@@ -18,6 +18,7 @@ Replace the one-off legacy prototype with a maintainable Windows application tha
 
 - process supported XML source data and nested archives;
 - discover and select information for extraction;
+- aggregate, index, query and filter discovered information across supported sources;
 - save reusable configurations and working states;
 - preview and export structured results;
 - provide useful progress, error and logging information.
