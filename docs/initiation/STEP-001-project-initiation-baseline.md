@@ -20,7 +20,7 @@ Replace the one-off legacy prototype with a maintainable Windows application tha
 - discover and select information for extraction;
 - aggregate, index, query and filter discovered information across supported sources;
 - save reusable configurations and working states;
-- preview and export structured results;
+- preview and export structured results with user-configurable export field selection and ordering;
 - provide useful progress, error and logging information.
 
 ## Scope
