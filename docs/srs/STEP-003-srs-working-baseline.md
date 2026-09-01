@@ -1,7 +1,7 @@
 # STEP-003 — System / Software Requirements Specification — Working Baseline
 
 **Status:** In Progress  
-**Current control point:** STEP-003.5.7 — Approval / Closure  
+**Current control point:** STEP-003.6 — Operational, Error & Recovery Requirements  
 **Jira Epic:** SPR-11  
 **Active sprint:** Sprint 3 — SRS 2  
 **Sprint end:** 3 September 2026, 23:30 Europe/Bucharest
@@ -29,7 +29,7 @@ The current controlled System / Software Requirement range is **SR-001 through S
 - **SR-001–SR-027** — Functional requirements; approved.
 - **SR-028–SR-046** — Data & information requirements; approved.
 - **SR-047–SR-103** — Interface requirements; approved.
-- **SR-104–SR-122** — Quality requirements; draft pending STEP-003.5 review and approval.
+- **SR-104–SR-122** — Quality requirements; approved.
 
 Requirement identifiers are permanent and are not renumbered when later requirements are added.
 
@@ -114,9 +114,17 @@ The full **SR-104–SR-122** batch passed review after five approved corrections
 
 Final review: 19/19 Quality SRs present, 13/13 non-functional URs directly covered, 19/19 Quality SRs reverse-traced, no duplicate Quality obligations identified.
 
-### STEP-003.5.7 — Approval / Closure — Current
+### STEP-003.5.7 — Approval / Closure — Complete
 
-The reviewed Quality batch remains Draft pending explicit approval/closure.
+**SR-104–SR-122 are Approved.**
+
+STEP-003.5 closed on 1 September 2026 after full Quality review, traceability reconciliation and final project-wide audit.
+
+### STEP-003.6 — Operational, Error & Recovery Requirements — Current
+
+This is the current control point.
+
+Scope includes interruption, retry, continuation, partial-failure handling, abort behaviour, cleanup and recovery semantics deferred from earlier STEP-003 work.
 
 ## Current traceability state
 
@@ -139,4 +147,4 @@ STEP-003 remains implementation-neutral.
 
 ## Next activity
 
-Perform **STEP-003.5.7 — Approval / Closure**.
+Continue **STEP-003.6 — Operational, Error & Recovery Requirements**.
