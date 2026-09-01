@@ -10,7 +10,7 @@ Translate the approved STEP-002 user requirements into a controlled, implementat
 
 ## Approved baseline
 
-STEP-003 establishes **163 approved System / Software Requirements**:
+STEP-003 established 163 requirements at initial closure and currently controls **166 approved System / Software Requirements** after the STEP-002.13 post-baseline amendment:
 
 - **SR-001–SR-027** — Functional
 - **SR-028–SR-046** — Data & Information
@@ -18,6 +18,9 @@ STEP-003 establishes **163 approved System / Software Requirements**:
 - **SR-104–SR-122** — Quality / Non-functional
 - **SR-123–SR-154** — Operational / Error & Recovery
 - **SR-155–SR-163** — System Constraints & Dependencies
+- **SR-164** — Functional post-baseline amendment: Database Tag Name Override
+- **SR-165** — Data post-baseline amendment: normalized resulting Database tag representation
+- **SR-166** — Interface post-baseline amendment: modified-mapping visibility/locatability
 
 Requirement identifiers are permanent and are not renumbered when later requirements are added or clarified.
 
@@ -29,8 +32,8 @@ The controlled chain is:
 
 Final STEP-003 reconciliation confirmed:
 
-- **62/62** approved User Requirements have downstream System Requirement coverage.
-- **163/163** System Requirements have reverse traceability or a controlled derived-requirement justification.
+- **65/65** current approved User Requirements have downstream System Requirement coverage.
+- **166/166** current System Requirements have reverse traceability or a controlled derived-requirement justification.
 - **SR-080** and **SR-081** are intentionally derived requirements with explicit controlled rationale.
 - **0** missing SR IDs.
 - **0** duplicate SR IDs.
@@ -53,6 +56,9 @@ Final STEP-003 reconciliation confirmed:
 - Installer elevation remains a packaging/deployment decision.
 - Original loaded source data must not be modified.
 - The core discovery/extraction workflow must support declared-supported non-aircraft XML structures.
+- The user may override the resulting Database Tag Name of selected discovered information before Database creation/update.
+- Multiple selected source tags assigned the same resulting Database Tag Name are intentionally represented under that one resulting Database information type while retaining required value/content and source provenance; this does not introduce arbitrary cross-tag joins.
+- Modified Database Tag Name mappings must be distinguishable and locatable in Discovery; exact visual treatment remains a STEP-004.7 design decision.
 
 ## Final review
 
@@ -69,6 +75,12 @@ STEP-003.9 reviewed the SRS for:
 - unresolved questions and decisions.
 
 All six recorded open questions are resolved.
+
+### Post-baseline controlled amendment — STEP-002.13
+
+During STEP-004.2 architecture review, Database Tag Name Override was identified as a genuine user-facing capability rather than an architecture-only implementation choice. The change was routed through requirements change control before architecture closure.
+
+The current amended baseline adds UR-F-024, UR-F-025, UR-D-018, SR-164 through SR-166, and RD-013. The original STEP-003.9 closure remains historically valid for the 163-SR baseline approved earlier on 1 September 2026.
 
 The final review made controlled wording clarifications to **SR-107, SR-123, SR-124, SR-125, SR-130, SR-131, SR-136 and SR-138**. These changes tightened terminology and removed subjective wording without changing IDs, traceability, approved scope or product capability.
 
