@@ -1,7 +1,7 @@
 # STEP-003 — System / Software Requirements Specification — Working Baseline
 
 **Status:** In Progress  
-**Current control point:** STEP-003.7 — System Constraints & Dependencies  
+**Current control point:** STEP-003.8 — User Requirement → System Requirement Traceability  
 **Jira Epic:** SPR-11  
 **Active sprint:** Sprint 3 — SRS 2  
 **Sprint end:** 3 September 2026, 23:30 Europe/Bucharest
@@ -18,19 +18,20 @@ This file is the lean GitHub-side working representation of the controlled STEP-
 | STEP-003.4 | Interface Requirements | SPR-17 | Complete |
 | STEP-003.5 | Quality / Non-functional Requirements | SPR-18 | Complete |
 | STEP-003.6 | Operational, Error & Recovery Requirements | SPR-19 | Complete |
-| STEP-003.7 | System Constraints & Dependencies | SPR-20 | In Progress |
-| STEP-003.8 | User Requirement → System Requirement Traceability | SPR-21 | To Do |
+| STEP-003.7 | System Constraints & Dependencies | SPR-20 | Complete |
+| STEP-003.8 | User Requirement → System Requirement Traceability | SPR-21 | In Progress |
 | STEP-003.9 | SRS Review & Baseline | SPR-22 | To Do |
 
 ## Controlled requirement range
 
-The current controlled System / Software Requirement range is **SR-001 through SR-154**.
+The current controlled System / Software Requirement range is **SR-001 through SR-163**.
 
 - **SR-001–SR-027** — Functional requirements; approved.
 - **SR-028–SR-046** — Data & information requirements; approved.
 - **SR-047–SR-103** — Interface requirements; approved.
 - **SR-104–SR-122** — Quality requirements; approved.
 - **SR-123–SR-154** — Operational / Error & Recovery requirements; approved.
+- **SR-155–SR-163** — System constraints & dependencies; approved.
 
 Requirement identifiers are permanent and are not renumbered when later requirements are added.
 
@@ -145,15 +146,39 @@ Final STEP-003.6 review:
 - zero affected forward-traceability gaps;
 - SR-138 corrected to mandatory `shall` wording before closure.
 
-### STEP-003.7 — System Constraints & Dependencies — Current
+### STEP-003.7 — System Constraints & Dependencies — Complete
+
+**SR-155–SR-163 are Approved.**
+
+STEP-003.7 closed on 1 September 2026 after derivation, review and traceability reconciliation.
+
+Key controlled outcomes include:
+- supported Windows environments are release-declared rather than permanently fixed in the SRS;
+- core processing is local and does not require cloud/SaaS services;
+- normal application operation must be possible without administrator privileges;
+- proprietary/local source and derived data do not require transmission to an external service;
+- original loaded source data remains unmodified;
+- core discovery/extraction remains usable with declared-supported non-aircraft XML structures;
+- installable Windows delivery is required;
+- application-specific runtime components required for normal operation are included;
+- any external non-bundled prerequisite is explicitly identified;
+- installer elevation remains a packaging/deployment decision under RD-004.
+
+Final STEP-003.7 review:
+- 9/9 SR-155–SR-163 present, unique and approved;
+- 9/9 constraint URs have downstream system coverage;
+- 9/9 STEP-003.7 requirements reverse-traced;
+- no duplicate requirement IDs or unresolved deployment decisions introduced.
+
+### STEP-003.8 — User Requirement → System Requirement Traceability — Current
 
 This is the current control point.
 
-Scope includes operating environment, deployment, administrator-right restrictions, supported-environment boundaries and remaining solution constraints/dependencies not already controlled by earlier STEP-003 work.
+The final STEP-003 traceability reconciliation checks all 62 approved User Requirements against the complete approved SR-001–SR-163 SRS set before STEP-003.9 final review/baseline closure.
 
 ## Current traceability state
 
-Forward and reverse traceability has been reconciled through **SR-154** for completed STEP-003.6 derivation.
+Forward and reverse traceability has been reconciled through **SR-163** for completed STEP-003.7 derivation; STEP-003.8 now performs the final SRS-wide reconciliation.
 
 Performance/workload decisions have been resolved:
 - OQ-002 / RD-002 — 30,000 supported XML files within 30 minutes on RTE-001;
@@ -167,9 +192,9 @@ Final SRS-wide traceability reconciliation is still reserved for STEP-003.8.
 STEP-003 remains implementation-neutral.
 
 - Approved retry, interruption, continuation, cleanup and recovery semantics are controlled by completed STEP-003.6.
-- Operating-environment, deployment and remaining solution constraints belong to STEP-003.7.
+- Approved operating-environment, deployment and solution constraints are controlled by completed STEP-003.7.
 - Architecture, technology selection, concrete storage/database design and final UI design belong to STEP-004 unless an approved requirement or constraint mandates otherwise.
 
 ## Next activity
 
-Continue **STEP-003.7 — System Constraints & Dependencies**.
+Continue **STEP-003.8 — User Requirement → System Requirement Traceability**.
