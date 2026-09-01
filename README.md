@@ -10,8 +10,8 @@ The project is currently in **STEP-003 — System / Software Requirements Specif
 - STEP-001 — Complete
 - STEP-002 — Complete
 - STEP-003 — In Progress
-- Current control point: **STEP-003.7 — System Constraints & Dependencies**
-- Current controlled SR range: **SR-001 through SR-154**
+- Current control point: **STEP-003.8 — User Requirement → System Requirement Traceability**
+- Current controlled SR range: **SR-001 through SR-163**
 - Active Jira sprint: **Sprint 3 — SRS 2**
 
 Detailed working status for the current SRS phase is maintained in:
@@ -32,8 +32,8 @@ Detailed working status for the current SRS phase is maintained in:
   - Quality review: complete.
   - Quality approval / closure: complete.
 - Operational/error/recovery requirements: complete and approved.
-- System constraints/dependencies: in progress.
-- Final SRS traceability reconciliation: not started.
+- System constraints/dependencies: complete and approved.
+- Final SRS traceability reconciliation: in progress.
 - SRS review/baseline closure: not started.
 
 The detailed controlled requirements and traceability records are maintained in Confluence during requirements work; Jira tracks the active delivery tasks and sprint.
