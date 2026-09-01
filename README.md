@@ -16,7 +16,7 @@ The project is currently in **STEP-003 — System / Software Requirements Specif
 
 Detailed working status for the current SRS phase is maintained in:
 
-- [STEP-003 SRS working baseline](STEP-003-srs-working-baseline.md)
+- [STEP-003 SRS working baseline](docs/srs/STEP-003-srs-working-baseline.md)
 
 ## Current SRS state
 
