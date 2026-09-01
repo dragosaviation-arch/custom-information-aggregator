@@ -10,7 +10,7 @@ A configurable application for discovering, indexing, querying, filtering, extra
 - **STEP-003 — Complete**
 - Next: **STEP-004 — Architecture & Solution Design**
 
-STEP-003 establishes the approved System / Software Requirements Specification through **SR-163**, with complete User Requirement → System Requirement traceability.
+STEP-003 establishes the approved System / Software Requirements Specification through **SR-166**, with complete current User Requirement → System Requirement traceability after the STEP-002.13 controlled amendment.
 
 Project baselines:
 
