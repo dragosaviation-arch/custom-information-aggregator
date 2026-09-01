@@ -10,7 +10,7 @@ The project is currently in **STEP-003 — System / Software Requirements Specif
 - STEP-001 — Complete
 - STEP-002 — Complete
 - STEP-003 — In Progress
-- Current control point: **STEP-003.5.7 — Approval / Closure**
+- Current control point: **STEP-003.6 — Operational, Error & Recovery Requirements**
 - Current controlled SR range: **SR-001 through SR-122**
 - Active Jira sprint: **Sprint 3 — SRS 2**
 
@@ -30,8 +30,8 @@ Detailed working status for the current SRS phase is maintained in:
   - Usability & readability: complete.
   - Diagnostics & user guidance: complete.
   - Quality review: complete.
-  - Quality approval / closure: current.
-- Operational/error/recovery requirements: not started.
+  - Quality approval / closure: complete.
+- Operational/error/recovery requirements: in progress.
 - System constraints/dependencies: not started.
 - Final SRS traceability reconciliation: not started.
 - SRS review/baseline closure: not started.
