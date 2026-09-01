@@ -1,7 +1,7 @@
 # STEP-003 — System / Software Requirements Specification — Working Baseline
 
 **Status:** In Progress  
-**Current control point:** STEP-003.5.6 — Quality Review  
+**Current control point:** STEP-003.5.7 — Approval / Closure  
 **Jira Epic:** SPR-11  
 **Active sprint:** Sprint 3 — SRS 2  
 **Sprint end:** 3 September 2026, 23:30 Europe/Bucharest
@@ -60,9 +60,12 @@ Key controlled expectations include:
 Draft Quality requirements: **SR-115–SR-116**.
 
 Performance baseline:
-- reference processing workflow for at least **30,000 supported XML files**;
-- maximum acceptance time: **30 minutes**;
-- measured on the controlled reference test environment **RTE-001**.
+- timed path begins when the user initiates loading of the controlled supported source archive/package;
+- includes supported archive extraction/unpacking, supported XML availability/loading and Discovery processing;
+- representative workload yields at least **30,000 supported XML files** and includes archive nesting through **three levels**;
+- timed path ends when Discovery results are available for review/selection;
+- maximum acceptance time: **30 minutes** on **RTE-001**;
+- post-Discovery query/filter, information extraction, review and export are outside the timed path.
 
 Representative large/complex workload baseline:
 - at least 30,000 supported XML files;
@@ -100,11 +103,20 @@ Key controlled expectations include:
 - controls representing the same supported action retain consistent meaning and user-visible effect;
 - user guidance is sufficient for an intended Planning User to complete UC-001 through UC-005 without developer-level assistance.
 
-### STEP-003.5.6 — Quality Review — Current
+### STEP-003.5.6 — Quality Review — Complete
 
-This is the current control point.
+The full **SR-104–SR-122** batch passed review after five approved corrections:
+- removed the undefined long-running-operation threshold from SR-104–SR-106 and anchored SR-105 to RTE-001;
+- explicitly defined the SR-115 stopwatch boundary from source archive/package load through Discovery-result availability;
+- made the SR-116 representative workload self-contained at ≥30,000 supported XML files and three archive levels;
+- strengthened SR-122 to require guidance usable without person-to-person explanation of the standard workflow;
+- removed the weak SR-082 → UR-NF-012 supporting trace.
 
-The Quality requirement batch **SR-104–SR-122** is ready for completeness, consistency, duplication, ambiguity, implementation-neutrality, verification and traceability review before approval/closure.
+Final review: 19/19 Quality SRs present, 13/13 non-functional URs directly covered, 19/19 Quality SRs reverse-traced, no duplicate Quality obligations identified.
+
+### STEP-003.5.7 — Approval / Closure — Current
+
+The reviewed Quality batch remains Draft pending explicit approval/closure.
 
 ## Current traceability state
 
@@ -127,4 +139,4 @@ STEP-003 remains implementation-neutral.
 
 ## Next activity
 
-Perform **STEP-003.5.6 — Quality Review**.
+Perform **STEP-003.5.7 — Approval / Closure**.
