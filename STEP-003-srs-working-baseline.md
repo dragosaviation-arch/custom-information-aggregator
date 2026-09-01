@@ -1,7 +1,7 @@
 # STEP-003 — System / Software Requirements Specification — Working Baseline
 
 **Status:** In Progress  
-**Current control point:** STEP-003.5.5 — Diagnostics & User Guidance  
+**Current control point:** STEP-003.5.6 — Quality Review  
 **Jira Epic:** SPR-11  
 **Active sprint:** Sprint 3 — SRS 2  
 **Sprint end:** 3 September 2026, 23:30 Europe/Bucharest
@@ -24,12 +24,12 @@ This file is the lean GitHub-side working representation of the controlled STEP-
 
 ## Controlled requirement range
 
-The current controlled System / Software Requirement range is **SR-001 through SR-118**.
+The current controlled System / Software Requirement range is **SR-001 through SR-122**.
 
 - **SR-001–SR-027** — Functional requirements; approved.
 - **SR-028–SR-046** — Data & information requirements; approved.
 - **SR-047–SR-103** — Interface requirements; approved.
-- **SR-104–SR-118** — Quality requirements; draft pending STEP-003.5 review and approval.
+- **SR-104–SR-122** — Quality requirements; draft pending STEP-003.5 review and approval.
 
 Requirement identifiers are permanent and are not renumbered when later requirements are added.
 
@@ -90,20 +90,25 @@ Key controlled expectations include:
 - the intended Planning User can complete UC-001 through UC-005 without developer assistance or knowledge of internal implementation/XML-processing logic;
 - extracted information presented for review is structured and distinguishable without requiring raw XML markup inspection.
 
-### STEP-003.5.5 — Diagnostics & User Guidance — Current
+### STEP-003.5.5 — Diagnostics & User Guidance — Complete
+
+Draft Quality requirements: **SR-119–SR-122**.
+
+Key controlled expectations include:
+- retained failed-operation diagnostics identify the operation/stage, affected source/item where determinable, and associated error/failure description;
+- the same user-facing concepts, states and operations use consistent terminology across UC-001 through UC-005;
+- controls representing the same supported action retain consistent meaning and user-visible effect;
+- user guidance is sufficient for an intended Planning User to complete UC-001 through UC-005 without developer-level assistance.
+
+### STEP-003.5.6 — Quality Review — Current
 
 This is the current control point.
 
-Primary approved user-requirement inputs:
-- UR-NF-011 — retain sufficient processing/error information to diagnose failed operations;
-- UR-NF-012 — user-facing controls/terminology consistent across the core workflow;
-- UR-NF-013 — user guidance sufficient to perform the core workflow.
-
-No STEP-003.5.5 SRs have been added yet.
+The Quality requirement batch **SR-104–SR-122** is ready for completeness, consistency, duplication, ambiguity, implementation-neutrality, verification and traceability review before approval/closure.
 
 ## Current traceability state
 
-Forward and reverse traceability has been reconciled through **SR-118** for completed STEP-003.5 substeps.
+Forward and reverse traceability has been reconciled through **SR-122** for completed STEP-003.5 derivation substeps.
 
 Performance/workload decisions have been resolved:
 - OQ-002 / RD-002 — 30,000 supported XML files within 30 minutes on RTE-001;
@@ -122,4 +127,4 @@ STEP-003 remains implementation-neutral.
 
 ## Next activity
 
-Continue **STEP-003.5.5 — Diagnostics & User Guidance**.
+Perform **STEP-003.5.6 — Quality Review**.
