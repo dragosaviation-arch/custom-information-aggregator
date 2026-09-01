@@ -10,8 +10,8 @@ The project is currently in **STEP-003 — System / Software Requirements Specif
 - STEP-001 — Complete
 - STEP-002 — Complete
 - STEP-003 — In Progress
-- Current control point: **STEP-003.5.4 — Usability & Readability**
-- Current controlled SR range: **SR-001 through SR-116**
+- Current control point: **STEP-003.5.5 — Diagnostics & User Guidance**
+- Current controlled SR range: **SR-001 through SR-118**
 - Active Jira sprint: **Sprint 3 — SRS 2**
 
 Detailed working status for the current SRS phase is maintained in:
@@ -27,7 +27,8 @@ Detailed working status for the current SRS phase is maintained in:
   - Responsiveness & feedback: complete.
   - Reliability & repeatability: complete.
   - Performance & workload: complete.
-  - Usability & readability: current.
+  - Usability & readability: complete.
+  - Diagnostics & user guidance: current.
 - Operational/error/recovery requirements: not started.
 - System constraints/dependencies: not started.
 - Final SRS traceability reconciliation: not started.
