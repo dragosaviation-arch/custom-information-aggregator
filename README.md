@@ -23,3 +23,11 @@ Project baselines:
 - [STEP-004 — Architecture & Solution Design](docs/architecture/STEP-004-architecture-baseline.md)
 
 Detailed controlled requirements, architecture decisions and traceability are maintained in Confluence; Jira tracks SDLC execution and sprint work.
+
+## Git branch lifecycle
+
+- `main` is the canonical integrated project baseline.
+- At most one long-lived working branch is used for the current major SDLC phase.
+- A major-phase branch is created from current `main`, merged through a pull request, and deleted after its baseline is merged.
+- Changes discovered later for an already closed phase use a new short-lived amendment/cleanup branch from current `main`; closed phase branches are not revived as development branches.
+- Full repository audits must enumerate every non-`main` branch, compare it with `main`, identify its PR/lifecycle state, and flag any stale or orphan branch.
