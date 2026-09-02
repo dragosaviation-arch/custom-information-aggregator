@@ -9,7 +9,7 @@ A configurable application for discovering, indexing, querying, filtering, extra
 - STEP-002 — Complete
 - STEP-003 — Complete
 - **STEP-004 — In Progress**
-- Current control point: **STEP-004.8 — Cross-Cutting Technical Design**
+- Current control point: **STEP-004.9 — Technology Stack & Key Technical Decisions**
 
 STEP-003 establishes the current approved System / Software Requirements Specification through **SR-168**, with complete 67/67 User Requirement → System Requirement coverage and 168/168 reverse traceability / controlled derivation after the STEP-002.14 controlled amendment.
 
