@@ -26,8 +26,9 @@ Detailed controlled requirements, architecture decisions and traceability are ma
 
 ## Git branch lifecycle
 
-- `main` is the canonical integrated project baseline.
+- `main` is the canonical integrated project baseline and is not used for direct working commits.
 - At most one long-lived working branch is used for the current major SDLC phase.
+- Controlled repository changes reach `main` through pull requests; direct commits to `main` are prohibited by project process.
 - A major-phase branch is created from current `main`, merged through a pull request, and deleted after its baseline is merged.
 - Changes discovered later for an already closed phase use a new short-lived amendment/cleanup branch from current `main`; closed phase branches are not revived as development branches.
 - Full repository audits must enumerate every non-`main` branch, compare it with `main`, identify its PR/lifecycle state, and flag any stale or orphan branch.
