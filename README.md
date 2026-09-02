@@ -11,7 +11,7 @@ A configurable application for discovering, indexing, querying, filtering, extra
 - **STEP-004 — In Progress**
 - Current control point: **STEP-004.3 — System Context & Boundaries**
 
-STEP-003 establishes the current approved System / Software Requirements Specification through **SR-166**, with complete 67/67 User Requirement → System Requirement coverage and 168/168 reverse traceability / controlled derivation after the STEP-002.14 controlled amendment.
+STEP-003 establishes the current approved System / Software Requirements Specification through **SR-168**, with complete 67/67 User Requirement → System Requirement coverage and 168/168 reverse traceability / controlled derivation after the STEP-002.14 controlled amendment.
 
 Project baselines:
 
