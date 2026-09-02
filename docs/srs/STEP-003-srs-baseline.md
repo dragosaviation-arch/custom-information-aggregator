@@ -10,7 +10,7 @@ Translate the approved STEP-002 user requirements into a controlled, implementat
 
 ## Approved baseline
 
-STEP-003 established 163 requirements at initial closure and currently controls **166 approved System / Software Requirements** after the STEP-002.13 post-baseline amendment:
+STEP-003 established 163 requirements at initial closure and currently controls **168 approved System / Software Requirements** after the STEP-002.14 post-baseline amendment:
 
 - **SR-001–SR-027** — Functional
 - **SR-028–SR-046** — Data & Information
@@ -21,6 +21,8 @@ STEP-003 established 163 requirements at initial closure and currently controls 
 - **SR-164** — Functional post-baseline amendment: Database Tag Name Override
 - **SR-165** — Data post-baseline amendment: normalized resulting Database tag representation
 - **SR-166** — Interface post-baseline amendment: modified-mapping visibility/locatability
+- **SR-167** — Operational post-baseline amendment: retained successful processed-item/source history
+- **SR-168** — Quality/documentation post-baseline amendment: supported-installation guidance
 
 Requirement identifiers are permanent and are not renumbered when later requirements are added or clarified.
 
@@ -32,8 +34,8 @@ The controlled chain is:
 
 Final STEP-003 reconciliation confirmed:
 
-- **65/65** current approved User Requirements have downstream System Requirement coverage.
-- **166/166** current System Requirements have reverse traceability or a controlled derived-requirement justification.
+- **67/67** current approved User Requirements have downstream System Requirement coverage.
+- **168/168** current System Requirements have reverse traceability or a controlled derived-requirement justification.
 - **SR-080** and **SR-081** are intentionally derived requirements with explicit controlled rationale.
 - **0** missing SR IDs.
 - **0** duplicate SR IDs.
@@ -60,6 +62,9 @@ Final STEP-003 reconciliation confirmed:
 - Multiple selected source tags assigned the same resulting Database Tag Name are intentionally represented under that one resulting Database information type while retaining required value/content and source provenance; this does not introduce arbitrary cross-tag joins.
 - Modified Database Tag Name mappings must be distinguishable and locatable in Discovery; exact visual treatment remains a STEP-004.7 design decision.
 - For indexed Database occurrences, the retained information type/tag is the resulting Database Tag Name. Where an override applies, the configured Database Tag Name is the retained tag identity; the original source tag name/namespace need not remain in the resulting Database, while value/content and source provenance remain required.
+- Reusable information-selection profiles save and restore selected/excluded discovered-tag membership only; Database Tag Name Override mappings remain outside reusable profile scope.
+- Completed supported processing records retain identity of successfully processed source items/files.
+- Installation guidance must be sufficient for an intended user with any required installation privileges to complete the supported installation procedure without another person explaining the standard process.
 
 ## Final review
 
@@ -84,6 +89,10 @@ During STEP-004.2 architecture review, Database Tag Name Override was identified
 The current amended baseline adds UR-F-024, UR-F-025, UR-D-018, SR-164 through SR-166, and RD-013. The original STEP-003.9 closure remains historically valid for the 163-SR baseline approved earlier on 1 September 2026.
 
 A subsequent STEP-004.2 literal full audit clarified UR-D-014 / SR-041 against RD-013 without adding scope: when a Database Tag Name Override applies, the indexed occurrence's resulting information type/tag is the configured Database Tag Name.
+
+### Post-baseline controlled amendment — STEP-002.14
+
+A repeated full audit against STEP-001 identified two original commitments that were only partially represented downstream and one reusable-profile scope ambiguity. STEP-002.14 adds UR-F-026, UR-NF-014, SR-167, SR-168 and RD-014; reusable selection profiles are explicitly selected/excluded-tag membership only, successful processed-item/source identity is retained for completed operations, and supported-installation guidance is explicitly required.
 
 The final review made controlled wording clarifications to **SR-107, SR-123, SR-124, SR-125, SR-130, SR-131, SR-136 and SR-138**. These changes tightened terminology and removed subjective wording without changing IDs, traceability, approved scope or product capability.
 
