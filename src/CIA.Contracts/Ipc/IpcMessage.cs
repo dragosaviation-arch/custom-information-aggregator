@@ -6,6 +6,8 @@ namespace CIA.Contracts.Ipc;
     TypeDiscriminatorPropertyName = "messageType",
     UnknownDerivedTypeHandling = JsonUnknownDerivedTypeHandling.FailSerialization)]
 [JsonDerivedType(typeof(EstablishConnectionCommand), "establishConnectionCommand")]
+[JsonDerivedType(typeof(ProcessingHostLivenessCommand), "processingHostLivenessCommand")]
+[JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 public abstract record IpcMessage(Guid MessageId, DateTimeOffset TimestampUtc);
@@ -24,6 +26,16 @@ public sealed record EstablishConnectionCommand(
     DateTimeOffset TimestampUtc,
     Guid ClientInstanceId,
     int ProtocolVersion)
+    : IpcCommand(MessageId, TimestampUtc);
+
+public sealed record ProcessingHostLivenessCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc)
+    : IpcCommand(MessageId, TimestampUtc);
+
+public sealed record StopProcessingHostCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc)
     : IpcCommand(MessageId, TimestampUtc);
 
 public sealed record CommandAcknowledgement(

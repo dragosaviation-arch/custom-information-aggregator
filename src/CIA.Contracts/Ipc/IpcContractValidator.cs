@@ -24,6 +24,9 @@ public static class IpcContractValidator
             case EstablishConnectionCommand command:
                 ValidateEstablishConnectionCommand(command);
                 break;
+            case ProcessingHostLivenessCommand:
+            case StopProcessingHostCommand:
+                break;
             case CommandAcknowledgement acknowledgement:
                 ValidateCommandAcknowledgement(acknowledgement);
                 break;

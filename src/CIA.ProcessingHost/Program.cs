@@ -1,5 +1,6 @@
 using CIA.ProcessingHost.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace CIA.ProcessingHost;
@@ -20,6 +21,12 @@ public sealed class Program
         logger.LogInformation(
             "CIA process started with role {ProcessRole}",
             ProcessingHostApplicationHost.ProcessRole);
+
+        if (host.Services.GetService<ProcessingHostRuntimeOptions>() is not null)
+        {
+            await host.WaitForShutdownAsync().ConfigureAwait(false);
+        }
+
         logger.LogInformation(
             "CIA process stopping with role {ProcessRole}",
             ProcessingHostApplicationHost.ProcessRole);

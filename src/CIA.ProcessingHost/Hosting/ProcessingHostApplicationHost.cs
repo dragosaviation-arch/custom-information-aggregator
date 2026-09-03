@@ -1,4 +1,5 @@
 using CIA.Core.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Serilog;
@@ -21,6 +22,14 @@ public static class ProcessingHostApplicationHost
                 ApplicationName = typeof(ProcessingHostApplicationHost).Assembly.GetName().Name,
                 ContentRootPath = AppContext.BaseDirectory
             });
+
+        var runtimeOptions = ProcessingHostRuntimeOptions.FromConfiguration(builder.Configuration);
+
+        if (runtimeOptions is not null)
+        {
+            builder.Services.AddSingleton(runtimeOptions);
+            builder.Services.AddHostedService<ProcessingHostLifetimeService>();
+        }
 
         ConfigureLogging(builder);
         return builder.Build();
