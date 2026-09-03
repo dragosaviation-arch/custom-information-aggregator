@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:presentation="clr-namespace:CIA.Desktop.Presentation"
+        xmlns:views="clr-namespace:CIA.Desktop.Views"
         x:Name="WindowRoot"
         Title="CIA"
         Width="1440"
@@ -9,103 +10,11 @@
         MinWidth="980"
         MinHeight="620"
         WindowStartupLocation="CenterScreen"
-        Background="#FFF6F7FB"
-        FontFamily="Segoe UI"
-        FontSize="13"
-        Loaded="OnWindowLoaded"
-        SizeChanged="OnWindowSizeChanged"
+        Background="{StaticResource CiaBackgroundBrush}"
+        FontFamily="{StaticResource CiaFontFamily}"
+        FontSize="{StaticResource CiaBodyFontSize}"
         SnapsToDevicePixels="True">
-    <Window.Resources>
-        <Style x:Key="PanelStyle"
-               TargetType="Border">
-            <Setter Property="Background" Value="#FFFFFFFF" />
-            <Setter Property="BorderBrush" Value="#FFD9DEE8" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="10" />
-            <Setter Property="Effect">
-                <Setter.Value>
-                    <DropShadowEffect BlurRadius="2"
-                                      Direction="270"
-                                      Opacity="0.05"
-                                      ShadowDepth="1"
-                                      Color="#FF101828" />
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="ButtonStyle"
-               TargetType="Button">
-            <Setter Property="Height" Value="34" />
-            <Setter Property="Padding" Value="12,0" />
-            <Setter Property="Background" Value="#FFFFFFFF" />
-            <Setter Property="BorderBrush" Value="#FFC8CFDC" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="Foreground" Value="#FF1F2430" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="ButtonBorder"
-                                Padding="{TemplateBinding Padding}"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="7">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center" />
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="ButtonBorder"
-                                        Property="Background"
-                                        Value="#FFF8F9FC" />
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="ButtonBorder"
-                                        Property="Background"
-                                        Value="#FFF0F2F5" />
-                                <Setter TargetName="ButtonBorder"
-                                        Property="BorderBrush"
-                                        Value="#FFD9DEE8" />
-                                <Setter Property="Foreground" Value="#FF9AA3B2" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="PrimaryButtonStyle"
-               TargetType="Button"
-               BasedOn="{StaticResource ButtonStyle}">
-            <Setter Property="Background" Value="#FF6C63FF" />
-            <Setter Property="BorderBrush" Value="#FF6C63FF" />
-            <Setter Property="Foreground" Value="#FFFFFFFF" />
-        </Style>
-
-        <Style x:Key="GhostButtonStyle"
-               TargetType="Button"
-               BasedOn="{StaticResource ButtonStyle}">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="Foreground" Value="#FF667085" />
-        </Style>
-
-        <Style x:Key="PanelTitleStyle"
-               TargetType="TextBlock">
-            <Setter Property="FontSize" Value="14" />
-            <Setter Property="FontWeight" Value="Bold" />
-            <Setter Property="Foreground" Value="#FF1F2430" />
-        </Style>
-
-        <Style x:Key="SecondaryTextStyle"
-               TargetType="TextBlock">
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="Foreground" Value="#FF667085" />
-        </Style>
-    </Window.Resources>
-
-    <Grid Background="#FFF6F7FB">
+    <Grid Background="{StaticResource CiaBackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="52" />
             <RowDefinition Height="54" />
@@ -114,10 +23,7 @@
         </Grid.RowDefinitions>
 
         <Border Grid.Row="0"
-                Padding="18,0"
-                Background="#FFFFFFFF"
-                BorderBrush="#FFD9DEE8"
-                BorderThickness="0,0,0,1">
+                Style="{StaticResource CiaTopBarStyle}">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -128,28 +34,22 @@
                             Orientation="Horizontal">
                     <Border Width="28"
                             Height="28"
+                            Background="{StaticResource CiaLogoBrush}"
                             CornerRadius="8">
-                        <Border.Background>
-                            <LinearGradientBrush StartPoint="0,0"
-                                                 EndPoint="1,1">
-                                <GradientStop Offset="0" Color="#FF6C63FF" />
-                                <GradientStop Offset="1" Color="#FF8A84FF" />
-                            </LinearGradientBrush>
-                        </Border.Background>
                         <TextBlock HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
                                    FontWeight="ExtraBold"
-                                   Foreground="#FFFFFFFF"
+                                   Foreground="{StaticResource CiaPanelBrush}"
                                    Text="C" />
                     </Border>
                     <StackPanel Margin="10,0,0,0"
                                 VerticalAlignment="Center">
                         <TextBlock FontWeight="Bold"
-                                   Foreground="#FF1F2430"
+                                   Foreground="{StaticResource CiaTextPrimaryBrush}"
                                    Text="CIA" />
                         <TextBlock Margin="0,1,0,0"
                                    FontSize="11"
-                                   Foreground="#FF667085"
+                                   Foreground="{StaticResource CiaTextSecondaryBrush}"
                                    Text="Custom Information Aggregator" />
                     </StackPanel>
                 </StackPanel>
@@ -160,97 +60,28 @@
                     <Ellipse Width="8"
                              Height="8"
                              Margin="0,0,8,0"
-                             Fill="#FF2D8A57" />
+                             Fill="{StaticResource CiaSuccessBrush}" />
                     <TextBlock VerticalAlignment="Center"
-                               FontSize="12"
-                               Foreground="#FF667085"
+                               Style="{StaticResource CiaSecondaryTextStyle}"
                                Text="Session active" />
                 </StackPanel>
             </Grid>
         </Border>
 
         <Border Grid.Row="1"
-                Padding="16,0"
-                Background="#FFFFFFFF"
-                BorderBrush="#FFD9DEE8"
-                BorderThickness="0,0,0,1">
+                Style="{StaticResource CiaNavigationBarStyle}">
             <ListBox AutomationProperties.Name="Principal workspaces"
+                     ItemContainerStyle="{StaticResource CiaWorkspaceTabItemStyle}"
+                     ItemTemplate="{StaticResource CiaWorkspaceTabTemplate}"
                      ItemsSource="{Binding Workspaces}"
                      SelectedItem="{Binding SelectedWorkspace, Mode=TwoWay}"
-                     HorizontalAlignment="Left"
-                     VerticalAlignment="Bottom"
-                     Background="Transparent"
-                     BorderThickness="0"
-                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                     ScrollViewer.VerticalScrollBarVisibility="Disabled">
-                <ListBox.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" />
-                    </ItemsPanelTemplate>
-                </ListBox.ItemsPanel>
-                <ListBox.ItemContainerStyle>
-                    <Style TargetType="ListBoxItem">
-                        <Setter Property="Height" Value="40" />
-                        <Setter Property="Margin" Value="0,0,4,0" />
-                        <Setter Property="Padding" Value="16,0" />
-                        <Setter Property="Foreground" Value="#FF667085" />
-                        <Setter Property="FontWeight" Value="SemiBold" />
-                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                        <Setter Property="VerticalContentAlignment" Value="Center" />
-                        <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
-                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
-                        <Setter Property="Template">
-                            <Setter.Value>
-                                <ControlTemplate TargetType="ListBoxItem">
-                                    <Border x:Name="TabBackground"
-                                            Padding="{TemplateBinding Padding}"
-                                            Background="Transparent"
-                                            CornerRadius="8,8,0,0">
-                                        <Grid>
-                                            <ContentPresenter HorizontalAlignment="Center"
-                                                              VerticalAlignment="Center" />
-                                            <Border x:Name="SelectedLine"
-                                                    Height="2"
-                                                    VerticalAlignment="Bottom"
-                                                    Background="#FF6C63FF"
-                                                    Visibility="Collapsed" />
-                                        </Grid>
-                                    </Border>
-                                    <ControlTemplate.Triggers>
-                                        <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="TabBackground"
-                                                    Property="Background"
-                                                    Value="#FFF8F9FC" />
-                                            <Setter Property="Foreground" Value="#FF1F2430" />
-                                        </Trigger>
-                                        <Trigger Property="IsSelected" Value="True">
-                                            <Setter TargetName="TabBackground"
-                                                    Property="Background"
-                                                    Value="#FFEEECFF" />
-                                            <Setter TargetName="SelectedLine"
-                                                    Property="Visibility"
-                                                    Value="Visible" />
-                                            <Setter Property="Foreground" Value="#FF6C63FF" />
-                                        </Trigger>
-                                    </ControlTemplate.Triggers>
-                                </ControlTemplate>
-                            </Setter.Value>
-                        </Setter>
-                    </Style>
-                </ListBox.ItemContainerStyle>
-                <ListBox.ItemTemplate>
-                    <DataTemplate>
-                        <TextBlock Foreground="{Binding RelativeSource={RelativeSource AncestorType=ListBoxItem}, Path=Foreground}"
-                                   Text="{Binding Title}" />
-                    </DataTemplate>
-                </ListBox.ItemTemplate>
-            </ListBox>
+                     Style="{StaticResource CiaWorkspaceTabsStyle}" />
         </Border>
 
         <Grid Grid.Row="2">
-            <Grid x:Name="LoadWorkspace">
-                <Grid.Style>
-                    <Style TargetType="Grid">
+            <views:LoadWorkspaceView>
+                <views:LoadWorkspaceView.Style>
+                    <Style TargetType="views:LoadWorkspaceView">
                         <Setter Property="Visibility" Value="Collapsed" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding SelectedWorkspace.Area}"
@@ -259,362 +90,10 @@
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
-                </Grid.Style>
+                </views:LoadWorkspaceView.Style>
+            </views:LoadWorkspaceView>
 
-                <ScrollViewer x:Name="WorkspaceScroller"
-                              HorizontalScrollBarVisibility="Auto"
-                              VerticalScrollBarVisibility="Auto"
-                              SizeChanged="OnWorkspaceViewportSizeChanged">
-                    <Grid x:Name="LoadLayout"
-                          Margin="16">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition x:Name="LoadLeftColumn"
-                                              Width="*"
-                                              MinWidth="620" />
-                            <ColumnDefinition x:Name="LoadGapColumn" Width="12" />
-                            <ColumnDefinition x:Name="LoadRightColumn" Width="360" />
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition x:Name="LoadTopRow" Height="*" />
-                            <RowDefinition x:Name="LoadStackGapRow" Height="0" />
-                            <RowDefinition x:Name="LoadBottomRow" Height="0" />
-                        </Grid.RowDefinitions>
-
-                        <Grid x:Name="LoadLeftPane"
-                              Grid.Row="0"
-                              Grid.Column="0">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="10" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="10" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="10" />
-                                <RowDefinition Height="*" MinHeight="300" />
-                            </Grid.RowDefinitions>
-
-                            <DockPanel Margin="0,10,0,0"
-                                       LastChildFill="True">
-                                <StackPanel DockPanel.Dock="Right"
-                                            Orientation="Horizontal">
-                                    <Button Margin="0,0,2,0"
-                                            IsEnabled="False"
-                                            Style="{StaticResource GhostButtonStyle}"
-                                            Content="Include visible" />
-                                    <Button Margin="0,0,8,0"
-                                            IsEnabled="False"
-                                            Style="{StaticResource GhostButtonStyle}"
-                                            Content="Exclude visible" />
-                                    <TextBox Width="220"
-                                             Height="34"
-                                             Padding="10,0"
-                                             VerticalContentAlignment="Center"
-                                             Background="#FFF0F2F5"
-                                             BorderBrush="#FFD9DEE8"
-                                             BorderThickness="1"
-                                             Foreground="#FF9AA3B2"
-                                             IsEnabled="False"
-                                             Text="Filter loaded sources…" />
-                                </StackPanel>
-
-                                <StackPanel Orientation="Horizontal">
-                                    <Button Margin="0,0,8,0"
-                                            IsEnabled="False"
-                                            Style="{StaticResource PrimaryButtonStyle}"
-                                            Content="＋ File" />
-                                    <Button Margin="0,0,8,0"
-                                            IsEnabled="False"
-                                            Style="{StaticResource ButtonStyle}"
-                                            Content="＋ Folder" />
-                                    <Button IsEnabled="False"
-                                            Style="{StaticResource ButtonStyle}"
-                                            Content="＋ Archive" />
-                                </StackPanel>
-                            </DockPanel>
-
-                            <Border Grid.Row="2"
-                                    Padding="12,10"
-                                    Background="#FFFFFFFF"
-                                    BorderBrush="#FFD9DEE8"
-                                    BorderThickness="1"
-                                    CornerRadius="10">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock VerticalAlignment="Center"
-                                               FontWeight="Bold"
-                                               Foreground="#FF1F2430"
-                                               Text="Discovery" />
-                                    <Border Height="24"
-                                            Margin="10,0"
-                                            Padding="9,0"
-                                            VerticalAlignment="Center"
-                                            Background="#FFEEF1F5"
-                                            CornerRadius="12">
-                                        <StackPanel Orientation="Horizontal">
-                                            <Ellipse Width="7"
-                                                     Height="7"
-                                                     Margin="0,0,6,0"
-                                                     VerticalAlignment="Center"
-                                                     Fill="#FF8A94A6" />
-                                            <TextBlock VerticalAlignment="Center"
-                                                       FontSize="12"
-                                                       FontWeight="Bold"
-                                                       Foreground="#FF667085"
-                                                       Text="Not available" />
-                                        </StackPanel>
-                                    </Border>
-                                    <TextBlock VerticalAlignment="Center"
-                                               Style="{StaticResource SecondaryTextStyle}"
-                                               Text="Add supported sources before running Discovery." />
-                                </StackPanel>
-                            </Border>
-
-                            <Border Grid.Row="4"
-                                    Padding="12,11"
-                                    Style="{StaticResource PanelStyle}">
-                                <StackPanel>
-                                    <Grid Margin="0,0,0,8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel>
-                                            <TextBlock FontWeight="Bold"
-                                                       Foreground="#FF1F2430"
-                                                       Text="Load workspace ready" />
-                                            <TextBlock Style="{StaticResource SecondaryTextStyle}"
-                                                       Text="No active operation" />
-                                        </StackPanel>
-                                        <TextBlock Grid.Column="1"
-                                                   VerticalAlignment="Center"
-                                                   Style="{StaticResource SecondaryTextStyle}"
-                                                   Text="0%" />
-                                    </Grid>
-                                    <ProgressBar Height="8"
-                                                 Maximum="100"
-                                                 Value="0"
-                                                 Background="#FFECEFF4"
-                                                 BorderThickness="0"
-                                                 Foreground="#FF6C63FF" />
-                                    <Grid Margin="0,8,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Style="{StaticResource SecondaryTextStyle}"
-                                                   Text="Current archive: —" />
-                                        <TextBlock Grid.Column="1"
-                                                   Style="{StaticResource SecondaryTextStyle}"
-                                                   Text="Files found 0 · Loaded 0 · Warnings 0" />
-                                    </Grid>
-                                </StackPanel>
-                            </Border>
-
-                            <Border Grid.Row="6"
-                                    MinHeight="300"
-                                    ClipToBounds="True"
-                                    Style="{StaticResource PanelStyle}">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="34" />
-                                        <RowDefinition Height="*" />
-                                    </Grid.RowDefinitions>
-
-                                    <Border Background="#FFFAFBFD"
-                                            BorderBrush="#FFD9DEE8"
-                                            BorderThickness="0,0,0,1">
-                                        <Grid Margin="8,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="38" />
-                                                <ColumnDefinition Width="2*" MinWidth="150" />
-                                                <ColumnDefinition Width="2.6*" MinWidth="180" />
-                                                <ColumnDefinition Width="44" />
-                                                <ColumnDefinition Width="112" />
-                                                <ColumnDefinition Width="100" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="1"
-                                                       VerticalAlignment="Center"
-                                                       FontSize="12"
-                                                       FontWeight="Bold"
-                                                       Foreground="#FF667085"
-                                                       Text="Source" />
-                                            <TextBlock Grid.Column="2"
-                                                       VerticalAlignment="Center"
-                                                       FontSize="12"
-                                                       FontWeight="Bold"
-                                                       Foreground="#FF667085"
-                                                       Text="Path" />
-                                            <TextBlock Grid.Column="3"
-                                                       HorizontalAlignment="Center"
-                                                       VerticalAlignment="Center"
-                                                       FontSize="12"
-                                                       FontWeight="Bold"
-                                                       Foreground="#FF667085"
-                                                       Text="Lvl"
-                                                       ToolTip="Archive nesting depth" />
-                                            <TextBlock Grid.Column="4"
-                                                       VerticalAlignment="Center"
-                                                       FontSize="12"
-                                                       FontWeight="Bold"
-                                                       Foreground="#FF667085"
-                                                       Text="Status" />
-                                        </Grid>
-                                    </Border>
-
-                                    <Grid Grid.Row="1"
-                                          MinHeight="280">
-                                        <StackPanel HorizontalAlignment="Center"
-                                                    VerticalAlignment="Center">
-                                            <TextBlock HorizontalAlignment="Center"
-                                                       FontSize="15"
-                                                       FontWeight="SemiBold"
-                                                       Foreground="#FF1F2430"
-                                                       Text="No sources loaded" />
-                                            <TextBlock Margin="0,6,0,0"
-                                                       HorizontalAlignment="Center"
-                                                       Foreground="#FF667085"
-                                                       Text="Add a supported file, folder or archive to begin." />
-                                        </StackPanel>
-                                    </Grid>
-                                </Grid>
-                            </Border>
-                        </Grid>
-
-                        <Grid x:Name="LoadRightRail"
-                              Grid.Row="0"
-                              Grid.Column="2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition x:Name="DetailsColumn" Width="*" />
-                                <ColumnDefinition x:Name="RightRailGapColumn" Width="0" />
-                                <ColumnDefinition x:Name="SettingsColumn" Width="0" />
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition x:Name="DetailsRow"
-                                               Height="57*"
-                                               MinHeight="300" />
-                                <RowDefinition x:Name="RightRailGapRow" Height="12" />
-                                <RowDefinition x:Name="SettingsRow"
-                                               Height="43*"
-                                               MinHeight="220" />
-                            </Grid.RowDefinitions>
-
-                            <Border x:Name="DetailsPanel"
-                                    Grid.Row="0"
-                                    Grid.Column="0"
-                                    MinHeight="300"
-                                    ClipToBounds="True"
-                                    Style="{StaticResource PanelStyle}">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="*" />
-                                    </Grid.RowDefinitions>
-                                    <Border Padding="14,12"
-                                            BorderBrush="#FFD9DEE8"
-                                            BorderThickness="0,0,0,1">
-                                        <Grid>
-                                            <TextBlock Style="{StaticResource PanelTitleStyle}"
-                                                       Text="Details" />
-                                            <TextBlock HorizontalAlignment="Right"
-                                                       VerticalAlignment="Center"
-                                                       FontSize="11"
-                                                       Foreground="#FF667085"
-                                                       Text="Selected source" />
-                                        </Grid>
-                                    </Border>
-                                    <StackPanel Grid.Row="1"
-                                                HorizontalAlignment="Center"
-                                                VerticalAlignment="Center">
-                                        <TextBlock HorizontalAlignment="Center"
-                                                   FontSize="15"
-                                                   FontWeight="SemiBold"
-                                                   Foreground="#FF1F2430"
-                                                   Text="No source selected" />
-                                        <TextBlock Margin="0,6,0,0"
-                                                   HorizontalAlignment="Center"
-                                                   Foreground="#FF667085"
-                                                   Text="Select a row to inspect its details." />
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
-
-                            <Border x:Name="SettingsPanel"
-                                    Grid.Row="2"
-                                    Grid.Column="0"
-                                    MinHeight="220"
-                                    ClipToBounds="True"
-                                    Style="{StaticResource PanelStyle}">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="*" />
-                                    </Grid.RowDefinitions>
-                                    <Border Padding="14,12"
-                                            BorderBrush="#FFD9DEE8"
-                                            BorderThickness="0,0,0,1">
-                                        <TextBlock Style="{StaticResource PanelTitleStyle}"
-                                                   Text="Local settings" />
-                                    </Border>
-                                    <StackPanel Grid.Row="1"
-                                                Margin="14,2,14,12">
-                                        <CheckBox Padding="0,8"
-                                                  IsChecked="True"
-                                                  IsEnabled="False">
-                                            <StackPanel Margin="6,0,0,0">
-                                                <TextBlock FontWeight="SemiBold"
-                                                           Foreground="#FF1F2430"
-                                                           Text="Include supported XML files" />
-                                                <TextBlock Margin="0,2,0,0"
-                                                           Style="{StaticResource SecondaryTextStyle}"
-                                                           Text="Include supported XML discovered when loading folders."
-                                                           TextWrapping="Wrap" />
-                                            </StackPanel>
-                                        </CheckBox>
-                                        <Border BorderBrush="#FFEEF1F5" BorderThickness="0,0,0,1" />
-                                        <CheckBox Padding="0,8"
-                                                  IsChecked="True"
-                                                  IsEnabled="False">
-                                            <StackPanel Margin="6,0,0,0">
-                                                <TextBlock FontWeight="SemiBold"
-                                                           Foreground="#FF1F2430"
-                                                           Text="Include supported archive files" />
-                                                <TextBlock Margin="0,2,0,0"
-                                                           Style="{StaticResource SecondaryTextStyle}"
-                                                           Text="Include supported archives discovered when loading folders."
-                                                           TextWrapping="Wrap" />
-                                            </StackPanel>
-                                        </CheckBox>
-                                        <Border BorderBrush="#FFEEF1F5" BorderThickness="0,0,0,1" />
-                                        <CheckBox Padding="0,8"
-                                                  IsChecked="True"
-                                                  IsEnabled="False">
-                                            <StackPanel Margin="6,0,0,0">
-                                                <TextBlock FontWeight="SemiBold"
-                                                           Foreground="#FF1F2430"
-                                                           Text="Traverse subfolders recursively" />
-                                                <TextBlock Margin="0,2,0,0"
-                                                           Style="{StaticResource SecondaryTextStyle}"
-                                                           Text="Search supported content below the selected folder."
-                                                           TextWrapping="Wrap" />
-                                            </StackPanel>
-                                        </CheckBox>
-                                        <Border Margin="0,10,0,0"
-                                                Padding="10,9"
-                                                Background="#FFF6F7FA"
-                                                CornerRadius="8">
-                                            <TextBlock FontSize="12"
-                                                       Foreground="#FF667085"
-                                                       Text="Duplicate source paths are prevented by default. No allow-duplicates setting is exposed."
-                                                       TextWrapping="Wrap" />
-                                        </Border>
-                                    </StackPanel>
-                                </Grid>
-                            </Border>
-                        </Grid>
-                    </Grid>
-                </ScrollViewer>
-            </Grid>
-
-            <Grid Margin="16">
+            <Grid Margin="{StaticResource CiaWorkspaceMargin}">
                 <Grid.Style>
                     <Style TargetType="Grid">
                         <Setter Property="Visibility" Value="Visible" />
@@ -628,15 +107,12 @@
                 </Grid.Style>
                 <StackPanel HorizontalAlignment="Center"
                             VerticalAlignment="Center">
-                    <TextBlock HorizontalAlignment="Center"
-                               FontSize="18"
-                               FontWeight="SemiBold"
-                               Foreground="#FF1F2430"
+                    <TextBlock Style="{StaticResource CiaWorkspacePlaceholderTitleTextStyle}"
                                Text="{Binding SelectedWorkspace.Title}" />
                     <TextBlock Margin="0,5,0,0"
                                MaxWidth="700"
                                HorizontalAlignment="Center"
-                               Foreground="#FF667085"
+                               Foreground="{StaticResource CiaTextSecondaryBrush}"
                                Text="{Binding SelectedWorkspace.Description}"
                                TextAlignment="Center"
                                TextWrapping="Wrap" />
@@ -645,10 +121,7 @@
         </Grid>
 
         <Border Grid.Row="3"
-                Padding="14,0"
-                Background="#FFFFFFFF"
-                BorderBrush="#FFD9DEE8"
-                BorderThickness="0,1,0,0">
+                Style="{StaticResource CiaStatusBarStyle}">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -659,15 +132,12 @@
                 <StackPanel VerticalAlignment="Center"
                             Orientation="Horizontal">
                     <TextBlock Margin="0,0,7,0"
-                               FontSize="12"
-                               FontWeight="Bold"
-                               Foreground="#FF1F2430"
+                               Style="{StaticResource CiaStatusLabelTextStyle}"
                                Text="Host" />
                     <TextBlock AutomationProperties.LiveSetting="Polite"
                                AutomationProperties.Name="Processing Host status"
                                VerticalAlignment="Center"
-                               FontSize="12"
-                               Foreground="#FF667085"
+                               Style="{StaticResource CiaSecondaryTextStyle}"
                                Text="{Binding GlobalStatus.HostStatusText, ElementName=WindowRoot}" />
                 </StackPanel>
 
@@ -675,15 +145,12 @@
                             VerticalAlignment="Center"
                             Orientation="Horizontal">
                     <TextBlock Margin="0,0,7,0"
-                               FontSize="12"
-                               FontWeight="Bold"
-                               Foreground="#FF1F2430"
+                               Style="{StaticResource CiaStatusLabelTextStyle}"
                                Text="Operation" />
                     <TextBlock AutomationProperties.LiveSetting="Polite"
                                AutomationProperties.Name="Global operation status"
                                VerticalAlignment="Center"
-                               FontSize="12"
-                               Foreground="#FF667085"
+                               Style="{StaticResource CiaSecondaryTextStyle}"
                                Text="{Binding GlobalStatus.OperationStatusText, ElementName=WindowRoot}"
                                TextTrimming="CharacterEllipsis" />
                 </StackPanel>
