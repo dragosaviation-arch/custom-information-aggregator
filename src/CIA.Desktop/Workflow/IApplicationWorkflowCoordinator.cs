@@ -6,6 +6,8 @@ public interface IApplicationWorkflowCoordinator
 {
     WorkflowStateSnapshot Current { get; }
 
+    event EventHandler<WorkflowStateSnapshot>? StateChanged;
+
     WorkflowCommandResult RecordSourceSelectionChanged(bool hasValidSourceSelection);
 
     WorkflowCommandResult RecordDiscoveryConfigurationChanged();

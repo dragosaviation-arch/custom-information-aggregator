@@ -35,11 +35,14 @@ public sealed class ApplicationHostTests
         var secondSession = host.Services.GetRequiredService<ApplicationSession>();
         var viewModel = host.Services.GetRequiredService<MainWindowViewModel>();
         var workflowCoordinator = host.Services.GetRequiredService<IApplicationWorkflowCoordinator>();
+        var globalStatus = host.Services.GetRequiredService<GlobalStatusViewModel>();
         var serviceProbe = host.Services.GetRequiredService<IServiceProviderIsService>();
 
         Assert.AreSame(firstSession, secondSession);
         Assert.AreSame(firstSession, viewModel.Session);
         Assert.IsInstanceOfType<ApplicationWorkflowCoordinator>(workflowCoordinator);
+        Assert.AreEqual("Stopped", globalStatus.HostStatusText);
+        Assert.AreEqual("No operation", globalStatus.OperationStatusText);
         Assert.IsTrue(serviceProbe.IsService(typeof(MainWindow)));
     }
 

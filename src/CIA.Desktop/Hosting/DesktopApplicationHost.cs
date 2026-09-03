@@ -28,6 +28,7 @@ public static class DesktopApplicationHost
             });
 
         builder.Services.AddSingleton<ApplicationSession>();
+        builder.Services.AddSingleton<GlobalStatusViewModel>();
         builder.Services.AddSingleton<MainWindowViewModel>();
         builder.Services.AddSingleton<MainWindow>();
         builder.Services.AddSingleton(
