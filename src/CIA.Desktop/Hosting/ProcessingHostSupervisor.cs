@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using CIA.Contracts.Ipc;
+using CIA.Contracts.Operations;
 using CIA.Core.Diagnostics;
 using CIA.Desktop.Ipc;
 using Microsoft.Extensions.Logging;
@@ -13,6 +14,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
     private readonly IProcessingHostProcessLauncher _processLauncher;
     private readonly ILogger<ProcessingHostSupervisor> _logger;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly SemaphoreSlim _requestGate = new(1, 1);
     private readonly object _stateGate = new();
     private readonly Guid _clientInstanceId = Guid.CreateVersion7();
 
@@ -91,6 +93,50 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         await StopCoreAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<bool> RequestOperationCancellationAsync(
+        OperationId operationId,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (!IsCurrentHostReady())
+            {
+                return false;
+            }
+
+            var connection = _connection!;
+            await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                using var commandCancellation = new CancellationTokenSource(
+                    _options.LivenessTimeout);
+                var command = new CancelOperationCommand(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    operationId);
+                await connection.SendAsync(command, commandCancellation.Token).ConfigureAwait(false);
+                var acknowledgement = await ReceiveAcknowledgementAsync(
+                        connection,
+                        command.MessageId,
+                        commandCancellation.Token)
+                    .ConfigureAwait(false);
+                return acknowledgement.Acceptance == CommandAcceptance.Accepted;
+            }
+            finally
+            {
+                _requestGate.Release();
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -99,6 +145,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         }
 
         StopCoreAsync(CancellationToken.None).GetAwaiter().GetResult();
+        _requestGate.Dispose();
         _lifecycleGate.Dispose();
     }
 
@@ -110,6 +157,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         }
 
         await StopCoreAsync(CancellationToken.None).ConfigureAwait(false);
+        _requestGate.Dispose();
         _lifecycleGate.Dispose();
     }
 
@@ -339,11 +387,20 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         var command = new ProcessingHostLivenessCommand(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow);
-        await connection.SendAsync(command, livenessCancellation.Token).ConfigureAwait(false);
-        await ReceiveAcceptedAcknowledgementAsync(
-            connection,
-            command.MessageId,
-            livenessCancellation.Token).ConfigureAwait(false);
+        await _requestGate.WaitAsync(livenessCancellation.Token).ConfigureAwait(false);
+
+        try
+        {
+            await connection.SendAsync(command, livenessCancellation.Token).ConfigureAwait(false);
+            await ReceiveAcceptedAcknowledgementAsync(
+                connection,
+                command.MessageId,
+                livenessCancellation.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            _requestGate.Release();
+        }
     }
 
     private async Task HandleUnexpectedLossAsync(
@@ -560,19 +617,40 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         Guid commandMessageId,
         CancellationToken cancellationToken)
     {
-        var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+        var acknowledgement = await ReceiveAcknowledgementAsync(
+                connection,
+                commandMessageId,
+                cancellationToken)
+            .ConfigureAwait(false);
 
-        if (response is not CommandAcknowledgement
+        if (acknowledgement is not
             {
                 Acceptance: CommandAcceptance.Accepted,
                 Failure: null
-            } acknowledgement
+            })
+        {
+            throw new ProcessingHostLifecycleException(
+                ProcessingHostLifecycleError.InvalidReadinessResponse,
+                "The Processing Host returned an invalid lifecycle-command acknowledgement.");
+        }
+    }
+
+    private static async Task<CommandAcknowledgement> ReceiveAcknowledgementAsync(
+        NamedPipeIpcConnection connection,
+        Guid commandMessageId,
+        CancellationToken cancellationToken)
+    {
+        var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+
+        if (response is not CommandAcknowledgement acknowledgement
             || acknowledgement.CommandMessageId != commandMessageId)
         {
             throw new ProcessingHostLifecycleException(
                 ProcessingHostLifecycleError.InvalidReadinessResponse,
                 "The Processing Host returned an invalid lifecycle-command acknowledgement.");
         }
+
+        return acknowledgement;
     }
 
     private async Task TerminateFailedStartAsync(Process process)

@@ -27,6 +27,9 @@ public static class IpcContractValidator
             case ProcessingHostLivenessCommand:
             case StopProcessingHostCommand:
                 break;
+            case CancelOperationCommand command:
+                ValidateCancelOperationCommand(command);
+                break;
             case CommandAcknowledgement acknowledgement:
                 ValidateCommandAcknowledgement(acknowledgement);
                 break;
@@ -74,6 +77,15 @@ public static class IpcContractValidator
         }
 
         ValidateFailure(acknowledgement.Failure);
+    }
+
+    private static void ValidateCancelOperationCommand(CancelOperationCommand command)
+    {
+        if (!CIA.Contracts.Operations.OperationId.IsValid(command.OperationId.Value))
+        {
+            throw InvalidContract(
+                "A cancellation command requires a non-empty UUIDv7 Operation ID.");
+        }
     }
 
     private static void ValidateProcessingHostAvailabilityEvent(

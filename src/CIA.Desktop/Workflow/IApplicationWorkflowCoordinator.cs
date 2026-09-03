@@ -16,6 +16,9 @@ public interface IApplicationWorkflowCoordinator
         WorkflowOperationKind operationKind,
         CancellationToken cancellationToken = default);
 
+    Task<WorkflowCommandResult> RequestCancellationAsync(
+        CancellationToken cancellationToken = default);
+
     WorkflowCommandResult CompleteOperation(
         OperationId operationId,
         OperationOutcome outcome);

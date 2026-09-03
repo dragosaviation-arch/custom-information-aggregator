@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using CIA.Contracts.Ipc;
+using CIA.Contracts.Operations;
 using CIA.Desktop.Ipc;
 using CIA.ProcessingHost.Ipc;
 
@@ -99,6 +100,10 @@ public sealed class NamedPipeIpcTests
         IpcMessage[] messages =
         [
             new ProcessingHostLivenessCommand(Guid.CreateVersion7(), DateTimeOffset.UtcNow),
+            new CancelOperationCommand(
+                Guid.CreateVersion7(),
+                DateTimeOffset.UtcNow,
+                OperationId.CreateNew()),
             new StopProcessingHostCommand(Guid.CreateVersion7(), DateTimeOffset.UtcNow)
         ];
 
@@ -165,6 +170,22 @@ public sealed class NamedPipeIpcTests
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             (ProcessingHostAvailability)int.MaxValue);
+        await using var stream = new MemoryStream();
+
+        await AssertProtocolErrorAsync(
+            () => LengthPrefixedJsonMessageFramer.WriteAsync(stream, invalidMessage).AsTask(),
+            IpcProtocolError.InvalidContract);
+
+        Assert.AreEqual(0, stream.Length);
+    }
+
+    [TestMethod]
+    public async Task WriterRejectsCancellationWithoutValidOperationIdentity()
+    {
+        var invalidMessage = new CancelOperationCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            default);
         await using var stream = new MemoryStream();
 
         await AssertProtocolErrorAsync(

@@ -12,7 +12,9 @@ public enum WorkflowRejectionCode
     ConflictingOperation = 6,
     ProcessingHostUnavailable = 7,
     OperationMismatch = 8,
-    InvalidOutcome = 9
+    InvalidOutcome = 9,
+    NoActiveOperation = 10,
+    CancellationRejected = 11
 }
 
 public sealed record WorkflowRejection(

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using CIA.Contracts.Ipc;
 using CIA.ProcessingHost.Ipc;
+using CIA.ProcessingHost.Operations;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -9,6 +10,7 @@ namespace CIA.ProcessingHost.Hosting;
 
 public sealed class ProcessingHostLifetimeService(
     ProcessingHostRuntimeOptions options,
+    CooperativeOperationCancellation operationCancellation,
     IHostApplicationLifetime applicationLifetime,
     ILogger<ProcessingHostLifetimeService> logger) : BackgroundService
 {
@@ -118,6 +120,31 @@ public sealed class ProcessingHostLifetimeService(
                         .ConfigureAwait(false);
                     break;
 
+                case CancelOperationCommand command when established:
+                    var cancellation = operationCancellation.RequestCancellation(
+                        command.OperationId);
+
+                    if (cancellation.Accepted)
+                    {
+                        await SendAcceptedAsync(connection, command.MessageId, cancellationToken)
+                            .ConfigureAwait(false);
+                        logger.LogInformation(
+                            "Processing Host accepted cooperative cancellation for operation {OperationId}",
+                            command.OperationId);
+                    }
+                    else
+                    {
+                        await SendRejectedAsync(
+                                connection,
+                                command.MessageId,
+                                "operation-not-active",
+                                "The requested operation is not active in the Processing Host.",
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+
+                    break;
+
                 case StopProcessingHostCommand command when established:
                     await SendAcceptedAsync(connection, command.MessageId, cancellationToken)
                         .ConfigureAwait(false);
@@ -177,6 +204,21 @@ public sealed class ProcessingHostLifetimeService(
         Guid commandMessageId,
         CancellationToken cancellationToken)
     {
+        return SendRejectedAsync(
+            connection,
+            commandMessageId,
+            "invalid-lifecycle-sequence",
+            "The message is not valid in the current Processing Host lifecycle state.",
+            cancellationToken);
+    }
+
+    private static ValueTask SendRejectedAsync(
+        NamedPipeIpcConnection connection,
+        Guid commandMessageId,
+        string failureCode,
+        string failureDescription,
+        CancellationToken cancellationToken)
+    {
         return connection.SendAsync(
             new CommandAcknowledgement(
                 Guid.CreateVersion7(),
@@ -184,8 +226,8 @@ public sealed class ProcessingHostLifetimeService(
                 commandMessageId,
                 CommandAcceptance.Rejected,
                 new IpcFailure(
-                    "invalid-lifecycle-sequence",
-                    "The message is not valid in the current Processing Host lifecycle state.")),
+                    failureCode,
+                    failureDescription)),
             cancellationToken);
     }
 

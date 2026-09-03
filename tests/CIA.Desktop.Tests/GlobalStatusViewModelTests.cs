@@ -210,6 +210,14 @@ public sealed class GlobalStatusViewModelTests
             return Task.CompletedTask;
         }
 
+        public Task<bool> RequestOperationCancellationAsync(
+            OperationId operationId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(false);
+        }
+
         public void Publish(ProcessingHostLifecycleState state)
         {
             Current = CreateSnapshot(state);

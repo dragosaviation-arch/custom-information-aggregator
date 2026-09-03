@@ -175,6 +175,63 @@ public sealed class ApplicationWorkflowCoordinator :
         }
     }
 
+    public async Task<WorkflowCommandResult> RequestCancellationAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ActiveWorkflowOperation activeOperation;
+
+        lock (_stateGate)
+        {
+            if (_current.ActiveOperation is null)
+            {
+                return WorkflowCommandResult.Reject(
+                    WorkflowRejectionCode.NoActiveOperation,
+                    "There is no active operation to cancel.");
+            }
+
+            activeOperation = _current.ActiveOperation;
+        }
+
+        bool accepted;
+
+        try
+        {
+            accepted = await _processingHostSupervisor
+                .RequestOperationCancellationAsync(
+                    activeOperation.Correlation.OperationId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            accepted = false;
+        }
+
+        if (!accepted)
+        {
+            return WorkflowCommandResult.Reject(
+                WorkflowRejectionCode.CancellationRejected,
+                "The active operation could not accept cancellation.");
+        }
+
+        lock (_stateGate)
+        {
+            if (_current.ActiveOperation?.Correlation.OperationId
+                != activeOperation.Correlation.OperationId)
+            {
+                return WorkflowCommandResult.Reject(
+                    WorkflowRejectionCode.OperationMismatch,
+                    "The active operation changed before cancellation was accepted.");
+            }
+        }
+
+        return WorkflowCommandResult.Accept(activeOperation.Correlation);
+    }
+
     public WorkflowCommandResult CompleteOperation(
         OperationId operationId,
         OperationOutcome outcome)
