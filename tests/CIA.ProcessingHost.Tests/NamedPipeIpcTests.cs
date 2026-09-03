@@ -120,6 +120,61 @@ public sealed class NamedPipeIpcTests
     }
 
     [TestMethod]
+    public async Task RejectedAcknowledgementRoundTripsControlledFailureDetails()
+    {
+        var acknowledgement = new CommandAcknowledgement(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            Guid.CreateVersion7(),
+            CommandAcceptance.Rejected,
+            new IpcFailure(
+                "invalid-lifecycle-sequence",
+                "The command is not valid in the current Processing Host lifecycle state."));
+        await using var stream = new MemoryStream();
+
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, acknowledgement);
+        stream.Position = 0;
+
+        var roundTripped = await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
+
+        Assert.IsInstanceOfType<CommandAcknowledgement>(roundTripped);
+        Assert.AreEqual(acknowledgement, roundTripped);
+        Assert.AreEqual(acknowledgement.Failure, ((CommandAcknowledgement)roundTripped).Failure);
+    }
+
+    [TestMethod]
+    public async Task FramerReassemblesHeaderAndPayloadFromFragmentedReads()
+    {
+        var expected = CreateConnectionCommand();
+        await using var completeFrame = new MemoryStream();
+        await LengthPrefixedJsonMessageFramer.WriteAsync(completeFrame, expected);
+        await using var fragmentedFrame = new FragmentedReadStream(
+            completeFrame.ToArray(),
+            maximumReadSize: 1);
+
+        var actual = await LengthPrefixedJsonMessageFramer.ReadAsync(fragmentedFrame);
+
+        Assert.AreEqual(expected, actual);
+        Assert.AreEqual(fragmentedFrame.Length, fragmentedFrame.Position);
+    }
+
+    [TestMethod]
+    public async Task WriterRejectsInvalidContractBeforeWritingFrameBytes()
+    {
+        var invalidMessage = new ProcessingHostAvailabilityEvent(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            (ProcessingHostAvailability)int.MaxValue);
+        await using var stream = new MemoryStream();
+
+        await AssertProtocolErrorAsync(
+            () => LengthPrefixedJsonMessageFramer.WriteAsync(stream, invalidMessage).AsTask(),
+            IpcProtocolError.InvalidContract);
+
+        Assert.AreEqual(0, stream.Length);
+    }
+
+    [TestMethod]
     [DataRow(0)]
     [DataRow(-1)]
     [DataRow(IpcProtocol.MaximumPayloadLength + 1)]
@@ -173,6 +228,24 @@ public sealed class NamedPipeIpcTests
             }
             """;
         await using var stream = CreateFrame(Encoding.UTF8.GetBytes(unknownMessage));
+
+        await AssertProtocolErrorAsync(
+            () => LengthPrefixedJsonMessageFramer.ReadAsync(stream).AsTask(),
+            IpcProtocolError.MalformedJson);
+    }
+
+    [TestMethod]
+    public async Task FramerRejectsUnmappedJsonMembers()
+    {
+        var messageWithUnmappedMember = $$"""
+            {
+              "messageType": "processingHostLivenessCommand",
+              "messageId": "{{Guid.CreateVersion7()}}",
+              "timestampUtc": "{{DateTimeOffset.UtcNow:O}}",
+              "unexpected": "boundary input"
+            }
+            """;
+        await using var stream = CreateFrame(Encoding.UTF8.GetBytes(messageWithUnmappedMember));
 
         await AssertProtocolErrorAsync(
             () => LengthPrefixedJsonMessageFramer.ReadAsync(stream).AsTask(),
@@ -274,6 +347,19 @@ public sealed class NamedPipeIpcTests
         catch (IpcProtocolException exception)
         {
             Assert.AreEqual(expectedError, exception.Error);
+        }
+    }
+
+    private sealed class FragmentedReadStream(byte[] buffer, int maximumReadSize)
+        : MemoryStream(buffer, writable: false)
+    {
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> destination,
+            CancellationToken cancellationToken = default)
+        {
+            return base.ReadAsync(
+                destination[..Math.Min(destination.Length, maximumReadSize)],
+                cancellationToken);
         }
     }
 }

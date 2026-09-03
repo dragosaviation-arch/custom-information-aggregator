@@ -62,6 +62,65 @@ public sealed class ProcessingHostLifecycleTests
     }
 
     [TestMethod]
+    public async Task RealHostRejectsPrematureCommandThenAcknowledgesLivenessAndShutdown()
+    {
+        using var logs = new TemporaryLifecycleLogDirectory();
+        using var timeout = new CancellationTokenSource(TestTimeout);
+        var pipeName = $"CIA.Tests.SPR60.{Guid.NewGuid():N}";
+        string[] arguments =
+        [
+            $"--{ProcessingHostRuntimeContract.PipeNameConfigurationKey}={pipeName}",
+            $"--{ProcessingHostRuntimeContract.ParentProcessIdConfigurationKey}={Environment.ProcessId}",
+            $"--{ApplicationLogPaths.DirectoryConfigurationKey}={logs.Path}"
+        ];
+        using var host = ProcessingHostApplicationHost.Create(arguments);
+        var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+
+        await host.StartAsync(timeout.Token);
+        await using var connection = await CIA.Desktop.Ipc.ProcessingHostIpcClient
+            .ConnectAsync(pipeName, timeout.Token);
+
+        var prematureLiveness = new ProcessingHostLivenessCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow);
+        await connection.SendAsync(prematureLiveness, timeout.Token);
+        var rejection = await ReceiveAcknowledgementAsync(
+            connection,
+            prematureLiveness.MessageId,
+            CommandAcceptance.Rejected,
+            timeout.Token);
+        Assert.IsNotNull(rejection.Failure);
+        Assert.AreEqual("invalid-lifecycle-sequence", rejection.Failure.Code);
+
+        await CompleteReadinessHandshakeAsync(connection, timeout.Token);
+
+        var liveness = new ProcessingHostLivenessCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow);
+        await connection.SendAsync(liveness, timeout.Token);
+        var livenessAcknowledgement = await ReceiveAcknowledgementAsync(
+            connection,
+            liveness.MessageId,
+            CommandAcceptance.Accepted,
+            timeout.Token);
+        Assert.IsNull(livenessAcknowledgement.Failure);
+
+        var stop = new StopProcessingHostCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow);
+        await connection.SendAsync(stop, timeout.Token);
+        var stopAcknowledgement = await ReceiveAcknowledgementAsync(
+            connection,
+            stop.MessageId,
+            CommandAcceptance.Accepted,
+            timeout.Token);
+        Assert.IsNull(stopAcknowledgement.Failure);
+
+        await WaitForCancellationAsync(lifetime.ApplicationStopping, timeout.Token);
+        await host.StopAsync(timeout.Token);
+    }
+
+    [TestMethod]
     public async Task ConcurrentAvailabilityRequestsDoNotCreateDuplicateHosts()
     {
         await using var fixture = new SupervisorFixture();
@@ -287,6 +346,21 @@ public sealed class ProcessingHostLifecycleTests
         Assert.AreEqual(
             ProcessingHostAvailability.Ready,
             ((ProcessingHostAvailabilityEvent)availability).Availability);
+    }
+
+    private static async Task<CommandAcknowledgement> ReceiveAcknowledgementAsync(
+        NamedPipeIpcConnection connection,
+        Guid commandMessageId,
+        CommandAcceptance expectedAcceptance,
+        CancellationToken cancellationToken)
+    {
+        var message = await connection.ReceiveAsync(cancellationToken);
+        Assert.IsInstanceOfType<CommandAcknowledgement>(message);
+
+        var acknowledgement = (CommandAcknowledgement)message;
+        Assert.AreEqual(commandMessageId, acknowledgement.CommandMessageId);
+        Assert.AreEqual(expectedAcceptance, acknowledgement.Acceptance);
+        return acknowledgement;
     }
 
     private static async Task<ProcessingHostLifecycleSnapshot> WaitForStateAsync(
