@@ -15,11 +15,9 @@ public sealed class MainWindowViewModel : ObservableObject
         Workspaces = Array.AsReadOnly<WorkspaceDefinition>(
         [
             new(WorkspaceArea.Load, "Load", "Source loading and active-session source selection."),
-            new(WorkspaceArea.Discover, "Discover", "Information discovery and mapping."),
-            new(WorkspaceArea.Database, "Database", "Structured results and filtering."),
-            new(WorkspaceArea.ExtractionReviewExport, "Extraction / Review / Export", "Extraction, result review, and export."),
-            new(WorkspaceArea.ActivityDiagnostics, "Activity / Diagnostics", "Operation activity and diagnostic information."),
-            new(WorkspaceArea.SettingsMaintenance, "Settings / Maintenance", "Application settings and managed-data maintenance.")
+            new(WorkspaceArea.Discovery, "Discovery", "Information discovery and mapping."),
+            new(WorkspaceArea.Database, "Database", "Structured results, extraction, review, and export."),
+            new(WorkspaceArea.Settings, "Settings", "Application settings, history, diagnostics, and maintenance.")
         ]);
         _selectedWorkspace = Workspaces[0];
     }
