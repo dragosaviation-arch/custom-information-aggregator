@@ -6,6 +6,7 @@ using CIA.Core.Diagnostics;
 using CIA.Desktop;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
+using CIA.Desktop.Workflow;
 using CIA.ProcessingHost.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,10 +34,12 @@ public sealed class ApplicationHostTests
         var firstSession = host.Services.GetRequiredService<ApplicationSession>();
         var secondSession = host.Services.GetRequiredService<ApplicationSession>();
         var viewModel = host.Services.GetRequiredService<MainWindowViewModel>();
+        var workflowCoordinator = host.Services.GetRequiredService<IApplicationWorkflowCoordinator>();
         var serviceProbe = host.Services.GetRequiredService<IServiceProviderIsService>();
 
         Assert.AreSame(firstSession, secondSession);
         Assert.AreSame(firstSession, viewModel.Session);
+        Assert.IsInstanceOfType<ApplicationWorkflowCoordinator>(workflowCoordinator);
         Assert.IsTrue(serviceProbe.IsService(typeof(MainWindow)));
     }
 

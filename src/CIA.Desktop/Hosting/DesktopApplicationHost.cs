@@ -2,6 +2,7 @@ using System.IO;
 using CIA.Core;
 using CIA.Core.Diagnostics;
 using CIA.Desktop.Presentation;
+using CIA.Desktop.Workflow;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -38,6 +39,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<IProcessingHostSupervisor>(
             services => services.GetRequiredService<ProcessingHostSupervisor>());
         builder.Services.AddHostedService<ProcessingHostSupervisorLifetime>();
+        builder.Services.AddSingleton<IApplicationWorkflowCoordinator, ApplicationWorkflowCoordinator>();
 
         ConfigureLogging(builder);
         return builder.Build();

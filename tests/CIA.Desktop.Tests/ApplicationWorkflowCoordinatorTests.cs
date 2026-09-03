@@ -1,0 +1,257 @@
+using CIA.Contracts.Operations;
+using CIA.Desktop.Hosting;
+using CIA.Desktop.Workflow;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace CIA.Desktop.Tests;
+
+[TestClass]
+public sealed class ApplicationWorkflowCoordinatorTests
+{
+    [TestMethod]
+    public async Task ValidIntentIsCoordinatedThroughProcessingHostAvailability()
+    {
+        var supervisor = new StubProcessingHostSupervisor();
+        var coordinator = CreateCoordinator(supervisor);
+
+        Assert.IsTrue(coordinator.RecordSourceSelectionChanged(true).Accepted);
+
+        var result = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.IsNotNull(result.Operation);
+        Assert.AreEqual(7, result.Operation.OperationId.Value.Version);
+        Assert.AreEqual(1, supervisor.EnsureAvailableCallCount);
+        Assert.AreEqual(result.Operation, coordinator.Current.ActiveOperation?.Correlation);
+    }
+
+    [TestMethod]
+    public async Task MissingPrerequisiteIsRejectedBeforeHostAvailabilityIsRequested()
+    {
+        var supervisor = new StubProcessingHostSupervisor();
+        var coordinator = CreateCoordinator(supervisor);
+
+        var result = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.MissingSourceSelection, result.Rejection?.Code);
+        Assert.IsNull(result.Operation);
+        Assert.AreEqual(0, supervisor.EnsureAvailableCallCount);
+        Assert.IsNull(coordinator.Current.ActiveOperation);
+    }
+
+    [TestMethod]
+    public async Task ConflictingMutationIsRejectedWhileAnOperationIsActive()
+    {
+        var supervisor = new StubProcessingHostSupervisor();
+        var coordinator = CreateCoordinator(supervisor);
+        coordinator.RecordSourceSelectionChanged(true);
+        var discovery = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        var conflictingOperation = await coordinator.BeginOperationAsync(
+            WorkflowOperationKind.DatabaseBuild);
+        var conflictingSourceChange = coordinator.RecordSourceSelectionChanged(false);
+
+        Assert.IsTrue(discovery.Accepted);
+        Assert.AreEqual(
+            WorkflowRejectionCode.ConflictingOperation,
+            conflictingOperation.Rejection?.Code);
+        Assert.AreEqual(
+            WorkflowRejectionCode.ConflictingOperation,
+            conflictingSourceChange.Rejection?.Code);
+        Assert.IsTrue(coordinator.Current.HasValidSourceSelection);
+        Assert.AreEqual(1, supervisor.EnsureAvailableCallCount);
+    }
+
+    [TestMethod]
+    public async Task SuccessfulWorkflowTracksCurrentAndCascadingStaleState()
+    {
+        var coordinator = CreateCoordinator(new StubProcessingHostSupervisor());
+        coordinator.RecordSourceSelectionChanged(true);
+
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.Discovery);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.DatabaseBuild);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.Extraction);
+
+        Assert.AreEqual(WorkflowArtifactStatus.Current, coordinator.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, coordinator.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, coordinator.Current.Extraction);
+
+        var sourceChange = coordinator.RecordSourceSelectionChanged(true);
+
+        Assert.IsTrue(sourceChange.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, coordinator.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, coordinator.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, coordinator.Current.Extraction);
+    }
+
+    [TestMethod]
+    public async Task DiscoveryConfigurationChangeMakesDownstreamArtifactsStale()
+    {
+        var coordinator = CreateCoordinator(new StubProcessingHostSupervisor());
+        coordinator.RecordSourceSelectionChanged(true);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.Discovery);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.DatabaseBuild);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.Extraction);
+
+        var result = coordinator.RecordDiscoveryConfigurationChanged();
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, coordinator.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, coordinator.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, coordinator.Current.Extraction);
+    }
+
+    [TestMethod]
+    public async Task DownstreamOperationsRequireCurrentUpstreamState()
+    {
+        var supervisor = new StubProcessingHostSupervisor();
+        var coordinator = CreateCoordinator(supervisor);
+        coordinator.RecordSourceSelectionChanged(true);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.Discovery);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.DatabaseBuild);
+        coordinator.RecordSourceSelectionChanged(true);
+
+        var database = await coordinator.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
+        var extraction = await coordinator.BeginOperationAsync(WorkflowOperationKind.Extraction);
+        var export = await coordinator.BeginOperationAsync(WorkflowOperationKind.Export);
+
+        Assert.AreEqual(WorkflowRejectionCode.DiscoveryNotCurrent, database.Rejection?.Code);
+        Assert.AreEqual(WorkflowRejectionCode.DatabaseNotCurrent, extraction.Rejection?.Code);
+        Assert.AreEqual(WorkflowRejectionCode.ExtractionNotCurrent, export.Rejection?.Code);
+        Assert.AreEqual(2, supervisor.EnsureAvailableCallCount);
+    }
+
+    [TestMethod]
+    public async Task FailedAttemptPreservesPublishedStateAndNextAttemptHasNewIdentity()
+    {
+        var coordinator = CreateCoordinator(new StubProcessingHostSupervisor());
+        coordinator.RecordSourceSelectionChanged(true);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.Discovery);
+
+        var failedAttempt = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+        var failedCompletion = coordinator.CompleteOperation(
+            failedAttempt.Operation!.OperationId,
+            OperationOutcome.Failed);
+        var nextAttempt = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        Assert.IsTrue(failedCompletion.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, coordinator.Current.Discovery);
+        Assert.AreNotEqual(
+            failedAttempt.Operation.OperationId,
+            nextAttempt.Operation?.OperationId);
+    }
+
+    [TestMethod]
+    public async Task HostFailureIsReturnedWithoutExposingTheRawException()
+    {
+        const string sensitiveMessage = "internal host failure details";
+        var supervisor = new StubProcessingHostSupervisor
+        {
+            AvailabilityException = new InvalidOperationException(sensitiveMessage)
+        };
+        var coordinator = CreateCoordinator(supervisor);
+        coordinator.RecordSourceSelectionChanged(true);
+
+        var result = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.ProcessingHostUnavailable, result.Rejection?.Code);
+        Assert.IsFalse(result.Rejection!.Reason.Contains(sensitiveMessage, StringComparison.Ordinal));
+        Assert.IsNull(coordinator.Current.ActiveOperation);
+    }
+
+    [TestMethod]
+    public async Task InvalidCommandAndMismatchedCompletionAreRejectedCleanly()
+    {
+        var supervisor = new StubProcessingHostSupervisor();
+        var coordinator = CreateCoordinator(supervisor);
+
+        var unsupported = await coordinator.BeginOperationAsync((WorkflowOperationKind)999);
+        var mismatch = coordinator.CompleteOperation(
+            OperationId.CreateNew(),
+            OperationOutcome.CompletedSuccessfully);
+
+        Assert.AreEqual(WorkflowRejectionCode.UnsupportedOperation, unsupported.Rejection?.Code);
+        Assert.AreEqual(WorkflowRejectionCode.OperationMismatch, mismatch.Rejection?.Code);
+        Assert.AreEqual(0, supervisor.EnsureAvailableCallCount);
+    }
+
+    [TestMethod]
+    public void DesktopWorkflowAssemblyDoesNotReferenceProcessingHostImplementation()
+    {
+        var referencedAssemblies = typeof(ApplicationWorkflowCoordinator)
+            .Assembly
+            .GetReferencedAssemblies()
+            .Select(assembly => assembly.Name)
+            .ToArray();
+
+        CollectionAssert.DoesNotContain(referencedAssemblies, "CIA.ProcessingHost");
+    }
+
+    private static ApplicationWorkflowCoordinator CreateCoordinator(
+        IProcessingHostSupervisor supervisor)
+    {
+        return new ApplicationWorkflowCoordinator(
+            supervisor,
+            NullLogger<ApplicationWorkflowCoordinator>.Instance);
+    }
+
+    private static async Task CompleteSuccessfullyAsync(
+        IApplicationWorkflowCoordinator coordinator,
+        WorkflowOperationKind operationKind)
+    {
+        var begin = await coordinator.BeginOperationAsync(operationKind);
+        Assert.IsTrue(begin.Accepted);
+        Assert.IsNotNull(begin.Operation);
+
+        var completion = coordinator.CompleteOperation(
+            begin.Operation.OperationId,
+            OperationOutcome.CompletedSuccessfully);
+        Assert.IsTrue(completion.Accepted);
+    }
+
+    private sealed class StubProcessingHostSupervisor : IProcessingHostSupervisor
+    {
+        public ProcessingHostLifecycleSnapshot Current { get; private set; } = new(
+            ProcessingHostLifecycleState.Ready,
+            HostDesired: true,
+            ProcessId: 1234,
+            FailureCode: null);
+
+        public int EnsureAvailableCallCount { get; private set; }
+
+        public Exception? AvailabilityException { get; init; }
+
+        public event EventHandler<ProcessingHostLifecycleSnapshot>? StateChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public Task<ProcessingHostLifecycleSnapshot> EnsureAvailableAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureAvailableCallCount++;
+
+            if (AvailabilityException is not null)
+            {
+                throw AvailabilityException;
+            }
+
+            return Task.FromResult(Current);
+        }
+
+        public Task StopAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Current = new ProcessingHostLifecycleSnapshot(
+                ProcessingHostLifecycleState.Stopped,
+                HostDesired: false,
+                ProcessId: null,
+                FailureCode: null);
+            return Task.CompletedTask;
+        }
+    }
+}
