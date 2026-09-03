@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CIA.Contracts/CIA.Contracts.csproj" />
+    <Project Path="src/CIA.Core/CIA.Core.csproj" />
+    <Project Path="src/CIA.Desktop/CIA.Desktop.csproj" />
+    <Project Path="src/CIA.ProcessingHost/CIA.ProcessingHost.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CIA.Desktop.Tests/CIA.Desktop.Tests.csproj" />
+    <Project Path="tests/CIA.ProcessingHost.Tests/CIA.ProcessingHost.Tests.csproj" />
+  </Folder>
+</Solution>
