@@ -17,21 +17,39 @@ public enum WorkflowOperationKind
     Export = 4
 }
 
+public enum WorkflowOperationState
+{
+    Active = 1,
+    CompletedSuccessfully = 2,
+    CompletedWithIssues = 3,
+    Failed = 4,
+    Cancelled = 5,
+    InterruptedIncomplete = 6
+}
+
 public sealed record ActiveWorkflowOperation(
     WorkflowOperationKind Kind,
     OperationCorrelation Correlation);
+
+public sealed record WorkflowOperationStatus(
+    WorkflowOperationKind Kind,
+    OperationCorrelation Correlation,
+    WorkflowOperationState State,
+    string? Detail);
 
 public sealed record WorkflowStateSnapshot(
     bool HasValidSourceSelection,
     WorkflowArtifactStatus Discovery,
     WorkflowArtifactStatus Database,
     WorkflowArtifactStatus Extraction,
-    ActiveWorkflowOperation? ActiveOperation)
+    ActiveWorkflowOperation? ActiveOperation,
+    WorkflowOperationStatus? LatestOperation)
 {
     public static WorkflowStateSnapshot Empty { get; } = new(
         HasValidSourceSelection: false,
         WorkflowArtifactStatus.Unavailable,
         WorkflowArtifactStatus.Unavailable,
         WorkflowArtifactStatus.Unavailable,
-        ActiveOperation: null);
+        ActiveOperation: null,
+        LatestOperation: null);
 }

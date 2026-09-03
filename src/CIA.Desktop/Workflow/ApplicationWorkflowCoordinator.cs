@@ -4,12 +4,15 @@ using Microsoft.Extensions.Logging;
 
 namespace CIA.Desktop.Workflow;
 
-public sealed class ApplicationWorkflowCoordinator : IApplicationWorkflowCoordinator
+public sealed class ApplicationWorkflowCoordinator :
+    IApplicationWorkflowCoordinator,
+    IDisposable
 {
     private readonly IProcessingHostSupervisor _processingHostSupervisor;
     private readonly ILogger<ApplicationWorkflowCoordinator> _logger;
     private readonly object _stateGate = new();
     private WorkflowStateSnapshot _current = WorkflowStateSnapshot.Empty;
+    private int _disposed;
 
     public ApplicationWorkflowCoordinator(
         IProcessingHostSupervisor processingHostSupervisor,
@@ -20,6 +23,7 @@ public sealed class ApplicationWorkflowCoordinator : IApplicationWorkflowCoordin
 
         _processingHostSupervisor = processingHostSupervisor;
         _logger = logger;
+        _processingHostSupervisor.StateChanged += OnProcessingHostStateChanged;
     }
 
     public WorkflowStateSnapshot Current
@@ -33,8 +37,12 @@ public sealed class ApplicationWorkflowCoordinator : IApplicationWorkflowCoordin
         }
     }
 
+    public event EventHandler<WorkflowStateSnapshot>? StateChanged;
+
     public WorkflowCommandResult RecordSourceSelectionChanged(bool hasValidSourceSelection)
     {
+        WorkflowStateSnapshot changedState;
+
         lock (_stateGate)
         {
             var conflict = RejectIfOperationActive();
@@ -50,13 +58,17 @@ public sealed class ApplicationWorkflowCoordinator : IApplicationWorkflowCoordin
                 Database = MakeStaleIfAvailable(_current.Database),
                 Extraction = MakeStaleIfAvailable(_current.Extraction)
             };
-
-            return WorkflowCommandResult.Accept();
+            changedState = _current;
         }
+
+        PublishStateChanged(changedState);
+        return WorkflowCommandResult.Accept();
     }
 
     public WorkflowCommandResult RecordDiscoveryConfigurationChanged()
     {
+        WorkflowStateSnapshot changedState;
+
         lock (_stateGate)
         {
             var conflict = RejectIfOperationActive();
@@ -77,9 +89,11 @@ public sealed class ApplicationWorkflowCoordinator : IApplicationWorkflowCoordin
                 Database = MakeStaleIfAvailable(_current.Database),
                 Extraction = MakeStaleIfAvailable(_current.Extraction)
             };
-
-            return WorkflowCommandResult.Accept();
+            changedState = _current;
         }
+
+        PublishStateChanged(changedState);
+        return WorkflowCommandResult.Accept();
     }
 
     public async Task<WorkflowCommandResult> BeginOperationAsync(
@@ -87,6 +101,7 @@ public sealed class ApplicationWorkflowCoordinator : IApplicationWorkflowCoordin
         CancellationToken cancellationToken = default)
     {
         OperationCorrelation correlation;
+        WorkflowStateSnapshot changedState;
 
         lock (_stateGate)
         {
@@ -99,9 +114,17 @@ public sealed class ApplicationWorkflowCoordinator : IApplicationWorkflowCoordin
             correlation = OperationCorrelation.CreateNew();
             _current = _current with
             {
-                ActiveOperation = new ActiveWorkflowOperation(operationKind, correlation)
+                ActiveOperation = new ActiveWorkflowOperation(operationKind, correlation),
+                LatestOperation = new WorkflowOperationStatus(
+                    operationKind,
+                    correlation,
+                    WorkflowOperationState.Active,
+                    Detail: null)
             };
+            changedState = _current;
         }
+
+        PublishStateChanged(changedState);
 
         try
         {
@@ -111,22 +134,38 @@ public sealed class ApplicationWorkflowCoordinator : IApplicationWorkflowCoordin
 
             if (host.State != ProcessingHostLifecycleState.Ready)
             {
-                ClearActiveOperation(correlation.OperationId);
+                MarkActiveOperationTerminal(
+                    correlation.OperationId,
+                    WorkflowOperationState.Failed,
+                    "The Processing Host is unavailable.");
                 return WorkflowCommandResult.Reject(
                     WorkflowRejectionCode.ProcessingHostUnavailable,
                     "The Processing Host is not available for this operation.");
+            }
+
+            if (!IsActiveOperation(correlation.OperationId))
+            {
+                return WorkflowCommandResult.Reject(
+                    WorkflowRejectionCode.ProcessingHostUnavailable,
+                    "The operation was interrupted before it could start.");
             }
 
             return WorkflowCommandResult.Accept(correlation);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            ClearActiveOperation(correlation.OperationId);
+            MarkActiveOperationTerminal(
+                correlation.OperationId,
+                WorkflowOperationState.Cancelled,
+                "Operation start was cancelled.");
             throw;
         }
         catch (Exception exception)
         {
-            ClearActiveOperation(correlation.OperationId);
+            MarkActiveOperationTerminal(
+                correlation.OperationId,
+                WorkflowOperationState.Failed,
+                "The Processing Host is unavailable.");
             _logger.LogWarning(
                 exception,
                 "The Processing Host was unavailable for {OperationKind}.",
@@ -142,6 +181,9 @@ public sealed class ApplicationWorkflowCoordinator : IApplicationWorkflowCoordin
         OperationId operationId,
         OperationOutcome outcome)
     {
+        WorkflowStateSnapshot changedState;
+        ActiveWorkflowOperation activeOperation;
+
         lock (_stateGate)
         {
             if (!Enum.IsDefined(outcome))
@@ -151,21 +193,36 @@ public sealed class ApplicationWorkflowCoordinator : IApplicationWorkflowCoordin
                     "The operation outcome is not supported.");
             }
 
-            var activeOperation = _current.ActiveOperation;
-            if (activeOperation is null || activeOperation.Correlation.OperationId != operationId)
+            var currentActiveOperation = _current.ActiveOperation;
+            if (currentActiveOperation is null
+                || currentActiveOperation.Correlation.OperationId != operationId)
             {
                 return WorkflowCommandResult.Reject(
                     WorkflowRejectionCode.OperationMismatch,
                     "The completion does not match the active operation.");
             }
 
+            activeOperation = currentActiveOperation;
             _current = ApplyCompletion(_current, activeOperation.Kind, outcome) with
             {
-                ActiveOperation = null
+                ActiveOperation = null,
+                LatestOperation = CreateTerminalStatus(activeOperation, outcome)
             };
-
-            return WorkflowCommandResult.Accept(activeOperation.Correlation);
+            changedState = _current;
         }
+
+        PublishStateChanged(changedState);
+        return WorkflowCommandResult.Accept(activeOperation.Correlation);
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _processingHostSupervisor.StateChanged -= OnProcessingHostStateChanged;
     }
 
     private WorkflowCommandResult? ValidateOperation(WorkflowOperationKind operationKind)
@@ -216,15 +273,105 @@ public sealed class ApplicationWorkflowCoordinator : IApplicationWorkflowCoordin
                 $"{_current.ActiveOperation.Kind} is already active.");
     }
 
-    private void ClearActiveOperation(OperationId operationId)
+    private bool IsActiveOperation(OperationId operationId)
     {
         lock (_stateGate)
         {
-            if (_current.ActiveOperation?.Correlation.OperationId == operationId)
-            {
-                _current = _current with { ActiveOperation = null };
-            }
+            return _current.ActiveOperation?.Correlation.OperationId == operationId;
         }
+    }
+
+    private void OnProcessingHostStateChanged(
+        object? sender,
+        ProcessingHostLifecycleSnapshot hostState)
+    {
+        switch (hostState.State)
+        {
+            case ProcessingHostLifecycleState.Recreating:
+                MarkActiveOperationTerminal(
+                    operationId: null,
+                    WorkflowOperationState.InterruptedIncomplete,
+                    "The Processing Host connection was lost.");
+                break;
+            case ProcessingHostLifecycleState.Faulted:
+                MarkActiveOperationTerminal(
+                    operationId: null,
+                    WorkflowOperationState.Failed,
+                    "The Processing Host is unavailable.");
+                break;
+        }
+    }
+
+    private void MarkActiveOperationTerminal(
+        OperationId? operationId,
+        WorkflowOperationState terminalState,
+        string detail)
+    {
+        WorkflowStateSnapshot? changedState = null;
+
+        lock (_stateGate)
+        {
+            var activeOperation = _current.ActiveOperation;
+            if (activeOperation is null
+                || (operationId is not null
+                    && activeOperation.Correlation.OperationId != operationId.Value))
+            {
+                return;
+            }
+
+            _current = _current with
+            {
+                ActiveOperation = null,
+                LatestOperation = new WorkflowOperationStatus(
+                    activeOperation.Kind,
+                    activeOperation.Correlation,
+                    terminalState,
+                    detail)
+            };
+            changedState = _current;
+        }
+
+        PublishStateChanged(changedState);
+    }
+
+    private void PublishStateChanged(WorkflowStateSnapshot state)
+    {
+        StateChanged?.Invoke(this, state);
+    }
+
+    private static WorkflowOperationStatus CreateTerminalStatus(
+        ActiveWorkflowOperation activeOperation,
+        OperationOutcome outcome)
+    {
+        return outcome switch
+        {
+            OperationOutcome.CompletedSuccessfully => new WorkflowOperationStatus(
+                activeOperation.Kind,
+                activeOperation.Correlation,
+                WorkflowOperationState.CompletedSuccessfully,
+                Detail: null),
+            OperationOutcome.CompletedWithIssues => new WorkflowOperationStatus(
+                activeOperation.Kind,
+                activeOperation.Correlation,
+                WorkflowOperationState.CompletedWithIssues,
+                "The operation completed with issues."),
+            OperationOutcome.Failed => new WorkflowOperationStatus(
+                activeOperation.Kind,
+                activeOperation.Correlation,
+                WorkflowOperationState.Failed,
+                "The operation did not complete."),
+            OperationOutcome.Cancelled => new WorkflowOperationStatus(
+                activeOperation.Kind,
+                activeOperation.Correlation,
+                WorkflowOperationState.Cancelled,
+                "The operation was cancelled."),
+            OperationOutcome.InterruptedIncomplete => new WorkflowOperationStatus(
+                activeOperation.Kind,
+                activeOperation.Correlation,
+                WorkflowOperationState.InterruptedIncomplete,
+                "The operation was interrupted before completion."),
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null)
+        };
     }
 
     private static WorkflowStateSnapshot ApplyCompletion(
