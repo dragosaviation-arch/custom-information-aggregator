@@ -94,6 +94,32 @@ public sealed class NamedPipeIpcTests
     }
 
     [TestMethod]
+    public async Task LifecycleCommandsRoundTripAsTypedLengthPrefixedJsonContracts()
+    {
+        IpcMessage[] messages =
+        [
+            new ProcessingHostLivenessCommand(Guid.CreateVersion7(), DateTimeOffset.UtcNow),
+            new StopProcessingHostCommand(Guid.CreateVersion7(), DateTimeOffset.UtcNow)
+        ];
+
+        await using var stream = new MemoryStream();
+
+        foreach (var message in messages)
+        {
+            await LengthPrefixedJsonMessageFramer.WriteAsync(stream, message);
+        }
+
+        stream.Position = 0;
+
+        foreach (var expected in messages)
+        {
+            Assert.AreEqual(expected, await LengthPrefixedJsonMessageFramer.ReadAsync(stream));
+        }
+
+        Assert.AreEqual(stream.Length, stream.Position);
+    }
+
+    [TestMethod]
     [DataRow(0)]
     [DataRow(-1)]
     [DataRow(IpcProtocol.MaximumPayloadLength + 1)]

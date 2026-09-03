@@ -29,6 +29,15 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ApplicationSession>();
         builder.Services.AddSingleton<MainWindowViewModel>();
         builder.Services.AddSingleton<MainWindow>();
+        builder.Services.AddSingleton(
+            new ProcessingHostSupervisorOptions(
+                ProcessingHostSupervisorOptions.ResolveCompanionExecutablePath(),
+                builder.Configuration[ApplicationLogPaths.DirectoryConfigurationKey]));
+        builder.Services.AddSingleton<IProcessingHostProcessLauncher, SystemProcessingHostProcessLauncher>();
+        builder.Services.AddSingleton<ProcessingHostSupervisor>();
+        builder.Services.AddSingleton<IProcessingHostSupervisor>(
+            services => services.GetRequiredService<ProcessingHostSupervisor>());
+        builder.Services.AddHostedService<ProcessingHostSupervisorLifetime>();
 
         ConfigureLogging(builder);
         return builder.Build();
