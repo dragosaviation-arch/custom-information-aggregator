@@ -1,0 +1,50 @@
+using CIA.Core.Diagnostics;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Serilog;
+using Serilog.Formatting.Compact;
+
+namespace CIA.ProcessingHost.Hosting;
+
+public static class ProcessingHostApplicationHost
+{
+    public const string ProcessRole = "ProcessingHost";
+
+    public static IHost Create(string[] args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+
+        var builder = Host.CreateApplicationBuilder(
+            new HostApplicationBuilderSettings
+            {
+                Args = args,
+                ApplicationName = typeof(ProcessingHostApplicationHost).Assembly.GetName().Name,
+                ContentRootPath = AppContext.BaseDirectory
+            });
+
+        ConfigureLogging(builder);
+        return builder.Build();
+    }
+
+    private static void ConfigureLogging(HostApplicationBuilder builder)
+    {
+        builder.Logging.ClearProviders();
+
+        var logDirectory = ApplicationLogPaths.ResolveDirectory(
+            builder.Configuration[ApplicationLogPaths.DirectoryConfigurationKey]);
+        Directory.CreateDirectory(logDirectory);
+
+        var serilogLogger = new LoggerConfiguration()
+            .MinimumLevel.Information()
+            .Enrich.FromLogContext()
+            .Enrich.WithProperty("ProcessRole", ProcessRole)
+            .WriteTo.File(
+                new CompactJsonFormatter(),
+                ApplicationLogPaths.GetProcessingHostFilePath(logDirectory),
+                rollingInterval: RollingInterval.Day,
+                shared: false)
+            .CreateLogger();
+
+        builder.Services.AddSerilog(serilogLogger, dispose: true);
+    }
+}
