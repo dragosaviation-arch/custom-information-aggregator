@@ -31,6 +31,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<GlobalStatusViewModel>();
         builder.Services.AddSingleton<MainWindowViewModel>();
         builder.Services.AddSingleton<MainWindow>();
+        builder.Services.AddSingleton<IProcessingHistoryRecorder, ClefProcessingHistoryRecorder>();
         builder.Services.AddSingleton(
             new ProcessingHostSupervisorOptions(
                 ProcessingHostSupervisorOptions.ResolveCompanionExecutablePath(),

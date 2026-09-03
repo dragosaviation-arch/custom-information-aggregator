@@ -25,6 +25,8 @@ public static class ProcessingHostApplicationHost
 
         var runtimeOptions = ProcessingHostRuntimeOptions.FromConfiguration(builder.Configuration);
 
+        builder.Services.AddSingleton<IProcessingHistoryRecorder, ClefProcessingHistoryRecorder>();
+
         if (runtimeOptions is not null)
         {
             builder.Services.AddSingleton(runtimeOptions);

@@ -4,7 +4,6 @@ using CIA.Core;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Workflow;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.Desktop.Tests;
 
@@ -171,7 +170,7 @@ public sealed class GlobalStatusViewModelTests
     {
         return new ApplicationWorkflowCoordinator(
             supervisor,
-            NullLogger<ApplicationWorkflowCoordinator>.Instance);
+            new RecordingProcessingHistoryRecorder());
     }
 
     private sealed class StubProcessingHostSupervisor : IProcessingHostSupervisor
