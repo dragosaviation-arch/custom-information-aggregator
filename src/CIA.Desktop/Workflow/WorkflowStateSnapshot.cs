@@ -35,7 +35,8 @@ public sealed record WorkflowOperationStatus(
     WorkflowOperationKind Kind,
     OperationCorrelation Correlation,
     WorkflowOperationState State,
-    string? Detail);
+    string? Detail,
+    OperationCompletion? Completion = null);
 
 public sealed record WorkflowStateSnapshot(
     bool HasValidSourceSelection,

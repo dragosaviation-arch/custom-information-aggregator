@@ -181,6 +181,23 @@ public sealed class ApplicationWorkflowCoordinator :
         OperationId operationId,
         OperationOutcome outcome)
     {
+        return CompleteOperation(operationId, outcome, completion: null);
+    }
+
+    public WorkflowCommandResult CompleteOperation(OperationCompletion completion)
+    {
+        ArgumentNullException.ThrowIfNull(completion);
+        return CompleteOperation(
+            completion.Correlation.OperationId,
+            completion.Outcome,
+            completion);
+    }
+
+    private WorkflowCommandResult CompleteOperation(
+        OperationId operationId,
+        OperationOutcome outcome,
+        OperationCompletion? completion)
+    {
         WorkflowStateSnapshot changedState;
         ActiveWorkflowOperation activeOperation;
 
@@ -195,7 +212,9 @@ public sealed class ApplicationWorkflowCoordinator :
 
             var currentActiveOperation = _current.ActiveOperation;
             if (currentActiveOperation is null
-                || currentActiveOperation.Correlation.OperationId != operationId)
+                || currentActiveOperation.Correlation.OperationId != operationId
+                || (completion is not null
+                    && currentActiveOperation.Correlation != completion.Correlation))
             {
                 return WorkflowCommandResult.Reject(
                     WorkflowRejectionCode.OperationMismatch,
@@ -206,7 +225,7 @@ public sealed class ApplicationWorkflowCoordinator :
             _current = ApplyCompletion(_current, activeOperation.Kind, outcome) with
             {
                 ActiveOperation = null,
-                LatestOperation = CreateTerminalStatus(activeOperation, outcome)
+                LatestOperation = CreateTerminalStatus(activeOperation, outcome, completion)
             };
             changedState = _current;
         }
@@ -341,7 +360,8 @@ public sealed class ApplicationWorkflowCoordinator :
 
     private static WorkflowOperationStatus CreateTerminalStatus(
         ActiveWorkflowOperation activeOperation,
-        OperationOutcome outcome)
+        OperationOutcome outcome,
+        OperationCompletion? completion)
     {
         return outcome switch
         {
@@ -349,27 +369,32 @@ public sealed class ApplicationWorkflowCoordinator :
                 activeOperation.Kind,
                 activeOperation.Correlation,
                 WorkflowOperationState.CompletedSuccessfully,
-                Detail: null),
+                Detail: null,
+                completion),
             OperationOutcome.CompletedWithIssues => new WorkflowOperationStatus(
                 activeOperation.Kind,
                 activeOperation.Correlation,
                 WorkflowOperationState.CompletedWithIssues,
-                "The operation completed with issues."),
+                "The operation completed with issues.",
+                completion),
             OperationOutcome.Failed => new WorkflowOperationStatus(
                 activeOperation.Kind,
                 activeOperation.Correlation,
                 WorkflowOperationState.Failed,
-                "The operation did not complete."),
+                "The operation did not complete.",
+                completion),
             OperationOutcome.Cancelled => new WorkflowOperationStatus(
                 activeOperation.Kind,
                 activeOperation.Correlation,
                 WorkflowOperationState.Cancelled,
-                "The operation was cancelled."),
+                "The operation was cancelled.",
+                completion),
             OperationOutcome.InterruptedIncomplete => new WorkflowOperationStatus(
                 activeOperation.Kind,
                 activeOperation.Correlation,
                 WorkflowOperationState.InterruptedIncomplete,
-                "The operation was interrupted before completion."),
+                "The operation was interrupted before completion.",
+                completion),
             _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null)
         };
     }
