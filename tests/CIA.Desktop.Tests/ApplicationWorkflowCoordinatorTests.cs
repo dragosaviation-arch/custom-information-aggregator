@@ -143,6 +143,29 @@ public sealed class ApplicationWorkflowCoordinatorTests
     }
 
     [TestMethod]
+    public async Task SharedPartialCompletionIsRetainedByWorkflowStatus()
+    {
+        var coordinator = CreateCoordinator(new StubProcessingHostSupervisor());
+        coordinator.RecordSourceSelectionChanged(true);
+        var begin = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+        var completion = OperationCompletion.FromCompletedItems(
+            begin.Operation!,
+            [
+                OperationItemStatus.ProcessedSuccessfully("source-a"),
+                OperationItemStatus.Failed("source-b", "parse-failed")
+            ]);
+
+        var result = coordinator.CompleteOperation(completion);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, coordinator.Current.Discovery);
+        Assert.AreEqual(
+            WorkflowOperationState.CompletedWithIssues,
+            coordinator.Current.LatestOperation?.State);
+        Assert.AreSame(completion, coordinator.Current.LatestOperation?.Completion);
+    }
+
+    [TestMethod]
     public async Task HostFailureIsReturnedWithoutExposingTheRawException()
     {
         const string sensitiveMessage = "internal host failure details";

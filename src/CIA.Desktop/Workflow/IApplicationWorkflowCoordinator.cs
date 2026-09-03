@@ -19,4 +19,6 @@ public interface IApplicationWorkflowCoordinator
     WorkflowCommandResult CompleteOperation(
         OperationId operationId,
         OperationOutcome outcome);
+
+    WorkflowCommandResult CompleteOperation(OperationCompletion completion);
 }
