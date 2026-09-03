@@ -1,3 +1,5 @@
+using CIA.Core.Runtime;
+
 namespace CIA.Core.Diagnostics;
 
 public static class ApplicationLogPaths
@@ -21,18 +23,7 @@ public static class ApplicationLogPaths
         }
         else
         {
-            var localApplicationData = Environment.GetFolderPath(
-                Environment.SpecialFolder.LocalApplicationData);
-
-            if (string.IsNullOrWhiteSpace(localApplicationData))
-            {
-                throw new InvalidOperationException("The LocalAppData directory could not be resolved.");
-            }
-
-            resolvedDirectory = Path.Combine(
-                localApplicationData,
-                "Custom Information Aggregator",
-                "Logs");
+            resolvedDirectory = ApplicationPaths.ForCurrentUser().LogsDirectory;
         }
 
         EnsureSeparateFromInstalledBinaries(resolvedDirectory);
@@ -57,6 +48,12 @@ public static class ApplicationLogPaths
 
     private static void EnsureSeparateFromInstalledBinaries(string logDirectory)
     {
+        if (ApplicationPaths.ForCurrentUser().IsInstalledBinaryPath(logDirectory))
+        {
+            throw new InvalidOperationException(
+                "The log directory must remain separate from installed application binaries.");
+        }
+
         var installedDirectory = Path.GetFullPath(AppContext.BaseDirectory)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var installedDirectoryPrefix = installedDirectory + Path.DirectorySeparatorChar;
