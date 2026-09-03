@@ -1,0 +1,150 @@
+{
+  "meta": {
+    "name": "CIA Load UI Preview",
+    "version": "0.1",
+    "purpose": "Standalone visual/interaction prototype. Not production code.",
+    "coordinateSystem": "DIP-like CSS pixels at 100% browser zoom"
+  },
+  "viewport": {
+    "designWidth": 1440,
+    "designHeight": 900,
+    "minWidth": 980,
+    "minHeight": 620
+  },
+  "tokens": {
+    "fontFamily": "Segoe UI, Inter, Arial, sans-serif",
+    "fontSizeBody": 13,
+    "fontSizeSmall": 12,
+    "fontSizeTitle": 24,
+    "fontSizeSection": 14,
+    "background": "#F6F7FB",
+    "panel": "#FFFFFF",
+    "panelAlt": "#FAFBFD",
+    "textPrimary": "#1F2430",
+    "textSecondary": "#667085",
+    "textMuted": "#8A94A6",
+    "accent": "#6C63FF",
+    "accentSoft": "#EEECFF",
+    "accentHover": "#5B52F5",
+    "border": "#D9DEE8",
+    "borderStrong": "#C8CFDC",
+    "success": "#2D8A57",
+    "warning": "#A66A00",
+    "danger": "#B54747",
+    "disabledBg": "#F0F2F5",
+    "disabledText": "#9AA3B2",
+    "selectedRow": "#F1F0FF",
+    "hoverRow": "#F8F9FC",
+    "radius": 10,
+    "radiusSmall": 7,
+    "shadow": "0 1px 2px rgba(16,24,40,.05)",
+    "controlHeight": 34,
+    "rowHeight": 38,
+    "statusBarHeight": 34,
+    "workspaceGap": 12,
+    "outerPadding": 16
+  },
+  "shell": {
+    "topbarHeight": 52,
+    "tabbarHeight": 54,
+    "statusBarHeight": 34,
+    "workspaceTabs": [
+      "Load",
+      "Discover",
+      "Database",
+      "Extraction / Review / Export",
+      "Activity / Diagnostics",
+      "Settings / Maintenance"
+    ]
+  },
+  "loadLayout": {
+    "leftPane": {
+      "minWidth": 620,
+      "flex": 1,
+      "regions": [
+        "toolbar",
+        "discoveryState",
+        "localProgress",
+        "sourceList"
+      ]
+    },
+    "rightRail": {
+      "preferredWidth": 360,
+      "minWidth": 320,
+      "maxWidth": 420,
+      "regions": [
+        "details",
+        "localSettings"
+      ]
+    },
+    "gap": 12,
+    "detailsHeight": 0.57,
+    "settingsHeight": 0.43
+  },
+  "sourceList": {
+    "columns": [
+      {
+        "id": "include",
+        "label": "",
+        "width": 38
+      },
+      {
+        "id": "name",
+        "label": "Source",
+        "width": "2.0fr"
+      },
+      {
+        "id": "path",
+        "label": "Path",
+        "width": "2.6fr"
+      },
+      {
+        "id": "depth",
+        "label": "",
+        "width": 44
+      },
+      {
+        "id": "status",
+        "label": "Status",
+        "width": 112
+      },
+      {
+        "id": "actions",
+        "label": "",
+        "width": 100
+      }
+    ],
+    "failedStyle": "greyed + italic + explicit Failed status text/icon",
+    "excludedStyle": "reduced emphasis but still readable",
+    "selectedStyle": "accent-tinted row"
+  },
+  "detailsPane": {
+    "fields": [
+      "Source name",
+      "Full path",
+      "Type",
+      "Archive nesting depth",
+      "Inclusion state",
+      "Processing status",
+      "Extraction location",
+      "Discovery relation"
+    ]
+  },
+  "localSettings": {
+    "items": [
+      "Include supported XML files",
+      "Include supported archive files",
+      "Traverse subfolders recursively"
+    ],
+    "duplicateHandling": "Prevent duplicate source paths by default; no user setting exposed."
+  },
+  "statusBehavior": {
+    "global": "Persistent across workspace navigation.",
+    "local": "Richer Load-specific detail when Load is active.",
+    "cancel": "Esc is the sole cancellation interaction while a cancellable operation is active."
+  },
+  "responsive": {
+    "breakpoint": 1120,
+    "behaviorBelowBreakpoint": "Right rail stacks below source list; global status remains fixed at bottom."
+  }
+}

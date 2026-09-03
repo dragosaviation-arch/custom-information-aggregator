@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CIA Load UI Preview</title>
+<style>
+  :root{
+    --bg:#F6F7FB;--panel:#FFFFFF;--panelAlt:#FAFBFD;--text:#1F2430;--muted:#667085;--faint:#8A94A6;
+    --accent:#6C63FF;--accentSoft:#EEECFF;--accentHover:#5B52F5;--border:#D9DEE8;--borderStrong:#C8CFDC;
+    --success:#2D8A57;--warning:#A66A00;--danger:#B54747;--disabledBg:#F0F2F5;--disabledText:#9AA3B2;
+    --selected:#F1F0FF;--hover:#F8F9FC;--radius:10px;--radiusSm:7px;--shadow:0 1px 2px rgba(16,24,40,.05);
+    --controlH:34px;--rowH:38px;--statusH:34px;--gap:12px;--pad:16px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{font-family:"Segoe UI",Inter,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:13px;overflow:hidden}
+  button,input{font:inherit}
+  button{cursor:pointer}
+  .app{height:100%;display:grid;grid-template-rows:52px 54px 1fr var(--statusH);min-width:980px;min-height:620px}
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:0 18px;border-bottom:1px solid var(--border);background:#fff}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700}
+  .logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,#6C63FF,#8A84FF);display:grid;place-items:center;color:#fff;font-weight:800}
+  .brand small{display:block;color:var(--muted);font-weight:500;font-size:11px;margin-top:1px}
+  .session{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--success)}
+  .tabs{display:flex;align-items:end;padding:0 16px;background:#fff;border-bottom:1px solid var(--border);gap:4px}
+  .tab{height:40px;border:0;background:transparent;color:var(--muted);padding:0 16px;border-radius:8px 8px 0 0;font-weight:600}
+  .tab:hover{background:var(--hover);color:var(--text)}
+  .tab.active{color:var(--accent);background:var(--accentSoft);box-shadow:inset 0 -2px 0 var(--accent)}
+  .workspace{overflow:auto;padding:var(--pad)}
+  .load-grid{display:grid;grid-template-columns:minmax(620px,1fr) minmax(320px,360px);gap:var(--gap);min-height:calc(100vh - 52px - 54px - 34px - 32px)}
+  .left{display:grid;grid-template-rows:auto auto auto minmax(300px,1fr);gap:10px;min-width:0}
+  .right{display:grid;grid-template-rows:minmax(300px,57fr) minmax(220px,43fr);gap:var(--gap);min-width:0}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);min-width:0}
+  .panel-title{padding:12px 14px;border-bottom:1px solid var(--border);font-weight:700;font-size:14px;display:flex;justify-content:space-between;align-items:center}
+  .toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .toolbar .spacer{flex:1}
+  .btn{height:var(--controlH);border:1px solid var(--borderStrong);background:#fff;border-radius:var(--radiusSm);padding:0 12px;color:var(--text);font-weight:600;display:inline-flex;align-items:center;gap:7px}
+  .btn:hover{background:var(--hover)}
+  .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.primary:hover{background:var(--accentHover)}
+  .btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}
+  .btn.ghost:hover{background:var(--hover);color:var(--text)}
+  .btn:disabled{background:var(--disabledBg);color:var(--disabledText);border-color:var(--border);cursor:not-allowed}
+  .toolbar-wrap{padding:10px 0 0}
+  .search{height:var(--controlH);width:220px;border:1px solid var(--borderStrong);border-radius:var(--radiusSm);padding:0 10px;background:#fff;color:var(--text)}
+  .state-strip{display:flex;gap:10px;align-items:center;padding:10px 12px;background:var(--panel);border:1px solid var(--border);border-radius:var(--radius)}
+  .state-label{font-weight:700}
+  .badge{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:999px;font-size:12px;font-weight:700}
+  .badge.stale{background:#FFF4DD;color:#8C5C00}
+  .badge.current{background:#E8F6EF;color:#226C45}
+  .badge.none{background:#EEF1F5;color:#667085}
+  .local-progress{padding:11px 12px}
+  .progress-head{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:8px}
+  .progress-title{font-weight:700}
+  .progress-meta{color:var(--muted);font-size:12px}
+  .bar{height:8px;background:#ECEFF4;border-radius:99px;overflow:hidden}
+  .bar>span{display:block;height:100%;width:0%;background:var(--accent);transition:width .25s linear}
+  .progress-foot{display:flex;justify-content:space-between;margin-top:8px;color:var(--muted);font-size:12px;gap:14px;flex-wrap:wrap}
+  .list-panel{overflow:hidden;display:grid;grid-template-rows:auto 1fr}
+  .list-head{display:grid;grid-template-columns:38px minmax(150px,2fr) minmax(180px,2.6fr) 44px 112px 100px;align-items:center;height:34px;padding:0 8px;background:var(--panelAlt);border-bottom:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:700}
+  .rows{overflow:auto}
+  .row{display:grid;grid-template-columns:38px minmax(150px,2fr) minmax(180px,2.6fr) 44px 112px 100px;align-items:center;min-height:var(--rowH);padding:0 8px;border-bottom:1px solid #EDF0F4;cursor:default}
+  .row:hover{background:var(--hover)}
+  .row.selected{background:var(--selected)}
+  .row.excluded{opacity:.62}
+  .row.failed{color:var(--disabledText);font-style:italic;background:#F7F8FA}
+  .row input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent)}
+  .source-name{display:flex;align-items:center;gap:8px;min-width:0;font-weight:600}
+  .type-icon{width:20px;height:20px;border-radius:5px;background:#EEF1F5;display:grid;place-items:center;font-size:11px;font-style:normal;color:#5D6675;flex:none}
+  .source-text,.path-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .path-text{color:var(--muted);font-size:12px}
+  .depth{display:flex;justify-content:center}
+  .depth-badge{width:24px;height:24px;border-radius:7px;background:#EEF1F5;display:grid;place-items:center;color:#596273;font-weight:700;font-size:11px}
+  .status{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700}
+  .status::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--faint)}
+  .status.ready{color:#475467}.status.ready::before{background:#667085}
+  .status.processing{color:#5A52D7}.status.processing::before{background:var(--accent)}
+  .status.complete{color:#226C45}.status.complete::before{background:var(--success)}
+  .status.failed{color:#9A3838}.status.failed::before{background:var(--danger)}
+  .status.warning{color:#8C5C00}.status.warning::before{background:var(--warning)}
+  .row-actions{display:flex;justify-content:flex-end;gap:2px}
+  .icon-btn{width:30px;height:30px;border:0;background:transparent;border-radius:6px;color:var(--muted);display:grid;place-items:center}
+  .icon-btn:hover{background:#EDEFF4;color:var(--text)}
+  .empty{display:grid;place-items:center;height:100%;min-height:280px;color:var(--muted);text-align:center;padding:40px}
+  .empty strong{display:block;color:var(--text);font-size:15px;margin-bottom:6px}
+  .details-body{padding:14px;overflow:auto}
+  .detail-name{font-size:16px;font-weight:700;margin-bottom:4px}
+  .detail-sub{color:var(--muted);font-size:12px;margin-bottom:14px;word-break:break-all}
+  .kv{display:grid;grid-template-columns:130px 1fr;gap:8px 10px;padding:7px 0;border-bottom:1px solid #EEF1F5}
+  .kv:last-child{border-bottom:0}
+  .kv .k{color:var(--muted)}
+  .kv .v{font-weight:600;word-break:break-word}
+  .settings-body{padding:12px 14px}
+  .setting{display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid #EEF1F5}
+  .setting:last-child{border-bottom:0}
+  .setting input{width:16px;height:16px;accent-color:var(--accent);margin-top:2px}
+  .setting b{display:block;margin-bottom:2px}
+  .setting span{color:var(--muted);font-size:12px;line-height:1.35}
+  .note{margin-top:12px;padding:9px 10px;border-radius:8px;background:#F6F7FA;color:var(--muted);font-size:12px}
+  .placeholder{height:100%;min-height:480px;display:grid;place-items:center;color:var(--muted);text-align:center}
+  .placeholder strong{display:block;color:var(--text);font-size:18px;margin-bottom:5px}
+  .statusbar{display:flex;align-items:center;gap:12px;padding:0 14px;border-top:1px solid var(--border);background:#fff;color:var(--muted);font-size:12px;white-space:nowrap}
+  .statusbar .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .statusbar strong{color:var(--text)}
+  .statusbar .mini-bar{width:170px;height:6px;background:#ECEFF4;border-radius:99px;overflow:hidden}
+  .statusbar .mini-bar span{display:block;height:100%;width:0;background:var(--accent);transition:width .25s}
+  .toast{position:fixed;right:18px;bottom:50px;background:#1F2430;color:#fff;border-radius:8px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:0;transform:translateY(8px);pointer-events:none;transition:.18s;z-index:20}
+  .toast.show{opacity:1;transform:translateY(0)}
+  @media (max-width:1120px){
+    body{overflow:auto}
+    .app{height:auto;min-height:100vh}
+    .workspace{overflow:visible}
+    .load-grid{grid-template-columns:1fr}
+    .right{grid-template-columns:1fr 1fr;grid-template-rows:none}
+    .statusbar{position:sticky;bottom:0}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo">C</div>
+      <div>CIA<small>Custom Information Aggregator</small></div>
+    </div>
+    <div class="session"><span class="dot"></span> Session active</div>
+  </div>
+
+  <div class="tabs" id="tabs"></div>
+
+  <div class="workspace">
+    <div id="loadWorkspace" class="load-grid">
+      <section class="left">
+        <div class="toolbar-wrap">
+          <div class="toolbar">
+            <button class="btn primary" id="addFile">＋ File</button>
+            <button class="btn" id="addFolder">＋ Folder</button>
+            <button class="btn" id="addArchive">＋ Archive</button>
+            <button class="btn" id="simulate">▶ Simulate load</button>
+            <div class="spacer"></div>
+            <button class="btn ghost" id="includeVisible">Include visible</button>
+            <button class="btn ghost" id="excludeVisible">Exclude visible</button>
+            <input class="search" id="filter" placeholder="Filter loaded sources…" />
+          </div>
+        </div>
+
+        <div class="state-strip">
+          <span class="state-label">Discovery</span>
+          <span class="badge stale" id="discoveryBadge">● Out of date</span>
+          <span style="color:var(--muted);font-size:12px">Source-set changes require Discovery to be run again.</span>
+        </div>
+
+        <div class="panel local-progress">
+          <div class="progress-head">
+            <div>
+              <div class="progress-title" id="localTitle">Load workspace ready</div>
+              <div class="progress-meta" id="localMeta">No active operation</div>
+            </div>
+            <div class="progress-meta" id="localPct">0%</div>
+          </div>
+          <div class="bar"><span id="localBar"></span></div>
+          <div class="progress-foot">
+            <span id="localCurrent">Current archive: —</span>
+            <span id="localCounts">Files found 0 · Loaded 0 · Warnings 0</span>
+          </div>
+        </div>
+
+        <div class="panel list-panel">
+          <div class="list-head">
+            <div></div><div>Source</div><div>Path</div><div title="Archive nesting depth">Lvl</div><div>Status</div><div></div>
+          </div>
+          <div class="rows" id="rows"></div>
+        </div>
+      </section>
+
+      <aside class="right">
+        <div class="panel">
+          <div class="panel-title">Details <span style="font-size:11px;color:var(--muted);font-weight:500">Selected source</span></div>
+          <div class="details-body" id="details"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-title">Local settings</div>
+          <div class="settings-body">
+            <label class="setting">
+              <input type="checkbox" id="setXml" checked>
+              <div><b>Include supported XML files</b><span>Include supported XML discovered when loading folders.</span></div>
+            </label>
+            <label class="setting">
+              <input type="checkbox" id="setArchives" checked>
+              <div><b>Include supported archive files</b><span>Include supported archives discovered when loading folders.</span></div>
+            </label>
+            <label class="setting">
+              <input type="checkbox" id="setRecursive" checked>
+              <div><b>Traverse subfolders recursively</b><span>Search supported content below the selected folder.</span></div>
+            </label>
+            <div class="note">Duplicate source paths are prevented by default. No “allow duplicates” setting is exposed.</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div id="placeholder" class="placeholder" style="display:none">
+      <div><strong id="phTitle">Workspace</strong><span>Placeholder only. Global operation status remains visible below.</span></div>
+    </div>
+  </div>
+
+  <div class="statusbar">
+    <strong id="globalState">Ready</strong>
+    <div class="grow" id="globalText">No active operation</div>
+    <span id="globalIssue">0 warnings · 0 failures</span>
+    <div class="mini-bar"><span id="globalBar"></span></div>
+    <span id="globalPct">0%</span>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const tabs = ["Load","Discover","Database","Extraction / Review / Export","Activity / Diagnostics","Settings / Maintenance"];
+const tabsEl = document.getElementById("tabs");
+let activeTab = "Load";
+tabs.forEach(name=>{
+  const b=document.createElement("button");
+  b.className="tab"+(name==="Load"?" active":"");
+  b.textContent=name;
+  b.onclick=()=>switchTab(name,b);
+  tabsEl.appendChild(b);
+});
+
+function switchTab(name,btn){
+  activeTab=name;
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  btn.classList.add("active");
+  const load=document.getElementById("loadWorkspace");
+  const ph=document.getElementById("placeholder");
+  if(name==="Load"){load.style.display="grid";ph.style.display="none";}
+  else{
+    load.style.display="none";ph.style.display="grid";
+    document.getElementById("phTitle").textContent=name;
+  }
+}
+
+let data=[
+  {id:1,name:"AMM_A320_27-50-00.xml",type:"XML",path:"C:\\Manuals\\A320\\AMM_A320_27-50-00.xml",depth:0,included:true,status:"Ready",extract:"—",discovery:"Stale"},
+  {id:2,name:"MPD_Revision_46.xml",type:"XML",path:"C:\\Manuals\\A320\\MPD\\MPD_Revision_46.xml",depth:0,included:true,status:"Complete",extract:"—",discovery:"Stale"},
+  {id:3,name:"TEM_tools.xml",type:"XML",path:"C:\\Manuals\\A320\\TEM\\TEM_tools.xml",depth:2,included:true,status:"Ready",extract:"C:\\Users\\User\\AppData\\Local\\CIA\\Working\\op-018\\lvl2",discovery:"Stale"},
+  {id:4,name:"archive_child.xml",type:"XML",path:"C:\\Packages\\AircraftData.zip\\Nested.7z\\archive_child.xml",depth:2,included:true,status:"Processing",extract:"C:\\Users\\User\\AppData\\Local\\CIA\\Working\\op-018\\lvl2",discovery:"Stale"},
+  {id:5,name:"unsupported_payload.xml",type:"XML",path:"D:\\Drop\\unsupported_payload.xml",depth:0,included:false,status:"Failed",extract:"—",discovery:"Unavailable"},
+  {id:6,name:"old_revision.xml",type:"XML",path:"D:\\Drop\\old_revision.xml",depth:0,included:false,status:"Ready",extract:"—",discovery:"Stale"},
+  {id:7,name:"cml_package_item.xml",type:"XML",path:"C:\\Packages\\CML.zip\\cml_package_item.xml",depth:1,included:true,status:"Warning",extract:"C:\\Users\\User\\AppData\\Local\\CIA\\Working\\op-018\\lvl1",discovery:"Stale"}
+];
+let selectedId=1;
+let running=false, timer=null, pct=0, warnings=0, failures=0;
+const rowsEl=document.getElementById("rows");
+const detailsEl=document.getElementById("details");
+const filterEl=document.getElementById("filter");
+
+function filtered(){
+  const q=filterEl.value.trim().toLowerCase();
+  return data.filter(x=>!q || x.name.toLowerCase().includes(q) || x.path.toLowerCase().includes(q) || x.status.toLowerCase().includes(q));
+}
+function statusClass(s){return s.toLowerCase()==="complete"?"complete":s.toLowerCase();}
+function render(){
+  const list=filtered();
+  if(!list.length){
+    rowsEl.innerHTML='<div class="empty"><div><strong>No sources match this view</strong>Change the filter or add another source.</div></div>';
+  } else {
+    rowsEl.innerHTML=list.map(x=>`
+      <div class="row ${x.id===selectedId?"selected":""} ${!x.included?"excluded":""} ${x.status==="Failed"?"failed":""}" data-id="${x.id}">
+        <div><input type="checkbox" ${x.included?"checked":""} data-action="toggle" title="${x.included?"Included":"Excluded"}"></div>
+        <div class="source-name"><span class="type-icon">${x.type==="XML"?"X":"A"}</span><span class="source-text">${x.name}</span></div>
+        <div class="path-text" title="${x.path}">${x.path}</div>
+        <div class="depth">${x.depth?`<span class="depth-badge" title="Archive nesting level ${x.depth}">A${x.depth}</span>`:""}</div>
+        <div><span class="status ${statusClass(x.status)}">${x.status}</span></div>
+        <div class="row-actions">
+          <button class="icon-btn" data-action="refresh" title="Refresh / reload">↻</button>
+          <button class="icon-btn" data-action="remove" title="Remove from session">✕</button>
+        </div>
+      </div>`).join("");
+    rowsEl.querySelectorAll(".row").forEach(row=>{
+      row.addEventListener("click",e=>{
+        const id=+row.dataset.id;
+        if(e.target.dataset.action==="toggle"){
+          const x=data.find(v=>v.id===id); x.included=e.target.checked; showToast(x.included?"Source included":"Source excluded"); render(); return;
+        }
+        if(e.target.dataset.action==="remove"){
+          data=data.filter(v=>v.id!==id);
+          if(selectedId===id) selectedId=data[0]?.id ?? null;
+          markDiscoveryStale(); showToast("Source removed from active session"); render(); return;
+        }
+        if(e.target.dataset.action==="refresh"){
+          const x=data.find(v=>v.id===id); x.status="Ready"; markDiscoveryStale(); showToast("Source reloaded"); render(); return;
+        }
+        selectedId=id; render();
+      });
+    });
+  }
+  renderDetails();
+}
+function renderDetails(){
+  const x=data.find(v=>v.id===selectedId);
+  if(!x){
+    detailsEl.innerHTML='<div class="empty" style="min-height:240px"><div><strong>No source selected</strong>Select a row to inspect its details.</div></div>'; return;
+  }
+  detailsEl.innerHTML=`
+    <div class="detail-name">${x.name}</div>
+    <div class="detail-sub">${x.path}</div>
+    ${kv("Type",x.type)}
+    ${kv("Archive depth",x.depth?`Level ${x.depth}`:"Not archived")}
+    ${kv("Inclusion",x.included?"Included":"Excluded")}
+    ${kv("Status",x.status)}
+    ${kv("Extraction location",x.extract)}
+    ${kv("Discovery",x.discovery)}
+  `;
+}
+function kv(k,v){return `<div class="kv"><div class="k">${k}</div><div class="v">${v}</div></div>`}
+
+filterEl.addEventListener("input",render);
+document.getElementById("includeVisible").onclick=()=>{filtered().forEach(x=>x.included=true);showToast("Visible sources included");render()};
+document.getElementById("excludeVisible").onclick=()=>{filtered().forEach(x=>x.included=false);showToast("Visible sources excluded");render()};
+
+let addCounter=0;
+function addMock(kind){
+  const examples=[
+    {name:"new_source.xml",type:"XML",path:"C:\\New\\new_source.xml",depth:0},
+    {name:"folder_item.xml",type:"XML",path:"C:\\SelectedFolder\\Subfolder\\folder_item.xml",depth:0},
+    {name:"nested_item.xml",type:"XML",path:"C:\\Incoming\\package.zip\\child.7z\\nested_item.xml",depth:2}
+  ];
+  const e=examples[kind];
+  if(data.some(x=>x.path===e.path)){showToast("Duplicate source path prevented");return;}
+  data.push({id:Date.now()+addCounter++,name:e.name,type:e.type,path:e.path,depth:e.depth,included:true,status:"Ready",extract:e.depth?"C:\\Users\\User\\AppData\\Local\\CIA\\Working\\mock":"—",discovery:"Stale"});
+  selectedId=data[data.length-1].id;markDiscoveryStale();showToast("Mock source added");render();
+}
+document.getElementById("addFile").onclick=()=>addMock(0);
+document.getElementById("addFolder").onclick=()=>addMock(1);
+document.getElementById("addArchive").onclick=()=>addMock(2);
+
+function markDiscoveryStale(){
+  const b=document.getElementById("discoveryBadge");
+  b.className="badge stale"; b.textContent="● Out of date";
+}
+function showToast(msg){
+  const t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");
+  clearTimeout(t._timer);t._timer=setTimeout(()=>t.classList.remove("show"),1500);
+}
+function updateProgress(){
+  document.getElementById("localBar").style.width=pct+"%";
+  document.getElementById("globalBar").style.width=pct+"%";
+  document.getElementById("localPct").textContent=pct+"%";
+  document.getElementById("globalPct").textContent=pct+"%";
+  document.getElementById("localMeta").textContent=running?"Archive extraction and source validation":"No active operation";
+  document.getElementById("localCurrent").textContent=running?`Current archive: package_${Math.min(4,Math.floor(pct/25)+1)}.zip · nesting level ${Math.min(3,Math.floor(pct/30)+1)}`:"Current archive: —";
+  document.getElementById("localCounts").textContent=`Files found ${Math.floor(pct*4.8)} · Loaded ${Math.floor(pct*4.5)} · Warnings ${warnings}`;
+  document.getElementById("globalIssue").textContent=`${warnings} warnings · ${failures} failures`;
+}
+function startSimulation(){
+  if(running)return;
+  running=true;pct=0;warnings=0;failures=0;
+  document.getElementById("simulate").disabled=true;
+  document.getElementById("localTitle").textContent="Loading sources…";
+  document.getElementById("globalState").textContent="Active";
+  document.getElementById("globalText").textContent="Loading and extracting source package — press Esc to cancel";
+  const proc=data.find(x=>x.status==="Processing") || data[0]; proc.status="Processing";
+  render();updateProgress();
+  timer=setInterval(()=>{
+    pct=Math.min(100,pct+5);
+    if(pct===40)warnings=1;
+    if(pct===75)warnings=2;
+    updateProgress();
+    if(pct>=100){
+      clearInterval(timer);running=false;
+      data.forEach(x=>{if(x.status==="Processing")x.status="Complete"});
+      document.getElementById("simulate").disabled=false;
+      document.getElementById("localTitle").textContent="Load completed successfully";
+      document.getElementById("localMeta").textContent="Completed with 2 warnings";
+      document.getElementById("globalState").textContent="Completed";
+      document.getElementById("globalText").textContent="Load completed with warnings";
+      render();showToast("Simulation complete");
+    }
+  },220);
+}
+document.getElementById("simulate").onclick=startSimulation;
+
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape" && running){
+    clearInterval(timer);running=false;
+    document.getElementById("simulate").disabled=false;
+    document.getElementById("localTitle").textContent="Load cancelled";
+    document.getElementById("localMeta").textContent="Cancellation completed at a safe boundary";
+    document.getElementById("globalState").textContent="Cancelled";
+    document.getElementById("globalText").textContent="Load operation cancelled";
+    data.forEach(x=>{if(x.status==="Processing")x.status="Warning"});
+    render();showToast("Operation cancelled with Esc");
+  }
+});
+
+render();updateProgress();
+</script>
+</body>
+</html>
