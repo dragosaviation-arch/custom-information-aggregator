@@ -1,6 +1,7 @@
+using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Operations;
+using CIA.Core.Diagnostics;
 using CIA.Desktop.Hosting;
-using Microsoft.Extensions.Logging;
 
 namespace CIA.Desktop.Workflow;
 
@@ -9,20 +10,20 @@ public sealed class ApplicationWorkflowCoordinator :
     IDisposable
 {
     private readonly IProcessingHostSupervisor _processingHostSupervisor;
-    private readonly ILogger<ApplicationWorkflowCoordinator> _logger;
+    private readonly IProcessingHistoryRecorder _processingHistoryRecorder;
     private readonly object _stateGate = new();
     private WorkflowStateSnapshot _current = WorkflowStateSnapshot.Empty;
     private int _disposed;
 
     public ApplicationWorkflowCoordinator(
         IProcessingHostSupervisor processingHostSupervisor,
-        ILogger<ApplicationWorkflowCoordinator> logger)
+        IProcessingHistoryRecorder processingHistoryRecorder)
     {
         ArgumentNullException.ThrowIfNull(processingHostSupervisor);
-        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(processingHistoryRecorder);
 
         _processingHostSupervisor = processingHostSupervisor;
-        _logger = logger;
+        _processingHistoryRecorder = processingHistoryRecorder;
         _processingHostSupervisor.StateChanged += OnProcessingHostStateChanged;
     }
 
@@ -165,11 +166,8 @@ public sealed class ApplicationWorkflowCoordinator :
             MarkActiveOperationTerminal(
                 correlation.OperationId,
                 WorkflowOperationState.Failed,
-                "The Processing Host is unavailable.");
-            _logger.LogWarning(
-                exception,
-                "The Processing Host was unavailable for {OperationKind}.",
-                operationKind);
+                "The Processing Host is unavailable.",
+                exception.ToString());
 
             return WorkflowCommandResult.Reject(
                 WorkflowRejectionCode.ProcessingHostUnavailable,
@@ -231,6 +229,12 @@ public sealed class ApplicationWorkflowCoordinator :
         }
 
         PublishStateChanged(changedState);
+        RecordTerminalAttempt(
+            activeOperation,
+            outcome,
+            completion,
+            changedState.LatestOperation?.Detail,
+            technicalDetail: null);
         return WorkflowCommandResult.Accept(activeOperation.Correlation);
     }
 
@@ -324,9 +328,11 @@ public sealed class ApplicationWorkflowCoordinator :
     private void MarkActiveOperationTerminal(
         OperationId? operationId,
         WorkflowOperationState terminalState,
-        string detail)
+        string detail,
+        string? technicalDetail = null)
     {
         WorkflowStateSnapshot? changedState = null;
+        ActiveWorkflowOperation? terminalOperation = null;
 
         lock (_stateGate)
         {
@@ -347,10 +353,75 @@ public sealed class ApplicationWorkflowCoordinator :
                     terminalState,
                     detail)
             };
+            terminalOperation = activeOperation;
             changedState = _current;
         }
 
         PublishStateChanged(changedState);
+        RecordTerminalAttempt(
+            terminalOperation,
+            ToOperationOutcome(terminalState),
+            completion: null,
+            detail,
+            technicalDetail);
+    }
+
+    private void RecordTerminalAttempt(
+        ActiveWorkflowOperation operation,
+        OperationOutcome outcome,
+        OperationCompletion? completion,
+        string? userFacingDescription,
+        string? technicalDetail)
+    {
+        var recordedAtUtc = DateTimeOffset.UtcNow;
+        var record = new ProcessingAttemptRecord(
+            operation.Correlation,
+            operation.Kind.ToString(),
+            finalStage: null,
+            recordedAtUtc,
+            outcome,
+            completion);
+
+        _processingHistoryRecorder.RecordAttempt(record);
+
+        if (outcome is not (OperationOutcome.Failed or OperationOutcome.InterruptedIncomplete)
+            || string.IsNullOrWhiteSpace(userFacingDescription))
+        {
+            return;
+        }
+
+        _processingHistoryRecorder.RecordDiagnostic(
+            new ProcessingDiagnosticRecord(
+                DiagnosticRecordId.CreateNew(),
+                operation.Correlation,
+                operation.Kind.ToString(),
+                processingStage: null,
+                sourceId: null,
+                itemId: null,
+                itemState: null,
+                recordedAtUtc,
+                outcome,
+                userFacingDescription,
+                outcome == OperationOutcome.Failed
+                    ? "operation-failed"
+                    : "operation-interrupted",
+                technicalDetail));
+    }
+
+    private static OperationOutcome ToOperationOutcome(WorkflowOperationState state)
+    {
+        return state switch
+        {
+            WorkflowOperationState.CompletedSuccessfully =>
+                OperationOutcome.CompletedSuccessfully,
+            WorkflowOperationState.CompletedWithIssues =>
+                OperationOutcome.CompletedWithIssues,
+            WorkflowOperationState.Failed => OperationOutcome.Failed,
+            WorkflowOperationState.Cancelled => OperationOutcome.Cancelled,
+            WorkflowOperationState.InterruptedIncomplete =>
+                OperationOutcome.InterruptedIncomplete,
+            _ => throw new ArgumentOutOfRangeException(nameof(state), state, null)
+        };
     }
 
     private void PublishStateChanged(WorkflowStateSnapshot state)

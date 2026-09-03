@@ -1,7 +1,6 @@
 using CIA.Contracts.Operations;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Workflow;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.Desktop.Tests;
 
@@ -166,6 +165,57 @@ public sealed class ApplicationWorkflowCoordinatorTests
     }
 
     [TestMethod]
+    public async Task SharedCompletionIsRetainedAsStructuredAttemptHistory()
+    {
+        var history = new RecordingProcessingHistoryRecorder();
+        var coordinator = CreateCoordinator(new StubProcessingHostSupervisor(), history);
+        coordinator.RecordSourceSelectionChanged(true);
+        var begin = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+        var completion = OperationCompletion.FromCompletedItems(
+            begin.Operation!,
+            [
+                OperationItemStatus.ProcessedSuccessfully("source-a"),
+                OperationItemStatus.Failed("source-b", "parse-failed")
+            ]);
+
+        coordinator.CompleteOperation(completion);
+
+        Assert.HasCount(1, history.Attempts);
+        Assert.AreEqual(begin.Operation, history.Attempts[0].Correlation);
+        Assert.AreEqual(OperationOutcome.CompletedWithIssues, history.Attempts[0].TerminalOutcome);
+        Assert.AreSame(completion, history.Attempts[0].Completion);
+        Assert.IsEmpty(history.Diagnostics);
+    }
+
+    [TestMethod]
+    public async Task ReinitiatedOperationAppendsASeparateHistoryAttempt()
+    {
+        var history = new RecordingProcessingHistoryRecorder();
+        var coordinator = CreateCoordinator(new StubProcessingHostSupervisor(), history);
+        coordinator.RecordSourceSelectionChanged(true);
+
+        var first = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+        coordinator.CompleteOperation(first.Operation!.OperationId, OperationOutcome.Failed);
+        var second = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+        coordinator.CompleteOperation(
+            second.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully);
+
+        Assert.HasCount(2, history.Attempts);
+        Assert.AreNotEqual(
+            history.Attempts[0].Correlation.OperationId,
+            history.Attempts[1].Correlation.OperationId);
+        Assert.AreEqual(OperationOutcome.Failed, history.Attempts[0].TerminalOutcome);
+        Assert.AreEqual(
+            OperationOutcome.CompletedSuccessfully,
+            history.Attempts[1].TerminalOutcome);
+        Assert.HasCount(1, history.Diagnostics);
+        Assert.AreEqual(
+            history.Attempts[0].Correlation.OperationId,
+            history.Diagnostics[0].Correlation.OperationId);
+    }
+
+    [TestMethod]
     public async Task HostFailureIsReturnedWithoutExposingTheRawException()
     {
         const string sensitiveMessage = "internal host failure details";
@@ -213,11 +263,12 @@ public sealed class ApplicationWorkflowCoordinatorTests
     }
 
     private static ApplicationWorkflowCoordinator CreateCoordinator(
-        IProcessingHostSupervisor supervisor)
+        IProcessingHostSupervisor supervisor,
+        RecordingProcessingHistoryRecorder? historyRecorder = null)
     {
         return new ApplicationWorkflowCoordinator(
             supervisor,
-            NullLogger<ApplicationWorkflowCoordinator>.Instance);
+            historyRecorder ?? new RecordingProcessingHistoryRecorder());
     }
 
     private static async Task CompleteSuccessfullyAsync(
