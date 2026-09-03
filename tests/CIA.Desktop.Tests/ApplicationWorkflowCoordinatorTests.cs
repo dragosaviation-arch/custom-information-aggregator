@@ -251,6 +251,78 @@ public sealed class ApplicationWorkflowCoordinatorTests
     }
 
     [TestMethod]
+    public async Task AcceptedCancellationKeepsOperationActiveUntilCancelledCompletionArrives()
+    {
+        var history = new RecordingProcessingHistoryRecorder();
+        var supervisor = new StubProcessingHostSupervisor();
+        var coordinator = CreateCoordinator(supervisor, history);
+        coordinator.RecordSourceSelectionChanged(true);
+        var begin = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        var cancellation = await coordinator.RequestCancellationAsync();
+        var conflictingOperation = await coordinator.BeginOperationAsync(
+            WorkflowOperationKind.Discovery);
+
+        Assert.IsTrue(cancellation.Accepted);
+        Assert.AreEqual(1, supervisor.CancellationRequestCount);
+        Assert.AreEqual(begin.Operation!.OperationId, supervisor.LastCancellationOperationId);
+        Assert.AreEqual(WorkflowOperationState.Active, coordinator.Current.LatestOperation?.State);
+        Assert.AreEqual(
+            WorkflowRejectionCode.ConflictingOperation,
+            conflictingOperation.Rejection?.Code);
+
+        var completion = OperationCompletion.FromTerminalOutcome(
+            begin.Operation,
+            OperationOutcome.Cancelled,
+            [
+                OperationItemStatus.ProcessedSuccessfully("source-a"),
+                OperationItemStatus.Unprocessed("source-b", "operation-cancelled-before-start")
+            ]);
+        var completed = coordinator.CompleteOperation(completion);
+
+        Assert.IsTrue(completed.Accepted);
+        Assert.IsNull(coordinator.Current.ActiveOperation);
+        Assert.AreEqual(WorkflowOperationState.Cancelled, coordinator.Current.LatestOperation?.State);
+        Assert.AreSame(completion, coordinator.Current.LatestOperation?.Completion);
+        Assert.IsTrue(completion.CanRetainResultFor("source-a"));
+        Assert.HasCount(1, history.Attempts);
+        Assert.AreEqual(OperationOutcome.Cancelled, history.Attempts[0].TerminalOutcome);
+        Assert.AreSame(completion, history.Attempts[0].Completion);
+    }
+
+    [TestMethod]
+    public async Task CancellationWithoutActiveOperationIsRejectedBeforeHostContact()
+    {
+        var supervisor = new StubProcessingHostSupervisor();
+        var coordinator = CreateCoordinator(supervisor);
+
+        var result = await coordinator.RequestCancellationAsync();
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.NoActiveOperation, result.Rejection?.Code);
+        Assert.AreEqual(0, supervisor.CancellationRequestCount);
+    }
+
+    [TestMethod]
+    public async Task RejectedCancellationLeavesTheOperationActive()
+    {
+        var supervisor = new StubProcessingHostSupervisor
+        {
+            CancellationAccepted = false
+        };
+        var coordinator = CreateCoordinator(supervisor);
+        coordinator.RecordSourceSelectionChanged(true);
+        var begin = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        var result = await coordinator.RequestCancellationAsync();
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.CancellationRejected, result.Rejection?.Code);
+        Assert.AreEqual(begin.Operation, coordinator.Current.ActiveOperation?.Correlation);
+        Assert.AreEqual(WorkflowOperationState.Active, coordinator.Current.LatestOperation?.State);
+    }
+
+    [TestMethod]
     public void DesktopWorkflowAssemblyDoesNotReferenceProcessingHostImplementation()
     {
         var referencedAssemblies = typeof(ApplicationWorkflowCoordinator)
@@ -295,6 +367,12 @@ public sealed class ApplicationWorkflowCoordinatorTests
 
         public int EnsureAvailableCallCount { get; private set; }
 
+        public int CancellationRequestCount { get; private set; }
+
+        public OperationId? LastCancellationOperationId { get; private set; }
+
+        public bool CancellationAccepted { get; init; } = true;
+
         public Exception? AvailabilityException { get; init; }
 
         public event EventHandler<ProcessingHostLifecycleSnapshot>? StateChanged
@@ -326,6 +404,16 @@ public sealed class ApplicationWorkflowCoordinatorTests
                 ProcessId: null,
                 FailureCode: null);
             return Task.CompletedTask;
+        }
+
+        public Task<bool> RequestOperationCancellationAsync(
+            OperationId operationId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CancellationRequestCount++;
+            LastCancellationOperationId = operationId;
+            return Task.FromResult(CancellationAccepted);
         }
     }
 }

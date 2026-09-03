@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using CIA.Contracts.Operations;
 
 namespace CIA.Contracts.Ipc;
 
@@ -7,6 +8,7 @@ namespace CIA.Contracts.Ipc;
     UnknownDerivedTypeHandling = JsonUnknownDerivedTypeHandling.FailSerialization)]
 [JsonDerivedType(typeof(EstablishConnectionCommand), "establishConnectionCommand")]
 [JsonDerivedType(typeof(ProcessingHostLivenessCommand), "processingHostLivenessCommand")]
+[JsonDerivedType(typeof(CancelOperationCommand), "cancelOperationCommand")]
 [JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
@@ -31,6 +33,12 @@ public sealed record EstablishConnectionCommand(
 public sealed record ProcessingHostLivenessCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc)
+    : IpcCommand(MessageId, TimestampUtc);
+
+public sealed record CancelOperationCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    OperationId OperationId)
     : IpcCommand(MessageId, TimestampUtc);
 
 public sealed record StopProcessingHostCommand(

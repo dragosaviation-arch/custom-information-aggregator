@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using CIA.Contracts.Ipc;
+using CIA.Contracts.Operations;
 using CIA.Core.Diagnostics;
 using CIA.Desktop.Hosting;
 using CIA.ProcessingHost.Hosting;
+using CIA.ProcessingHost.Operations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -116,6 +118,82 @@ public sealed class ProcessingHostLifecycleTests
             timeout.Token);
         Assert.IsNull(stopAcknowledgement.Failure);
 
+        await WaitForCancellationAsync(lifetime.ApplicationStopping, timeout.Token);
+        await host.StopAsync(timeout.Token);
+    }
+
+    [TestMethod]
+    public async Task RealHostAcceptsCancellationForMatchingActiveOperation()
+    {
+        using var logs = new TemporaryLifecycleLogDirectory();
+        using var timeout = new CancellationTokenSource(TestTimeout);
+        var pipeName = $"CIA.Tests.SPR101.{Guid.NewGuid():N}";
+        string[] arguments =
+        [
+            $"--{ProcessingHostRuntimeContract.PipeNameConfigurationKey}={pipeName}",
+            $"--{ProcessingHostRuntimeContract.ParentProcessIdConfigurationKey}={Environment.ProcessId}",
+            $"--{ApplicationLogPaths.DirectoryConfigurationKey}={logs.Path}"
+        ];
+        using var host = ProcessingHostApplicationHost.Create(arguments);
+        var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+        var cancellation = host.Services.GetRequiredService<CooperativeOperationCancellation>();
+        var correlation = OperationCorrelation.CreateNew();
+        var operation = cancellation.BeginOperation(
+            correlation,
+            "Discovery",
+            "Source interpretation",
+            [new ProcessingItemPlan("source-a")]);
+        Assert.IsTrue(operation.TryStartItem("source-a", out var inFlight));
+
+        await host.StartAsync(timeout.Token);
+        await using var connection = await CIA.Desktop.Ipc.ProcessingHostIpcClient
+            .ConnectAsync(pipeName, timeout.Token);
+        await CompleteReadinessHandshakeAsync(connection, timeout.Token);
+
+        var mismatchedCommand = new CancelOperationCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            OperationId.CreateNew());
+        await connection.SendAsync(mismatchedCommand, timeout.Token);
+        var rejection = await ReceiveAcknowledgementAsync(
+            connection,
+            mismatchedCommand.MessageId,
+            CommandAcceptance.Rejected,
+            timeout.Token);
+        Assert.AreEqual("operation-not-active", rejection.Failure?.Code);
+        Assert.IsFalse(inFlight!.CancellationToken.IsCancellationRequested);
+
+        var command = new CancelOperationCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            correlation.OperationId);
+        await connection.SendAsync(command, timeout.Token);
+        var acknowledgement = await ReceiveAcknowledgementAsync(
+            connection,
+            command.MessageId,
+            CommandAcceptance.Accepted,
+            timeout.Token);
+
+        Assert.IsNull(acknowledgement.Failure);
+        Assert.IsTrue(inFlight.CancellationToken.IsCancellationRequested);
+        var acceptedCancellation = cancellation.RequestCancellation(correlation.OperationId);
+        Assert.AreEqual(
+            OperationCancellationRequestStatus.AlreadyAccepted,
+            acceptedCancellation.Status);
+        inFlight.CommitCompletedResult();
+        var completion = await acceptedCancellation.Completion!.WaitAsync(timeout.Token);
+        Assert.AreEqual(OperationOutcome.Cancelled, completion.Outcome);
+        Assert.IsTrue(completion.CanRetainResultFor("source-a"));
+
+        var stop = new StopProcessingHostCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow);
+        await connection.SendAsync(stop, timeout.Token);
+        await ReceiveAcknowledgementAsync(
+            connection,
+            stop.MessageId,
+            CommandAcceptance.Accepted,
+            timeout.Token);
         await WaitForCancellationAsync(lifetime.ApplicationStopping, timeout.Token);
         await host.StopAsync(timeout.Token);
     }
