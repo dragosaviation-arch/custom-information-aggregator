@@ -1,0 +1,59 @@
+<Project DefaultTargets="Publish">
+
+  <PropertyGroup>
+    <_CiaRepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))</_CiaRepositoryRoot>
+    <_CiaPublishDirectory>$(_CiaRepositoryRoot)artifacts\publish\win-x64\</_CiaPublishDirectory>
+    <_CiaPublishProperties>Configuration=Release;RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=false;PublishTrimmed=false;DebugType=None;DebugSymbols=false;PublishDir=$(_CiaPublishDirectory)</_CiaPublishProperties>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <_CiaApplicationProject Include="$(_CiaRepositoryRoot)src\CIA.Desktop\CIA.Desktop.csproj" />
+    <_CiaApplicationProject Include="$(_CiaRepositoryRoot)src\CIA.ProcessingHost\CIA.ProcessingHost.csproj" />
+  </ItemGroup>
+
+  <Target Name="_PreparePublishDirectory">
+    <RemoveDir Directories="$(_CiaPublishDirectory)" />
+    <MakeDir Directories="$(_CiaPublishDirectory)" />
+  </Target>
+
+  <Target Name="_RestoreApplications">
+    <MSBuild
+      Projects="@(_CiaApplicationProject)"
+      Targets="Restore"
+      BuildInParallel="false"
+      Properties="RuntimeIdentifier=win-x64;SelfContained=true" />
+  </Target>
+
+  <Target Name="Publish" DependsOnTargets="_PreparePublishDirectory;_RestoreApplications">
+    <MSBuild
+      Projects="@(_CiaApplicationProject)"
+      Targets="Publish"
+      BuildInParallel="false"
+      Properties="$(_CiaPublishProperties)" />
+
+    <Error
+      Condition="!Exists('$(_CiaPublishDirectory)CIA.exe')"
+      Text="The CIA desktop executable is missing from the publication." />
+    <Error
+      Condition="!Exists('$(_CiaPublishDirectory)CIA.ProcessingHost.exe')"
+      Text="The CIA Processing Host executable is missing from the publication." />
+    <Error
+      Condition="!Exists('$(_CiaPublishDirectory)CIA.dll') Or !Exists('$(_CiaPublishDirectory)CIA.ProcessingHost.dll') Or !Exists('$(_CiaPublishDirectory)CIA.Contracts.dll') Or !Exists('$(_CiaPublishDirectory)CIA.Core.dll')"
+      Text="Required CIA application libraries are missing from the publication." />
+    <Error
+      Condition="!Exists('$(_CiaPublishDirectory)coreclr.dll') Or !Exists('$(_CiaPublishDirectory)hostfxr.dll') Or !Exists('$(_CiaPublishDirectory)hostpolicy.dll')"
+      Text="The bundled .NET runtime is missing from the publication." />
+
+    <ItemGroup>
+      <_CiaUnexpectedTestAssembly Include="$(_CiaPublishDirectory)*.Tests.dll" />
+    </ItemGroup>
+    <Error
+      Condition="'@(_CiaUnexpectedTestAssembly)' != ''"
+      Text="Test assemblies must not be included in the CIA publication." />
+
+    <Message
+      Importance="high"
+      Text="Published CIA self-contained win-x64 multi-file runtime to $(_CiaPublishDirectory)" />
+  </Target>
+
+</Project>
