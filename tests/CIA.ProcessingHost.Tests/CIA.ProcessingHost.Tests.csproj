@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\CIA.Desktop\CIA.Desktop.csproj" />
     <ProjectReference Include="..\..\src\CIA.ProcessingHost\CIA.ProcessingHost.csproj" />
   </ItemGroup>
 
