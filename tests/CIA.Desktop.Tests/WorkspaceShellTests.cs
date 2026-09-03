@@ -14,16 +14,28 @@ public sealed class WorkspaceShellTests
         string[] expectedWorkspaceTitles =
         [
             "Load",
-            "Discover",
+            "Discovery",
             "Database",
-            "Extraction / Review / Export",
-            "Activity / Diagnostics",
-            "Settings / Maintenance"
+            "Settings"
         ];
 
         CollectionAssert.AreEqual(
             expectedWorkspaceTitles,
             shell.Workspaces.Select(workspace => workspace.Title).ToArray());
+    }
+
+    [TestMethod]
+    public void WorkspaceAreaContainsOnlyApprovedTopLevelAreas()
+    {
+        string[] expectedWorkspaceAreas =
+        [
+            nameof(WorkspaceArea.Load),
+            nameof(WorkspaceArea.Discovery),
+            nameof(WorkspaceArea.Database),
+            nameof(WorkspaceArea.Settings)
+        ];
+
+        CollectionAssert.AreEqual(expectedWorkspaceAreas, Enum.GetNames<WorkspaceArea>());
     }
 
     [TestMethod]
@@ -43,18 +55,22 @@ public sealed class WorkspaceShellTests
     public void PrincipalWorkspacesCanBeSelectedInAnyOrder()
     {
         var shell = CreateShell();
-        var settings = shell.Workspaces.Single(workspace => workspace.Area == WorkspaceArea.SettingsMaintenance);
-        var discover = shell.Workspaces.Single(workspace => workspace.Area == WorkspaceArea.Discover);
+        var settings = shell.Workspaces.Single(workspace => workspace.Area == WorkspaceArea.Settings);
+        var discovery = shell.Workspaces.Single(workspace => workspace.Area == WorkspaceArea.Discovery);
         var load = shell.Workspaces.Single(workspace => workspace.Area == WorkspaceArea.Load);
+        var database = shell.Workspaces.Single(workspace => workspace.Area == WorkspaceArea.Database);
 
         shell.SelectedWorkspace = settings;
         Assert.AreSame(settings, shell.SelectedWorkspace);
 
-        shell.SelectedWorkspace = discover;
-        Assert.AreSame(discover, shell.SelectedWorkspace);
+        shell.SelectedWorkspace = discovery;
+        Assert.AreSame(discovery, shell.SelectedWorkspace);
 
         shell.SelectedWorkspace = load;
         Assert.AreSame(load, shell.SelectedWorkspace);
+
+        shell.SelectedWorkspace = database;
+        Assert.AreSame(database, shell.SelectedWorkspace);
     }
 
     private static MainWindowViewModel CreateShell()

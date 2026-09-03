@@ -8,9 +8,7 @@ public sealed record WorkspaceDefinition(
 public enum WorkspaceArea
 {
     Load,
-    Discover,
+    Discovery,
     Database,
-    ExtractionReviewExport,
-    ActivityDiagnostics,
-    SettingsMaintenance
+    Settings
 }
