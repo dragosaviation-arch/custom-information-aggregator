@@ -10,6 +10,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\CIA.Contracts\CIA.Contracts.csproj" />
     <ProjectReference Include="..\CIA.Core\CIA.Core.csproj" />
   </ItemGroup>
