@@ -11,11 +11,25 @@ public sealed class SourceLoadingCoordinator(
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
 
-    public async Task<SourceLoadingResult> AddAsync(
+    public Task<SourceLoadingResult> AddAsync(
         SourceSelectionKind selectionKind,
         string path,
         CancellationToken cancellationToken = default)
     {
+        return AddAsync(
+            selectionKind,
+            path,
+            SourceLoadSettings.Default,
+            cancellationToken);
+    }
+
+    public async Task<SourceLoadingResult> AddAsync(
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
         await _gate.WaitAsync(cancellationToken);
 
         try
@@ -57,7 +71,7 @@ public sealed class SourceLoadingCoordinator(
             var intakeResult = await intakeClient.LoadAsync(
                 selectionKind,
                 fullPath,
-                SourceLoadSettings.Default,
+                settings,
                 cancellationToken);
 
             if (!intakeResult.Accepted)
@@ -102,6 +116,50 @@ public sealed class SourceLoadingCoordinator(
             _gate.Release();
         }
     }
+
+    public SourceInclusionResult SetInclusion(
+        IEnumerable<LoadedSourceItem> sources,
+        bool isIncluded)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+
+        if (workflowCoordinator.Current.ActiveOperation is not null)
+        {
+            return SourceInclusionResult.Reject(
+                "conflicting-operation",
+                "Source inclusion cannot change while an operation is active.");
+        }
+
+        var targets = sources
+            .Where(sourceSet.Contains)
+            .Distinct()
+            .Where(source => source.IsIncluded != isIncluded)
+            .ToHashSet();
+
+        if (targets.Count == 0)
+        {
+            return SourceInclusionResult.Accept(changedCount: 0);
+        }
+
+        var hasIncludedSource = sourceSet.Items.Any(
+            source => targets.Contains(source) ? isIncluded : source.IsIncluded);
+        var workflowResult = workflowCoordinator.RecordSourceSelectionChanged(hasIncludedSource);
+
+        if (!workflowResult.Accepted)
+        {
+            return SourceInclusionResult.Reject(
+                "workflow-rejected",
+                workflowResult.Rejection?.Reason
+                    ?? "The workflow rejected the source-inclusion change.");
+        }
+
+        foreach (var source in targets)
+        {
+            source.IsIncluded = isIncluded;
+        }
+
+        return SourceInclusionResult.Accept(targets.Count);
+    }
 }
 
 public sealed record SourceLoadingResult(
@@ -119,5 +177,22 @@ public sealed record SourceLoadingResult(
     internal static SourceLoadingResult Reject(string code, string description)
     {
         return new SourceLoadingResult(false, 0, 0, code, description);
+    }
+}
+
+public sealed record SourceInclusionResult(
+    bool Accepted,
+    int ChangedCount,
+    string? FailureCode,
+    string? FailureDescription)
+{
+    internal static SourceInclusionResult Accept(int changedCount)
+    {
+        return new SourceInclusionResult(true, changedCount, null, null);
+    }
+
+    internal static SourceInclusionResult Reject(string code, string description)
+    {
+        return new SourceInclusionResult(false, 0, code, description);
     }
 }

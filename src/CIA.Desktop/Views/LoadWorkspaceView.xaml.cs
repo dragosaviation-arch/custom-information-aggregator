@@ -1,11 +1,17 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Animation;
+using CIA.Desktop.Presentation;
 
 namespace CIA.Desktop.Views;
 
 public partial class LoadWorkspaceView : UserControl
 {
-    private const double CompactLayoutBreakpoint = 1120;
+    private const double CompactLayoutBreakpoint = 1180;
+    private const double SourceRowHeight = 33;
+    private const double DropOverlaySafeSpace = 20;
+    private bool? _dropOverlayVisible;
 
     public LoadWorkspaceView()
     {
@@ -15,16 +21,13 @@ public partial class LoadWorkspaceView : UserControl
     private void OnViewLoaded(object sender, RoutedEventArgs e)
     {
         ApplyResponsiveLayout();
+        UpdateDropOverlayVisibility();
     }
 
     private void OnViewSizeChanged(object sender, SizeChangedEventArgs e)
     {
         ApplyResponsiveLayout();
-    }
-
-    private void OnWorkspaceViewportSizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        ApplyResponsiveLayout();
+        UpdateDropOverlayVisibility();
     }
 
     private void ApplyResponsiveLayout()
@@ -34,9 +37,8 @@ public partial class LoadWorkspaceView : UserControl
             return;
         }
 
-        LoadLayout.MinHeight = Math.Max(0, WorkspaceScroller.ViewportHeight - 32);
+        var hostWidth = Window.GetWindow(this)?.ActualWidth ?? ActualWidth;
 
-        double hostWidth = Window.GetWindow(this)?.ActualWidth ?? ActualWidth;
         if (hostWidth < CompactLayoutBreakpoint)
         {
             ApplyCompactLayout();
@@ -51,11 +53,12 @@ public partial class LoadWorkspaceView : UserControl
         LoadLeftColumn.MinWidth = 0;
         LoadLeftColumn.Width = new GridLength(1, GridUnitType.Star);
         LoadGapColumn.Width = new GridLength(0);
+        LoadRightColumn.MinWidth = 0;
         LoadRightColumn.Width = new GridLength(0);
 
-        LoadTopRow.Height = GridLength.Auto;
-        LoadStackGapRow.Height = new GridLength(12);
-        LoadBottomRow.Height = GridLength.Auto;
+        LoadTopRow.Height = new GridLength(3, GridUnitType.Star);
+        LoadStackGapRow.Height = new GridLength(8);
+        LoadBottomRow.Height = new GridLength(2, GridUnitType.Star);
 
         Grid.SetRow(LoadLeftPane, 0);
         Grid.SetColumn(LoadLeftPane, 0);
@@ -63,14 +66,12 @@ public partial class LoadWorkspaceView : UserControl
         Grid.SetColumn(LoadRightRail, 0);
 
         DetailsColumn.Width = new GridLength(1, GridUnitType.Star);
-        RightRailGapColumn.Width = new GridLength(12);
+        RightRailGapColumn.Width = new GridLength(8);
         SettingsColumn.Width = new GridLength(1, GridUnitType.Star);
 
-        DetailsRow.Height = GridLength.Auto;
-        DetailsRow.MinHeight = 0;
+        DetailsRow.Height = new GridLength(1, GridUnitType.Star);
         RightRailGapRow.Height = new GridLength(0);
         SettingsRow.Height = new GridLength(0);
-        SettingsRow.MinHeight = 0;
 
         Grid.SetRow(DetailsPanel, 0);
         Grid.SetColumn(DetailsPanel, 0);
@@ -80,10 +81,11 @@ public partial class LoadWorkspaceView : UserControl
 
     private void ApplyWideLayout()
     {
-        LoadLeftColumn.MinWidth = 620;
-        LoadLeftColumn.Width = new GridLength(1, GridUnitType.Star);
-        LoadGapColumn.Width = new GridLength(12);
-        LoadRightColumn.Width = new GridLength(360);
+        LoadLeftColumn.MinWidth = 600;
+        LoadLeftColumn.Width = new GridLength(2, GridUnitType.Star);
+        LoadGapColumn.Width = new GridLength(8);
+        LoadRightColumn.MinWidth = 420;
+        LoadRightColumn.Width = new GridLength(1, GridUnitType.Star);
 
         LoadTopRow.Height = new GridLength(1, GridUnitType.Star);
         LoadStackGapRow.Height = new GridLength(0);
@@ -98,15 +100,90 @@ public partial class LoadWorkspaceView : UserControl
         RightRailGapColumn.Width = new GridLength(0);
         SettingsColumn.Width = new GridLength(0);
 
-        DetailsRow.Height = new GridLength(57, GridUnitType.Star);
-        DetailsRow.MinHeight = 300;
-        RightRailGapRow.Height = new GridLength(12);
-        SettingsRow.Height = new GridLength(43, GridUnitType.Star);
-        SettingsRow.MinHeight = 220;
+        DetailsRow.Height = new GridLength(56, GridUnitType.Star);
+        RightRailGapRow.Height = new GridLength(8);
+        SettingsRow.Height = new GridLength(44, GridUnitType.Star);
 
         Grid.SetRow(DetailsPanel, 0);
         Grid.SetColumn(DetailsPanel, 0);
         Grid.SetRow(SettingsPanel, 2);
         Grid.SetColumn(SettingsPanel, 0);
+    }
+
+    private void OnSourceRowsLayoutUpdated(object? sender, EventArgs e)
+    {
+        UpdateDropOverlayVisibility();
+    }
+
+    private void UpdateDropOverlayVisibility()
+    {
+        if (!IsLoaded || SourceRowsList.ActualHeight <= 0)
+        {
+            return;
+        }
+
+        var occupiedHeight = SourceRowsList.Items.Count * SourceRowHeight;
+        var requiredEmptyHeight = DropOverlay.ActualHeight + DropOverlaySafeSpace;
+        var shouldShow = SourceRowsList.Items.Count == 0
+            || occupiedHeight < SourceRowsList.ActualHeight - requiredEmptyHeight;
+
+        if (_dropOverlayVisible == shouldShow)
+        {
+            return;
+        }
+
+        _dropOverlayVisible = shouldShow;
+        DropOverlay.BeginAnimation(
+            OpacityProperty,
+            new DoubleAnimation(
+                shouldShow ? 1 : 0,
+                TimeSpan.FromMilliseconds(140)));
+    }
+
+    private void OnSourceListDragEnter(object sender, DragEventArgs e)
+    {
+        UpdateDragState(e);
+    }
+
+    private void OnSourceListDragOver(object sender, DragEventArgs e)
+    {
+        UpdateDragState(e);
+    }
+
+    private void OnSourceListDragLeave(object sender, DragEventArgs e)
+    {
+        SetDropOverlayDragState(isDragging: false);
+    }
+
+    private async void OnSourceListDrop(object sender, DragEventArgs e)
+    {
+        SetDropOverlayDragState(isDragging: false);
+
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)
+            || e.Data.GetData(DataFormats.FileDrop) is not string[] paths
+            || DataContext is not LoadWorkspaceViewModel viewModel)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        await viewModel.AddDroppedPathsAsync(paths);
+        UpdateDropOverlayVisibility();
+    }
+
+    private void UpdateDragState(DragEventArgs e)
+    {
+        var hasPaths = e.Data.GetDataPresent(DataFormats.FileDrop);
+        e.Effects = hasPaths ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+        SetDropOverlayDragState(hasPaths);
+    }
+
+    private void SetDropOverlayDragState(bool isDragging)
+    {
+        DropOverlay.Background = (Brush)FindResource(
+            isDragging ? "CiaAccentSoftBrush" : "CiaDropOverlayBrush");
+        DropOverlay.BorderBrush = (Brush)FindResource(
+            isDragging ? "CiaAccentBrush" : "CiaBorderStrongBrush");
     }
 }
