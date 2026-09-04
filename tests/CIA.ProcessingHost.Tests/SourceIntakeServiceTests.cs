@@ -58,6 +58,105 @@ public sealed class SourceIntakeServiceTests
     }
 
     [TestMethod]
+    public async Task FolderIncludesOnlyTheEnabledSupportedSourceKinds()
+    {
+        using var files = new TemporarySourceDirectory();
+        var xmlPath = files.WriteFile("source.xml", "<root />");
+        var archivePath = files.CreateZip("sources.zip");
+        var service = new SourceIntakeService();
+
+        var xmlOnly = await service.LoadAsync(
+            SourceSelectionKind.Folder,
+            files.Path,
+            new SourceLoadSettings(true, false, false));
+        var archivesOnly = await service.LoadAsync(
+            SourceSelectionKind.Folder,
+            files.Path,
+            new SourceLoadSettings(false, true, false));
+
+        Assert.IsTrue(xmlOnly.Accepted);
+        Assert.HasCount(1, xmlOnly.Sources);
+        Assert.AreEqual(Path.GetFullPath(xmlPath), xmlOnly.Sources[0].Path);
+        Assert.AreEqual(LoadedSourceKind.XmlFile, xmlOnly.Sources[0].Kind);
+        Assert.IsTrue(archivesOnly.Accepted);
+        Assert.HasCount(1, archivesOnly.Sources);
+        Assert.AreEqual(Path.GetFullPath(archivePath), archivesOnly.Sources[0].Path);
+        Assert.AreEqual(LoadedSourceKind.Archive, archivesOnly.Sources[0].Kind);
+    }
+
+    [TestMethod]
+    public async Task FolderTraversalFollowsTheActiveRecursiveSettingExactly()
+    {
+        using var files = new TemporarySourceDirectory();
+        var topLevelPath = files.WriteFile("top.xml", "<root />");
+        var nestedPath = files.WriteFile(Path.Combine("nested", "child.xml"), "<root />");
+        var service = new SourceIntakeService();
+
+        var topLevelOnly = await service.LoadAsync(
+            SourceSelectionKind.Folder,
+            files.Path,
+            new SourceLoadSettings(true, false, false));
+        var recursive = await service.LoadAsync(
+            SourceSelectionKind.Folder,
+            files.Path,
+            new SourceLoadSettings(true, false, true));
+
+        CollectionAssert.AreEqual(
+            new[] { Path.GetFullPath(topLevelPath) },
+            topLevelOnly.Sources.Select(source => source.Path).ToArray());
+        CollectionAssert.AreEquivalent(
+            new[] { topLevelPath, nestedPath }.Select(Path.GetFullPath).ToArray(),
+            recursive.Sources.Select(source => source.Path).ToArray());
+    }
+
+    [TestMethod]
+    public async Task DirectFileAndArchiveSelectionsIgnoreFolderInclusionSwitches()
+    {
+        using var files = new TemporarySourceDirectory();
+        var xmlPath = files.WriteFile("source.xml", "<root />");
+        var archivePath = files.CreateZip("sources.zip");
+        var folderSwitchesDisabled = new SourceLoadSettings(false, false, false);
+        var service = new SourceIntakeService();
+
+        var xml = await service.LoadAsync(
+            SourceSelectionKind.XmlFile,
+            xmlPath,
+            folderSwitchesDisabled);
+        var archive = await service.LoadAsync(
+            SourceSelectionKind.Archive,
+            archivePath,
+            folderSwitchesDisabled);
+
+        Assert.IsTrue(xml.Accepted);
+        Assert.HasCount(1, xml.Sources);
+        Assert.AreEqual(LoadedSourceKind.XmlFile, xml.Sources[0].Kind);
+        Assert.IsTrue(archive.Accepted);
+        Assert.HasCount(1, archive.Sources);
+        Assert.AreEqual(LoadedSourceKind.Archive, archive.Sources[0].Kind);
+    }
+
+    [TestMethod]
+    public async Task InvalidArchiveDepthIsRejectedAsAControlledLoadSettingsFailure()
+    {
+        using var files = new TemporarySourceDirectory();
+        var archivePath = files.CreateZip("sources.zip");
+        var invalidSettings = SourceLoadSettings.Default with
+        {
+            MaximumArchiveNestingDepth = default
+        };
+        var service = new SourceIntakeService();
+
+        var result = await service.LoadAsync(
+            SourceSelectionKind.Archive,
+            archivePath,
+            invalidSettings);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("invalid-load-settings", result.Failure?.Code);
+        Assert.HasCount(0, result.Sources);
+    }
+
+    [TestMethod]
     public async Task ArchiveSelectionUsesContentRecognitionWithoutExtractingTheArchive()
     {
         using var files = new TemporarySourceDirectory();

@@ -116,6 +116,11 @@ public static class IpcContractValidator
         {
             throw InvalidContract("Source-load settings are required.");
         }
+
+        if (!ArchiveNestingDepth.IsValid(command.Settings.MaximumArchiveNestingDepth.Value))
+        {
+            throw InvalidContract("The maximum archive nesting depth must be at least 1.");
+        }
     }
 
     private static void ValidateLoadSourcesResponse(LoadSourcesResponse response)

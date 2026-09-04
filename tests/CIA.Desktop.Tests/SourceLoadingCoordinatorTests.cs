@@ -174,6 +174,35 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    public async Task ActiveArchiveDepthPassesThroughTheDesktopIntakeBoundary()
+    {
+        var path = Path.GetFullPath("sources.zip");
+        var client = new StubSourceIntakeClient(
+            Accept(new LoadedSourceContract(
+                SourceId.CreateNew(),
+                path,
+                IsIncluded: true,
+                LoadedSourceStatus.Ready,
+                LoadedSourceKind.Archive)));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        var settings = SourceLoadSettings.Default with
+        {
+            MaximumArchiveNestingDepth = ArchiveNestingDepth.From(6)
+        };
+
+        var result = await coordinator.AddAsync(
+            SourceSelectionKind.Archive,
+            path,
+            settings);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreEqual(settings, client.LastSettings);
+        Assert.AreEqual(6, client.LastSettings?.MaximumArchiveNestingDepth.Value);
+    }
+
+    [TestMethod]
     public async Task DuplicatePathIsBlockedBeforeASecondHostRequest()
     {
         var path = Path.GetFullPath("source.xml");

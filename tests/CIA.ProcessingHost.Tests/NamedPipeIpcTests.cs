@@ -128,12 +128,16 @@ public sealed class NamedPipeIpcTests
     [TestMethod]
     public async Task SourceLoadingCommandAndResponseRoundTripAsTypedContracts()
     {
+        var activeSettings = SourceLoadSettings.Default with
+        {
+            MaximumArchiveNestingDepth = ArchiveNestingDepth.From(5)
+        };
         var command = new LoadSourcesCommand(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             SourceSelectionKind.Folder,
             Path.GetFullPath("sources"),
-            SourceLoadSettings.Default);
+            activeSettings);
         var response = new LoadSourcesResponse(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
@@ -154,13 +158,39 @@ public sealed class NamedPipeIpcTests
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
         stream.Position = 0;
 
-        Assert.AreEqual(command, await LengthPrefixedJsonMessageFramer.ReadAsync(stream));
+        var roundTrippedCommand = await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
+        Assert.AreEqual(command, roundTrippedCommand);
+        Assert.AreEqual(
+            5,
+            ((LoadSourcesCommand)roundTrippedCommand).Settings.MaximumArchiveNestingDepth.Value);
         var roundTrippedResponse = await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
         Assert.IsInstanceOfType<LoadSourcesResponse>(roundTrippedResponse);
         Assert.AreEqual(response.CommandMessageId, ((LoadSourcesResponse)roundTrippedResponse).CommandMessageId);
         CollectionAssert.AreEqual(
             response.Sources.ToArray(),
             ((LoadSourcesResponse)roundTrippedResponse).Sources.ToArray());
+    }
+
+    [TestMethod]
+    public async Task InvalidArchiveDepthIsRejectedAtTheIpcContractBoundary()
+    {
+        var invalidSettings = SourceLoadSettings.Default with
+        {
+            MaximumArchiveNestingDepth = default
+        };
+        var command = new LoadSourcesCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            SourceSelectionKind.Archive,
+            Path.GetFullPath("sources.zip"),
+            invalidSettings);
+        await using var stream = new MemoryStream();
+
+        var exception = await Assert.ThrowsExactlyAsync<IpcProtocolException>(
+            () => LengthPrefixedJsonMessageFramer.WriteAsync(stream, command).AsTask());
+
+        Assert.AreEqual(IpcProtocolError.InvalidContract, exception.Error);
+        StringAssert.Contains(exception.Message, "maximum archive nesting depth");
     }
 
     [TestMethod]

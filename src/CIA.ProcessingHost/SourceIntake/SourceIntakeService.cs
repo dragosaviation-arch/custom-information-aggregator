@@ -26,6 +26,13 @@ public sealed class SourceIntakeService
         SourceLoadSettings settings,
         CancellationToken cancellationToken)
     {
+        if (settings.MaximumArchiveNestingDepth.Value < 1)
+        {
+            return Reject(
+                "invalid-load-settings",
+                "The maximum archive nesting depth must be at least 1.");
+        }
+
         try
         {
             cancellationToken.ThrowIfCancellationRequested();

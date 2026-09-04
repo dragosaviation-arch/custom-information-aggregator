@@ -26,6 +26,9 @@ public sealed record SourceLoadSettings(
     bool IncludeArchiveFiles,
     bool TraverseSubfolders)
 {
+    public ArchiveNestingDepth MaximumArchiveNestingDepth { get; init; } =
+        ArchiveNestingDepth.Default;
+
     public static SourceLoadSettings Default { get; } = new(
         IncludeXmlFiles: true,
         IncludeArchiveFiles: true,
