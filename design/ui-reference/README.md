@@ -25,12 +25,11 @@ Preserve the user's current visual and interaction direction in Git so Codex and
 
 - `load/CIA_Load_UI_Spec.json` is the primary measurable visual specification for the areas it defines, except for workspace/page count, workspace naming, top-level navigation grouping, or any other area explicitly superseded by controlled project authority.
 - `load/CIA_Load_UI_Preview.html` is the complementary visual and interaction reference for composition, hierarchy, and intended appearance.
+- `discovery/CIA_Discovery_UI_Spec.json` and `discovery/CIA_Discovery_UI_Preview.html` provide the equivalent temporary guidance for the future Discovery workspace.
 - If the HTML and JSON differ on a measurable visual property explicitly defined by the JSON, prefer the JSON.
 - Neither reference overrides approved architecture or requirements.
 
-## Known superseded design area — top-level navigation
-
-The supplied HTML and JSON revision predates the controlled four-tab navigation correction. Its workspace/tab count, workspace names, and top-level grouping are obsolete and must not be treated as implementation guidance.
+## Controlled top-level navigation
 
 The authoritative top-level navigation is exactly:
 
@@ -46,17 +45,7 @@ Capability ownership remains controlled as follows:
 - configuration and maintenance remain within Settings;
 - persistent global operation/status remains an application-level surface and is not a separate tab.
 
-Therefore:
-
-- Do not reproduce the prototype's six-tab navigation in production.
-- Do not create separate top-level Extraction / Review / Export navigation.
-- Do not create separate top-level Activity / Diagnostics navigation.
-- Do not use Settings / Maintenance as the controlled top-level title.
-- Do not rename Discovery back to Discover.
-- Do not modify the supplied HTML or JSON to correct these obsolete areas during import.
-- Preserve the source files exactly as supplied.
-- Treat the obsolete navigation structure only as historical prototype content.
-- Other visual properties—such as colors, spacing, sizing, panel treatment, typography, table styling, control appearance, and general visual language—may remain useful as design guidance unless separately superseded.
+The current references reflect this four-tab structure. Later reference updates must continue to defer to controlled project authority if navigation or capability ownership diverges.
 
 ## Prototype-only behavior
 
@@ -91,6 +80,8 @@ The canonical current files are:
 
 - `design/ui-reference/load/CIA_Load_UI_Preview.html`
 - `design/ui-reference/load/CIA_Load_UI_Spec.json`
+- `design/ui-reference/discovery/CIA_Discovery_UI_Preview.html`
+- `design/ui-reference/discovery/CIA_Discovery_UI_Spec.json`
 
 When the user supplies a newer approved revision:
 
@@ -98,7 +89,8 @@ When the user supplies a newer approved revision:
 - do not accumulate numbered duplicate files unless explicitly requested;
 - preserve revision history through Git commits;
 - use the version contained in the supplied design material where applicable;
-- never invent a design revision or silently modify the design.
+- never invent a design revision or silently modify the design;
+- apply only explicitly approved semantic reconciliations when an imported reference contains a known interaction contradiction.
 
 ## Lifecycle
 

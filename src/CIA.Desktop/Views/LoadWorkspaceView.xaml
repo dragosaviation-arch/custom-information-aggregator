@@ -48,9 +48,14 @@
                         Command="{Binding AddFolderCommand}"
                         Style="{StaticResource CiaButtonStyle}"
                         Content="＋ Add Folder" />
-                <Button Command="{Binding AddArchiveCommand}"
+                <Button Margin="0,0,6,0"
+                        Command="{Binding AddArchiveCommand}"
                         Style="{StaticResource CiaButtonStyle}"
                         Content="＋ Add Archive" />
+                <Button Command="{Binding RemoveCheckedCommand}"
+                        Style="{StaticResource CiaDangerButtonStyle}"
+                        Content="− Remove"
+                        ToolTip="Remove checked entries from this session only." />
             </StackPanel>
 
             <WrapPanel Grid.Row="2"
@@ -77,13 +82,79 @@
                             </TextBlock.Style>
                         </TextBlock>
                     </Grid>
-                    <Button Width="31"
-                            Margin="4,0,0,0"
-                            IsEnabled="False"
-                            Padding="0"
-                            Style="{StaticResource CiaButtonStyle}"
-                            Content="⚲"
-                            ToolTip="Additional filter options are not available yet." />
+                    <Grid Margin="4,0,0,0">
+                        <Button x:Name="FilterOptionsButton"
+                                Width="31"
+                                Padding="0"
+                                Command="{Binding ToggleFilterOptionsCommand}"
+                                Style="{StaticResource CiaButtonStyle}"
+                                Content="⚲"
+                                ToolTip="Filter by status or source size." />
+                        <Popup Width="280"
+                               AllowsTransparency="True"
+                               IsOpen="{Binding IsFilterOptionsOpen}"
+                               Placement="Bottom"
+                               PlacementTarget="{Binding ElementName=FilterOptionsButton}"
+                               StaysOpen="False">
+                            <Border Margin="0,5,0,0"
+                                    Padding="10"
+                                    Background="{StaticResource CiaPanelBrush}"
+                                    BorderBrush="{StaticResource CiaBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="9">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="88" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="7" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="7" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="9" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock VerticalAlignment="Center"
+                                               Style="{StaticResource CiaSecondaryTextStyle}"
+                                               Text="Status" />
+                                    <ComboBox Grid.Column="1"
+                                              Height="29"
+                                              ItemsSource="{Binding FilterStatuses}"
+                                              SelectedItem="{Binding FilterStatus}" />
+                                    <TextBlock Grid.Row="2"
+                                               VerticalAlignment="Center"
+                                               Style="{StaticResource CiaSecondaryTextStyle}"
+                                               Text="Min size MB" />
+                                    <TextBox Grid.Row="2"
+                                             Grid.Column="1"
+                                             Style="{StaticResource CiaTextInputStyle}"
+                                             Text="{Binding MinimumSizeMb, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Grid.Row="4"
+                                               VerticalAlignment="Center"
+                                               Style="{StaticResource CiaSecondaryTextStyle}"
+                                               Text="Max size MB" />
+                                    <TextBox Grid.Row="4"
+                                             Grid.Column="1"
+                                             Style="{StaticResource CiaTextInputStyle}"
+                                             Text="{Binding MaximumSizeMb, UpdateSourceTrigger=PropertyChanged}" />
+                                    <StackPanel Grid.Row="6"
+                                                Grid.ColumnSpan="2"
+                                                HorizontalAlignment="Right"
+                                                Orientation="Horizontal">
+                                        <Button Margin="0,0,5,0"
+                                                Command="{Binding ClearFilterOptionsCommand}"
+                                                Style="{StaticResource CiaGhostButtonStyle}"
+                                                Content="Clear" />
+                                        <Button Command="{Binding ApplyFilterOptionsCommand}"
+                                                Style="{StaticResource CiaPrimaryButtonStyle}"
+                                                Content="Apply" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+                        </Popup>
+                    </Grid>
                 </StackPanel>
                 <Button Margin="0,0,2,0"
                         Command="{Binding IncludeVisibleCommand}"
@@ -94,10 +165,10 @@
                         Style="{StaticResource CiaGhostButtonStyle}"
                         Content="Exclude visible" />
                 <Button Margin="0,0,6,0"
-                        IsEnabled="False"
+                        Command="{Binding RefreshSelectedCommand}"
                         Style="{StaticResource CiaGhostButtonStyle}"
                         Content="Refresh selected"
-                        ToolTip="Source refresh is not available yet." />
+                        ToolTip="Refresh highlighted source rows." />
                 <TextBlock VerticalAlignment="Center"
                            FontWeight="Bold"
                            Foreground="{StaticResource CiaTextPrimaryBrush}"
@@ -179,6 +250,8 @@
                                  BorderThickness="0"
                                  ItemsSource="{Binding VisibleSources}"
                                  LayoutUpdated="OnSourceRowsLayoutUpdated"
+                                 SelectionChanged="OnSourceSelectionChanged"
+                                 SelectionMode="Extended"
                                  SelectedItem="{Binding SelectedSource, Mode=TwoWay}"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
@@ -281,7 +354,8 @@
                                                        Text="{Binding SizeText}" />
                                             <StackPanel Grid.Column="5"
                                                         VerticalAlignment="Center"
-                                                        Orientation="Horizontal">
+                                                        Orientation="Horizontal"
+                                                        ToolTip="{Binding StatusDetail}">
                                                 <Ellipse Width="6"
                                                          Height="6"
                                                          Margin="0,0,5,0"
@@ -296,11 +370,12 @@
                                             <Button Grid.Column="6"
                                                     Width="28"
                                                     Height="28"
-                                                    IsEnabled="False"
+                                                    Command="{Binding DataContext.RefreshSourceCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}"
                                                     Padding="0"
                                                     Style="{StaticResource CiaGhostButtonStyle}"
                                                     Content="↻"
-                                                    ToolTip="Source refresh is not available yet." />
+                                                    ToolTip="Refresh this source." />
                                         </Grid>
                                     </Border>
                                 </DataTemplate>
@@ -677,6 +752,18 @@
                                                    TextWrapping="Wrap" />
                                         <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
                                                    Text="Navigate after completion. Discovery is not started automatically."
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </CheckBox>
+                                <Border Style="{StaticResource CiaDividerStyle}" />
+                                <CheckBox Padding="0,4"
+                                          IsChecked="{Binding DontWarnWhenRemovingEntries}">
+                                    <StackPanel Margin="7,0,0,0">
+                                        <TextBlock FontWeight="SemiBold"
+                                                   Text="Don't warn when removing entries"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
+                                                   Text="Skip the removal confirmation for this session."
                                                    TextWrapping="Wrap" />
                                     </StackPanel>
                                 </CheckBox>

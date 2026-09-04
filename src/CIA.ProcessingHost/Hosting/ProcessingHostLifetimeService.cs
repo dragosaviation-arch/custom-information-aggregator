@@ -13,6 +13,7 @@ public sealed class ProcessingHostLifetimeService(
     ProcessingHostRuntimeOptions options,
     CooperativeOperationCancellation operationCancellation,
     SourceIntakeService sourceIntake,
+    SourceRefreshService sourceRefresh,
     IHostApplicationLifetime applicationLifetime,
     ILogger<ProcessingHostLifetimeService> logger) : BackgroundService
 {
@@ -164,6 +165,24 @@ public sealed class ProcessingHostLifetimeService(
                                     : CommandAcceptance.Rejected,
                                 result.Sources,
                                 result.Failure),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+
+                case RefreshSourceCommand command when established:
+                    var refreshResult = await sourceRefresh
+                        .RefreshAsync(command.Source, cancellationToken)
+                        .ConfigureAwait(false);
+                    await connection.SendAsync(
+                            new RefreshSourceResponse(
+                                Guid.CreateVersion7(),
+                                DateTimeOffset.UtcNow,
+                                command.MessageId,
+                                refreshResult.Accepted
+                                    ? CommandAcceptance.Accepted
+                                    : CommandAcceptance.Rejected,
+                                refreshResult.Source,
+                                refreshResult.Failure),
                             cancellationToken)
                         .ConfigureAwait(false);
                     break;

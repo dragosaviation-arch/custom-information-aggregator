@@ -11,9 +11,11 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(ProcessingHostLivenessCommand), "processingHostLivenessCommand")]
 [JsonDerivedType(typeof(CancelOperationCommand), "cancelOperationCommand")]
 [JsonDerivedType(typeof(LoadSourcesCommand), "loadSourcesCommand")]
+[JsonDerivedType(typeof(RefreshSourceCommand), "refreshSourceCommand")]
 [JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
 [JsonDerivedType(typeof(LoadSourcesResponse), "loadSourcesResponse")]
+[JsonDerivedType(typeof(RefreshSourceResponse), "refreshSourceResponse")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 public abstract record IpcMessage(Guid MessageId, DateTimeOffset TimestampUtc);
 
@@ -52,6 +54,12 @@ public sealed record LoadSourcesCommand(
     SourceLoadSettings Settings)
     : IpcCommand(MessageId, TimestampUtc);
 
+public sealed record RefreshSourceCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    LoadedSourceContract Source)
+    : IpcCommand(MessageId, TimestampUtc);
+
 public sealed record StopProcessingHostCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc)
@@ -71,6 +79,15 @@ public sealed record LoadSourcesResponse(
     Guid CommandMessageId,
     CommandAcceptance Acceptance,
     IReadOnlyList<LoadedSourceContract> Sources,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record RefreshSourceResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    CommandAcceptance Acceptance,
+    LoadedSourceContract Source,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 

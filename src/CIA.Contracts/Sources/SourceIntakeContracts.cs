@@ -15,7 +15,10 @@ public enum LoadedSourceKind
 
 public enum LoadedSourceStatus
 {
-    Ready = 1
+    Ready = 1,
+    Unavailable = 2,
+    Unsupported = 3,
+    FailedValidation = 4
 }
 
 public sealed record SourceLoadSettings(

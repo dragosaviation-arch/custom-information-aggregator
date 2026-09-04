@@ -1,150 +1,167 @@
 {
   "meta": {
     "name": "CIA Load UI Preview",
-    "version": "0.1",
-    "purpose": "Standalone visual/interaction prototype. Not production code.",
+    "version": "1.3.1",
+    "status": "Load UI/UX hotfix - Remove uses existing checked rows",
     "coordinateSystem": "DIP-like CSS pixels at 100% browser zoom"
   },
+  "designGoals": [
+    "No application-level vertical scrollbar in normal operation; source list, Details and Settings scroll internally when needed.",
+    "Allow the whole desktop shell to shrink substantially in height without reserving large empty minimum areas.",
+    "Use an exact two-thirds / one-third split at normal width.",
+    "Below the responsive breakpoint, move the entire right rail below the Load area while keeping both regions inside the available viewport height.",
+    "When stacked, Item Details and Load Settings remain side-by-side and use their own compact two-column content layouts.",
+    "Use compact included/total notation: x / y included."
+  ],
   "viewport": {
-    "designWidth": 1440,
-    "designHeight": 900,
-    "minWidth": 980,
-    "minHeight": 620
-  },
-  "tokens": {
-    "fontFamily": "Segoe UI, Inter, Arial, sans-serif",
-    "fontSizeBody": 13,
-    "fontSizeSmall": 12,
-    "fontSizeTitle": 24,
-    "fontSizeSection": 14,
-    "background": "#F6F7FB",
-    "panel": "#FFFFFF",
-    "panelAlt": "#FAFBFD",
-    "textPrimary": "#1F2430",
-    "textSecondary": "#667085",
-    "textMuted": "#8A94A6",
-    "accent": "#6C63FF",
-    "accentSoft": "#EEECFF",
-    "accentHover": "#5B52F5",
-    "border": "#D9DEE8",
-    "borderStrong": "#C8CFDC",
-    "success": "#2D8A57",
-    "warning": "#A66A00",
-    "danger": "#B54747",
-    "disabledBg": "#F0F2F5",
-    "disabledText": "#9AA3B2",
-    "selectedRow": "#F1F0FF",
-    "hoverRow": "#F8F9FC",
-    "radius": 10,
-    "radiusSmall": 7,
-    "shadow": "0 1px 2px rgba(16,24,40,.05)",
-    "controlHeight": 34,
-    "rowHeight": 38,
-    "statusBarHeight": 34,
-    "workspaceGap": 12,
-    "outerPadding": 16
+    "designWidth": 1400,
+    "designHeight": 760,
+    "minWidth": 1000,
+    "minHeight": 520
   },
   "shell": {
-    "topbarHeight": 52,
-    "tabbarHeight": 54,
-    "statusBarHeight": 34,
-    "workspaceTabs": [
+    "titleBarHeight": 38,
+    "topNavigationHeight": 60,
+    "statusBarHeight": 32,
+    "workspaceOuterPadding": 8,
+    "workspaceGap": 8,
+    "pageLevelScroll": false
+  },
+  "topNavigation": {
+    "tabs": [
       "Load",
-      "Discover",
+      "Discovery",
       "Database",
-      "Extraction / Review / Export",
-      "Activity / Diagnostics",
-      "Settings / Maintenance"
-    ]
+      "Settings"
+    ],
+    "style": "prominent compact icon/title/subtitle navigation"
   },
   "loadLayout": {
     "leftPane": {
-      "minWidth": 620,
-      "flex": 1,
+      "minWidth": 600,
+      "preferredShare": 0.6666666666666666,
       "regions": [
-        "toolbar",
-        "discoveryState",
-        "localProgress",
-        "sourceList"
-      ]
+        "source-add toolbar",
+        "filter / bulk actions / included-count row",
+        "source list with contextual drag/drop overlay",
+        "workspace-local progress strip at bottom",
+        "Discovery state strip under local progress"
+      ],
+      "minimumVerticalReservation": "none beyond toolbar/summary/progress/drop-strip intrinsic content; source list absorbs remaining height",
+      "progressPlacement": "Bottom of the Load area, below source list and drag/drop strip.",
+      "discoveryStatePlacement": "Dedicated compact strip at the very bottom of the Load area, directly below the workspace-local progress strip."
     },
     "rightRail": {
-      "preferredWidth": 360,
-      "minWidth": 320,
-      "maxWidth": 420,
+      "minWidth": 420,
+      "preferredWidth": "33.333% of available content width",
+      "maxWidth": null,
+      "preferredShare": 0.3333333333333333,
       "regions": [
-        "details",
-        "localSettings"
-      ]
+        "Item Details",
+        "Load Settings"
+      ],
+      "minimumVerticalReservation": "none; Details and Settings use internal scrolling"
     },
-    "gap": 12,
-    "detailsHeight": 0.57,
-    "settingsHeight": 0.43
+    "detailsShare": 0.56,
+    "settingsShare": 0.44
+  },
+  "sourceSummary": {
+    "format": "x / y included",
+    "example": "463 / 487 included"
   },
   "sourceList": {
+    "rowHeight": 33,
+    "flatList": true,
     "columns": [
-      {
-        "id": "include",
-        "label": "",
-        "width": 38
-      },
-      {
-        "id": "name",
-        "label": "Source",
-        "width": "2.0fr"
-      },
-      {
-        "id": "path",
-        "label": "Path",
-        "width": "2.6fr"
-      },
-      {
-        "id": "depth",
-        "label": "",
-        "width": 44
-      },
-      {
-        "id": "status",
-        "label": "Status",
-        "width": 112
-      },
-      {
-        "id": "actions",
-        "label": "",
-        "width": 100
-      }
+      "include",
+      "source",
+      "path",
+      "archive depth",
+      "size",
+      "status",
+      "refresh"
     ],
-    "failedStyle": "greyed + italic + explicit Failed status text/icon",
-    "excludedStyle": "reduced emphasis but still readable",
-    "selectedStyle": "accent-tinted row"
+    "removeFromSessionExposed": true,
+    "summary": "Merged into the control row after Refresh selected, using x / y included.",
+    "controlRow": {
+      "alignment": "left",
+      "order": [
+        "search/filter field",
+        "filter options button",
+        "Include visible",
+        "Exclude visible",
+        "Refresh selected",
+        "x / y included"
+      ],
+      "responsiveWrap": "No Discovery-state content lives in this row."
+    },
+    "dragDropOverlay": {
+      "placement": "overlay inside the loaded-source list, anchored near the lower center of the usable list area",
+      "text": "\u21e7 Drag & drop files, folders or archives here",
+      "visibilityRule": "Show only while there is sufficient empty space below the currently rendered rows. Automatically fade/hide before the last visible loaded-source row reaches the overlay region, so source text never overlaps the drag/drop message. Re-evaluate after filtering, adding sources, scrolling, and window resize.",
+      "pointerEvents": "none for the visual overlay; the loaded-source list remains the drop target"
+    },
+    "removeBehavior": {
+      "control": "Existing dusty-red '\u2212 Remove' button immediately after Add Archive",
+      "target": "rows whose existing checkbox is checked",
+      "effect": "remove those checked entries from the current session only; never delete source files from disk",
+      "confirmation": "Dynamic compact wording: 'Remove 1 entry?' or 'Remove N entries?'",
+      "discoveryImpact": "removal changes the active source set and makes Discovery out of date"
+    },
+    "rowSelection": {
+      "purpose": "Select one or more loaded-source rows for inspection/details and actions that explicitly use row selection, such as Refresh selected. Remove uses checked/included rows instead.",
+      "distinctFromInclusion": true,
+      "interaction": [
+        "Click: select one row",
+        "Ctrl+Click: add/remove a row from the selection",
+        "Shift+Click: select a contiguous range"
+      ],
+      "visual": "Selected rows use the existing highlighted-row treatment."
+    }
   },
   "detailsPane": {
-    "fields": [
-      "Source name",
-      "Full path",
-      "Type",
-      "Archive nesting depth",
-      "Inclusion state",
-      "Processing status",
-      "Extraction location",
-      "Discovery relation"
-    ]
+    "layout": "two equal-width metadata columns (50/50), with wide rows only where needed",
+    "archiveBreadcrumb": true,
+    "rawXmlPreview": false,
+    "tabs": false,
+    "internalScrollAllowed": true
   },
-  "localSettings": {
-    "items": [
-      "Include supported XML files",
-      "Include supported archive files",
-      "Traverse subfolders recursively"
+  "loadSettings": {
+    "layout": "two equal-width columns (50/50)",
+    "groups": [
+      {
+        "heading": "WHEN ADDING A FOLDER",
+        "items": [
+          "Include XML files",
+          "Include archives",
+          "Search subfolders"
+        ]
+      },
+      {
+        "heading": "WORKFLOW",
+        "items": [
+          "Open Discovery when loading completes",
+          "Don't warn when removing entries"
+        ]
+      }
     ],
-    "duplicateHandling": "Prevent duplicate source paths by default; no user setting exposed."
+    "internalScrollAllowed": true,
+    "clarificationTextVisible": false,
+    "removeWarningPreference": {
+      "label": "Don't warn when removing entries",
+      "default": false,
+      "behavior": "Skip the confirmation dialog."
+    }
   },
-  "statusBehavior": {
-    "global": "Persistent across workspace navigation.",
-    "local": "Richer Load-specific detail when Load is active.",
-    "cancel": "Esc is the sole cancellation interaction while a cancellable operation is active."
+  "statusBar": {
+    "sessionIndicator": "green dot only",
+    "includedFormat": "x / y included",
+    "persistent": true
   },
   "responsive": {
-    "breakpoint": 1120,
-    "behaviorBelowBreakpoint": "Right rail stacks below source list; global status remains fixed at bottom."
+    "breakpoint": 1180,
+    "behaviorBelowBreakpoint": "Use a two-row viewport-contained layout: Load area on top and the entire right rail below. Do not switch to page-level scrolling. The source list, Item Details and Load Settings scroll internally if content exceeds their allocated area.",
+    "stackedHeightAllocation": "top Load area 3fr / bottom right rail 2fr",
+    "dragDropBehavior": "Overlay follows the source-list viewport and uses the same automatic collision-avoidance rule in both side-by-side and stacked layouts."
   }
 }

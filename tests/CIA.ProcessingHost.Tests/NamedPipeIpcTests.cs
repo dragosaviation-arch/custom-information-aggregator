@@ -164,6 +164,40 @@ public sealed class NamedPipeIpcTests
     }
 
     [TestMethod]
+    public async Task SourceRefreshCommandAndControlledResponseRoundTripWithRetainedIdentity()
+    {
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            Path.GetFullPath("source.xml"),
+            IsIncluded: false,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
+        var command = new RefreshSourceCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            source);
+        var response = new RefreshSourceResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            command.MessageId,
+            CommandAcceptance.Rejected,
+            source with { Status = LoadedSourceStatus.FailedValidation },
+            new IpcFailure("malformed-xml", "The XML source is malformed."));
+        await using var stream = new MemoryStream();
+
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
+        stream.Position = 0;
+
+        Assert.AreEqual(command, await LengthPrefixedJsonMessageFramer.ReadAsync(stream));
+        var roundTrippedResponse = await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
+        Assert.AreEqual(response, roundTrippedResponse);
+        Assert.AreEqual(
+            source.SourceId,
+            ((RefreshSourceResponse)roundTrippedResponse).Source.SourceId);
+    }
+
+    [TestMethod]
     public async Task RejectedAcknowledgementRoundTripsControlledFailureDetails()
     {
         var acknowledgement = new CommandAcknowledgement(

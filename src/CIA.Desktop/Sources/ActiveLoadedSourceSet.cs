@@ -35,11 +35,25 @@ public sealed class ActiveLoadedSourceSet
             _items.Add(new LoadedSourceItem(source));
         }
     }
+
+    internal void RemoveRange(IEnumerable<LoadedSourceItem> sources)
+    {
+        foreach (var source in sources.Distinct().ToArray())
+        {
+            _items.Remove(source);
+        }
+    }
 }
 
 public sealed class LoadedSourceItem : ObservableObject
 {
     private bool _isIncluded;
+    private LoadedSourceStatus _status;
+    private string? _statusDetail;
+    private long? _sizeBytes;
+    private string _sizeText = "—";
+    private string _modifiedText = "—";
+    private string _createdText = "—";
 
     public LoadedSourceItem(LoadedSourceContract source)
     {
@@ -48,13 +62,9 @@ public sealed class LoadedSourceItem : ObservableObject
         SourceId = source.SourceId;
         Path = source.Path;
         _isIncluded = source.IsIncluded;
-        Status = source.Status;
+        _status = source.Status;
         Kind = source.Kind;
-
-        var metadata = ReadFileMetadata(Path);
-        SizeText = metadata.SizeText;
-        ModifiedText = metadata.ModifiedText;
-        CreatedText = metadata.CreatedText;
+        RefreshMetadata();
     }
 
     public SourceId SourceId { get; }
@@ -75,13 +85,36 @@ public sealed class LoadedSourceItem : ObservableObject
 
     public string IncludedText => IsIncluded ? "Yes" : "No";
 
-    public LoadedSourceStatus Status { get; }
+    public LoadedSourceStatus Status
+    {
+        get => _status;
+        private set
+        {
+            if (SetProperty(ref _status, value))
+            {
+                OnPropertyChanged(nameof(StatusText));
+            }
+        }
+    }
+
+    public string? StatusDetail
+    {
+        get => _statusDetail;
+        private set => SetProperty(ref _statusDetail, value);
+    }
 
     public LoadedSourceKind Kind { get; }
 
     public string DisplayName => System.IO.Path.GetFileName(Path);
 
-    public string StatusText => Status == LoadedSourceStatus.Ready ? "Ready" : Status.ToString();
+    public string StatusText => Status switch
+    {
+        LoadedSourceStatus.Ready => "Ready",
+        LoadedSourceStatus.Unavailable => "Unavailable",
+        LoadedSourceStatus.Unsupported => "Unsupported",
+        LoadedSourceStatus.FailedValidation => "Failed validation",
+        _ => Status.ToString()
+    };
 
     public string LevelText => "—";
 
@@ -97,11 +130,66 @@ public sealed class LoadedSourceItem : ObservableObject
 
     public string BreadcrumbText => DisplayName;
 
-    public string SizeText { get; }
+    public long? SizeBytes
+    {
+        get => _sizeBytes;
+        private set => SetProperty(ref _sizeBytes, value);
+    }
 
-    public string ModifiedText { get; }
+    public string SizeText
+    {
+        get => _sizeText;
+        private set => SetProperty(ref _sizeText, value);
+    }
 
-    public string CreatedText { get; }
+    public string ModifiedText
+    {
+        get => _modifiedText;
+        private set => SetProperty(ref _modifiedText, value);
+    }
+
+    public string CreatedText
+    {
+        get => _createdText;
+        private set => SetProperty(ref _createdText, value);
+    }
+
+    internal void ApplyRefresh(LoadedSourceContract source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        if (source.SourceId != SourceId
+            || !string.Equals(source.Path, Path, StringComparison.OrdinalIgnoreCase)
+            || source.Kind != Kind)
+        {
+            throw new ArgumentException(
+                "A source refresh must retain the loaded source identity, path and kind.",
+                nameof(source));
+        }
+
+        Status = source.Status;
+        StatusDetail = null;
+        RefreshMetadata();
+    }
+
+    internal void ApplyRefreshFailure(
+        LoadedSourceStatus status,
+        string failureDescription)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(failureDescription);
+        Status = status;
+        StatusDetail = failureDescription;
+        RefreshMetadata();
+    }
+
+    private void RefreshMetadata()
+    {
+        var metadata = ReadFileMetadata(Path);
+        SizeBytes = metadata.SizeBytes;
+        SizeText = metadata.SizeText;
+        ModifiedText = metadata.ModifiedText;
+        CreatedText = metadata.CreatedText;
+    }
 
     private static SourceFileMetadata ReadFileMetadata(string path)
     {
@@ -115,6 +203,7 @@ public sealed class LoadedSourceItem : ObservableObject
             }
 
             return new SourceFileMetadata(
+                file.Length,
                 FormatFileSize(file.Length),
                 file.LastWriteTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
                 file.CreationTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture));
@@ -135,10 +224,11 @@ public sealed class LoadedSourceItem : ObservableObject
     }
 
     private sealed record SourceFileMetadata(
+        long? SizeBytes,
         string SizeText,
         string ModifiedText,
         string CreatedText)
     {
-        public static SourceFileMetadata Unavailable { get; } = new("—", "—", "—");
+        public static SourceFileMetadata Unavailable { get; } = new(null, "—", "—", "—");
     }
 }

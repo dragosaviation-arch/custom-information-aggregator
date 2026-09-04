@@ -51,11 +51,62 @@ public sealed class ProcessingHostSourceIntakeClient(
         }
     }
 
+    public async Task<SourceRefreshClientResult> RefreshAsync(
+        LoadedSourceContract source,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        try
+        {
+            var state = await hostSupervisor.EnsureAvailableAsync(cancellationToken);
+
+            if (state.State != ProcessingHostLifecycleState.Ready)
+            {
+                return RejectRefresh(
+                    source,
+                    "processing-host-unavailable",
+                    "The Processing Host is not available to refresh sources.");
+            }
+
+            var response = await requestClient.RequestSourceRefreshAsync(source, cancellationToken);
+            return new SourceRefreshClientResult(
+                response.Acceptance == CommandAcceptance.Accepted,
+                response.Source,
+                response.Failure?.Code,
+                response.Failure?.Description);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Source refresh could not be completed by the Processing Host");
+            return RejectRefresh(
+                source,
+                "processing-host-unavailable",
+                "The Processing Host could not complete the source-refresh request.");
+        }
+    }
+
     private static SourceIntakeClientResult Reject(string code, string description)
     {
         return new SourceIntakeClientResult(
             false,
             Array.Empty<LoadedSourceContract>(),
+            code,
+            description);
+    }
+
+    private static SourceRefreshClientResult RejectRefresh(
+        LoadedSourceContract source,
+        string code,
+        string description)
+    {
+        return new SourceRefreshClientResult(
+            false,
+            source with { Status = LoadedSourceStatus.Unavailable },
             code,
             description);
     }
