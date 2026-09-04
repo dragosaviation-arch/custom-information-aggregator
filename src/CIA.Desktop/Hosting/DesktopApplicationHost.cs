@@ -2,6 +2,7 @@ using System.IO;
 using CIA.Core;
 using CIA.Core.Diagnostics;
 using CIA.Desktop.Presentation;
+using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -30,6 +31,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ApplicationSession>();
         builder.Services.AddSingleton<GlobalStatusViewModel>();
         builder.Services.AddSingleton<MainWindowViewModel>();
+        builder.Services.AddSingleton<LoadWorkspaceViewModel>();
         builder.Services.AddSingleton<MainWindow>();
         builder.Services.AddSingleton<IProcessingHistoryRecorder, ClefProcessingHistoryRecorder>();
         builder.Services.AddSingleton(
@@ -42,6 +44,10 @@ public static class DesktopApplicationHost
             services => services.GetRequiredService<ProcessingHostSupervisor>());
         builder.Services.AddHostedService<ProcessingHostSupervisorLifetime>();
         builder.Services.AddSingleton<IApplicationWorkflowCoordinator, ApplicationWorkflowCoordinator>();
+        builder.Services.AddSingleton<ActiveLoadedSourceSet>();
+        builder.Services.AddSingleton<ISourceIntakeClient, ProcessingHostSourceIntakeClient>();
+        builder.Services.AddSingleton<SourceLoadingCoordinator>();
+        builder.Services.AddSingleton<ISourcePathPicker, WindowsSourcePathPicker>();
 
         ConfigureLogging(builder);
         return builder.Build();

@@ -56,14 +56,14 @@
 
                     <StackPanel Orientation="Horizontal">
                         <Button Margin="0,0,8,0"
-                                IsEnabled="False"
+                                Command="{Binding AddXmlFileCommand}"
                                 Style="{StaticResource CiaPrimaryButtonStyle}"
                                 Content="＋ File" />
                         <Button Margin="0,0,8,0"
-                                IsEnabled="False"
+                                Command="{Binding AddFolderCommand}"
                                 Style="{StaticResource CiaButtonStyle}"
                                 Content="＋ Folder" />
-                        <Button IsEnabled="False"
+                        <Button Command="{Binding AddArchiveCommand}"
                                 Style="{StaticResource CiaButtonStyle}"
                                 Content="＋ Archive" />
                     </StackPanel>
@@ -113,9 +113,9 @@
                             <StackPanel>
                                 <TextBlock FontWeight="Bold"
                                            Foreground="{StaticResource CiaTextPrimaryBrush}"
-                                           Text="Load workspace ready" />
+                                           Text="{Binding StatusTitle}" />
                                 <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="No active operation" />
+                                           Text="{Binding StatusDetail}" />
                             </StackPanel>
                             <TextBlock Grid.Column="1"
                                        VerticalAlignment="Center"
@@ -137,7 +137,7 @@
                                        Text="Current archive: —" />
                             <TextBlock Grid.Column="1"
                                        Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Files found 0 · Loaded 0 · Warnings 0" />
+                                       Text="{Binding SourceSummary}" />
                         </Grid>
                     </StackPanel>
                 </Border>
@@ -185,6 +185,16 @@
                               MinHeight="280">
                             <StackPanel HorizontalAlignment="Center"
                                         VerticalAlignment="Center">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasSources}" Value="False">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
                                 <TextBlock Style="{StaticResource CiaEmptyStateTitleTextStyle}"
                                            Text="No sources loaded" />
                                 <TextBlock Margin="0,6,0,0"
@@ -192,6 +202,76 @@
                                            Foreground="{StaticResource CiaTextSecondaryBrush}"
                                            Text="Add a supported file, folder or archive to begin." />
                             </StackPanel>
+
+                            <ListBox Background="Transparent"
+                                     BorderThickness="0"
+                                     ItemsSource="{Binding Sources}"
+                                     SelectedItem="{Binding SelectedSource, Mode=TwoWay}"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                <ListBox.Style>
+                                    <Style TargetType="ListBox">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasSources}" Value="False">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ListBox.Style>
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        <Setter Property="Padding" Value="0" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Padding="8,7"
+                                                BorderBrush="{StaticResource CiaBorderBrush}"
+                                                BorderThickness="0,0,0,1">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="38" />
+                                                    <ColumnDefinition Width="2*" MinWidth="150" />
+                                                    <ColumnDefinition Width="2.6*" MinWidth="180" />
+                                                    <ColumnDefinition Width="44" />
+                                                    <ColumnDefinition Width="112" />
+                                                    <ColumnDefinition Width="100" />
+                                                </Grid.ColumnDefinitions>
+                                                <CheckBox HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center"
+                                                          IsChecked="{Binding IsIncluded, Mode=OneWay}"
+                                                          IsHitTestVisible="False"
+                                                          Focusable="False" />
+                                                <TextBlock Grid.Column="1"
+                                                           VerticalAlignment="Center"
+                                                           Foreground="{StaticResource CiaTextPrimaryBrush}"
+                                                           Text="{Binding DisplayName}"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="2"
+                                                           VerticalAlignment="Center"
+                                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                                           Text="{Binding Path}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Path}" />
+                                                <TextBlock Grid.Column="3"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                                           Text="{Binding LevelText}" />
+                                                <Border Grid.Column="4"
+                                                        HorizontalAlignment="Left"
+                                                        Style="{StaticResource CiaNeutralStateBadgeStyle}">
+                                                    <TextBlock FontSize="12"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                                               Text="{Binding StatusText}" />
+                                                </Border>
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </Grid>
                     </Grid>
                 </Border>
@@ -237,16 +317,58 @@
                                            Text="Selected source" />
                             </Grid>
                         </Border>
-                        <StackPanel Grid.Row="1"
-                                    HorizontalAlignment="Center"
-                                    VerticalAlignment="Center">
-                            <TextBlock Style="{StaticResource CiaEmptyStateTitleTextStyle}"
-                                       Text="No source selected" />
-                            <TextBlock Margin="0,6,0,0"
-                                       HorizontalAlignment="Center"
-                                       Foreground="{StaticResource CiaTextSecondaryBrush}"
-                                       Text="Select a row to inspect its details." />
-                        </StackPanel>
+                        <Grid Grid.Row="1" Margin="14">
+                            <StackPanel HorizontalAlignment="Center"
+                                        VerticalAlignment="Center">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedSource}" Value="{x:Null}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <TextBlock Style="{StaticResource CiaEmptyStateTitleTextStyle}"
+                                           Text="No source selected" />
+                                <TextBlock Margin="0,6,0,0"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                           Text="Select a row to inspect its details." />
+                            </StackPanel>
+                            <StackPanel>
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedSource}" Value="{x:Null}">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <TextBlock Style="{StaticResource CiaStatusLabelTextStyle}" Text="SOURCE" />
+                                <TextBlock Margin="0,4,0,14"
+                                           FontWeight="SemiBold"
+                                           Foreground="{StaticResource CiaTextPrimaryBrush}"
+                                           Text="{Binding SelectedSource.DisplayName}"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Style="{StaticResource CiaStatusLabelTextStyle}" Text="PATH" />
+                                <TextBlock Margin="0,4,0,14"
+                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                           Text="{Binding SelectedSource.Path}"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Style="{StaticResource CiaStatusLabelTextStyle}" Text="TYPE" />
+                                <TextBlock Margin="0,4,0,14"
+                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                           Text="{Binding SelectedSource.KindText}" />
+                                <TextBlock Style="{StaticResource CiaStatusLabelTextStyle}" Text="STATUS" />
+                                <TextBlock Margin="0,4,0,0"
+                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                           Text="{Binding SelectedSource.StatusText}" />
+                            </StackPanel>
+                        </Grid>
                     </Grid>
                 </Border>
 

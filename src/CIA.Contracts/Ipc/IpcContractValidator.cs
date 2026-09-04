@@ -1,9 +1,12 @@
 namespace CIA.Contracts.Ipc;
 
+using CIA.Contracts.Sources;
+
 public static class IpcContractValidator
 {
     private const int MaximumFailureCodeLength = 100;
     private const int MaximumFailureDescriptionLength = 1024;
+    private const int MaximumPathLength = 32767;
 
     public static void Validate(IpcMessage message)
     {
@@ -30,8 +33,14 @@ public static class IpcContractValidator
             case CancelOperationCommand command:
                 ValidateCancelOperationCommand(command);
                 break;
+            case LoadSourcesCommand command:
+                ValidateLoadSourcesCommand(command);
+                break;
             case CommandAcknowledgement acknowledgement:
                 ValidateCommandAcknowledgement(acknowledgement);
+                break;
+            case LoadSourcesResponse response:
+                ValidateLoadSourcesResponse(response);
                 break;
             case ProcessingHostAvailabilityEvent availabilityEvent:
                 ValidateProcessingHostAvailabilityEvent(availabilityEvent);
@@ -88,6 +97,69 @@ public static class IpcContractValidator
         }
     }
 
+    private static void ValidateLoadSourcesCommand(LoadSourcesCommand command)
+    {
+        if (!Enum.IsDefined(command.SelectionKind))
+        {
+            throw InvalidContract("The source-selection kind is not supported.");
+        }
+
+        ValidatePath(command.Path);
+
+        if (command.Settings is null)
+        {
+            throw InvalidContract("Source-load settings are required.");
+        }
+    }
+
+    private static void ValidateLoadSourcesResponse(LoadSourcesResponse response)
+    {
+        ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+
+        if (!Enum.IsDefined(response.Acceptance))
+        {
+            throw InvalidContract("The source-load response has an unsupported acceptance value.");
+        }
+
+        if (response.Sources is null)
+        {
+            throw InvalidContract("A source-load response requires a source collection.");
+        }
+
+        foreach (var source in response.Sources)
+        {
+            if (source is null)
+            {
+                throw InvalidContract("A source-load response cannot contain null source items.");
+            }
+
+            ValidatePath(source.Path);
+
+            if (!Enum.IsDefined(source.Status) || !Enum.IsDefined(source.Kind))
+            {
+                throw InvalidContract("A loaded source has an unsupported kind or status.");
+            }
+        }
+
+        if (response.Acceptance == CommandAcceptance.Accepted)
+        {
+            if (response.Failure is not null)
+            {
+                throw InvalidContract("An accepted source-load response cannot include failure information.");
+            }
+
+            return;
+        }
+
+        if (response.Sources.Count != 0 || response.Failure is null)
+        {
+            throw InvalidContract(
+                "A rejected source-load response must contain no sources and include controlled failure information.");
+        }
+
+        ValidateFailure(response.Failure);
+    }
+
     private static void ValidateProcessingHostAvailabilityEvent(
         ProcessingHostAvailabilityEvent availabilityEvent)
     {
@@ -110,6 +182,19 @@ public static class IpcContractValidator
         {
             throw InvalidContract(
                 $"Failure descriptions must contain 1 to {MaximumFailureDescriptionLength} non-whitespace characters.");
+        }
+    }
+
+    private static void ValidatePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path.Length > MaximumPathLength)
+        {
+            throw InvalidContract($"Source paths must contain 1 to {MaximumPathLength} non-whitespace characters.");
+        }
+
+        if (!Path.IsPathFullyQualified(path))
+        {
+            throw InvalidContract("Source paths must be fully qualified.");
         }
     }
 

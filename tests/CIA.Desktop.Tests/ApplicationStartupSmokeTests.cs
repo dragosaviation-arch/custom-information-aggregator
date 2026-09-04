@@ -54,12 +54,14 @@ public sealed class ApplicationStartupSmokeTests
             window = host.Services.GetRequiredService<MainWindow>();
             var viewModel = host.Services.GetRequiredService<MainWindowViewModel>();
             var globalStatus = host.Services.GetRequiredService<GlobalStatusViewModel>();
+            var loadWorkspace = host.Services.GetRequiredService<LoadWorkspaceViewModel>();
             application.MainWindow = window;
 
             Assert.IsTrue(lifetime.ApplicationStarted.IsCancellationRequested);
             Assert.IsNotNull(window.Content);
             Assert.AreSame(viewModel, window.DataContext);
             Assert.AreSame(globalStatus, window.GlobalStatus);
+            Assert.AreSame(loadWorkspace, window.LoadWorkspace);
             Assert.HasCount(4, viewModel.Workspaces);
             Assert.AreEqual(WorkspaceArea.Load, viewModel.SelectedWorkspace.Area);
         }

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
+using CIA.Contracts.Sources;
 using CIA.Core.Diagnostics;
 using CIA.Desktop.Ipc;
 using Microsoft.Extensions.Logging;
@@ -125,6 +126,58 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                         commandCancellation.Token)
                     .ConfigureAwait(false);
                 return acknowledgement.Acceptance == CommandAcceptance.Accepted;
+            }
+            finally
+            {
+                _requestGate.Release();
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    public async Task<LoadSourcesResponse> RequestSourceLoadAsync(
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (!IsCurrentHostReady())
+            {
+                throw new InvalidOperationException(
+                    "The Processing Host is not ready for source-loading requests.");
+            }
+
+            var connection = _connection!;
+            await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                var command = new LoadSourcesCommand(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    selectionKind,
+                    path,
+                    settings);
+                await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+                var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+
+                if (response is not LoadSourcesResponse sourceResponse
+                    || sourceResponse.CommandMessageId != command.MessageId)
+                {
+                    throw new IpcProtocolException(
+                        IpcProtocolError.InvalidContract,
+                        "The Processing Host returned an invalid source-loading response.");
+                }
+
+                return sourceResponse;
             }
             finally
             {
@@ -380,17 +433,16 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         NamedPipeIpcConnection connection,
         CancellationToken monitorCancellation)
     {
-        using var livenessCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            monitorCancellation);
-        livenessCancellation.CancelAfter(_options.LivenessTimeout);
-
         var command = new ProcessingHostLivenessCommand(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow);
-        await _requestGate.WaitAsync(livenessCancellation.Token).ConfigureAwait(false);
+        await _requestGate.WaitAsync(monitorCancellation).ConfigureAwait(false);
 
         try
         {
+            using var livenessCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                monitorCancellation);
+            livenessCancellation.CancelAfter(_options.LivenessTimeout);
             await connection.SendAsync(command, livenessCancellation.Token).ConfigureAwait(false);
             await ReceiveAcceptedAcknowledgementAsync(
                 connection,

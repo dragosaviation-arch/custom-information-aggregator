@@ -3,6 +3,7 @@ using System.IO;
 using CIA.Contracts.Ipc;
 using CIA.ProcessingHost.Ipc;
 using CIA.ProcessingHost.Operations;
+using CIA.ProcessingHost.SourceIntake;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -11,6 +12,7 @@ namespace CIA.ProcessingHost.Hosting;
 public sealed class ProcessingHostLifetimeService(
     ProcessingHostRuntimeOptions options,
     CooperativeOperationCancellation operationCancellation,
+    SourceIntakeService sourceIntake,
     IHostApplicationLifetime applicationLifetime,
     ILogger<ProcessingHostLifetimeService> logger) : BackgroundService
 {
@@ -143,6 +145,27 @@ public sealed class ProcessingHostLifetimeService(
                             .ConfigureAwait(false);
                     }
 
+                    break;
+
+                case LoadSourcesCommand command when established:
+                    var result = await sourceIntake.LoadAsync(
+                            command.SelectionKind,
+                            command.Path,
+                            command.Settings,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    await connection.SendAsync(
+                            new LoadSourcesResponse(
+                                Guid.CreateVersion7(),
+                                DateTimeOffset.UtcNow,
+                                command.MessageId,
+                                result.Accepted
+                                    ? CommandAcceptance.Accepted
+                                    : CommandAcceptance.Rejected,
+                                result.Sources,
+                                result.Failure),
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     break;
 
                 case StopProcessingHostCommand command when established:

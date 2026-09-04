@@ -1,5 +1,6 @@
 using CIA.Core.Diagnostics;
 using CIA.ProcessingHost.Operations;
+using CIA.ProcessingHost.SourceIntake;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -28,6 +29,7 @@ public static class ProcessingHostApplicationHost
 
         builder.Services.AddSingleton<IProcessingHistoryRecorder, ClefProcessingHistoryRecorder>();
         builder.Services.AddSingleton<CooperativeOperationCancellation>();
+        builder.Services.AddSingleton<SourceIntakeService>();
 
         if (runtimeOptions is not null)
         {
