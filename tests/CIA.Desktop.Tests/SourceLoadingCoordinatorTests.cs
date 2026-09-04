@@ -14,7 +14,8 @@ public sealed class SourceLoadingCoordinatorTests
     public async Task LoadWorkspaceCommandUsesPickerAndSurfacesTheRealSourceSet()
     {
         var path = Path.GetFullPath("source.xml");
-        var client = new StubSourceIntakeClient(Accept(CreateXml(path)));
+        var loadedSource = CreateXml(path);
+        var client = new StubSourceIntakeClient(Accept(loadedSource));
         var sourceSet = new ActiveLoadedSourceSet();
         using var workflow = CreateWorkflowCoordinator();
         var loadingCoordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
@@ -29,6 +30,7 @@ public sealed class SourceLoadingCoordinatorTests
         Assert.IsTrue(viewModel.HasSources);
         Assert.AreEqual("Source loaded", viewModel.StatusTitle);
         Assert.AreSame(viewModel.Sources[0], sourceSet.Items[0]);
+        Assert.AreEqual(loadedSource.SourceId, viewModel.Sources[0].SourceId);
     }
 
     [TestMethod]
@@ -37,6 +39,7 @@ public sealed class SourceLoadingCoordinatorTests
         var path = Path.GetFullPath("source.xml");
         var client = new StubSourceIntakeClient(
             Accept(new LoadedSourceContract(
+                SourceId.CreateNew(),
                 path,
                 IsIncluded: true,
                 LoadedSourceStatus.Ready,
@@ -62,6 +65,7 @@ public sealed class SourceLoadingCoordinatorTests
         var path = Path.GetFullPath("source.xml");
         var client = new StubSourceIntakeClient(
             Accept(new LoadedSourceContract(
+                SourceId.CreateNew(),
                 path,
                 IsIncluded: true,
                 LoadedSourceStatus.Ready,
@@ -158,6 +162,7 @@ public sealed class SourceLoadingCoordinatorTests
     private static LoadedSourceContract CreateXml(string path)
     {
         return new LoadedSourceContract(
+            SourceId.CreateNew(),
             path,
             IsIncluded: true,
             LoadedSourceStatus.Ready,

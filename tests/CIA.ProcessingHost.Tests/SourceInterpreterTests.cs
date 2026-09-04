@@ -42,6 +42,7 @@ public sealed class SourceInterpreterTests
         Assert.AreEqual(SourceInterpretationStatus.Usable, result.Status);
         Assert.IsNull(result.Failure);
         Assert.IsNotNull(result.Source);
+        Assert.AreEqual(intakeResult.Sources[0].SourceId, result.Source.OriginatingSourceId);
         Assert.AreEqual(CatalogSourceAdapter.StructureId, result.Source.StructureId);
         Assert.HasCount(2, result.Source.Values);
         Assert.AreEqual("ProductSku", result.Source.Values[0].InformationType);
@@ -153,6 +154,50 @@ public sealed class SourceInterpreterTests
         StringAssert.Contains(exception.Message, CatalogSourceAdapter.StructureId);
     }
 
+    [TestMethod]
+    public async Task SupportedInterpretationLeavesOriginalSourceUnchangedAndCreatesNoSiblingData()
+    {
+        using var files = new TemporaryXmlDirectory();
+        var path = files.WriteFile(
+            "immutable.xml",
+            """
+            <catalog xmlns="urn:cia:test:catalog">
+              <product><sku>SKU-1</sku><description>Original content</description></product>
+            </catalog>
+            """);
+        var originalBytes = await File.ReadAllBytesAsync(path);
+        var originalWriteTime = File.GetLastWriteTimeUtc(path);
+        var intakeResult = await new SourceIntakeService().LoadAsync(
+            SourceSelectionKind.XmlFile,
+            path,
+            SourceLoadSettings.Default);
+        var interpreter = CreateInterpreter(new CatalogSourceAdapter());
+
+        var result = await interpreter.InterpretAsync(intakeResult.Sources[0]);
+
+        Assert.AreEqual(SourceInterpretationStatus.Usable, result.Status);
+        CollectionAssert.AreEqual(originalBytes, await File.ReadAllBytesAsync(path));
+        Assert.AreEqual(originalWriteTime, File.GetLastWriteTimeUtc(path));
+        CollectionAssert.AreEqual(
+            new[] { Path.GetFullPath(path) },
+            Directory.GetFiles(files.Path).Select(Path.GetFullPath).ToArray());
+    }
+
+    [TestMethod]
+    public async Task AdapterCannotReplaceOriginatingSourceIdentity()
+    {
+        using var files = new TemporaryXmlDirectory();
+        var path = files.WriteFile("catalog.xml", "<catalog xmlns=\"urn:cia:test:catalog\" />");
+        var loadedSource = CreateLoadedXml(path);
+        var interpreter = CreateInterpreter(new ReplacingIdentitySourceAdapter());
+
+        var result = await interpreter.InterpretAsync(loadedSource);
+
+        Assert.AreEqual(SourceInterpretationStatus.FailedValidation, result.Status);
+        Assert.AreEqual("invalid-adapter-result", result.Failure?.Code);
+        Assert.IsNull(result.Source);
+    }
+
     private static SourceInterpreter CreateInterpreter(params ISourceAdapter[] adapters)
     {
         return new SourceInterpreter(adapters, NullLogger<SourceInterpreter>.Instance);
@@ -161,6 +206,7 @@ public sealed class SourceInterpreterTests
     private static LoadedSourceContract CreateLoadedXml(string path)
     {
         return new LoadedSourceContract(
+            SourceId.CreateNew(),
             path,
             IsIncluded: true,
             LoadedSourceStatus.Ready,
@@ -176,6 +222,7 @@ public sealed class SourceInterpreterTests
             CatalogNamespace + "catalog");
 
         public async ValueTask<InterpretedSourceDocument> InterpretAsync(
+            SourceId originatingSourceId,
             XmlReader reader,
             CancellationToken cancellationToken = default)
         {
@@ -200,7 +247,26 @@ public sealed class SourceInterpreterTests
                 values.Add(new InterpretedSourceValue("ProductDescription", description.Value));
             }
 
-            return new InterpretedSourceDocument(StructureId, values);
+            return new InterpretedSourceDocument(originatingSourceId, StructureId, values);
+        }
+    }
+
+    private sealed class ReplacingIdentitySourceAdapter : ISourceAdapter
+    {
+        public SourceStructureDeclaration Declaration { get; } = new(
+            CatalogSourceAdapter.StructureId,
+            CatalogNamespace + "catalog");
+
+        public async ValueTask<InterpretedSourceDocument> InterpretAsync(
+            SourceId originatingSourceId,
+            XmlReader reader,
+            CancellationToken cancellationToken = default)
+        {
+            await XElement.LoadAsync(reader, LoadOptions.PreserveWhitespace, cancellationToken);
+            return new InterpretedSourceDocument(
+                SourceId.CreateNew(),
+                CatalogSourceAdapter.StructureId,
+                Array.Empty<InterpretedSourceValue>());
         }
     }
 

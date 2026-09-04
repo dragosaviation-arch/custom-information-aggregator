@@ -22,6 +22,7 @@ public sealed class SourceIntakeServiceTests
         Assert.IsTrue(result.Accepted);
         Assert.HasCount(1, result.Sources);
         Assert.AreEqual(Path.GetFullPath(xmlPath), result.Sources[0].Path);
+        Assert.AreNotEqual(default, result.Sources[0].SourceId);
         Assert.IsTrue(result.Sources[0].IsIncluded);
         Assert.AreEqual(LoadedSourceStatus.Ready, result.Sources[0].Status);
         Assert.AreEqual(LoadedSourceKind.XmlFile, result.Sources[0].Kind);
@@ -49,6 +50,9 @@ public sealed class SourceIntakeServiceTests
             new[] { xmlPath, nestedXmlPath, archivePath }.Select(Path.GetFullPath).ToArray(),
             result.Sources.Select(source => source.Path).ToArray());
         Assert.IsTrue(result.Sources.All(source => source.IsIncluded));
+        Assert.AreEqual(
+            result.Sources.Count,
+            result.Sources.Select(source => source.SourceId).Distinct().Count());
         Assert.IsFalse(result.Sources.Any(source => source.Path.EndsWith("notes.txt", StringComparison.Ordinal)));
         Assert.IsTrue(Directory.Exists(nestedDirectory));
     }

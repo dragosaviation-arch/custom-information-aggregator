@@ -35,11 +35,14 @@ public sealed class LoadedSourceItem
     {
         ArgumentNullException.ThrowIfNull(source);
 
+        SourceId = source.SourceId;
         Path = source.Path;
         IsIncluded = source.IsIncluded;
         Status = source.Status;
         Kind = source.Kind;
     }
+
+    public SourceId SourceId { get; }
 
     public string Path { get; }
 

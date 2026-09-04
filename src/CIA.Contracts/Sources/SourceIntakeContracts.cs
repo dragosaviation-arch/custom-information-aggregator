@@ -30,6 +30,7 @@ public sealed record SourceLoadSettings(
 }
 
 public sealed record LoadedSourceContract(
+    SourceId SourceId,
     string Path,
     bool IsIncluded,
     LoadedSourceStatus Status,

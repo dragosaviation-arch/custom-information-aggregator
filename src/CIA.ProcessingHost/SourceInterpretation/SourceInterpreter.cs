@@ -109,7 +109,7 @@ public sealed class SourceInterpreter : ISourceInterpreter
             }
 
             var interpretedSource = await adapter
-                .InterpretAsync(reader, cancellationToken)
+                .InterpretAsync(source.SourceId, reader, cancellationToken)
                 .ConfigureAwait(false);
 
             while (await reader.ReadAsync().ConfigureAwait(false))
@@ -120,11 +120,12 @@ public sealed class SourceInterpreter : ISourceInterpreter
             if (!string.Equals(
                     interpretedSource.StructureId,
                     adapter.Declaration.StructureId,
-                    StringComparison.Ordinal))
+                    StringComparison.Ordinal)
+                || interpretedSource.OriginatingSourceId != source.SourceId)
             {
                 return SourceInterpretationResult.FailedValidation(
                     "invalid-adapter-result",
-                    "The source adapter returned content for a different declared structure.");
+                    "The source adapter returned content for a different source or declared structure.");
             }
 
             return SourceInterpretationResult.Usable(interpretedSource);
