@@ -147,6 +147,7 @@ public sealed class SourceIntakeService
     private static LoadedSourceContract CreateSource(string path, LoadedSourceKind kind)
     {
         return new LoadedSourceContract(
+            SourceId.CreateNew(),
             path,
             IsIncluded: true,
             LoadedSourceStatus.Ready,

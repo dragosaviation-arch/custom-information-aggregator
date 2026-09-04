@@ -1,5 +1,6 @@
 using System.Xml;
 using System.Xml.Linq;
+using CIA.Contracts.Sources;
 using CIA.Core.Sources;
 
 namespace CIA.ProcessingHost.SourceInterpretation;
@@ -9,6 +10,7 @@ public interface ISourceAdapter
     SourceStructureDeclaration Declaration { get; }
 
     ValueTask<InterpretedSourceDocument> InterpretAsync(
+        SourceId originatingSourceId,
         XmlReader reader,
         CancellationToken cancellationToken = default);
 }

@@ -133,6 +133,11 @@ public static class IpcContractValidator
                 throw InvalidContract("A source-load response cannot contain null source items.");
             }
 
+            if (!SourceId.IsValid(source.SourceId.Value))
+            {
+                throw InvalidContract("A loaded source requires a non-empty Source ID.");
+            }
+
             ValidatePath(source.Path);
 
             if (!Enum.IsDefined(source.Status) || !Enum.IsDefined(source.Kind))

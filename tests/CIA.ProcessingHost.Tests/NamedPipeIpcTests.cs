@@ -141,6 +141,7 @@ public sealed class NamedPipeIpcTests
             CommandAcceptance.Accepted,
             [
                 new LoadedSourceContract(
+                    SourceId.CreateNew(),
                     Path.GetFullPath("sources/source.xml"),
                     IsIncluded: true,
                     LoadedSourceStatus.Ready,
