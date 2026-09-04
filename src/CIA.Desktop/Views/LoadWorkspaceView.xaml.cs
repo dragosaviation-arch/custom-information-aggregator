@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using CIA.Desktop.Presentation;
+using CIA.Desktop.Sources;
 
 namespace CIA.Desktop.Views;
 
@@ -113,6 +114,15 @@ public partial class LoadWorkspaceView : UserControl
     private void OnSourceRowsLayoutUpdated(object? sender, EventArgs e)
     {
         UpdateDropOverlayVisibility();
+    }
+
+    private void OnSourceSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DataContext is LoadWorkspaceViewModel viewModel)
+        {
+            viewModel.SetHighlightedSources(
+                SourceRowsList.SelectedItems.Cast<LoadedSourceItem>());
+        }
     }
 
     private void UpdateDropOverlayVisibility()

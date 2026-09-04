@@ -142,7 +142,8 @@ public sealed class SourceLoadingCoordinator(
         }
 
         var hasIncludedSource = sourceSet.Items.Any(
-            source => targets.Contains(source) ? isIncluded : source.IsIncluded);
+            source => (targets.Contains(source) ? isIncluded : source.IsIncluded)
+                      && source.Status == LoadedSourceStatus.Ready);
         var workflowResult = workflowCoordinator.RecordSourceSelectionChanged(hasIncludedSource);
 
         if (!workflowResult.Accepted)
@@ -159,6 +160,182 @@ public sealed class SourceLoadingCoordinator(
         }
 
         return SourceInclusionResult.Accept(targets.Count);
+    }
+
+    public SourceRemovalResult Remove(IEnumerable<LoadedSourceItem> sources)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+
+        if (workflowCoordinator.Current.ActiveOperation is not null)
+        {
+            return SourceRemovalResult.Reject(
+                "conflicting-operation",
+                "Sources cannot be removed while an operation is active.");
+        }
+
+        var targets = sources
+            .Where(sourceSet.Contains)
+            .Distinct()
+            .ToHashSet();
+
+        if (targets.Count == 0)
+        {
+            return SourceRemovalResult.Accept(removedCount: 0);
+        }
+
+        var hasValidSourceSelection = sourceSet.Items.Any(
+            source => !targets.Contains(source)
+                      && source.IsIncluded
+                      && source.Status == LoadedSourceStatus.Ready);
+        var workflowResult = workflowCoordinator.RecordSourceSelectionChanged(
+            hasValidSourceSelection);
+
+        if (!workflowResult.Accepted)
+        {
+            return SourceRemovalResult.Reject(
+                "workflow-rejected",
+                workflowResult.Rejection?.Reason
+                    ?? "The workflow rejected the source removal.");
+        }
+
+        sourceSet.RemoveRange(targets);
+        return SourceRemovalResult.Accept(targets.Count);
+    }
+
+    public async Task<SourceRefreshResult> RefreshAsync(
+        LoadedSourceItem source,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        await _gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            if (!sourceSet.Contains(source))
+            {
+                return SourceRefreshResult.Reject(
+                    "source-not-loaded",
+                    "The source is no longer part of the active session.");
+            }
+
+            if (workflowCoordinator.Current.ActiveOperation is not null)
+            {
+                return SourceRefreshResult.Reject(
+                    "conflicting-operation",
+                    "Sources cannot be refreshed while an operation is active.");
+            }
+
+            var refreshRequest = new LoadedSourceContract(
+                source.SourceId,
+                source.Path,
+                source.IsIncluded,
+                source.Status,
+                source.Kind);
+            var intakeResult = await intakeClient.RefreshAsync(
+                refreshRequest,
+                cancellationToken);
+
+            if (!intakeResult.Accepted)
+            {
+                var failureDescription = intakeResult.FailureDescription
+                    ?? "The source could not be refreshed.";
+                var workflowFailureResult = workflowCoordinator.RecordSourceSelectionChanged(
+                    HasValidSourceSelectionExcept(source));
+
+                if (!workflowFailureResult.Accepted)
+                {
+                    return SourceRefreshResult.Reject(
+                        "workflow-rejected",
+                        workflowFailureResult.Rejection?.Reason
+                            ?? "The workflow rejected the source refresh.");
+                }
+
+                var failedStatus = intakeResult.Source.SourceId == source.SourceId
+                    && intakeResult.Source.Status != LoadedSourceStatus.Ready
+                    ? intakeResult.Source.Status
+                    : MapFailureStatus(intakeResult.FailureCode);
+                source.ApplyRefreshFailure(failedStatus, failureDescription);
+                return SourceRefreshResult.Reject(
+                    intakeResult.FailureCode ?? "source-refresh-rejected",
+                    failureDescription,
+                    sourceUpdated: true);
+            }
+
+            var refreshed = intakeResult.Source;
+
+            if (refreshed.SourceId != source.SourceId
+                || !string.Equals(refreshed.Path, source.Path, StringComparison.OrdinalIgnoreCase)
+                || refreshed.Kind != source.Kind)
+            {
+                const string failureDescription =
+                    "The Processing Host did not return the requested source during refresh.";
+                var workflowFailureResult = workflowCoordinator.RecordSourceSelectionChanged(
+                    HasValidSourceSelectionExcept(source));
+
+                if (!workflowFailureResult.Accepted)
+                {
+                    return SourceRefreshResult.Reject(
+                        "workflow-rejected",
+                        workflowFailureResult.Rejection?.Reason
+                            ?? "The workflow rejected the source refresh.");
+                }
+
+                source.ApplyRefreshFailure(
+                    LoadedSourceStatus.FailedValidation,
+                    failureDescription);
+                return SourceRefreshResult.Reject(
+                    "invalid-refresh-response",
+                    failureDescription,
+                    sourceUpdated: true);
+            }
+
+            var retainedIdentity = new LoadedSourceContract(
+                source.SourceId,
+                source.Path,
+                source.IsIncluded,
+                refreshed.Status,
+                source.Kind);
+            var hasValidSourceSelection = HasValidSourceSelectionExcept(source)
+                || retainedIdentity.IsIncluded
+                && retainedIdentity.Status == LoadedSourceStatus.Ready;
+            var workflowResult = workflowCoordinator.RecordSourceSelectionChanged(
+                hasValidSourceSelection);
+
+            if (!workflowResult.Accepted)
+            {
+                return SourceRefreshResult.Reject(
+                    "workflow-rejected",
+                    workflowResult.Rejection?.Reason
+                        ?? "The workflow rejected the source refresh.");
+            }
+
+            source.ApplyRefresh(retainedIdentity);
+            return SourceRefreshResult.Accept();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private bool HasValidSourceSelectionExcept(LoadedSourceItem excluded)
+    {
+        return sourceSet.Items.Any(source =>
+            !ReferenceEquals(source, excluded)
+            && source.IsIncluded
+            && source.Status == LoadedSourceStatus.Ready);
+    }
+
+    private static LoadedSourceStatus MapFailureStatus(string? failureCode)
+    {
+        return failureCode switch
+        {
+            "unsupported-source" or "unsupported-archive" or "unsupported-input"
+                => LoadedSourceStatus.Unsupported,
+            "malformed-xml" or "source-validation-failed"
+                => LoadedSourceStatus.FailedValidation,
+            _ => LoadedSourceStatus.Unavailable
+        };
     }
 }
 
@@ -194,5 +371,42 @@ public sealed record SourceInclusionResult(
     internal static SourceInclusionResult Reject(string code, string description)
     {
         return new SourceInclusionResult(false, 0, code, description);
+    }
+}
+
+public sealed record SourceRemovalResult(
+    bool Accepted,
+    int RemovedCount,
+    string? FailureCode,
+    string? FailureDescription)
+{
+    internal static SourceRemovalResult Accept(int removedCount)
+    {
+        return new SourceRemovalResult(true, removedCount, null, null);
+    }
+
+    internal static SourceRemovalResult Reject(string code, string description)
+    {
+        return new SourceRemovalResult(false, 0, code, description);
+    }
+}
+
+public sealed record SourceRefreshResult(
+    bool Accepted,
+    bool SourceUpdated,
+    string? FailureCode,
+    string? FailureDescription)
+{
+    internal static SourceRefreshResult Accept()
+    {
+        return new SourceRefreshResult(true, true, null, null);
+    }
+
+    internal static SourceRefreshResult Reject(
+        string code,
+        string description,
+        bool sourceUpdated = false)
+    {
+        return new SourceRefreshResult(false, sourceUpdated, code, description);
     }
 }

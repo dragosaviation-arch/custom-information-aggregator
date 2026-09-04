@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Windows.Data;
 using CIA.Contracts.Sources;
@@ -13,6 +14,9 @@ namespace CIA.Desktop.Presentation;
 
 public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 {
+    private static readonly IReadOnlyList<string> AvailableStatuses =
+        ["All", "Ready", "Unavailable", "Unsupported", "Failed validation"];
+
     private readonly ISourcePathPicker _pathPicker;
     private readonly SourceLoadingCoordinator _loadingCoordinator;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
@@ -21,13 +25,30 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand<LoadedSourceItem> _toggleSourceInclusionCommand;
     private readonly RelayCommand _includeVisibleCommand;
     private readonly RelayCommand _excludeVisibleCommand;
+    private readonly RelayCommand _removeCheckedCommand;
+    private readonly RelayCommand _confirmRemovalCommand;
+    private readonly RelayCommand _cancelRemovalCommand;
+    private readonly AsyncRelayCommand<LoadedSourceItem> _refreshSourceCommand;
+    private readonly AsyncRelayCommand _refreshSelectedCommand;
+    private IReadOnlyList<LoadedSourceItem> _highlightedSources = [];
+    private IReadOnlyList<LoadedSourceItem> _pendingRemovalSources = [];
     private bool _includeXmlFiles = true;
     private bool _includeArchives = true;
     private bool _searchSubfolders = true;
     private bool _openDiscoveryWhenLoadingCompletes;
+    private bool _dontWarnWhenRemovingEntries;
     private bool _isBusy;
+    private bool _isFilterOptionsOpen;
+    private bool _isRemovalConfirmationOpen;
     private LoadedSourceItem? _selectedSource;
     private string _filterText = string.Empty;
+    private string _filterStatus = "All";
+    private string _minimumSizeMb = string.Empty;
+    private string _maximumSizeMb = string.Empty;
+    private string _removalConfirmationMessage = string.Empty;
+    private LoadedSourceStatus? _appliedStatus;
+    private double? _appliedMinimumSizeMb;
+    private double? _appliedMaximumSizeMb;
     private string _statusTitle = "Load workspace ready";
     private string _statusDetail = "No active operation";
     private WorkflowArtifactStatus _discoveryStatus;
@@ -83,45 +104,90 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _excludeVisibleCommand = new RelayCommand(
             () => SetVisibleInclusion(isIncluded: false),
             CanChangeVisibleInclusion);
+        _removeCheckedCommand = new RelayCommand(RemoveChecked, CanRemoveChecked);
+        _confirmRemovalCommand = new RelayCommand(ConfirmRemoval);
+        _cancelRemovalCommand = new RelayCommand(CancelRemoval);
+        _refreshSourceCommand = new AsyncRelayCommand<LoadedSourceItem>(
+            RefreshSourceAsync,
+            source => source is not null && !IsBusy);
+        _refreshSelectedCommand = new AsyncRelayCommand(
+            RefreshSelectedAsync,
+            () => !IsBusy && _highlightedSources.Count > 0);
+        ToggleFilterOptionsCommand = new RelayCommand(
+            () => IsFilterOptionsOpen = !IsFilterOptionsOpen);
+        ApplyFilterOptionsCommand = new RelayCommand(ApplyFilterOptions);
+        ClearFilterOptionsCommand = new RelayCommand(ClearFilterOptions);
     }
 
     public ReadOnlyObservableCollection<LoadedSourceItem> Sources { get; }
-
     public ICollectionView VisibleSources { get; }
-
     public IAsyncRelayCommand AddXmlFileCommand { get; }
-
     public IAsyncRelayCommand AddFolderCommand { get; }
-
     public IAsyncRelayCommand AddArchiveCommand { get; }
-
     public IRelayCommand ToggleSourceInclusionCommand => _toggleSourceInclusionCommand;
-
     public IRelayCommand IncludeVisibleCommand => _includeVisibleCommand;
-
     public IRelayCommand ExcludeVisibleCommand => _excludeVisibleCommand;
-
+    public IRelayCommand RemoveCheckedCommand => _removeCheckedCommand;
+    public IRelayCommand ConfirmRemovalCommand => _confirmRemovalCommand;
+    public IRelayCommand CancelRemovalCommand => _cancelRemovalCommand;
+    public IAsyncRelayCommand RefreshSourceCommand => _refreshSourceCommand;
+    public IAsyncRelayCommand RefreshSelectedCommand => _refreshSelectedCommand;
+    public IRelayCommand ToggleFilterOptionsCommand { get; }
+    public IRelayCommand ApplyFilterOptionsCommand { get; }
+    public IRelayCommand ClearFilterOptionsCommand { get; }
+    public IReadOnlyList<string> FilterStatuses => AvailableStatuses;
     public bool HasSources => Sources.Count > 0;
-
     public int IncludedCount => Sources.Count(source => source.IsIncluded);
-
     public string IncludedSummary => $"{IncludedCount} / {Sources.Count} included";
-
-    public string SourceSummary => $"Files found {Sources.Count} · Loaded {Sources.Count} · Warnings 0";
+    public string SourceSummary =>
+        $"Files found {Sources.Count} · Loaded {Sources.Count} · Issues {Sources.Count(source => source.Status != LoadedSourceStatus.Ready)}";
 
     public string FilterText
     {
         get => _filterText;
         set
         {
-            if (!SetProperty(ref _filterText, value))
+            if (SetProperty(ref _filterText, value))
             {
-                return;
+                RefreshVisibleSources();
             }
-
-            VisibleSources.Refresh();
-            NotifyInclusionCommandsCanExecuteChanged();
         }
+    }
+
+    public string FilterStatus
+    {
+        get => _filterStatus;
+        set => SetProperty(ref _filterStatus, value);
+    }
+
+    public string MinimumSizeMb
+    {
+        get => _minimumSizeMb;
+        set => SetProperty(ref _minimumSizeMb, value);
+    }
+
+    public string MaximumSizeMb
+    {
+        get => _maximumSizeMb;
+        set => SetProperty(ref _maximumSizeMb, value);
+    }
+
+    public bool IsFilterOptionsOpen
+    {
+        get => _isFilterOptionsOpen;
+        set => SetProperty(ref _isFilterOptionsOpen, value);
+    }
+
+    public bool IsRemovalConfirmationOpen
+    {
+        get => _isRemovalConfirmationOpen;
+        private set => SetProperty(ref _isRemovalConfirmationOpen, value);
+    }
+
+    public string RemovalConfirmationMessage
+    {
+        get => _removalConfirmationMessage;
+        private set => SetProperty(ref _removalConfirmationMessage, value);
     }
 
     public bool IncludeXmlFiles
@@ -148,6 +214,12 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         set => SetProperty(ref _openDiscoveryWhenLoadingCompletes, value);
     }
 
+    public bool DontWarnWhenRemovingEntries
+    {
+        get => _dontWarnWhenRemovingEntries;
+        set => SetProperty(ref _dontWarnWhenRemovingEntries, value);
+    }
+
     public bool IsBusy
     {
         get => _isBusy;
@@ -161,7 +233,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             AddXmlFileCommand.NotifyCanExecuteChanged();
             AddFolderCommand.NotifyCanExecuteChanged();
             AddArchiveCommand.NotifyCanExecuteChanged();
-            NotifyInclusionCommandsCanExecuteChanged();
+            NotifySourceCommandsCanExecuteChanged();
         }
     }
 
@@ -215,7 +287,6 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public async Task AddDroppedPathsAsync(IEnumerable<string> paths)
     {
         ArgumentNullException.ThrowIfNull(paths);
-
         var acceptedAny = false;
 
         foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -234,6 +305,13 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
+    public void SetHighlightedSources(IEnumerable<LoadedSourceItem> sources)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+        _highlightedSources = sources.Where(Sources.Contains).Distinct().ToArray();
+        _refreshSelectedCommand.NotifyCanExecuteChanged();
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -250,18 +328,14 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task AddSelectedPathAsync(
-        SourceSelectionKind selectionKind,
-        Func<string?> pickPath)
+    private async Task AddSelectedPathAsync(SourceSelectionKind selectionKind, Func<string?> pickPath)
     {
         var path = pickPath();
 
-        if (path is null)
+        if (path is not null)
         {
-            return;
+            await AddPathAsync(selectionKind, path, allowNavigation: true);
         }
-
-        await AddPathAsync(selectionKind, path, allowNavigation: true);
     }
 
     private async Task<bool> AddPathAsync(
@@ -283,8 +357,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             if (!result.Accepted)
             {
                 StatusTitle = "Source not added";
-                StatusDetail = result.FailureDescription
-                    ?? "The selected source could not be loaded.";
+                StatusDetail = result.FailureDescription ?? "The selected source could not be loaded.";
                 return false;
             }
 
@@ -309,30 +382,106 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
     private bool MatchesFilter(object item)
     {
-        if (item is not LoadedSourceItem source || string.IsNullOrWhiteSpace(FilterText))
+        if (item is not LoadedSourceItem source)
         {
-            return item is LoadedSourceItem;
+            return false;
         }
 
-        return source.DisplayName.Contains(FilterText, StringComparison.OrdinalIgnoreCase)
-            || source.Path.Contains(FilterText, StringComparison.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(FilterText)
+            && !source.DisplayName.Contains(FilterText, StringComparison.OrdinalIgnoreCase)
+            && !source.Path.Contains(FilterText, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (_appliedStatus is not null && source.Status != _appliedStatus)
+        {
+            return false;
+        }
+
+        if ((_appliedMinimumSizeMb is not null || _appliedMaximumSizeMb is not null)
+            && source.SizeBytes is null)
+        {
+            return false;
+        }
+
+        var sizeMb = source.SizeBytes / (1024d * 1024d);
+        return (_appliedMinimumSizeMb is null || sizeMb >= _appliedMinimumSizeMb)
+            && (_appliedMaximumSizeMb is null || sizeMb <= _appliedMaximumSizeMb);
+    }
+
+    private void ApplyFilterOptions()
+    {
+        if (!TryParseOptionalSize(MinimumSizeMb, out var minimum)
+            || !TryParseOptionalSize(MaximumSizeMb, out var maximum)
+            || minimum is not null && maximum is not null && minimum > maximum)
+        {
+            StatusTitle = "Filter options unchanged";
+            StatusDetail = "Size filters must be non-negative numbers with minimum no greater than maximum.";
+            return;
+        }
+
+        _appliedStatus = FilterStatus switch
+        {
+            "Ready" => LoadedSourceStatus.Ready,
+            "Unavailable" => LoadedSourceStatus.Unavailable,
+            "Unsupported" => LoadedSourceStatus.Unsupported,
+            "Failed validation" => LoadedSourceStatus.FailedValidation,
+            _ => null
+        };
+        _appliedMinimumSizeMb = minimum;
+        _appliedMaximumSizeMb = maximum;
+        IsFilterOptionsOpen = false;
+        RefreshVisibleSources();
+        StatusTitle = "Source filters applied";
+        StatusDetail = $"Showing {VisibleSources.Cast<object>().Count()} matching source(s).";
+    }
+
+    private void ClearFilterOptions()
+    {
+        FilterStatus = "All";
+        MinimumSizeMb = string.Empty;
+        MaximumSizeMb = string.Empty;
+        _appliedStatus = null;
+        _appliedMinimumSizeMb = null;
+        _appliedMaximumSizeMb = null;
+        IsFilterOptionsOpen = false;
+        RefreshVisibleSources();
+    }
+
+    private static bool TryParseOptionalSize(string text, out double? value)
+    {
+        value = null;
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return true;
+        }
+
+        if ((!double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out var parsed)
+             && !double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed))
+            || !double.IsFinite(parsed)
+            || parsed < 0)
+        {
+            return false;
+        }
+
+        value = parsed;
+        return true;
     }
 
     private void ToggleSourceInclusion(LoadedSourceItem? source)
     {
-        if (source is null)
+        if (source is not null)
         {
-            return;
+            ApplyInclusionResult(_loadingCoordinator.SetInclusion([source], !source.IsIncluded));
         }
-
-        ApplyInclusionResult(
-            _loadingCoordinator.SetInclusion([source], !source.IsIncluded));
     }
 
     private void SetVisibleInclusion(bool isIncluded)
     {
-        var visibleSources = VisibleSources.Cast<LoadedSourceItem>().ToArray();
-        ApplyInclusionResult(_loadingCoordinator.SetInclusion(visibleSources, isIncluded));
+        ApplyInclusionResult(
+            _loadingCoordinator.SetInclusion(VisibleSources.Cast<LoadedSourceItem>().ToArray(), isIncluded));
     }
 
     private void ApplyInclusionResult(SourceInclusionResult result)
@@ -347,20 +496,163 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         StatusTitle = "Source selection unchanged";
-        StatusDetail = result.FailureDescription
-            ?? "The source-selection change was rejected.";
+        StatusDetail = result.FailureDescription ?? "The source-selection change was rejected.";
     }
 
-    private bool CanChangeVisibleInclusion()
+    private void RemoveChecked()
     {
-        return !IsBusy && !VisibleSources.IsEmpty;
+        var targets = Sources.Where(source => source.IsIncluded).ToArray();
+
+        if (targets.Length == 0)
+        {
+            return;
+        }
+
+        if (!DontWarnWhenRemovingEntries)
+        {
+            _pendingRemovalSources = targets;
+            RemovalConfirmationMessage = targets.Length == 1
+                ? "Remove 1 entry?"
+                : $"Remove {targets.Length} entries?";
+            IsRemovalConfirmationOpen = true;
+            return;
+        }
+
+        CommitRemoval(targets);
     }
 
-    private void NotifyInclusionCommandsCanExecuteChanged()
+    private void ConfirmRemoval()
+    {
+        var targets = _pendingRemovalSources;
+        CloseRemovalConfirmation();
+
+        if (targets.Count > 0)
+        {
+            CommitRemoval(targets);
+        }
+    }
+
+    private void CancelRemoval()
+    {
+        CloseRemovalConfirmation();
+    }
+
+    private void CloseRemovalConfirmation()
+    {
+        _pendingRemovalSources = [];
+        IsRemovalConfirmationOpen = false;
+        RemovalConfirmationMessage = string.Empty;
+    }
+
+    private void CommitRemoval(IReadOnlyList<LoadedSourceItem> targets)
+    {
+
+        var result = _loadingCoordinator.Remove(targets);
+
+        if (!result.Accepted)
+        {
+            StatusTitle = "Sources not removed";
+            StatusDetail = result.FailureDescription ?? "The source removal was rejected.";
+            return;
+        }
+
+        if (SelectedSource is not null && targets.Contains(SelectedSource))
+        {
+            SelectedSource = Sources.FirstOrDefault();
+        }
+
+        StatusTitle = result.RemovedCount == 1 ? "Source removed" : "Sources removed";
+        StatusDetail = result.RemovedCount == 1
+            ? "Removed 1 entry from this session. The source file was not deleted."
+            : $"Removed {result.RemovedCount} entries from this session. Source files were not deleted.";
+    }
+
+    private async Task RefreshSourceAsync(LoadedSourceItem? source)
+    {
+        if (source is null)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        StatusTitle = "Refreshing source";
+        StatusDetail = $"Reloading {source.DisplayName} through the Processing Host…";
+
+        try
+        {
+            ApplyRefreshResult(source, await _loadingCoordinator.RefreshAsync(source));
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private async Task RefreshSelectedAsync()
+    {
+        var targets = _highlightedSources.Where(Sources.Contains).ToArray();
+
+        if (targets.Length == 0)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        StatusTitle = targets.Length == 1 ? "Refreshing source" : "Refreshing selected sources";
+        StatusDetail = "Reloading highlighted source rows through the Processing Host…";
+
+        try
+        {
+            var refreshedCount = 0;
+            var failedCount = 0;
+
+            foreach (var source in targets)
+            {
+                var result = await _loadingCoordinator.RefreshAsync(source);
+                refreshedCount += result.Accepted ? 1 : 0;
+                failedCount += result.Accepted ? 0 : 1;
+            }
+
+            RefreshVisibleSources();
+            StatusTitle = failedCount == 0
+                ? "Selected sources refreshed"
+                : "Source refresh completed with issues";
+            StatusDetail = $"Refreshed {refreshedCount}; {failedCount} could not be refreshed.";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private void ApplyRefreshResult(LoadedSourceItem source, SourceRefreshResult result)
+    {
+        RefreshVisibleSources();
+        NotifySourceCountsChanged();
+        StatusTitle = result.Accepted ? "Source refreshed" : "Source refresh failed";
+        StatusDetail = result.Accepted
+            ? $"Reloaded {source.DisplayName}; its source identity was retained."
+            : result.FailureDescription ?? "The selected source could not be refreshed.";
+    }
+
+    private bool CanChangeVisibleInclusion() => !IsBusy && !VisibleSources.IsEmpty;
+
+    private bool CanRemoveChecked() => !IsBusy && Sources.Any(source => source.IsIncluded);
+
+    private void RefreshVisibleSources()
+    {
+        VisibleSources.Refresh();
+        NotifySourceCommandsCanExecuteChanged();
+    }
+
+    private void NotifySourceCommandsCanExecuteChanged()
     {
         _toggleSourceInclusionCommand.NotifyCanExecuteChanged();
         _includeVisibleCommand.NotifyCanExecuteChanged();
         _excludeVisibleCommand.NotifyCanExecuteChanged();
+        _removeCheckedCommand.NotifyCanExecuteChanged();
+        _refreshSourceCommand.NotifyCanExecuteChanged();
+        _refreshSelectedCommand.NotifyCanExecuteChanged();
     }
 
     private void NavigateToDiscovery()
@@ -389,14 +681,17 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
         OnPropertyChanged(nameof(HasSources));
         NotifySourceCountsChanged();
-        NotifyInclusionCommandsCanExecuteChanged();
+        NotifySourceCommandsCanExecuteChanged();
     }
 
     private void OnSourcePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(LoadedSourceItem.IsIncluded))
+        if (e.PropertyName is nameof(LoadedSourceItem.IsIncluded)
+            or nameof(LoadedSourceItem.Status)
+            or nameof(LoadedSourceItem.SizeBytes))
         {
             NotifySourceCountsChanged();
+            RefreshVisibleSources();
         }
     }
 

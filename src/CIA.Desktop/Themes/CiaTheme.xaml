@@ -17,6 +17,7 @@
     <SolidColorBrush x:Key="CiaWarningBrush" Color="#FFA66A00" />
     <SolidColorBrush x:Key="CiaWarningSoftBrush" Color="#FFFFF4DD" />
     <SolidColorBrush x:Key="CiaDangerBrush" Color="#FFB54747" />
+    <SolidColorBrush x:Key="CiaModalOverlayBrush" Color="#381F2430" />
     <SolidColorBrush x:Key="CiaDisabledBackgroundBrush" Color="#FFF0F2F5" />
     <SolidColorBrush x:Key="CiaDisabledTextBrush" Color="#FF9AA3B2" />
     <SolidColorBrush x:Key="CiaSelectedRowBrush" Color="#FFF1F0FF" />
@@ -172,6 +173,13 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="Transparent" />
         <Setter Property="Foreground" Value="{StaticResource CiaTextSecondaryBrush}" />
+    </Style>
+
+    <Style x:Key="CiaDangerButtonStyle"
+           TargetType="Button"
+           BasedOn="{StaticResource CiaButtonStyle}">
+        <Setter Property="BorderBrush" Value="{StaticResource CiaDangerBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource CiaDangerBrush}" />
     </Style>
 
     <Style x:Key="CiaTextInputStyle" TargetType="TextBox">

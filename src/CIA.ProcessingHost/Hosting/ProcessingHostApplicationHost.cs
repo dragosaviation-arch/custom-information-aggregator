@@ -32,6 +32,7 @@ public static class ProcessingHostApplicationHost
         builder.Services.AddSingleton<CooperativeOperationCancellation>();
         builder.Services.AddSingleton<SourceIntakeService>();
         builder.Services.AddSingleton<ISourceInterpreter, SourceInterpreter>();
+        builder.Services.AddSingleton<SourceRefreshService>();
 
         if (runtimeOptions is not null)
         {

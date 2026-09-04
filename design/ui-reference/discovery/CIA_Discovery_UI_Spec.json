@@ -1,0 +1,283 @@
+{
+  "meta": {
+    "name": "CIA Discovery UI Preview",
+    "version": "0.10",
+    "status": "Discovery UI/UX refinement - bounded and aligned profile/blacklist fields",
+    "basis": "Approved Discovery requirements/architecture plus user-approved UI refinements"
+  },
+  "shell": {
+    "sharedWithLoad": true,
+    "minimumWindow": {
+      "width": 1000,
+      "height": 520
+    },
+    "normalUsePageScroll": false,
+    "titleBarHeight": 38,
+    "topNavigationHeight": 60,
+    "statusBarHeight": 32,
+    "workspacePadding": 8,
+    "workspaceGap": 8,
+    "topLevelTabs": [
+      "Load",
+      "Discovery",
+      "Database",
+      "Settings"
+    ],
+    "leftNavigationRail": false,
+    "persistentGlobalStatus": true
+  },
+  "layout": {
+    "desktop": {
+      "leftDiscoveryArea": "60%",
+      "rightRail": "40%",
+      "rightRailSplit": {
+        "tagPreview": "60%",
+        "discoverySettings": "40%"
+      },
+      "rightRailMinimumWidth": 0
+    },
+    "responsive": {
+      "breakpoint": 1180,
+      "baseline": "Matches approved Load responsive breakpoint and minimum-window philosophy.",
+      "behavior": "At widths below 1180, move the whole Discovery right rail below the tag list. The lower rail keeps Tag Preview and Discovery Settings side-by-side at approximately 60/40.",
+      "stackedMinimums": {
+        "tagPreview": 420,
+        "discoverySettings": 340
+      },
+      "pageLevelVerticalScroll": false,
+      "internalScrollOnly": [
+        "tag list",
+        "tag preview value",
+        "settings content"
+      ],
+      "preStackCompression": {
+        "range": "1181px to 1320px",
+        "behavior": [
+          "Right rail remains on the right but all internal controls become fully fluid.",
+          "General categories stack into one column.",
+          "Tag Preview occurrence navigation may wrap rather than clip.",
+          "Database footer may wrap.",
+          "Settings management fields/buttons shrink inside available width."
+        ]
+      }
+    }
+  },
+  "leftDiscoveryArea": {
+    "topActions": [
+      "Run Discovery / Re-run Discovery"
+    ],
+    "controlRowOrder": [
+      "Search tags",
+      "Selection Profile dropdown",
+      "Select visible",
+      "Deselect visible",
+      "selected / total count"
+    ],
+    "selectedCountFormatExample": "12 / 30,842 selected",
+    "tagListColumns": [
+      "Selected",
+      "Tag",
+      "Database Tag",
+      "Occurrences",
+      "Sources",
+      "Sample Value",
+      "Blacklist state/action"
+    ],
+    "removedColumns": [
+      "First Seen In"
+    ],
+    "presentationFeatures": [
+      "search",
+      "transient filtering",
+      "sorting",
+      "compact pagination",
+      "Tags per page selector"
+    ],
+    "sorting": {
+      "interaction": "Single-column sorting through the Tag, Database Tag, Occurrences, Sources and Sample Value headers.",
+      "visibleState": "The active header displays an ascending or descending arrow; inactive sortable headers display a bidirectional indicator.",
+      "default": "Tag ascending"
+    },
+    "sourceInspection": {
+      "entryPoint": "Each Sources value is an inspectable compact affordance in its tag row.",
+      "presentation": "A scrollable flyout lists every contributing source using a typed source ID, source name and per-source occurrence count.",
+      "aggregateCheck": "The flyout shows contributor count and summed occurrences and explicitly confirms they match the row aggregate.",
+      "tagPreviewBoundary": "Source contributor detail does not appear in Tag Preview."
+    },
+    "removedFeatures": [
+      "Minimum occurrences setting"
+    ],
+    "workspaceProgressPlacement": "Bottom of left Discovery area",
+    "cancellation": "Esc only; no on-screen Cancel button",
+    "pagination": {
+      "format": "Showing x\u2013y of total tags",
+      "tagsPerPageOptions": [
+        25,
+        50,
+        100,
+        250
+      ],
+      "default": 50
+    },
+    "topRow": {
+      "alignment": "left",
+      "wrap": "single row at normal width; wrap only when horizontal space requires it",
+      "order": [
+        "Re-run Discovery",
+        "Discovery current/stale state",
+        "loaded/included source context"
+      ],
+      "rightAlignedItems": false
+    },
+    "controlRowResponsive": "Search, filter, profile dropdown and selected/total count remain left-aligned and wrap only when needed.",
+    "bulkSelection": {
+      "actions": [
+        "Select visible",
+        "Deselect visible"
+      ],
+      "scope": "currently visible filtered tag subset"
+    },
+    "databaseTagVisibility": "The resulting Database Tag Name is always visible in the list. When no override exists it shows the discovered tag name; when overridden it shows the override with modified styling.",
+    "exclusionPresentation": "Do not use a generic Exclude button that looks equivalent to selection. Use a distinct Blacklist action/state because selection and explicit exclusion are separate semantics.",
+    "removedControls": [
+      "Filter options button",
+      "Selected/Unselected transient state filter"
+    ],
+    "filtering": {
+      "search": "free-text tag/value search remains in the control row",
+      "blacklistedVisibility": "controlled from Discovery Settings > General > List View",
+      "databaseTagOverrideOnly": "controlled from Discovery Settings > General > List View"
+    }
+  },
+  "tagPreview": {
+    "purpose": "Show only the string/text value contained by the selected discovered tag occurrence.",
+    "automaticBehavior": "Preview follows the selected tag and occurrence automatically.",
+    "contentPresentation": "Single plain-text value only. No derived Short/Long/field decomposition, no raw XML, no source metadata clutter.",
+    "occurrenceNavigation": [
+      "Previous",
+      "direct ordinal input",
+      "current / total context",
+      "Next"
+    ],
+    "occurrenceCountDuplication": "Do not repeat occurrence totals elsewhere inside Tag Preview; total appears in occurrence navigation only.",
+    "databaseTagNameOverride": {
+      "editable": true,
+      "default": "discovered tag name",
+      "modifiedIndicator": true,
+      "clearRevert": true,
+      "storedInSelectionProfile": false,
+      "placement": "Compact control below preview value, styled consistently with Load controls."
+    },
+    "removed": [
+      "raw XML/code preview",
+      "Open in Editor",
+      "friendly field/value decomposition",
+      "source context block",
+      "contributing-source block",
+      "duplicate occurrence-count chips"
+    ],
+    "responsiveSizing": {
+      "desktopRightRailMinimum": 0,
+      "databaseTagNameRow": "72px label / flexible field / compact action",
+      "occurrenceNavigator": "flex-wrap allowed before the full right rail moves below",
+      "noFixedPanelDriver": true
+    }
+  },
+  "discoverySettings": {
+    "tabs": [
+      "General",
+      "Profiles",
+      "Blacklist"
+    ],
+    "general": {
+      "layout": "Two category columns: Workflow on the left, List View on the right. Options stack vertically within each category.",
+      "categories": {
+        "Workflow": [
+          {
+            "label": "Open Database when creation completes",
+            "default": false,
+            "behavior": "Navigate to Database after successful explicit Database creation/update."
+          },
+          {
+            "label": "Confirm before re-running Discovery when Database is current",
+            "default": true,
+            "behavior": "Warn before a re-run makes the current Database out of date."
+          }
+        ],
+        "List View": [
+          {
+            "label": "Show blacklisted tags",
+            "default": true,
+            "behavior": "When off, blacklisted rows are hidden from the discovered-tag list."
+          },
+          {
+            "label": "Show only selected",
+            "default": false,
+            "behavior": "When on, show only currently selected discovered tags."
+          },
+          {
+            "label": "Show only tags with Database Tag Name Override",
+            "default": false,
+            "behavior": "When on, show only rows whose Database Tag Name differs from the discovered tag."
+          }
+        ]
+      }
+    },
+    "profiles": {
+      "alwaysVisibleOutsideTab": "Selection Profile load dropdown above tag list",
+      "managementLayout": "Centered label/control block. Active profile field max width matches the two-button block width (264px). Buttons remain centered below the field.",
+      "managementActions": [
+        "Save as Profile",
+        "Update Profile",
+        "Delete Profile"
+      ],
+      "profileContent": "Selected/excluded discovered-tag membership only",
+      "databaseTagNameOverridesIncluded": false,
+      "removeText": [
+        "Profile scope"
+      ]
+    },
+    "blacklist": {
+      "managementLayout": "Centered label/control block. Blacklist dropdown max width matches the two-button block width (264px). Buttons remain centered below the dropdown.",
+      "managementActions": [
+        "Load",
+        "Save Current",
+        "Update",
+        "Clone",
+        "Delete",
+        "Set as Default"
+      ]
+    },
+    "removed": [
+      "Auto refresh preview",
+      "Maximum preview length",
+      "Include selected tags only setting",
+      "Exclude selected tags setting"
+    ],
+    "style": "Use the same compact visual language as approved Load UI: small outline/ghost controls, compact dropdowns, tight spacing, no large full-width action buttons.",
+    "responsiveFields": "Profile/Blacklist fields are capped at 264px but shrink below that when the panel becomes narrower; no change to the v0.9 responsive stacking/compression behavior."
+  },
+  "databasePublication": {
+    "placement": "Bottom of Discovery Settings as persistent in-context footer",
+    "states": [
+      "Database not created",
+      "Database current",
+      "Database out of date"
+    ],
+    "action": "Create Database / Update Database",
+    "automaticRebuild": false
+  },
+  "stateSemantics": {
+    "tagStates": [
+      "neutral",
+      "selected",
+      "excluded/blacklisted"
+    ],
+    "selectionAndExclusionDistinct": true,
+    "databaseBecomesStaleWhen": [
+      "tag selection changes",
+      "tag exclusion/blacklist changes",
+      "Database Tag Name Override changes"
+    ]
+  }
+}

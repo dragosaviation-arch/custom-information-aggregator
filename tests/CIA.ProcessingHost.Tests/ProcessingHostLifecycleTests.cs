@@ -85,6 +85,29 @@ public sealed class ProcessingHostLifecycleTests
     }
 
     [TestMethod]
+    public async Task DesktopSupervisorRefreshesSourceThroughRealProcessingHostBoundary()
+    {
+        await using var fixture = new SupervisorFixture();
+        var sourcePath = Path.Combine(fixture.WorkDirectory, "source.xml");
+        await File.WriteAllTextAsync(sourcePath, "<root />");
+        await fixture.Supervisor.EnsureAvailableAsync();
+        var load = await fixture.Supervisor.RequestSourceLoadAsync(
+            SourceSelectionKind.XmlFile,
+            sourcePath,
+            SourceLoadSettings.Default);
+        var source = load.Sources.Single();
+        await File.WriteAllTextAsync(sourcePath, "<root><changed /></root>");
+
+        var refresh = await fixture.Supervisor.RequestSourceRefreshAsync(source);
+
+        Assert.AreEqual(CommandAcceptance.Rejected, refresh.Acceptance);
+        Assert.AreEqual(source.SourceId, refresh.Source.SourceId);
+        Assert.AreEqual(LoadedSourceStatus.Unsupported, refresh.Source.Status);
+        Assert.AreEqual("unsupported-xml-structure", refresh.Failure?.Code);
+        Assert.IsTrue(File.Exists(sourcePath));
+    }
+
+    [TestMethod]
     public async Task RealHostRejectsPrematureCommandThenAcknowledgesLivenessAndShutdown()
     {
         using var logs = new TemporaryLifecycleLogDirectory();

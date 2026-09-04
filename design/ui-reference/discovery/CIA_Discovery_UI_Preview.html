@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CIA Discovery UI Preview v0.10</title>
+<style>
+:root{
+  --bg:#f7f8fc;--panel:#fff;--text:#1f2430;--muted:#667085;--accent:#6e6bff;--accent2:#4e8cff;
+  --soft:#efeeff;--border:#dde2ea;--ok:#2f8a59;--warn:#a96a00;--bad:#b54747;--sel:#f1f0ff;
+  --titleH:38px;--navH:60px;--statusH:32px;--pad:8px;--gap:8px
+}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{font:12.5px "Segoe UI",Arial,sans-serif;color:var(--text);background:var(--bg);overflow:hidden}
+button,input,select{font:inherit}.app{height:100%;display:grid;grid-template-rows:var(--titleH) var(--navH) minmax(0,1fr) var(--statusH);min-width:1000px;min-height:520px}
+.title{display:flex;align-items:center;justify-content:space-between;padding:0 15px;background:#fff;border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:10px}.logo{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,var(--accent2),var(--accent));display:grid;place-items:center;color:#fff;font-weight:800;font-size:11px}
+.cia{font-size:18px;font-weight:750}.sep{width:1px;height:18px;background:#cbd2dd}.product{font-size:12.5px}.ver{font-size:10.5px;color:#98a1af}
+.nav{display:flex;gap:5px;padding:0 10px;background:#fff;border-bottom:1px solid var(--border)}
+.tab{flex:1;border:0;background:#fff;display:grid;grid-template-columns:34px 1fr;align-items:center;text-align:left;padding:5px 9px;position:relative;border-radius:9px 9px 0 0;cursor:pointer}
+.tab:hover{background:#f8f8ff}.tab.active{background:linear-gradient(#f2f1ff,#fcfcff)}
+.tab.active:after{content:"";position:absolute;left:7px;right:7px;bottom:0;height:3px;border-radius:5px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.ico{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-size:17px;color:#727991}.active .ico{background:var(--soft);color:var(--accent)}
+.t1{font-size:13.5px;font-weight:750}.active .t1{color:#5149e8}.t2{font-size:10.2px;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.workspace{padding:var(--pad);overflow:hidden;min-height:0}.grid{height:100%;display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:var(--gap);min-height:0}
+.left{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;gap:6px;min-width:0;min-height:0;overflow:hidden}
+.right{display:grid;grid-template-rows:minmax(0,3fr) minmax(0,2fr);gap:var(--gap);min-width:0;min-height:0;overflow:hidden}.right>*{min-width:0}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:9px;box-shadow:0 1px 2px rgba(16,24,40,.04);min-height:0}
+.ptitle{padding:7px 9px;border-bottom:1px solid var(--border);font-weight:750;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:8px;min-width:0;overflow:hidden}.sub{font-size:10.5px;color:var(--muted);font-weight:500}
+.toolbar,.controlrow{display:flex;gap:6px;align-items:center;min-width:0;flex-wrap:wrap}.grow{flex:1}
+.btn{height:29px;border:1px solid #cbd2dd;background:#fff;border-radius:7px;padding:0 10px;font-weight:650;cursor:pointer;white-space:nowrap}.btn:hover{background:#f8f9fc}.btn.primary{background:linear-gradient(135deg,#756fff,#5e68f4);color:#fff;border-color:#6863f5}.btn.ghost{border-color:transparent;background:transparent;color:var(--muted);padding:0 7px}.btn.danger{color:#a33a3a}.btn:disabled{opacity:.45;cursor:default}
+.statepill{height:22px;padding:0 8px;border-radius:999px;display:inline-flex;align-items:center;font-size:10.8px;font-weight:750;white-space:nowrap}.statepill.stale{background:#fff4dd;color:#8c5c00}.statepill.current{background:#eaf7ef;color:#226c45}.statepill.neutral{background:#f2f4f7;color:#667085}
+.searchbox{display:flex;gap:4px;position:relative}.search{height:29px;width:190px;border:1px solid #cbd2dd;border-radius:7px;padding:0 9px}.filter{width:31px;height:29px;border:1px solid #cbd2dd;border-radius:7px;background:#fff;cursor:pointer}.filter.on{background:var(--soft);color:#5149e8}
+.profileSel{height:29px;min-width:0;width:180px;max-width:220px;flex:0 1 180px;border:1px solid #cbd2dd;border-radius:7px;padding:0 8px;background:#fff}
+.count{font-weight:750;white-space:nowrap;padding:0 2px}.count b{color:var(--accent)}
+.pop{display:none;position:absolute;left:0;top:34px;width:270px;padding:10px;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 12px 28px rgba(20,30,50,.15);z-index:20}.pop.show{display:block}
+.fr{display:grid;grid-template-columns:92px 1fr;gap:7px;align-items:center;margin:7px 0}.fr label{font-size:11.5px;color:var(--muted)}.fr select{height:29px;border:1px solid #cbd2dd;border-radius:7px;padding:0 7px;width:100%}.checkline{display:flex;gap:7px;align-items:center;margin:8px 0;color:var(--muted)}.pf{display:flex;justify-content:flex-end;gap:5px;margin-top:7px}
+.list{overflow:hidden;display:grid;grid-template-rows:29px minmax(0,1fr) 30px;min-height:0;position:relative}
+.head,.row{display:grid;grid-template-columns:34px minmax(95px,1.1fr) minmax(105px,1.15fr) 76px 58px minmax(120px,1.55fr) 74px;align-items:center}
+.head{padding:0 6px;background:#fafbfd;border-bottom:1px solid var(--border);font-size:10.8px;color:var(--muted);font-weight:750}.sorthead{height:28px;padding:0;border:0;background:transparent;color:inherit;font-weight:750;text-align:left;cursor:pointer}.sorthead:after{content:" ↕";color:#a4aab5}.sorthead[aria-sort="ascending"]:after{content:" ↑";color:var(--accent)}.sorthead[aria-sort="descending"]:after{content:" ↓";color:var(--accent)}.rows{overflow:auto;min-height:0}
+.row{min-height:31px;padding:0 6px;border-bottom:1px solid #edf0f4}.row:hover{background:#f8f9fc}.row.selectedrow{background:var(--sel)}.row.excluded{opacity:.62;background:#fafafa}.row input{width:15px;height:15px;accent-color:var(--accent)}
+.tag{font-family:Consolas,"Segoe UI",sans-serif;font-size:11px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dbtag{font-size:10.8px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dbtag.modified{color:#8c5c00}.num,.sources{font-size:10.8px}.sourceinspect{height:24px;padding:0 5px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--accent);font-size:10.8px;font-weight:700;cursor:pointer}.sourceinspect:hover,.sourceinspect[aria-expanded="true"]{background:var(--soft);border-color:#d8d4ff}.sample{font-size:10.8px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.exbtn{height:23px;border:1px solid #d8dde6;background:#fff;border-radius:6px;font-size:10px;cursor:pointer;padding:0 6px}.exbtn.on{background:#fff1f1;color:#a33a3a;border-color:#efcaca}
+.pager{display:flex;align-items:center;gap:5px;padding:0 8px;border-top:1px solid var(--border);color:var(--muted);font-size:10.5px}.pager .grow{flex:1}.pg{min-width:25px;height:23px;border:1px solid #d7dce4;background:#fff;border-radius:6px;cursor:pointer}.pg.active{background:var(--accent);color:#fff;border-color:var(--accent)}.perpage{height:24px;border:1px solid #d7dce4;border-radius:6px;background:#fff;padding:0 5px;font-size:10.5px}
+.progress{padding:6px 9px}.ph{display:flex;justify-content:space-between;gap:10px}.pname{font-weight:750}.pm{font-size:10.8px;color:var(--muted)}.bar{height:5px;background:#eceff4;border-radius:99px;overflow:hidden;margin-top:5px}.bar span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:.18s}.pf2{display:flex;justify-content:space-between;gap:8px;margin-top:5px;font-size:10.5px;color:var(--muted)}
+.preview{display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:0;height:100%}
+.previewbody{padding:8px 10px;overflow:auto;min-height:0;display:flex;flex-direction:column}
+.previewhead{display:flex;align-items:center;gap:7px;margin-bottom:7px;flex-wrap:wrap}
+.tagchip{font-family:Consolas,monospace;font-weight:750;background:var(--soft);color:#5149e8;border-radius:6px;padding:4px 7px}
+.valuebox{flex:1;min-height:80px;border:1px solid #e4e7ec;border-radius:8px;background:#fcfcfe;padding:12px 14px;display:flex;align-items:flex-start;font-size:13px;line-height:1.5;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.override{display:grid;grid-template-columns:72px minmax(0,1fr) auto;gap:6px;align-items:center;margin-top:8px;min-width:0}
+.override label{font-size:10.8px;color:var(--muted)}.override input{height:28px;min-width:0;width:100%;border:1px solid #cbd2dd;border-radius:7px;padding:0 8px}.modified{font-size:10px;color:#8c5c00;margin-top:4px}
+.navocc{display:flex;align-items:center;justify-content:space-between;gap:5px;padding:7px 10px;border-top:1px solid var(--border);min-width:0;flex-wrap:wrap}
+.navocc .btn{flex:0 0 auto}
+.ordinal{width:56px;height:29px;border:1px solid #cbd2dd;border-radius:7px;text-align:center}.of{font-size:10.8px;color:var(--muted)}
+.settings{display:grid;grid-template-rows:auto minmax(0,1fr) auto;height:100%;min-height:0}.tabs2{display:flex;gap:6px;padding:0 8px;border-bottom:1px solid var(--border);min-width:0}.tabs2 .stab{flex:1 1 0;min-width:0;padding:0 4px}.stab{height:34px;border:0;background:transparent;color:var(--muted);cursor:pointer;position:relative;font-weight:650}.stab.active{color:#5149e8}.stab.active:after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--accent)}
+.setbody{padding:8px 10px;overflow:auto;min-height:0}.setpane{display:none}.setpane.active{display:block}.gh{font-size:10px;font-weight:800;color:#5b57d6;letter-spacing:.04em;margin:2px 0 5px}.info{padding:6px 7px;border:1px solid #e5e8ef;background:#fafbfd;border-radius:7px;margin-bottom:6px}.info b{display:block;font-size:11px;margin-bottom:2px}.info span{font-size:10.5px;color:var(--muted)}.generalcols{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}.groupblock{min-width:0}.settingstack{display:flex;flex-direction:column}.setting{display:flex;gap:7px;padding:5px 0;border-bottom:1px solid #eef1f5;cursor:pointer;min-width:0}
+.setting input{width:15px;height:15px;accent-color:var(--accent);margin-top:2px;flex:none}
+.setting b{display:block;font-size:11.5px}.setting span{display:block;font-size:10.5px;color:var(--muted);line-height:1.3;margin-top:1px}
+.management{display:grid;grid-template-columns:72px minmax(0,264px);gap:7px;align-items:start;justify-content:center;max-width:360px;width:100%;margin:0 auto;min-width:0}.management .mlabel{color:var(--muted);font-size:10.8px;padding-top:7px}.management .mcontent{min-width:0;width:min(264px,100%)}.management .mcontent select,.management .mcontent input{height:29px;min-width:0;width:100%;max-width:264px;border:1px solid #cbd2dd;border-radius:7px;padding:0 7px;background:#fff}.actiongridcompact{display:grid;grid-template-columns:repeat(2,minmax(0,118px));gap:6px 8px;justify-content:center;margin-top:7px;min-width:0}.actiongridcompact .btn{height:28px;width:100%;min-width:0;padding:0 6px;overflow:hidden;text-overflow:ellipsis}.actiongridcompact .centered{grid-column:1/-1;justify-self:center}.fieldline{display:grid;grid-template-columns:82px minmax(0,1fr);gap:7px;align-items:center;margin:6px auto;min-width:0;max-width:360px;width:100%}.fieldline label{color:var(--muted);font-size:10.8px}.fieldline select,.fieldline input{height:29px;min-width:0;max-width:100%;border:1px solid #cbd2dd;border-radius:7px;padding:0 7px;width:100%}
+.dbfooter{display:flex;align-items:center;gap:6px;padding:7px 9px;border-top:1px solid var(--border);background:#fcfcfe;min-width:0;flex-wrap:wrap}.dbfooter .grow{min-width:0}.dbtext{font-size:10.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.statusbar{display:flex;align-items:center;gap:9px;padding:0 10px;border-top:1px solid var(--border);background:#fff;color:var(--muted);font-size:10.8px;white-space:nowrap;min-width:0}.dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}.statusbar strong{color:var(--text)}.sgrow{flex:1;min-width:100px;overflow:hidden;text-overflow:ellipsis}.mini{width:120px;height:5px;background:#eceff4;border-radius:99px;overflow:hidden}.mini span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:.18s}
+.toast{position:fixed;right:16px;bottom:44px;background:#1f2430;color:#fff;border-radius:8px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.18);opacity:0;transform:translateY(8px);pointer-events:none;transition:.18s;z-index:30}.toast.show{opacity:1;transform:none}
+.sourceflyout{display:none;position:fixed;width:min(390px,calc(100vw - 32px));max-height:min(420px,calc(100vh - 70px));background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 14px 34px rgba(20,30,50,.18);z-index:40;overflow:hidden}.sourceflyout.show{display:grid;grid-template-rows:auto minmax(0,1fr) auto}.sourceflyout h3{margin:0;padding:9px 11px;border-bottom:1px solid var(--border);font-size:12px}.sourceitems{overflow:auto;padding:4px 0}.sourceitem{display:grid;grid-template-columns:84px minmax(0,1fr) 64px;gap:8px;padding:5px 10px;border-bottom:1px solid #eef1f5;font-size:10.8px}.sourceid{font-family:Consolas,monospace;color:var(--muted)}.sourcename{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sourcecount{text-align:right;font-weight:700}.sourceaggregate{padding:8px 10px;background:#fafbfd;border-top:1px solid var(--border);font-size:10.8px;color:var(--muted)}
+.placeholder{height:100%;display:grid;place-items:center;text-align:center;color:var(--muted)}.placeholder strong{display:block;color:var(--text);font-size:18px;margin-bottom:5px}
+
+@media(max-width:1320px) and (min-width:1181px){
+  .search{width:155px}
+  .profileSel{width:150px;flex-basis:150px}
+  .generalcols{grid-template-columns:1fr}
+  .setbody{padding:7px 8px}
+  .management{grid-template-columns:66px minmax(0,1fr)}
+  .actiongridcompact{grid-template-columns:repeat(2,minmax(0,104px))}
+  .navocc{justify-content:flex-start}
+  .navocc .btn:last-child{margin-left:auto}
+  .dbtext{flex-basis:100%;order:3}
+}
+
+@media(max-width:1180px){
+  .workspace{overflow:hidden}
+  .grid{height:100%;min-height:0;grid-template-columns:1fr;grid-template-rows:minmax(0,3fr) minmax(0,2fr)}
+  .left{min-height:0;height:auto}
+  .right{grid-template-columns:minmax(0,3fr) minmax(0,2fr);grid-template-rows:minmax(0,1fr);min-width:0;min-height:0;height:auto;overflow:hidden}
+  .t2{display:none}
+  .search{width:150px}
+}
+@media(max-width:1040px){
+  .right{grid-template-columns:minmax(0,3fr) minmax(0,2fr)}
+  .generalcols{grid-template-columns:1fr}
+  .management{grid-template-columns:74px minmax(0,1fr)}
+  .actiongridcompact{grid-template-columns:118px 118px}.actiongridcompact .btn{width:118px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="title">
+    <div class="brand"><div class="logo">C</div><div class="cia">CIA</div><div class="sep"></div><div class="product">Custom Information Aggregator</div></div>
+    <div class="ver">Discovery UI/UX preview v0.10</div>
+  </div>
+  <div class="nav" id="nav"></div>
+
+  <main class="workspace">
+    <div class="grid" id="discovery">
+      <section class="left">
+        <div class="toolbar">
+          <button class="btn primary" id="runDiscovery">↻ Re-run Discovery</button>
+          <span class="statepill current" id="discState">Discovery current</span>
+          <span class="pm">463 / 487 sources included</span>
+        </div>
+
+        <div class="controlrow">
+          <div class="searchbox">
+            <input class="search" id="search" placeholder="Search tags…">
+          </div>
+          <select class="profileSel" id="profileSelect" title="Load selection profile">
+            <option>Default Profile</option><option>ATA Planning</option><option>Tools & Consumables</option><option>No Profile</option>
+          </select>
+          <button class="btn ghost" id="selectVisible">Select visible</button>
+          <button class="btn ghost" id="deselectVisible">Deselect visible</button>
+          <div class="count"><b id="selCount">12</b> / <b id="totalCount">30,842</b> selected</div>
+        </div>
+
+        <div class="panel list">
+          <div class="head"><div></div><button class="sorthead" data-sort="name">Tag</button><button class="sorthead" data-sort="database">Database Tag</button><button class="sorthead" data-sort="occ">Occurrences</button><button class="sorthead" data-sort="sources">Sources</button><button class="sorthead" data-sort="sample">Sample Value</button><div>Blacklist</div></div>
+          <div class="rows" id="rows"></div>
+          <div class="pager">
+            <span id="showing">Showing 1–50 of 30,842 tags</span><div class="grow"></div>
+            <button class="pg">‹</button><button class="pg active">1</button><button class="pg">2</button><button class="pg">3</button><span>…</span><button class="pg">617</button><button class="pg">›</button><span style="margin-left:8px">Tags per page:</span><select class="perpage" id="tagsPerPage"><option>25</option><option selected>50</option><option>100</option><option>250</option></select>
+          </div>
+        </div>
+
+        <div class="panel progress">
+          <div class="ph"><div><div class="pname" id="pname">Discovery ready</div><div class="pm" id="pmeta">Current result available for the active source set</div></div><div class="pm" id="ppct">100%</div></div>
+          <div class="bar"><span id="pbar" style="width:100%"></span></div>
+          <div class="pf2"><span id="pstage">Stage: Complete</span><span id="pcnt">30,842 tags · 2 warnings</span></div>
+        </div>
+      </section>
+
+      <aside class="right">
+        <div class="panel preview">
+          <div class="ptitle">TAG PREVIEW <span class="sub">Readable occurrence content</span></div>
+          <div class="previewbody" id="previewBody"></div>
+          <div class="navocc">
+            <button class="btn" id="prevOcc">‹ Previous</button><span class="of">Occurrence</span><input class="ordinal" id="ordinal" value="1"><span class="of" id="ofTotal">of 12,846</span><button class="btn" id="nextOcc">Next ›</button>
+          </div>
+        </div>
+
+        <div class="panel settings">
+          <div class="tabs2">
+            <button class="stab active" data-pane="general">General</button>
+            <button class="stab" data-pane="profiles">Profiles</button>
+            <button class="stab" data-pane="blacklist">Blacklist</button>
+          </div>
+          <div class="setbody">
+            <div class="setpane active" id="general">
+              <div class="generalcols">
+                <div class="groupblock">
+                  <div class="gh">WORKFLOW</div>
+                  <div class="settingstack">
+                    <label class="setting"><input type="checkbox" id="openDatabaseOnComplete"><div><b>Open Database when creation completes</b><span>Navigate to Database after successful explicit creation/update.</span></div></label>
+                    <label class="setting"><input type="checkbox" id="confirmRerun" checked><div><b>Confirm before re-running Discovery when Database is current</b><span>Warn before a re-run makes the current Database out of date.</span></div></label>
+                  </div>
+                </div>
+                <div class="groupblock">
+                  <div class="gh">LIST VIEW</div>
+                  <div class="settingstack">
+                    <label class="setting"><input type="checkbox" id="showBlacklisted" checked><div><b>Show blacklisted tags</b><span>Hide blacklisted rows from the Discovery list when disabled.</span></div></label>
+                    <label class="setting"><input type="checkbox" id="showOnlySelected"><div><b>Show only selected</b><span>Limit the list to tags currently selected for downstream use.</span></div></label>
+                    <label class="setting"><input type="checkbox" id="overrideOnlySetting"><div><b>Show only tags with Database Tag Name Override</b><span>Limit the list to tags whose Database Tag Name was modified.</span></div></label>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="setpane" id="profiles">
+              <div class="gh">SELECTION PROFILE MANAGEMENT</div>
+              <div class="management">
+                <div class="mlabel">Active profile</div>
+                <div class="mcontent">
+                  <input id="profileName" value="Default Profile" readonly>
+                  <div class="actiongridcompact">
+                    <button class="btn" id="saveProfile">Save as Profile</button>
+                    <button class="btn" id="updateProfile">Update Profile</button>
+                    <button class="btn danger centered" id="deleteProfile">Delete Profile</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="setpane" id="blacklist">
+              <div class="gh">BLACKLIST PROFILE MANAGEMENT</div>
+              <div class="management">
+                <div class="mlabel">Blacklist</div>
+                <div class="mcontent">
+                  <select id="blacklistSelect"><option>Standard Blacklist ★</option><option>Minimal</option><option>None</option></select>
+                  <div class="actiongridcompact">
+                    <button class="btn" id="loadBlacklist">Load Blacklist</button>
+                    <button class="btn" id="saveBlacklist">Save Current</button>
+                    <button class="btn" id="updateBlacklist">Update</button>
+                    <button class="btn" id="cloneBlacklist">Clone</button>
+                    <button class="btn danger" id="deleteBlacklist">Delete</button>
+                    <button class="btn" id="defaultBlacklist">Set as Default</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="dbfooter">
+            <span class="statepill stale" id="dbState">Database out of date</span>
+            <div class="grow dbtext" id="dbText">Discovery configuration differs from the current Database.</div>
+            <button class="btn primary" id="dbAction">Update Database</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+    <div class="placeholder" id="placeholder" style="display:none"><div><strong id="phTitle">Workspace</strong><span>Placeholder only. Global status remains visible below.</span></div></div>
+  </main>
+
+  <footer class="statusbar">
+    <span class="dot" title="Session active"></span>
+    <strong id="globalState">Ready</strong>
+    <div class="sgrow" id="globalText">Discovery result current</div>
+    <span><strong>463</strong> / <strong>487</strong> sources included</span>
+    <span>Warnings <strong>2</strong></span>
+    <span>Elapsed <strong id="gelapsed">00:00:12</strong></span>
+    <div class="mini"><span id="gbar" style="width:100%"></span></div><strong id="gpct">100%</strong>
+  </footer>
+</div>
+<div class="toast" id="toast"></div>
+<aside class="sourceflyout" id="sourceFlyout" aria-live="polite">
+  <h3 id="sourceFlyoutTitle">Contributing sources</h3>
+  <div class="sourceitems" id="sourceItems"></div>
+  <div class="sourceaggregate" id="sourceAggregate"></div>
+</aside>
+
+<script>
+const navData=[["Load","▣","Add and manage sources"],["Discovery","◎","Discover and select information"],["Database","◫","Filter, extract, review and export"],["Settings","⚙","Configuration, history and support"]];
+const nav=document.getElementById("nav");
+navData.forEach(([n,i,s])=>{const b=document.createElement("button");b.className="tab"+(n==="Discovery"?" active":"");b.innerHTML=`<div class="ico">${i}</div><div><div class="t1">${n}</div><div class="t2">${s}</div></div>`;b.onclick=()=>switchTab(n,b);nav.appendChild(b)});
+function switchTab(n,b){document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));b.classList.add("active");discovery.style.display=n==="Discovery"?"grid":"none";placeholder.style.display=n==="Discovery"?"none":"grid";phTitle.textContent=n}
+
+const tags=[
+{id:1,name:"<tasknr>",occ:12846,sources:2104,sample:"ATA-27-10-00-910-801",selected:true,excluded:false,override:"",fields:[["Task number","ATA-27-10-00-910-801"],["Short","Remove the access panel."],["Long","Remove the access panel located on the upper cowling before continuing the inspection."],["Manhours","2.50"],["Reference document","AMM 27-10-00"],["Remarks","Ensure area is clean before installation."]]},
+{id:2,name:"<taskdesc>",occ:12846,sources:2104,sample:"Remove the access panel…",selected:true,excluded:false,override:"Task Description",fields:[["Short","Remove the access panel."],["Long","Remove the access panel located on the upper cowling before continuing the inspection."],["Language","EN"],["Revision","46"]]},
+{id:3,name:"<manhours>",occ:12846,sources:2104,sample:"2.50",selected:true,excluded:false,override:"",fields:[["Value","2.50"],["Unit","hours"],["Task","ATA-27-10-00-910-801"],["Source section","Labour planning"]]},
+{id:4,name:"<chapter>",occ:8432,sources:1512,sample:"27-10-00",selected:false,excluded:false,override:"",fields:[["Chapter","27"],["Section","10"],["Subject","00"]]},
+{id:5,name:"<section>",occ:8432,sources:1512,sample:"910",selected:false,excluded:false,override:"",fields:[["Section","910"],["Context","Task grouping"]]},
+{id:6,name:"<subsection>",occ:8432,sources:1512,sample:"801",selected:false,excluded:false,override:"",fields:[["Subsection","801"],["Context","Task detail grouping"]]},
+{id:7,name:"<remarks>",occ:7654,sources:1234,sample:"Ensure area is clean…",selected:true,excluded:false,override:"",fields:[["Remarks","Ensure area is clean before installation."],["Related task","ATA-27-10-00-910-801"]]},
+{id:8,name:"<reqtools>",occ:6231,sources:1102,sample:"STD-123, WRENCH-10…",selected:true,excluded:false,override:"Required Tools",fields:[["Tool","STD-123"],["Description","Torque wrench"],["Quantity","1"],["Related task","ATA-27-10-00-910-801"]]},
+{id:9,name:"<reqparts>",occ:6231,sources:1102,sample:"RIVET-456, BOLT-789…",selected:true,excluded:false,override:"",fields:[["Part","RIVET-456"],["Description","Blind rivet"],["Quantity","6"]]},
+{id:10,name:"<zone>",occ:5987,sources:998,sample:"Zone 300",selected:false,excluded:false,override:"",fields:[["Zone","300"],["Description","Wing / fairing area"]]},
+{id:11,name:"<access>",occ:5123,sources:876,sample:"From top side",selected:false,excluded:false,override:"",fields:[["Access","From top side"],["Panel","321AB"]]},
+{id:12,name:"<safety>",occ:4987,sources:765,sample:"Wear safety glasses…",selected:false,excluded:true,override:"",fields:[["Instruction","Wear safety glasses and protective gloves."],["Category","Safety"]]},
+{id:13,name:"<caution>",occ:4321,sources:654,sample:"Do not damage surface…",selected:false,excluded:true,override:"",fields:[["Caution","Do not damage the mating surface during removal."],["Category","Caution"]]},
+{id:14,name:"<refdoc>",occ:3876,sources:543,sample:"AMM 27-10-00",selected:true,excluded:false,override:"",fields:[["Reference","AMM 27-10-00"],["Type","AMM"]]},
+{id:15,name:"<effectivity>",occ:3210,sources:432,sample:"ALL",selected:false,excluded:false,override:"",fields:[["Effectivity","ALL"],["Applicability","All aircraft in source set"]]}
+];
+let current=1,occurrence=1,running=false,timer=null,pct=100,elapsed=12,dbCurrent=false,sortKey="name",sortDirection=1;
+const $=id=>document.getElementById(id), totalTags=30842, baseSelected=5;
+function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");clearTimeout(t.x);t.x=setTimeout(()=>t.classList.remove("show"),1300)}
+function selectedTotal(){return baseSelected+tags.filter(t=>t.selected&&!t.excluded).length}
+function visible(){
+ const q=$("search").value.toLowerCase();
+ const showBlacklisted=$("showBlacklisted") ? $("showBlacklisted").checked : true;
+ const showOnlySelected=$("showOnlySelected") ? $("showOnlySelected").checked : false;
+ const overrideOnly=$("overrideOnlySetting") ? $("overrideOnlySetting").checked : false;
+ return tags.filter(t=>{
+   const textMatch=!q||t.name.toLowerCase().includes(q)||t.sample.toLowerCase().includes(q)||(t.override||"").toLowerCase().includes(q);
+   return textMatch
+     && (showBlacklisted||!t.excluded)
+     && (!showOnlySelected||(t.selected&&!t.excluded))
+     && (!overrideOnly||!!t.override);
+ }).sort((a,b)=>sortDirection*compareTags(a,b,sortKey));
+}
+function databaseTag(t){return t.override||t.name.replace(/[<>]/g,"")}
+function compareTags(a,b,key){const av=key==="database"?databaseTag(a):a[key],bv=key==="database"?databaseTag(b):b[key];return typeof av==="number"?av-bv:String(av).localeCompare(String(bv),undefined,{numeric:true,sensitivity:"base"})}
+function updateSortHeaders(){document.querySelectorAll(".sorthead").forEach(h=>h.setAttribute("aria-sort",h.dataset.sort===sortKey?(sortDirection===1?"ascending":"descending"):"none"))}
+function render(){
+ $("selCount").textContent=selectedTotal();$("totalCount").textContent=totalTags.toLocaleString();
+ $("rows").innerHTML=visible().map(t=>`<div class="row ${t.id===current?"selectedrow":""} ${t.excluded?"excluded":""}" data-id="${t.id}">
+ <div><input data-a="select" type="checkbox" ${t.selected&&!t.excluded?"checked":""} ${t.excluded?"disabled":""}></div>
+ <div class="tag" title="${t.name}">${t.name}</div><div class="dbtag ${t.override?"modified":""}" title="${databaseTag(t)}">${databaseTag(t)}</div><div class="num">${t.occ.toLocaleString()}</div><div class="sources"><button class="sourceinspect" data-a="sources" aria-expanded="false" title="Inspect all contributing sources">${t.sources.toLocaleString()}</button></div>
+ <div class="sample" title="${t.sample}">${t.sample}</div><div><button class="exbtn ${t.excluded?"on":""}" data-a="exclude">${t.excluded?"Blacklisted":"Blacklist"}</button></div></div>`).join("");
+ document.querySelectorAll(".row").forEach(r=>r.onclick=e=>{
+   const t=tags.find(x=>x.id==r.dataset.id);
+   if(e.target.dataset.a==="select"){t.selected=e.target.checked;markDbStale("Tag selection changed");render();return}
+   if(e.target.dataset.a==="exclude"){t.excluded=!t.excluded;if(t.excluded)t.selected=false;markDbStale(t.excluded?"Tag excluded":"Tag exclusion removed");render();return}
+   if(e.target.dataset.a==="sources"){e.stopPropagation();showSources(t,e.target);return}
+   current=t.id;occurrence=1;render();
+ });
+ updateSortHeaders();
+ renderPreview();
+}
+function sourceBreakdown(t){const base=Math.floor(t.occ/t.sources),remainder=t.occ%t.sources;return Array.from({length:t.sources},(_,index)=>({id:`SRC-${String(index+1).padStart(5,"0")}`,name:`source-${String(index+1).padStart(5,"0")}.xml`,count:base+(index<remainder?1:0)}))}
+function showSources(t,button){const items=sourceBreakdown(t),flyout=$("sourceFlyout"),rect=button.getBoundingClientRect();document.querySelectorAll(".sourceinspect").forEach(x=>x.setAttribute("aria-expanded","false"));button.setAttribute("aria-expanded","true");$("sourceFlyoutTitle").textContent=`${t.name} · contributing sources`;$("sourceItems").innerHTML=items.map(s=>`<div class="sourceitem"><span class="sourceid">${s.id}</span><span class="sourcename" title="${s.name}">${s.name}</span><span class="sourcecount">${s.count.toLocaleString()}</span></div>`).join("");const total=items.reduce((sum,s)=>sum+s.count,0);$("sourceAggregate").textContent=`${items.length.toLocaleString()} sources · ${total.toLocaleString()} occurrences · matches tag aggregate`;flyout.classList.add("show");flyout.style.left=`${Math.min(rect.left,innerWidth-406)}px`;flyout.style.top=`${Math.min(rect.bottom+5,innerHeight-440)}px`}
+function closeSources(){const flyout=$("sourceFlyout");flyout.classList.remove("show");document.querySelectorAll(".sourceinspect").forEach(x=>x.setAttribute("aria-expanded","false"))}
+function renderPreview(){
+ const t=tags.find(x=>x.id===current)||tags[0];
+ $("ofTotal").textContent=`of ${t.occ.toLocaleString()}`;$("ordinal").value=occurrence;
+ let value=t.sample.replace(/…$/,"");
+ if(t.name==="<taskdesc>") value="Remove the access panel located on the upper cowling before continuing the inspection.";
+ if(t.name==="<remarks>") value="Ensure area is clean before installation.";
+ if(t.name==="<safety>") value="Wear safety glasses and protective gloves.";
+ if(t.name==="<caution>") value="Do not damage the mating surface during removal.";
+ $("previewBody").innerHTML=`<div class="previewhead"><span class="tagchip">${t.name}</span>${t.selected?'<span class="statepill current">Selected</span>':t.excluded?'<span class="statepill stale">Excluded</span>':'<span class="statepill neutral">Neutral</span>'}</div>
+ <div class="valuebox">${value}</div>
+ <div class="override"><label>Database Tag Name</label><input id="overrideInput" value="${t.override||t.name.replace(/[<>]/g,"")}" data-original="${t.name.replace(/[<>]/g,"")}"><button class="btn ghost" id="clearOverride">${t.override?"Revert":"Default"}</button></div>
+ ${t.override?'<div class="modified">Modified mapping — not stored in the selection profile.</div>':""}`;
+ const oi=$("overrideInput"),co=$("clearOverride");
+ oi.onchange=()=>{const orig=oi.dataset.original,val=oi.value.trim();t.override=(val&&val!==orig)?val:"";markDbStale("Database Tag Name Override changed");render()};
+ co.onclick=()=>{if(t.override){t.override="";markDbStale("Database Tag Name Override reverted");render()}};
+}
+function markDbStale(reason){dbCurrent=false;$("dbState").className="statepill stale";$("dbState").textContent="Database out of date";$("dbText").textContent=reason+". Update required.";$("dbAction").textContent="Update Database"}
+$("search").oninput=render;
+document.querySelectorAll(".sorthead").forEach(header=>header.onclick=()=>{const key=header.dataset.sort;if(sortKey===key)sortDirection*=-1;else{sortKey=key;sortDirection=1}render()});
+$("sourceFlyout").onclick=e=>e.stopPropagation();
+document.addEventListener("click",closeSources);
+$("selectVisible").onclick=()=>{visible().forEach(t=>{if(!t.excluded)t.selected=true});markDbStale("Visible tag selection changed");render();toast("Visible tags selected")};
+$("deselectVisible").onclick=()=>{visible().forEach(t=>t.selected=false);markDbStale("Visible tag selection changed");render();toast("Visible tags deselected")};
+$("tagsPerPage").onchange=()=>{toast(`Tags per page: ${$("tagsPerPage").value}`)};
+$("showBlacklisted").onchange=render;
+$("showOnlySelected").onchange=render;
+$("overrideOnlySetting").onchange=render;
+$("profileSelect").onchange=()=>{toast("Selection profile loaded");$("profileName").value=$("profileSelect").value;markDbStale("Selection profile changed")};
+$("prevOcc").onclick=()=>{occurrence=Math.max(1,occurrence-1);renderPreview()};$("nextOcc").onclick=()=>{const t=tags.find(x=>x.id===current);occurrence=Math.min(t.occ,occurrence+1);renderPreview()};
+$("ordinal").onchange=()=>{const t=tags.find(x=>x.id===current);let n=parseInt($("ordinal").value||"1",10);occurrence=Math.max(1,Math.min(t.occ,isNaN(n)?1:n));renderPreview()};
+document.querySelectorAll(".stab").forEach(b=>b.onclick=()=>{document.querySelectorAll(".stab").forEach(x=>x.classList.remove("active"));document.querySelectorAll(".setpane").forEach(x=>x.classList.remove("active"));b.classList.add("active");$(b.dataset.pane).classList.add("active")});
+["saveProfile","updateProfile","deleteProfile","loadBlacklist","saveBlacklist","updateBlacklist","cloneBlacklist","deleteBlacklist","defaultBlacklist"].forEach(id=>$(id).onclick=()=>toast($(id).textContent.trim()+" · prototype"));
+$("dbAction").onclick=()=>{dbCurrent=true;$("dbState").className="statepill current";$("dbState").textContent="Database current";$("dbText").textContent="Database matches the active Discovery configuration.";$("dbAction").textContent="Update Database";toast("Database updated");if($("openDatabaseOnComplete").checked){setTimeout(()=>{const b=[...document.querySelectorAll(".tab")].find(x=>x.querySelector(".t1").textContent==="Database");switchTab("Database",b)},350)}};
+function fmt(s){return [Math.floor(s/3600),Math.floor(s%3600/60),s%60].map(v=>String(v).padStart(2,"0")).join(":")}
+function updateProgress(){$("pbar").style.width=$("gbar").style.width=pct+"%";$("ppct").textContent=$("gpct").textContent=pct+"%";$("gelapsed").textContent=fmt(elapsed)}
+$("runDiscovery").onclick=()=>{if(running)return;if(dbCurrent&&$("confirmRerun").checked&&!confirm("Re-running Discovery will make the current Database out of date. Continue?"))return;running=true;pct=0;elapsed=0;$("runDiscovery").disabled=true;$("discState").className="statepill stale";$("discState").textContent="Discovery running";$("pname").textContent="Discovering information…";$("pmeta").textContent="Scanning active source set";$("pstage").textContent="Stage: Aggregating tags";$("pcnt").textContent="0 tags · 0 warnings";$("globalState").textContent="Processing";$("globalText").textContent="Discovery running · press Esc to cancel";updateProgress();
+ timer=setInterval(()=>{elapsed++;pct=Math.min(100,pct+5);$("pcnt").textContent=`${Math.round(totalTags*pct/100).toLocaleString()} tags · ${pct>70?2:0} warnings`;updateProgress();if(pct===100){clearInterval(timer);running=false;$("runDiscovery").disabled=false;$("discState").className="statepill current";$("discState").textContent="Discovery current";$("pname").textContent="Discovery complete";$("pmeta").textContent="Current result available for the active source set";$("pstage").textContent="Stage: Complete";$("globalState").textContent="Ready";$("globalText").textContent="Discovery result current";markDbStale("Discovery was re-run");toast("Discovery complete")}},150)};
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&running){clearInterval(timer);running=false;$("runDiscovery").disabled=false;$("discState").className="statepill stale";$("discState").textContent="Discovery incomplete";$("pname").textContent="Discovery cancelled";$("pmeta").textContent="Cancellation completed at a safe boundary";$("pstage").textContent="Stage: Cancelled";$("globalState").textContent="Cancelled";$("globalText").textContent="Discovery cancelled";toast("Cancelled with Esc")}});
+render();updateProgress();
+</script>
+</body>
+</html>

@@ -36,11 +36,17 @@ public static class IpcContractValidator
             case LoadSourcesCommand command:
                 ValidateLoadSourcesCommand(command);
                 break;
+            case RefreshSourceCommand command:
+                ValidateRefreshSourceCommand(command);
+                break;
             case CommandAcknowledgement acknowledgement:
                 ValidateCommandAcknowledgement(acknowledgement);
                 break;
             case LoadSourcesResponse response:
                 ValidateLoadSourcesResponse(response);
+                break;
+            case RefreshSourceResponse response:
+                ValidateRefreshSourceResponse(response);
                 break;
             case ProcessingHostAvailabilityEvent availabilityEvent:
                 ValidateProcessingHostAvailabilityEvent(availabilityEvent);
@@ -133,17 +139,7 @@ public static class IpcContractValidator
                 throw InvalidContract("A source-load response cannot contain null source items.");
             }
 
-            if (!SourceId.IsValid(source.SourceId.Value))
-            {
-                throw InvalidContract("A loaded source requires a non-empty Source ID.");
-            }
-
-            ValidatePath(source.Path);
-
-            if (!Enum.IsDefined(source.Status) || !Enum.IsDefined(source.Kind))
-            {
-                throw InvalidContract("A loaded source has an unsupported kind or status.");
-            }
+            ValidateLoadedSource(source);
         }
 
         if (response.Acceptance == CommandAcceptance.Accepted)
@@ -163,6 +159,67 @@ public static class IpcContractValidator
         }
 
         ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateRefreshSourceCommand(RefreshSourceCommand command)
+    {
+        if (command.Source is null)
+        {
+            throw InvalidContract("A source-refresh command requires a loaded source.");
+        }
+
+        ValidateLoadedSource(command.Source);
+    }
+
+    private static void ValidateRefreshSourceResponse(RefreshSourceResponse response)
+    {
+        ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+
+        if (!Enum.IsDefined(response.Acceptance))
+        {
+            throw InvalidContract("The source-refresh response has an unsupported acceptance value.");
+        }
+
+        if (response.Source is null)
+        {
+            throw InvalidContract("A source-refresh response requires the retained loaded source.");
+        }
+
+        ValidateLoadedSource(response.Source);
+
+        if (response.Acceptance == CommandAcceptance.Accepted)
+        {
+            if (response.Source.Status != LoadedSourceStatus.Ready || response.Failure is not null)
+            {
+                throw InvalidContract(
+                    "An accepted source-refresh response requires ready status and no failure information.");
+            }
+
+            return;
+        }
+
+        if (response.Source.Status == LoadedSourceStatus.Ready || response.Failure is null)
+        {
+            throw InvalidContract(
+                "An unsuccessful source-refresh response requires a non-ready status and controlled failure information.");
+        }
+
+        ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateLoadedSource(LoadedSourceContract source)
+    {
+        if (!SourceId.IsValid(source.SourceId.Value))
+        {
+            throw InvalidContract("A loaded source requires a non-empty Source ID.");
+        }
+
+        ValidatePath(source.Path);
+
+        if (!Enum.IsDefined(source.Status) || !Enum.IsDefined(source.Kind))
+        {
+            throw InvalidContract("A loaded source has an unsupported kind or status.");
+        }
     }
 
     private static void ValidateProcessingHostAvailabilityEvent(

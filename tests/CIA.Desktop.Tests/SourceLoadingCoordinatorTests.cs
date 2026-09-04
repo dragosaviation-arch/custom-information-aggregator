@@ -273,6 +273,282 @@ public sealed class SourceLoadingCoordinatorTests
         Assert.AreEqual(0, client.CallCount);
     }
 
+    [TestMethod]
+    public async Task RemoveTargetsCheckedEntriesRatherThanHighlightedRowsAndNeverDeletesFiles()
+    {
+        var tempDirectory = Directory.CreateTempSubdirectory("cia-spr62-remove-");
+
+        try
+        {
+            var checkedPath = Path.Combine(tempDirectory.FullName, "checked.xml");
+            var highlightedPath = Path.Combine(tempDirectory.FullName, "highlighted.xml");
+            await File.WriteAllTextAsync(checkedPath, "<catalog />");
+            await File.WriteAllTextAsync(highlightedPath, "<catalog />");
+            var client = new StubSourceIntakeClient(
+                Accept(CreateXml(checkedPath), CreateXml(highlightedPath)));
+            var sourceSet = new ActiveLoadedSourceSet();
+            using var workflow = CreateWorkflowCoordinator();
+            var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+            using var viewModel = new LoadWorkspaceViewModel(
+                new StubSourcePathPicker(tempDirectory.FullName),
+                coordinator,
+                sourceSet,
+                workflow,
+                new MainWindowViewModel(new ApplicationSession()));
+
+            await viewModel.AddFolderCommand.ExecuteAsync(null);
+            var checkedSource = sourceSet.Items.Single(source => source.Path == checkedPath);
+            var highlightedSource = sourceSet.Items.Single(source => source.Path == highlightedPath);
+            coordinator.SetInclusion([highlightedSource], isIncluded: false);
+            viewModel.SelectedSource = highlightedSource;
+            viewModel.SetHighlightedSources([highlightedSource]);
+
+            viewModel.RemoveCheckedCommand.Execute(null);
+
+            Assert.IsTrue(viewModel.IsRemovalConfirmationOpen);
+            Assert.AreEqual("Remove 1 entry?", viewModel.RemovalConfirmationMessage);
+            Assert.HasCount(2, sourceSet.Items);
+
+            viewModel.ConfirmRemovalCommand.Execute(null);
+
+            Assert.IsFalse(viewModel.IsRemovalConfirmationOpen);
+            Assert.HasCount(1, sourceSet.Items);
+            Assert.AreSame(highlightedSource, sourceSet.Items[0]);
+            Assert.IsTrue(File.Exists(checkedPath));
+            Assert.IsTrue(File.Exists(highlightedPath));
+            Assert.IsFalse(workflow.Current.HasValidSourceSelection);
+        }
+        finally
+        {
+            tempDirectory.Delete(recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task RemovalWarningCanBeDeclinedOrSkippedForTheCurrentViewModelSession()
+    {
+        var path = Path.GetFullPath("source.xml");
+        var secondPath = Path.GetFullPath("source-2.xml");
+        var client = new StubSourceIntakeClient(
+            Accept(CreateXml(path), CreateXml(secondPath)));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        using var viewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(path),
+            new SourceLoadingCoordinator(client, sourceSet, workflow),
+            sourceSet,
+            workflow,
+            new MainWindowViewModel(new ApplicationSession()));
+        await viewModel.AddXmlFileCommand.ExecuteAsync(null);
+
+        viewModel.RemoveCheckedCommand.Execute(null);
+        Assert.IsTrue(viewModel.IsRemovalConfirmationOpen);
+        Assert.AreEqual("Remove 2 entries?", viewModel.RemovalConfirmationMessage);
+        Assert.HasCount(2, sourceSet.Items);
+
+        viewModel.CancelRemovalCommand.Execute(null);
+        Assert.IsFalse(viewModel.IsRemovalConfirmationOpen);
+        Assert.HasCount(2, sourceSet.Items);
+
+        viewModel.DontWarnWhenRemovingEntries = true;
+        viewModel.RemoveCheckedCommand.Execute(null);
+
+        Assert.HasCount(0, sourceSet.Items);
+        Assert.IsFalse(viewModel.IsRemovalConfirmationOpen);
+        Assert.IsNull(viewModel.SelectedSource);
+        Assert.AreEqual("0 / 0 included", viewModel.IncludedSummary);
+    }
+
+    [TestMethod]
+    public async Task CombinedStatusAndSizeFilterScopesVisibleBulkInclusionOnly()
+    {
+        var tempDirectory = Directory.CreateTempSubdirectory("cia-spr62-filter-");
+
+        try
+        {
+            var smallPath = Path.Combine(tempDirectory.FullName, "small.xml");
+            var largePath = Path.Combine(tempDirectory.FullName, "large.xml");
+            var unavailablePath = Path.Combine(tempDirectory.FullName, "unavailable.xml");
+            await File.WriteAllBytesAsync(smallPath, new byte[128]);
+            await File.WriteAllBytesAsync(largePath, new byte[2 * 1024 * 1024]);
+            var sourceSet = new ActiveLoadedSourceSet();
+            using var workflow = CreateWorkflowCoordinator();
+            var client = new StubSourceIntakeClient(
+                Accept(
+                    CreateXml(smallPath),
+                    CreateXml(largePath),
+                    new LoadedSourceContract(
+                        SourceId.CreateNew(),
+                        unavailablePath,
+                        IsIncluded: true,
+                        LoadedSourceStatus.Unavailable,
+                        LoadedSourceKind.XmlFile)));
+            using var viewModel = new LoadWorkspaceViewModel(
+                new StubSourcePathPicker(tempDirectory.FullName),
+                new SourceLoadingCoordinator(client, sourceSet, workflow),
+                sourceSet,
+                workflow,
+                new MainWindowViewModel(new ApplicationSession()));
+            await viewModel.AddFolderCommand.ExecuteAsync(null);
+
+            viewModel.FilterText = "large";
+            viewModel.FilterStatus = "Ready";
+            viewModel.MinimumSizeMb = "1";
+            viewModel.ApplyFilterOptionsCommand.Execute(null);
+            Assert.AreEqual(largePath, viewModel.VisibleSources.Cast<LoadedSourceItem>().Single().Path);
+
+            viewModel.ExcludeVisibleCommand.Execute(null);
+
+            Assert.IsFalse(sourceSet.Items.Single(source => source.Path == largePath).IsIncluded);
+            Assert.IsTrue(sourceSet.Items.Single(source => source.Path == smallPath).IsIncluded);
+            Assert.IsTrue(sourceSet.Items.Single(source => source.Path == unavailablePath).IsIncluded);
+        }
+        finally
+        {
+            tempDirectory.Delete(recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ExplicitRefreshUsesHighlightedRowsAndPreservesSourceIdentityInPlace()
+    {
+        var firstPath = Path.GetFullPath("first.xml");
+        var secondPath = Path.GetFullPath("second.xml");
+        var originalFirst = CreateXml(firstPath);
+        var originalSecond = CreateXml(secondPath);
+        var client = new StubSourceIntakeClient(Accept(originalFirst, originalSecond));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        using var viewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(Path.GetFullPath("folder")),
+            coordinator,
+            sourceSet,
+            workflow,
+            new MainWindowViewModel(new ApplicationSession()));
+        await viewModel.AddFolderCommand.ExecuteAsync(null);
+        var firstItem = sourceSet.Items[0];
+        var secondItem = sourceSet.Items[1];
+        coordinator.SetInclusion([firstItem], isIncluded: false);
+        viewModel.SetHighlightedSources([firstItem]);
+
+        await viewModel.RefreshSelectedCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(2, client.CallCount);
+        Assert.AreSame(firstItem, sourceSet.Items[0]);
+        Assert.AreEqual(originalFirst.SourceId, firstItem.SourceId);
+        Assert.IsFalse(firstItem.IsIncluded);
+        Assert.AreEqual(originalSecond.SourceId, secondItem.SourceId);
+    }
+
+    [TestMethod]
+    public async Task RefreshFailureRetainsItemAndIdentityWithControlledUnavailableStatus()
+    {
+        var path = Path.GetFullPath("source.xml");
+        var original = CreateXml(path);
+        var client = new SequencedSourceIntakeClient(
+            Accept(original),
+            new SourceIntakeClientResult(
+                false,
+                Array.Empty<LoadedSourceContract>(),
+                "source-unreadable",
+                "The source is no longer readable."));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, path);
+        var item = sourceSet.Items.Single();
+
+        var result = await coordinator.RefreshAsync(item);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.IsTrue(result.SourceUpdated);
+        Assert.HasCount(1, sourceSet.Items);
+        Assert.AreSame(item, sourceSet.Items[0]);
+        Assert.AreEqual(original.SourceId, item.SourceId);
+        Assert.AreEqual(LoadedSourceStatus.Unavailable, item.Status);
+        Assert.AreEqual("The source is no longer readable.", item.StatusDetail);
+        Assert.IsFalse(workflow.Current.HasValidSourceSelection);
+    }
+
+    [TestMethod]
+    public async Task SuccessfulRefreshMakesCurrentDiscoveryResultStale()
+    {
+        var path = Path.GetFullPath("source.xml");
+        var client = new StubSourceIntakeClient(Accept(CreateXml(path)));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, path);
+        var discovery = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
+        workflow.CompleteOperation(
+            discovery.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Discovery);
+
+        var result = await coordinator.RefreshAsync(sourceSet.Items.Single());
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
+    }
+
+    [TestMethod]
+    public async Task RemovalMakesCurrentDiscoveryStaleWithoutStartingAnotherOperation()
+    {
+        var path = Path.GetFullPath("source.xml");
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(
+            new StubSourceIntakeClient(Accept(CreateXml(path))),
+            sourceSet,
+            workflow);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, path);
+        var discovery = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
+        workflow.CompleteOperation(
+            discovery.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully);
+
+        var result = coordinator.Remove(sourceSet.Items);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
+        Assert.IsFalse(workflow.Current.HasValidSourceSelection);
+        Assert.IsNull(workflow.Current.ActiveOperation);
+    }
+
+    [TestMethod]
+    public async Task SourceDoesNotRefreshUntilTheExplicitCommandIsInvoked()
+    {
+        var tempDirectory = Directory.CreateTempSubdirectory("cia-spr62-manual-refresh-");
+
+        try
+        {
+            var path = Path.Combine(tempDirectory.FullName, "source.xml");
+            await File.WriteAllTextAsync(path, "<catalog />");
+            var client = new StubSourceIntakeClient(Accept(CreateXml(path)));
+            var sourceSet = new ActiveLoadedSourceSet();
+            using var workflow = CreateWorkflowCoordinator();
+            var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+            await coordinator.AddAsync(SourceSelectionKind.XmlFile, path);
+            var item = sourceSet.Items.Single();
+            var originalSize = item.SizeBytes;
+
+            await File.AppendAllTextAsync(path, new string('x', 1024));
+
+            Assert.AreEqual(1, client.CallCount);
+            Assert.AreEqual(originalSize, item.SizeBytes);
+
+            await coordinator.RefreshAsync(item);
+
+            Assert.AreEqual(2, client.CallCount);
+            Assert.IsGreaterThan(originalSize!.Value, item.SizeBytes!.Value);
+        }
+        finally
+        {
+            tempDirectory.Delete(recursive: true);
+        }
+    }
+
     private static LoadedSourceContract CreateXml(string path)
     {
         return new LoadedSourceContract(
@@ -286,6 +562,22 @@ public sealed class SourceLoadingCoordinatorTests
     private static SourceIntakeClientResult Accept(params LoadedSourceContract[] sources)
     {
         return new SourceIntakeClientResult(true, sources, null, null);
+    }
+
+    private static SourceRefreshClientResult ToRefreshResult(
+        SourceIntakeClientResult result,
+        LoadedSourceContract source)
+    {
+        var returned = result.Sources.FirstOrDefault(candidate =>
+            string.Equals(candidate.Path, source.Path, StringComparison.OrdinalIgnoreCase));
+        var status = result.Accepted
+            ? returned?.Status ?? LoadedSourceStatus.Ready
+            : LoadedSourceStatus.Unavailable;
+        return new SourceRefreshClientResult(
+            result.Accepted,
+            source with { Status = status },
+            result.FailureCode,
+            result.FailureDescription);
     }
 
     private static ApplicationWorkflowCoordinator CreateWorkflowCoordinator()
@@ -311,6 +603,14 @@ public sealed class SourceLoadingCoordinatorTests
             LastSettings = settings;
             return Task.FromResult(result);
         }
+
+        public Task<SourceRefreshClientResult> RefreshAsync(
+            LoadedSourceContract source,
+            CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            return Task.FromResult(ToRefreshResult(result, source));
+        }
     }
 
     private sealed class SequencedSourceIntakeClient(params SourceIntakeClientResult[] results)
@@ -325,6 +625,13 @@ public sealed class SourceLoadingCoordinatorTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(results[_index++]);
+        }
+
+        public Task<SourceRefreshClientResult> RefreshAsync(
+            LoadedSourceContract source,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(ToRefreshResult(results[_index++], source));
         }
     }
 
