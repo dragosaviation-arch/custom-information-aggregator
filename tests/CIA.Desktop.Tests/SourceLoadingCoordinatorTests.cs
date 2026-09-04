@@ -23,7 +23,6 @@ public sealed class SourceLoadingCoordinatorTests
         var shell = new MainWindowViewModel(new ApplicationSession());
         var viewModel = new LoadWorkspaceViewModel(
             new StubSourcePathPicker(path),
-            new StubSourceRemovalConfirmation(),
             loadingCoordinator,
             sourceSet,
             workflow,
@@ -51,7 +50,6 @@ public sealed class SourceLoadingCoordinatorTests
         var shell = new MainWindowViewModel(new ApplicationSession());
         using var viewModel = new LoadWorkspaceViewModel(
             new StubSourcePathPicker(alphaPath),
-            new StubSourceRemovalConfirmation(),
             new SourceLoadingCoordinator(client, sourceSet, workflow),
             sourceSet,
             workflow,
@@ -83,7 +81,6 @@ public sealed class SourceLoadingCoordinatorTests
         using var folderWorkflow = CreateWorkflowCoordinator();
         using var folderViewModel = new LoadWorkspaceViewModel(
             new StubSourcePathPicker(path),
-            new StubSourceRemovalConfirmation(),
             new SourceLoadingCoordinator(folderClient, folderSources, folderWorkflow),
             folderSources,
             folderWorkflow,
@@ -111,7 +108,6 @@ public sealed class SourceLoadingCoordinatorTests
         using var archiveWorkflow = CreateWorkflowCoordinator();
         using var archiveViewModel = new LoadWorkspaceViewModel(
             new StubSourcePathPicker(path),
-            new StubSourceRemovalConfirmation(),
             new SourceLoadingCoordinator(archiveClient, archiveSources, archiveWorkflow),
             archiveSources,
             archiveWorkflow,
@@ -137,7 +133,6 @@ public sealed class SourceLoadingCoordinatorTests
         var shell = new MainWindowViewModel(new ApplicationSession());
         using var viewModel = new LoadWorkspaceViewModel(
             new StubSourcePathPicker(path),
-            new StubSourceRemovalConfirmation(),
             new SourceLoadingCoordinator(client, sourceSet, workflow),
             sourceSet,
             workflow,
@@ -294,10 +289,8 @@ public sealed class SourceLoadingCoordinatorTests
             var sourceSet = new ActiveLoadedSourceSet();
             using var workflow = CreateWorkflowCoordinator();
             var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
-            var confirmation = new StubSourceRemovalConfirmation();
             using var viewModel = new LoadWorkspaceViewModel(
                 new StubSourcePathPicker(tempDirectory.FullName),
-                confirmation,
                 coordinator,
                 sourceSet,
                 workflow,
@@ -312,7 +305,13 @@ public sealed class SourceLoadingCoordinatorTests
 
             viewModel.RemoveCheckedCommand.Execute(null);
 
-            Assert.AreEqual(1, confirmation.LastEntryCount);
+            Assert.IsTrue(viewModel.IsRemovalConfirmationOpen);
+            Assert.AreEqual("Remove 1 entry?", viewModel.RemovalConfirmationMessage);
+            Assert.HasCount(2, sourceSet.Items);
+
+            viewModel.ConfirmRemovalCommand.Execute(null);
+
+            Assert.IsFalse(viewModel.IsRemovalConfirmationOpen);
             Assert.HasCount(1, sourceSet.Items);
             Assert.AreSame(highlightedSource, sourceSet.Items[0]);
             Assert.IsTrue(File.Exists(checkedPath));
@@ -329,13 +328,13 @@ public sealed class SourceLoadingCoordinatorTests
     public async Task RemovalWarningCanBeDeclinedOrSkippedForTheCurrentViewModelSession()
     {
         var path = Path.GetFullPath("source.xml");
-        var client = new StubSourceIntakeClient(Accept(CreateXml(path)));
+        var secondPath = Path.GetFullPath("source-2.xml");
+        var client = new StubSourceIntakeClient(
+            Accept(CreateXml(path), CreateXml(secondPath)));
         var sourceSet = new ActiveLoadedSourceSet();
         using var workflow = CreateWorkflowCoordinator();
-        var confirmation = new StubSourceRemovalConfirmation(result: false);
         using var viewModel = new LoadWorkspaceViewModel(
             new StubSourcePathPicker(path),
-            confirmation,
             new SourceLoadingCoordinator(client, sourceSet, workflow),
             sourceSet,
             workflow,
@@ -343,14 +342,19 @@ public sealed class SourceLoadingCoordinatorTests
         await viewModel.AddXmlFileCommand.ExecuteAsync(null);
 
         viewModel.RemoveCheckedCommand.Execute(null);
-        Assert.HasCount(1, sourceSet.Items);
-        Assert.AreEqual(1, confirmation.CallCount);
+        Assert.IsTrue(viewModel.IsRemovalConfirmationOpen);
+        Assert.AreEqual("Remove 2 entries?", viewModel.RemovalConfirmationMessage);
+        Assert.HasCount(2, sourceSet.Items);
+
+        viewModel.CancelRemovalCommand.Execute(null);
+        Assert.IsFalse(viewModel.IsRemovalConfirmationOpen);
+        Assert.HasCount(2, sourceSet.Items);
 
         viewModel.DontWarnWhenRemovingEntries = true;
         viewModel.RemoveCheckedCommand.Execute(null);
 
         Assert.HasCount(0, sourceSet.Items);
-        Assert.AreEqual(1, confirmation.CallCount);
+        Assert.IsFalse(viewModel.IsRemovalConfirmationOpen);
         Assert.IsNull(viewModel.SelectedSource);
         Assert.AreEqual("0 / 0 included", viewModel.IncludedSummary);
     }
@@ -381,7 +385,6 @@ public sealed class SourceLoadingCoordinatorTests
                         LoadedSourceKind.XmlFile)));
             using var viewModel = new LoadWorkspaceViewModel(
                 new StubSourcePathPicker(tempDirectory.FullName),
-                new StubSourceRemovalConfirmation(),
                 new SourceLoadingCoordinator(client, sourceSet, workflow),
                 sourceSet,
                 workflow,
@@ -419,7 +422,6 @@ public sealed class SourceLoadingCoordinatorTests
         var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
         using var viewModel = new LoadWorkspaceViewModel(
             new StubSourcePathPicker(Path.GetFullPath("folder")),
-            new StubSourceRemovalConfirmation(),
             coordinator,
             sourceSet,
             workflow,
@@ -640,21 +642,6 @@ public sealed class SourceLoadingCoordinatorTests
         public string? PickFolder() => path;
 
         public string? PickArchive() => path;
-    }
-
-    private sealed class StubSourceRemovalConfirmation(bool result = true)
-        : ISourceRemovalConfirmation
-    {
-        public int CallCount { get; private set; }
-
-        public int? LastEntryCount { get; private set; }
-
-        public bool Confirm(int entryCount)
-        {
-            CallCount++;
-            LastEntryCount = entryCount;
-            return result;
-        }
     }
 
     private sealed class StubProcessingHostSupervisor : IProcessingHostSupervisor

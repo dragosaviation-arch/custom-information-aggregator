@@ -18,7 +18,6 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         ["All", "Ready", "Unavailable", "Unsupported", "Failed validation"];
 
     private readonly ISourcePathPicker _pathPicker;
-    private readonly ISourceRemovalConfirmation _removalConfirmation;
     private readonly SourceLoadingCoordinator _loadingCoordinator;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly MainWindowViewModel _shell;
@@ -27,9 +26,12 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _includeVisibleCommand;
     private readonly RelayCommand _excludeVisibleCommand;
     private readonly RelayCommand _removeCheckedCommand;
+    private readonly RelayCommand _confirmRemovalCommand;
+    private readonly RelayCommand _cancelRemovalCommand;
     private readonly AsyncRelayCommand<LoadedSourceItem> _refreshSourceCommand;
     private readonly AsyncRelayCommand _refreshSelectedCommand;
     private IReadOnlyList<LoadedSourceItem> _highlightedSources = [];
+    private IReadOnlyList<LoadedSourceItem> _pendingRemovalSources = [];
     private bool _includeXmlFiles = true;
     private bool _includeArchives = true;
     private bool _searchSubfolders = true;
@@ -37,11 +39,13 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private bool _dontWarnWhenRemovingEntries;
     private bool _isBusy;
     private bool _isFilterOptionsOpen;
+    private bool _isRemovalConfirmationOpen;
     private LoadedSourceItem? _selectedSource;
     private string _filterText = string.Empty;
     private string _filterStatus = "All";
     private string _minimumSizeMb = string.Empty;
     private string _maximumSizeMb = string.Empty;
+    private string _removalConfirmationMessage = string.Empty;
     private LoadedSourceStatus? _appliedStatus;
     private double? _appliedMinimumSizeMb;
     private double? _appliedMaximumSizeMb;
@@ -52,21 +56,18 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
     public LoadWorkspaceViewModel(
         ISourcePathPicker pathPicker,
-        ISourceRemovalConfirmation removalConfirmation,
         SourceLoadingCoordinator loadingCoordinator,
         ActiveLoadedSourceSet sourceSet,
         IApplicationWorkflowCoordinator workflowCoordinator,
         MainWindowViewModel shell)
     {
         ArgumentNullException.ThrowIfNull(pathPicker);
-        ArgumentNullException.ThrowIfNull(removalConfirmation);
         ArgumentNullException.ThrowIfNull(loadingCoordinator);
         ArgumentNullException.ThrowIfNull(sourceSet);
         ArgumentNullException.ThrowIfNull(workflowCoordinator);
         ArgumentNullException.ThrowIfNull(shell);
 
         _pathPicker = pathPicker;
-        _removalConfirmation = removalConfirmation;
         _loadingCoordinator = loadingCoordinator;
         _workflowCoordinator = workflowCoordinator;
         _shell = shell;
@@ -104,6 +105,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             () => SetVisibleInclusion(isIncluded: false),
             CanChangeVisibleInclusion);
         _removeCheckedCommand = new RelayCommand(RemoveChecked, CanRemoveChecked);
+        _confirmRemovalCommand = new RelayCommand(ConfirmRemoval);
+        _cancelRemovalCommand = new RelayCommand(CancelRemoval);
         _refreshSourceCommand = new AsyncRelayCommand<LoadedSourceItem>(
             RefreshSourceAsync,
             source => source is not null && !IsBusy);
@@ -125,6 +128,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand IncludeVisibleCommand => _includeVisibleCommand;
     public IRelayCommand ExcludeVisibleCommand => _excludeVisibleCommand;
     public IRelayCommand RemoveCheckedCommand => _removeCheckedCommand;
+    public IRelayCommand ConfirmRemovalCommand => _confirmRemovalCommand;
+    public IRelayCommand CancelRemovalCommand => _cancelRemovalCommand;
     public IAsyncRelayCommand RefreshSourceCommand => _refreshSourceCommand;
     public IAsyncRelayCommand RefreshSelectedCommand => _refreshSelectedCommand;
     public IRelayCommand ToggleFilterOptionsCommand { get; }
@@ -171,6 +176,18 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     {
         get => _isFilterOptionsOpen;
         set => SetProperty(ref _isFilterOptionsOpen, value);
+    }
+
+    public bool IsRemovalConfirmationOpen
+    {
+        get => _isRemovalConfirmationOpen;
+        private set => SetProperty(ref _isRemovalConfirmationOpen, value);
+    }
+
+    public string RemovalConfirmationMessage
+    {
+        get => _removalConfirmationMessage;
+        private set => SetProperty(ref _removalConfirmationMessage, value);
     }
 
     public bool IncludeXmlFiles
@@ -486,11 +503,49 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     {
         var targets = Sources.Where(source => source.IsIncluded).ToArray();
 
-        if (targets.Length == 0
-            || !DontWarnWhenRemovingEntries && !_removalConfirmation.Confirm(targets.Length))
+        if (targets.Length == 0)
         {
             return;
         }
+
+        if (!DontWarnWhenRemovingEntries)
+        {
+            _pendingRemovalSources = targets;
+            RemovalConfirmationMessage = targets.Length == 1
+                ? "Remove 1 entry?"
+                : $"Remove {targets.Length} entries?";
+            IsRemovalConfirmationOpen = true;
+            return;
+        }
+
+        CommitRemoval(targets);
+    }
+
+    private void ConfirmRemoval()
+    {
+        var targets = _pendingRemovalSources;
+        CloseRemovalConfirmation();
+
+        if (targets.Count > 0)
+        {
+            CommitRemoval(targets);
+        }
+    }
+
+    private void CancelRemoval()
+    {
+        CloseRemovalConfirmation();
+    }
+
+    private void CloseRemovalConfirmation()
+    {
+        _pendingRemovalSources = [];
+        IsRemovalConfirmationOpen = false;
+        RemovalConfirmationMessage = string.Empty;
+    }
+
+    private void CommitRemoval(IReadOnlyList<LoadedSourceItem> targets)
+    {
 
         var result = _loadingCoordinator.Remove(targets);
 

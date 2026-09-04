@@ -773,5 +773,70 @@
                 </Grid>
             </Border>
         </Grid>
+
+        <Grid Grid.RowSpan="3"
+              Grid.ColumnSpan="3"
+              Panel.ZIndex="100"
+              Background="{StaticResource CiaModalOverlayBrush}">
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsRemovalConfirmationOpen}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <Border Width="430"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{StaticResource CiaPanelBrush}"
+                    BorderBrush="{StaticResource CiaBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="10">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="28"
+                                      Direction="270"
+                                      Opacity="0.22"
+                                      ShadowDepth="12" />
+                </Border.Effect>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Border Padding="12,10"
+                            BorderBrush="{StaticResource CiaBorderBrush}"
+                            BorderThickness="0,0,0,1">
+                        <TextBlock FontSize="13"
+                                   FontWeight="ExtraBold"
+                                   Foreground="{StaticResource CiaTextPrimaryBrush}"
+                                   Text="Remove" />
+                    </Border>
+                    <TextBlock Grid.Row="1"
+                               Padding="12,11"
+                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                               Text="{Binding RemovalConfirmationMessage}" />
+                    <Border Grid.Row="2"
+                            Padding="12,9"
+                            Background="{StaticResource CiaPanelAlternateBrush}"
+                            BorderBrush="{StaticResource CiaBorderBrush}"
+                            BorderThickness="0,1,0,0">
+                        <StackPanel HorizontalAlignment="Right"
+                                    Orientation="Horizontal">
+                            <Button Margin="0,0,7,0"
+                                    Command="{Binding CancelRemovalCommand}"
+                                    Style="{StaticResource CiaButtonStyle}"
+                                    Content="Cancel" />
+                            <Button Command="{Binding ConfirmRemovalCommand}"
+                                    Style="{StaticResource CiaDangerButtonStyle}"
+                                    Content="− Remove" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
     </Grid>
 </UserControl>

@@ -48,7 +48,6 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ISourceIntakeClient, ProcessingHostSourceIntakeClient>();
         builder.Services.AddSingleton<SourceLoadingCoordinator>();
         builder.Services.AddSingleton<ISourcePathPicker, WindowsSourcePathPicker>();
-        builder.Services.AddSingleton<ISourceRemovalConfirmation, WindowsSourceRemovalConfirmation>();
 
         ConfigureLogging(builder);
         return builder.Build();

@@ -65,6 +65,30 @@ public sealed class UiReferenceReconciliationTests
         StringAssert.Contains(html, "aria-sort");
     }
 
+    [TestMethod]
+    public void ProductionRemovalConfirmationUsesTheCiaInApplicationModal()
+    {
+        var root = FindRepositoryRoot();
+        var loadView = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "CIA.Desktop",
+            "Views",
+            "LoadWorkspaceView.xaml"));
+        var desktopSource = Directory
+            .EnumerateFiles(Path.Combine(root, "src", "CIA.Desktop"), "*.cs", SearchOption.AllDirectories)
+            .Select(File.ReadAllText)
+            .ToArray();
+
+        StringAssert.Contains(loadView, "IsRemovalConfirmationOpen");
+        StringAssert.Contains(loadView, "RemovalConfirmationMessage");
+        StringAssert.Contains(loadView, "CiaModalOverlayBrush");
+        StringAssert.Contains(loadView, "CiaDangerButtonStyle");
+        Assert.IsFalse(desktopSource.Any(source => source.Contains(
+            "MessageBox.Show(",
+            StringComparison.Ordinal)));
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
