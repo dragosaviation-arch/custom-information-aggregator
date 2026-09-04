@@ -8,6 +8,7 @@ using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Workflow;
 using CIA.ProcessingHost.Hosting;
+using CIA.ProcessingHost.SourceInterpretation;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -56,6 +57,7 @@ public sealed class ApplicationHostTests
         Assert.IsNotNull(host.Services.GetRequiredService<IConfiguration>());
         Assert.IsNotNull(host.Services.GetRequiredService<IHostApplicationLifetime>());
         Assert.IsNotNull(host.Services.GetRequiredService<ILogger<Program>>());
+        Assert.IsNotNull(host.Services.GetRequiredService<ISourceInterpreter>());
         Assert.IsEmpty(host.Services.GetServices<IHostedService>());
     }
 
