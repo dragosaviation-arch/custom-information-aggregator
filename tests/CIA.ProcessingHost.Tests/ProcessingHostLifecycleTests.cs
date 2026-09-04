@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
+using CIA.Contracts.Sources;
 using CIA.Core.Diagnostics;
 using CIA.Desktop.Hosting;
 using CIA.ProcessingHost.Hosting;
@@ -61,6 +62,26 @@ public sealed class ProcessingHostLifecycleTests
 
         await Task.Delay(TimeSpan.FromMilliseconds(350));
         AssertProcessIsRunning(ready.ProcessId.Value);
+    }
+
+    [TestMethod]
+    public async Task DesktopSupervisorLoadsSourceThroughRealProcessingHost()
+    {
+        await using var fixture = new SupervisorFixture();
+        var sourcePath = Path.Combine(fixture.WorkDirectory, "source.xml");
+        await File.WriteAllTextAsync(sourcePath, "<root />");
+        await fixture.Supervisor.EnsureAvailableAsync();
+
+        var response = await fixture.Supervisor.RequestSourceLoadAsync(
+            SourceSelectionKind.XmlFile,
+            sourcePath,
+            SourceLoadSettings.Default);
+
+        Assert.AreEqual(CommandAcceptance.Accepted, response.Acceptance);
+        Assert.IsNull(response.Failure);
+        Assert.HasCount(1, response.Sources);
+        Assert.AreEqual(Path.GetFullPath(sourcePath), response.Sources[0].Path);
+        Assert.AreEqual(LoadedSourceKind.XmlFile, response.Sources[0].Kind);
     }
 
     [TestMethod]
@@ -544,6 +565,8 @@ public sealed class ProcessingHostLifecycleTests
         public TrackingProcessLauncher Launcher { get; }
 
         public ProcessingHostSupervisor Supervisor { get; }
+
+        public string WorkDirectory => _logs.Path;
 
         public async ValueTask DisposeAsync()
         {

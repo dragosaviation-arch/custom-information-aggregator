@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using CIA.Contracts.Operations;
+using CIA.Contracts.Sources;
 
 namespace CIA.Contracts.Ipc;
 
@@ -9,8 +10,10 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(EstablishConnectionCommand), "establishConnectionCommand")]
 [JsonDerivedType(typeof(ProcessingHostLivenessCommand), "processingHostLivenessCommand")]
 [JsonDerivedType(typeof(CancelOperationCommand), "cancelOperationCommand")]
+[JsonDerivedType(typeof(LoadSourcesCommand), "loadSourcesCommand")]
 [JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
+[JsonDerivedType(typeof(LoadSourcesResponse), "loadSourcesResponse")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 public abstract record IpcMessage(Guid MessageId, DateTimeOffset TimestampUtc);
 
@@ -41,6 +44,14 @@ public sealed record CancelOperationCommand(
     OperationId OperationId)
     : IpcCommand(MessageId, TimestampUtc);
 
+public sealed record LoadSourcesCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    SourceSelectionKind SelectionKind,
+    string Path,
+    SourceLoadSettings Settings)
+    : IpcCommand(MessageId, TimestampUtc);
+
 public sealed record StopProcessingHostCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc)
@@ -51,6 +62,15 @@ public sealed record CommandAcknowledgement(
     DateTimeOffset TimestampUtc,
     Guid CommandMessageId,
     CommandAcceptance Acceptance,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record LoadSourcesResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    CommandAcceptance Acceptance,
+    IReadOnlyList<LoadedSourceContract> Sources,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 

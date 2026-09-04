@@ -79,12 +79,12 @@
         </Border>
 
         <Grid Grid.Row="2">
-            <views:LoadWorkspaceView>
+            <views:LoadWorkspaceView DataContext="{Binding LoadWorkspace, ElementName=WindowRoot}">
                 <views:LoadWorkspaceView.Style>
                     <Style TargetType="views:LoadWorkspaceView">
                         <Setter Property="Visibility" Value="Collapsed" />
                         <Style.Triggers>
-                            <DataTrigger Binding="{Binding SelectedWorkspace.Area}"
+                            <DataTrigger Binding="{Binding DataContext.SelectedWorkspace.Area, ElementName=WindowRoot}"
                                          Value="{x:Static presentation:WorkspaceArea.Load}">
                                 <Setter Property="Visibility" Value="Visible" />
                             </DataTrigger>

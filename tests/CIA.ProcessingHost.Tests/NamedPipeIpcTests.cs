@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Text;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
+using CIA.Contracts.Sources;
 using CIA.Desktop.Ipc;
 using CIA.ProcessingHost.Ipc;
 
@@ -122,6 +123,43 @@ public sealed class NamedPipeIpcTests
         }
 
         Assert.AreEqual(stream.Length, stream.Position);
+    }
+
+    [TestMethod]
+    public async Task SourceLoadingCommandAndResponseRoundTripAsTypedContracts()
+    {
+        var command = new LoadSourcesCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            SourceSelectionKind.Folder,
+            Path.GetFullPath("sources"),
+            SourceLoadSettings.Default);
+        var response = new LoadSourcesResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            command.MessageId,
+            CommandAcceptance.Accepted,
+            [
+                new LoadedSourceContract(
+                    Path.GetFullPath("sources/source.xml"),
+                    IsIncluded: true,
+                    LoadedSourceStatus.Ready,
+                    LoadedSourceKind.XmlFile)
+            ],
+            Failure: null);
+        await using var stream = new MemoryStream();
+
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
+        stream.Position = 0;
+
+        Assert.AreEqual(command, await LengthPrefixedJsonMessageFramer.ReadAsync(stream));
+        var roundTrippedResponse = await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
+        Assert.IsInstanceOfType<LoadSourcesResponse>(roundTrippedResponse);
+        Assert.AreEqual(response.CommandMessageId, ((LoadSourcesResponse)roundTrippedResponse).CommandMessageId);
+        CollectionAssert.AreEqual(
+            response.Sources.ToArray(),
+            ((LoadSourcesResponse)roundTrippedResponse).Sources.ToArray());
     }
 
     [TestMethod]
