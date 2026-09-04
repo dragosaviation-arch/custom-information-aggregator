@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using CIA.Contracts.Sources;
+using CIA.Core.Runtime;
 using CIA.ProcessingHost.SourceIntake;
 
 namespace CIA.ProcessingHost.Tests;
@@ -12,7 +13,7 @@ public sealed class SourceIntakeServiceTests
     {
         using var files = new TemporarySourceDirectory();
         var xmlPath = files.WriteFile("source.xml", "<root />");
-        var service = new SourceIntakeService();
+        var service = files.CreateService();
 
         var result = await service.LoadAsync(
             SourceSelectionKind.XmlFile,
@@ -37,7 +38,7 @@ public sealed class SourceIntakeServiceTests
         var nestedXmlPath = files.WriteFile(Path.Combine("nested", "second.XML"), "<root />");
         var archivePath = files.CreateZip(Path.Combine("nested", "sources.package"));
         files.WriteFile("notes.txt", "not a supported source");
-        var service = new SourceIntakeService();
+        var service = files.CreateService();
 
         var result = await service.LoadAsync(
             SourceSelectionKind.Folder,
@@ -46,10 +47,12 @@ public sealed class SourceIntakeServiceTests
 
         Assert.IsTrue(result.Accepted);
         Assert.HasCount(3, result.Sources);
-        CollectionAssert.AreEquivalent(
-            new[] { xmlPath, nestedXmlPath, archivePath }.Select(Path.GetFullPath).ToArray(),
-            result.Sources.Select(source => source.Path).ToArray());
+        Assert.IsTrue(result.Sources.Any(source => source.Path == Path.GetFullPath(xmlPath)));
+        Assert.IsTrue(result.Sources.Any(source => source.Path == Path.GetFullPath(nestedXmlPath)));
+        Assert.IsTrue(result.Sources.Any(source =>
+            source.ArchiveProvenance?.OriginalArchivePath == Path.GetFullPath(archivePath)));
         Assert.IsTrue(result.Sources.All(source => source.IsIncluded));
+        Assert.IsTrue(result.Sources.All(source => source.Kind == LoadedSourceKind.XmlFile));
         Assert.AreEqual(
             result.Sources.Count,
             result.Sources.Select(source => source.SourceId).Distinct().Count());
@@ -63,7 +66,7 @@ public sealed class SourceIntakeServiceTests
         using var files = new TemporarySourceDirectory();
         var xmlPath = files.WriteFile("source.xml", "<root />");
         var archivePath = files.CreateZip("sources.zip");
-        var service = new SourceIntakeService();
+        var service = files.CreateService();
 
         var xmlOnly = await service.LoadAsync(
             SourceSelectionKind.Folder,
@@ -80,8 +83,10 @@ public sealed class SourceIntakeServiceTests
         Assert.AreEqual(LoadedSourceKind.XmlFile, xmlOnly.Sources[0].Kind);
         Assert.IsTrue(archivesOnly.Accepted);
         Assert.HasCount(1, archivesOnly.Sources);
-        Assert.AreEqual(Path.GetFullPath(archivePath), archivesOnly.Sources[0].Path);
-        Assert.AreEqual(LoadedSourceKind.Archive, archivesOnly.Sources[0].Kind);
+        Assert.AreEqual(
+            Path.GetFullPath(archivePath),
+            archivesOnly.Sources[0].ArchiveProvenance?.OriginalArchivePath);
+        Assert.AreEqual(LoadedSourceKind.XmlFile, archivesOnly.Sources[0].Kind);
     }
 
     [TestMethod]
@@ -90,7 +95,7 @@ public sealed class SourceIntakeServiceTests
         using var files = new TemporarySourceDirectory();
         var topLevelPath = files.WriteFile("top.xml", "<root />");
         var nestedPath = files.WriteFile(Path.Combine("nested", "child.xml"), "<root />");
-        var service = new SourceIntakeService();
+        var service = files.CreateService();
 
         var topLevelOnly = await service.LoadAsync(
             SourceSelectionKind.Folder,
@@ -116,7 +121,7 @@ public sealed class SourceIntakeServiceTests
         var xmlPath = files.WriteFile("source.xml", "<root />");
         var archivePath = files.CreateZip("sources.zip");
         var folderSwitchesDisabled = new SourceLoadSettings(false, false, false);
-        var service = new SourceIntakeService();
+        var service = files.CreateService();
 
         var xml = await service.LoadAsync(
             SourceSelectionKind.XmlFile,
@@ -132,7 +137,8 @@ public sealed class SourceIntakeServiceTests
         Assert.AreEqual(LoadedSourceKind.XmlFile, xml.Sources[0].Kind);
         Assert.IsTrue(archive.Accepted);
         Assert.HasCount(1, archive.Sources);
-        Assert.AreEqual(LoadedSourceKind.Archive, archive.Sources[0].Kind);
+        Assert.AreEqual(LoadedSourceKind.XmlFile, archive.Sources[0].Kind);
+        Assert.IsNotNull(archive.Sources[0].ArchiveProvenance);
     }
 
     [TestMethod]
@@ -144,7 +150,7 @@ public sealed class SourceIntakeServiceTests
         {
             MaximumArchiveNestingDepth = default
         };
-        var service = new SourceIntakeService();
+        var service = files.CreateService();
 
         var result = await service.LoadAsync(
             SourceSelectionKind.Archive,
@@ -157,11 +163,11 @@ public sealed class SourceIntakeServiceTests
     }
 
     [TestMethod]
-    public async Task ArchiveSelectionUsesContentRecognitionWithoutExtractingTheArchive()
+    public async Task ArchiveSelectionUsesContentRecognitionAndReturnsExtractedXmlWorkingSource()
     {
         using var files = new TemporarySourceDirectory();
         var archivePath = files.CreateZip("sources.package");
-        var service = new SourceIntakeService();
+        var service = files.CreateService();
 
         var result = await service.LoadAsync(
             SourceSelectionKind.Archive,
@@ -170,8 +176,12 @@ public sealed class SourceIntakeServiceTests
 
         Assert.IsTrue(result.Accepted);
         Assert.HasCount(1, result.Sources);
-        Assert.AreEqual(LoadedSourceKind.Archive, result.Sources[0].Kind);
-        Assert.AreEqual(Path.GetFullPath(archivePath), result.Sources[0].Path);
+        Assert.AreEqual(LoadedSourceKind.XmlFile, result.Sources[0].Kind);
+        Assert.AreNotEqual(Path.GetFullPath(archivePath), result.Sources[0].Path);
+        Assert.AreEqual(
+            Path.GetFullPath(archivePath),
+            result.Sources[0].ArchiveProvenance?.OriginalArchivePath);
+        Assert.IsTrue(File.Exists(result.Sources[0].Path));
         Assert.HasCount(1, Directory.GetFiles(files.Path));
     }
 
@@ -180,7 +190,7 @@ public sealed class SourceIntakeServiceTests
     {
         using var files = new TemporarySourceDirectory();
         var unsupportedPath = files.WriteFile("source.txt", "not XML or an archive");
-        var service = new SourceIntakeService();
+        var service = files.CreateService();
 
         var unsupported = await service.LoadAsync(
             SourceSelectionKind.Archive,
@@ -203,7 +213,7 @@ public sealed class SourceIntakeServiceTests
     {
         using var files = new TemporarySourceDirectory();
         var path = files.WriteFile("locked.xml", "<root />");
-        var service = new SourceIntakeService();
+        var service = files.CreateService();
         await using var locked = new FileStream(
             path,
             FileMode.Open,
@@ -225,14 +235,23 @@ public sealed class SourceIntakeServiceTests
         private readonly string _root = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
             "CIA.SPR61.Tests");
+        private readonly string _testRoot;
 
         public TemporarySourceDirectory()
         {
-            Path = System.IO.Path.Combine(_root, Guid.NewGuid().ToString("N"));
+            _testRoot = System.IO.Path.Combine(_root, Guid.NewGuid().ToString("N"));
+            Path = System.IO.Path.Combine(_testRoot, "Sources");
             Directory.CreateDirectory(Path);
         }
 
         public string Path { get; }
+
+        public SourceIntakeService CreateService()
+        {
+            var applicationPaths = ApplicationPaths.FromLocalApplicationData(
+                System.IO.Path.Combine(_testRoot, "LocalAppData"));
+            return new SourceIntakeService(new ArchiveExtractionService(applicationPaths));
+        }
 
         public string CreateDirectory(string relativePath)
         {
@@ -272,7 +291,7 @@ public sealed class SourceIntakeServiceTests
             var resolvedRoot = System.IO.Path.GetFullPath(_root)
                 .TrimEnd(System.IO.Path.DirectorySeparatorChar)
                 + System.IO.Path.DirectorySeparatorChar;
-            var resolvedTarget = System.IO.Path.GetFullPath(Path);
+            var resolvedTarget = System.IO.Path.GetFullPath(_testRoot);
 
             if (!resolvedTarget.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase))
             {

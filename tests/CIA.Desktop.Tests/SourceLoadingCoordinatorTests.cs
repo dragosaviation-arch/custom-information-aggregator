@@ -203,6 +203,95 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    public async Task ExtractedArchiveSourceReplacesContainerAndExposesRealArchiveContext()
+    {
+        var archivePath = Path.GetFullPath("package.zip");
+        var extractionRoot = Path.GetFullPath("working/run-1");
+        var source = CreateArchiveDerivedXml(
+            archivePath,
+            extractionRoot,
+            "folder/source.xml",
+            nestingLevel: 2);
+        var intake = Accept(source) with
+        {
+            Issues =
+            [
+                new SourceIntakeIssue(
+                    "archive-depth-limit",
+                    "A deeper archive was skipped.",
+                    archivePath,
+                    ArchiveNestingLevel: 2,
+                    EntryPath: "level3.zip")
+            ]
+        };
+        var client = new StubSourceIntakeClient(intake);
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        using var viewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(archivePath),
+            new SourceLoadingCoordinator(client, sourceSet, workflow),
+            sourceSet,
+            workflow,
+            new MainWindowViewModel(new ApplicationSession()));
+
+        await viewModel.AddArchiveCommand.ExecuteAsync(null);
+        var duplicate = await new SourceLoadingCoordinator(client, sourceSet, workflow)
+            .AddAsync(SourceSelectionKind.Archive, archivePath);
+
+        Assert.HasCount(1, sourceSet.Items);
+        var item = sourceSet.Items[0];
+        Assert.AreEqual(LoadedSourceKind.XmlFile, item.Kind);
+        Assert.AreEqual(source.Path, item.Path);
+        Assert.AreEqual("2", item.LevelText);
+        Assert.AreEqual("Level 2 of 3", item.ArchiveDepthText);
+        Assert.AreEqual("Archive: package.zip", item.SourceText);
+        StringAssert.Contains(item.BreadcrumbText, "package.zip");
+        StringAssert.Contains(item.BreadcrumbText, "level-2.zip");
+        StringAssert.Contains(item.BreadcrumbText, "source.xml");
+        Assert.AreEqual("Sources loaded with issues", viewModel.StatusTitle);
+        StringAssert.Contains(viewModel.StatusDetail, "1 archive item issue");
+        Assert.AreEqual("Completed with issues", viewModel.ProgressText);
+        Assert.AreEqual("Current archive: package.zip · nesting level 2", viewModel.CurrentArchiveText);
+        StringAssert.Contains(viewModel.SourceSummary, "Issues 1");
+        Assert.IsFalse(duplicate.Accepted);
+        Assert.AreEqual("duplicate-path", duplicate.FailureCode);
+        Assert.AreEqual(1, client.CallCount);
+    }
+
+    [TestMethod]
+    public async Task ArchiveDerivedRefreshUpdatesWorkingPathAndRetainsSourceIdentityInPlace()
+    {
+        var archivePath = Path.GetFullPath("package.zip");
+        var original = CreateArchiveDerivedXml(
+            archivePath,
+            Path.GetFullPath("working/run-1"),
+            "source.xml",
+            nestingLevel: 1);
+        var refreshedContract = CreateArchiveDerivedXml(
+            archivePath,
+            Path.GetFullPath("working/run-2"),
+            "source.xml",
+            nestingLevel: 1) with
+        {
+            SourceId = original.SourceId
+        };
+        var client = new ArchiveRefreshClient(original, refreshedContract);
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.Archive, archivePath);
+        var item = sourceSet.Items.Single();
+
+        var result = await coordinator.RefreshAsync(item);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreSame(item, sourceSet.Items.Single());
+        Assert.AreEqual(original.SourceId, item.SourceId);
+        Assert.AreEqual(refreshedContract.Path, item.Path);
+        Assert.AreEqual(refreshedContract.ArchiveProvenance, item.ArchiveProvenance);
+    }
+
+    [TestMethod]
     public async Task DuplicatePathIsBlockedBeforeASecondHostRequest()
     {
         var path = Path.GetFullPath("source.xml");
@@ -588,6 +677,46 @@ public sealed class SourceLoadingCoordinatorTests
             LoadedSourceKind.XmlFile);
     }
 
+    private static LoadedSourceContract CreateArchiveDerivedXml(
+        string archivePath,
+        string extractionRoot,
+        string archiveMemberPath,
+        int nestingLevel)
+    {
+        var archiveId = SourceId.CreateNew();
+        var lineage = new List<ArchiveLineageItem>
+        {
+            new(archiveId, archivePath, 1)
+        };
+
+        for (var level = 2; level <= nestingLevel; level++)
+        {
+            lineage.Add(new ArchiveLineageItem(
+                SourceId.CreateNew(),
+                $"nested/level-{level}.zip",
+                level));
+        }
+
+        return new LoadedSourceContract(
+            SourceId.CreateNew(),
+            Path.Combine(extractionRoot, "source.xml"),
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile)
+        {
+            ArchiveProvenance = new ArchiveSourceProvenance(
+                archiveId,
+                archivePath,
+                lineage,
+                nestingLevel,
+                archiveMemberPath,
+                extractionRoot,
+                ArchiveExtractionRetention.ManagedTemporary,
+                ArchiveNestingDepth.Default,
+                PersistentExtractionDirectory: null)
+        };
+    }
+
     private static SourceIntakeClientResult Accept(params LoadedSourceContract[] sources)
     {
         return new SourceIntakeClientResult(true, sources, null, null);
@@ -661,6 +790,31 @@ public sealed class SourceLoadingCoordinatorTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(ToRefreshResult(results[_index++], source));
+        }
+    }
+
+    private sealed class ArchiveRefreshClient(
+        LoadedSourceContract initial,
+        LoadedSourceContract refreshed) : ISourceIntakeClient
+    {
+        public Task<SourceIntakeClientResult> LoadAsync(
+            SourceSelectionKind selectionKind,
+            string path,
+            SourceLoadSettings settings,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Accept(initial));
+        }
+
+        public Task<SourceRefreshClientResult> RefreshAsync(
+            LoadedSourceContract source,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new SourceRefreshClientResult(
+                true,
+                refreshed,
+                FailureCode: null,
+                FailureDescription: null));
         }
     }
 

@@ -138,20 +138,45 @@ public sealed class NamedPipeIpcTests
             SourceSelectionKind.Folder,
             Path.GetFullPath("sources"),
             activeSettings);
+        var archivePath = Path.GetFullPath("sources/package.zip");
+        var extractionRoot = Path.GetFullPath("working/extraction");
+        var archiveId = SourceId.CreateNew();
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            Path.Combine(extractionRoot, "source.xml"),
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile)
+        {
+            ArchiveProvenance = new ArchiveSourceProvenance(
+                archiveId,
+                archivePath,
+                [new ArchiveLineageItem(archiveId, archivePath, 1)],
+                ArchiveNestingLevel: 1,
+                ArchiveMemberPath: "source.xml",
+                extractionRoot,
+                ArchiveExtractionRetention.ManagedTemporary,
+                activeSettings.MaximumArchiveNestingDepth,
+                PersistentExtractionDirectory: null)
+        };
         var response = new LoadSourcesResponse(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             command.MessageId,
             CommandAcceptance.Accepted,
+            [source],
+            Failure: null)
+        {
+            Issues =
             [
-                new LoadedSourceContract(
-                    SourceId.CreateNew(),
-                    Path.GetFullPath("sources/source.xml"),
-                    IsIncluded: true,
-                    LoadedSourceStatus.Ready,
-                    LoadedSourceKind.XmlFile)
-            ],
-            Failure: null);
+                new SourceIntakeIssue(
+                    "archive-entry-failed",
+                    "One independent archive member was skipped.",
+                    archivePath,
+                    ArchiveNestingLevel: 1,
+                    EntryPath: "../bad/item.xml")
+            ]
+        };
         await using var stream = new MemoryStream();
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
@@ -166,9 +191,18 @@ public sealed class NamedPipeIpcTests
         var roundTrippedResponse = await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
         Assert.IsInstanceOfType<LoadSourcesResponse>(roundTrippedResponse);
         Assert.AreEqual(response.CommandMessageId, ((LoadSourcesResponse)roundTrippedResponse).CommandMessageId);
-        CollectionAssert.AreEqual(
-            response.Sources.ToArray(),
-            ((LoadSourcesResponse)roundTrippedResponse).Sources.ToArray());
+        var typedResponse = (LoadSourcesResponse)roundTrippedResponse;
+        Assert.HasCount(1, typedResponse.Sources);
+        Assert.AreEqual(source.SourceId, typedResponse.Sources[0].SourceId);
+        Assert.AreEqual(source.Path, typedResponse.Sources[0].Path);
+        Assert.AreEqual(
+            source.ArchiveProvenance?.OriginalArchiveSourceId,
+            typedResponse.Sources[0].ArchiveProvenance?.OriginalArchiveSourceId);
+        Assert.AreEqual(
+            source.ArchiveProvenance?.ArchiveMemberPath,
+            typedResponse.Sources[0].ArchiveProvenance?.ArchiveMemberPath);
+        Assert.HasCount(1, typedResponse.Sources[0].ArchiveProvenance!.ArchiveLineage);
+        CollectionAssert.AreEqual(response.Issues.ToArray(), typedResponse.Issues.ToArray());
     }
 
     [TestMethod]
@@ -191,6 +225,67 @@ public sealed class NamedPipeIpcTests
 
         Assert.AreEqual(IpcProtocolError.InvalidContract, exception.Error);
         StringAssert.Contains(exception.Message, "maximum archive nesting depth");
+    }
+
+    [TestMethod]
+    public async Task PersistentExtractionWithoutAnExplicitDestinationIsRejectedAtTheIpcBoundary()
+    {
+        var command = new LoadSourcesCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            SourceSelectionKind.Archive,
+            Path.GetFullPath("sources.zip"),
+            SourceLoadSettings.Default with
+            {
+                PersistentArchiveExtractionEnabled = true,
+                PersistentArchiveExtractionDirectory = null
+            });
+        await using var stream = new MemoryStream();
+
+        var exception = await Assert.ThrowsExactlyAsync<IpcProtocolException>(
+            () => LengthPrefixedJsonMessageFramer.WriteAsync(stream, command).AsTask());
+
+        Assert.AreEqual(IpcProtocolError.InvalidContract, exception.Error);
+        StringAssert.Contains(exception.Message, "explicitly configured destination");
+    }
+
+    [TestMethod]
+    public async Task ExtractedSourceOutsideItsDeclaredRootIsRejectedAtTheIpcBoundary()
+    {
+        var archivePath = Path.GetFullPath("source.zip");
+        var archiveId = SourceId.CreateNew();
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            Path.GetFullPath("outside/source.xml"),
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile)
+        {
+            ArchiveProvenance = new ArchiveSourceProvenance(
+                archiveId,
+                archivePath,
+                [new ArchiveLineageItem(archiveId, archivePath, 1)],
+                ArchiveNestingLevel: 1,
+                ArchiveMemberPath: "source.xml",
+                ExtractionRoot: Path.GetFullPath("working/extraction"),
+                ArchiveExtractionRetention.ManagedTemporary,
+                ArchiveNestingDepth.Default,
+                PersistentExtractionDirectory: null)
+        };
+        var response = new LoadSourcesResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            Guid.CreateVersion7(),
+            CommandAcceptance.Accepted,
+            [source],
+            Failure: null);
+        await using var stream = new MemoryStream();
+
+        var exception = await Assert.ThrowsExactlyAsync<IpcProtocolException>(
+            () => LengthPrefixedJsonMessageFramer.WriteAsync(stream, response).AsTask());
+
+        Assert.AreEqual(IpcProtocolError.InvalidContract, exception.Error);
+        StringAssert.Contains(exception.Message, "inside its extraction root");
     }
 
     [TestMethod]

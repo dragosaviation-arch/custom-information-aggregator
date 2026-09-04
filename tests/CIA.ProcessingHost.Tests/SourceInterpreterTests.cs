@@ -1,6 +1,7 @@
 using System.Xml;
 using System.Xml.Linq;
 using CIA.Contracts.Sources;
+using CIA.Core.Runtime;
 using CIA.Core.Sources;
 using CIA.ProcessingHost.SourceIntake;
 using CIA.ProcessingHost.SourceInterpretation;
@@ -28,7 +29,7 @@ public sealed class SourceInterpreterTests
               </product>
             </catalog>
             """);
-        var intakeResult = await new SourceIntakeService().LoadAsync(
+        var intakeResult = await files.CreateIntakeService().LoadAsync(
             SourceSelectionKind.XmlFile,
             path,
             SourceLoadSettings.Default);
@@ -167,7 +168,7 @@ public sealed class SourceInterpreterTests
             """);
         var originalBytes = await File.ReadAllBytesAsync(path);
         var originalWriteTime = File.GetLastWriteTimeUtc(path);
-        var intakeResult = await new SourceIntakeService().LoadAsync(
+        var intakeResult = await files.CreateIntakeService().LoadAsync(
             SourceSelectionKind.XmlFile,
             path,
             SourceLoadSettings.Default);
@@ -181,6 +182,34 @@ public sealed class SourceInterpreterTests
         CollectionAssert.AreEqual(
             new[] { Path.GetFullPath(path) },
             Directory.GetFiles(files.Path).Select(Path.GetFullPath).ToArray());
+    }
+
+    [TestMethod]
+    public async Task ArchiveProvenancePassesThroughTheGenericInterpreterBoundary()
+    {
+        using var files = new TemporaryXmlDirectory();
+        var path = files.WriteFile(
+            "catalog.xml",
+            "<catalog xmlns=\"urn:cia:test:catalog\"><product><sku>A</sku><description>B</description></product></catalog>");
+        var archiveId = SourceId.CreateNew();
+        var provenance = new ArchiveSourceProvenance(
+            archiveId,
+            Path.GetFullPath(Path.Combine(files.Path, "original.zip")),
+            [new ArchiveLineageItem(archiveId, Path.GetFullPath(Path.Combine(files.Path, "original.zip")), 1)],
+            ArchiveNestingLevel: 1,
+            ArchiveMemberPath: "catalog.xml",
+            ExtractionRoot: files.Path,
+            ArchiveExtractionRetention.ManagedTemporary,
+            ArchiveNestingDepth.Default,
+            PersistentExtractionDirectory: null);
+        var source = CreateLoadedXml(path) with { ArchiveProvenance = provenance };
+        var interpreter = CreateInterpreter(new CatalogSourceAdapter());
+
+        var result = await interpreter.InterpretAsync(source);
+
+        Assert.AreEqual(SourceInterpretationStatus.Usable, result.Status);
+        Assert.AreEqual(source.SourceId, result.Source?.OriginatingSourceId);
+        Assert.AreEqual(provenance, result.Source?.ArchiveProvenance);
     }
 
     [TestMethod]
@@ -283,6 +312,13 @@ public sealed class SourceInterpreterTests
         }
 
         public string Path { get; }
+
+        public SourceIntakeService CreateIntakeService()
+        {
+            var applicationPaths = ApplicationPaths.FromLocalApplicationData(
+                System.IO.Path.Combine(Path, "LocalAppData"));
+            return new SourceIntakeService(new ArchiveExtractionService(applicationPaths));
+        }
 
         public string WriteFile(string fileName, string content)
         {

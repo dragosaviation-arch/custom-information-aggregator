@@ -21,6 +21,12 @@ public enum LoadedSourceStatus
     FailedValidation = 4
 }
 
+public enum ArchiveExtractionRetention
+{
+    ManagedTemporary = 1,
+    Persistent = 2
+}
+
 public sealed record SourceLoadSettings(
     bool IncludeXmlFiles,
     bool IncludeArchiveFiles,
@@ -28,6 +34,10 @@ public sealed record SourceLoadSettings(
 {
     public ArchiveNestingDepth MaximumArchiveNestingDepth { get; init; } =
         ArchiveNestingDepth.Default;
+
+    public bool PersistentArchiveExtractionEnabled { get; init; }
+
+    public string? PersistentArchiveExtractionDirectory { get; init; }
 
     public static SourceLoadSettings Default { get; } = new(
         IncludeXmlFiles: true,
@@ -40,4 +50,30 @@ public sealed record LoadedSourceContract(
     string Path,
     bool IsIncluded,
     LoadedSourceStatus Status,
-    LoadedSourceKind Kind);
+    LoadedSourceKind Kind)
+{
+    public ArchiveSourceProvenance? ArchiveProvenance { get; init; }
+}
+
+public sealed record ArchiveLineageItem(
+    SourceId ArchiveSourceId,
+    string Path,
+    int NestingLevel);
+
+public sealed record ArchiveSourceProvenance(
+    SourceId OriginalArchiveSourceId,
+    string OriginalArchivePath,
+    IReadOnlyList<ArchiveLineageItem> ArchiveLineage,
+    int ArchiveNestingLevel,
+    string ArchiveMemberPath,
+    string ExtractionRoot,
+    ArchiveExtractionRetention Retention,
+    ArchiveNestingDepth MaximumArchiveNestingDepth,
+    string? PersistentExtractionDirectory);
+
+public sealed record SourceIntakeIssue(
+    string Code,
+    string Description,
+    string ArchivePath,
+    int ArchiveNestingLevel,
+    string? EntryPath);

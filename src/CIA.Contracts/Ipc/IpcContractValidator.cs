@@ -121,6 +121,8 @@ public static class IpcContractValidator
         {
             throw InvalidContract("The maximum archive nesting depth must be at least 1.");
         }
+
+        ValidatePersistentExtractionSettings(command.Settings);
     }
 
     private static void ValidateLoadSourcesResponse(LoadSourcesResponse response)
@@ -145,6 +147,21 @@ public static class IpcContractValidator
             }
 
             ValidateLoadedSource(source);
+        }
+
+        if (response.Issues is null)
+        {
+            throw InvalidContract("A source-load response requires an issue collection.");
+        }
+
+        foreach (var issue in response.Issues)
+        {
+            if (issue is null)
+            {
+                throw InvalidContract("A source-load response cannot contain null issue items.");
+            }
+
+            ValidateSourceIntakeIssue(issue);
         }
 
         if (response.Acceptance == CommandAcceptance.Accepted)
@@ -225,6 +242,159 @@ public static class IpcContractValidator
         {
             throw InvalidContract("A loaded source has an unsupported kind or status.");
         }
+
+        if (source.ArchiveProvenance is not null)
+        {
+            if (source.Kind != LoadedSourceKind.XmlFile)
+            {
+                throw InvalidContract("Only extracted XML working sources can contain archive provenance.");
+            }
+
+            ValidateArchiveProvenance(source, source.ArchiveProvenance);
+        }
+    }
+
+    private static void ValidatePersistentExtractionSettings(SourceLoadSettings settings)
+    {
+        var directory = settings.PersistentArchiveExtractionDirectory;
+
+        if (settings.PersistentArchiveExtractionEnabled && string.IsNullOrWhiteSpace(directory))
+        {
+            throw InvalidContract(
+                "Persistent archive extraction requires an explicitly configured destination.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            ValidatePath(directory);
+        }
+    }
+
+    private static void ValidateArchiveProvenance(
+        LoadedSourceContract source,
+        ArchiveSourceProvenance provenance)
+    {
+        if (!SourceId.IsValid(provenance.OriginalArchiveSourceId.Value))
+        {
+            throw InvalidContract("Archive provenance requires an original archive Source ID.");
+        }
+
+        ValidatePath(provenance.OriginalArchivePath);
+        ValidatePath(provenance.ExtractionRoot);
+
+        if (!IsWithinDirectory(source.Path, provenance.ExtractionRoot))
+        {
+            throw InvalidContract("An extracted source path must remain inside its extraction root.");
+        }
+
+        if (!Enum.IsDefined(provenance.Retention))
+        {
+            throw InvalidContract("Archive provenance has an unsupported extraction-retention value.");
+        }
+
+        if (!ArchiveNestingDepth.IsValid(provenance.MaximumArchiveNestingDepth.Value)
+            || provenance.ArchiveNestingLevel < 1
+            || !provenance.MaximumArchiveNestingDepth.AllowsLevel(provenance.ArchiveNestingLevel))
+        {
+            throw InvalidContract("Archive provenance contains an invalid nesting level or maximum depth.");
+        }
+
+        if (string.IsNullOrWhiteSpace(provenance.ArchiveMemberPath))
+        {
+            throw InvalidContract("Archive provenance requires an archive-member path.");
+        }
+
+        ValidateRelativeArchivePath(provenance.ArchiveMemberPath);
+
+        if (provenance.ArchiveLineage is null || provenance.ArchiveLineage.Count == 0)
+        {
+            throw InvalidContract("Archive provenance requires archive lineage.");
+        }
+
+        for (var index = 0; index < provenance.ArchiveLineage.Count; index++)
+        {
+            var lineage = provenance.ArchiveLineage[index];
+
+            if (lineage is null
+                || !SourceId.IsValid(lineage.ArchiveSourceId.Value)
+                || string.IsNullOrWhiteSpace(lineage.Path)
+                || lineage.NestingLevel != index + 1)
+            {
+                throw InvalidContract("Archive provenance contains invalid archive lineage.");
+            }
+
+            if (index == 0)
+            {
+                ValidatePath(lineage.Path);
+            }
+            else
+            {
+                ValidateRelativeArchivePath(lineage.Path);
+            }
+        }
+
+        if (provenance.ArchiveLineage[0].ArchiveSourceId != provenance.OriginalArchiveSourceId
+            || !string.Equals(
+                provenance.ArchiveLineage[0].Path,
+                provenance.OriginalArchivePath,
+                StringComparison.OrdinalIgnoreCase)
+            || provenance.ArchiveLineage.Count != provenance.ArchiveNestingLevel)
+        {
+            throw InvalidContract("Archive provenance lineage does not match its origin or nesting level.");
+        }
+
+        if (provenance.Retention == ArchiveExtractionRetention.Persistent)
+        {
+            if (string.IsNullOrWhiteSpace(provenance.PersistentExtractionDirectory))
+            {
+                throw InvalidContract(
+                    "Persistent archive provenance requires its configured extraction destination.");
+            }
+
+            ValidatePath(provenance.PersistentExtractionDirectory);
+
+            if (!IsWithinDirectory(
+                    provenance.ExtractionRoot,
+                    provenance.PersistentExtractionDirectory))
+            {
+                throw InvalidContract(
+                    "Persistent archive extraction must remain inside its configured destination.");
+            }
+        }
+        else if (provenance.PersistentExtractionDirectory is not null)
+        {
+            throw InvalidContract(
+                "Temporary archive provenance cannot contain a persistent extraction destination.");
+        }
+    }
+
+    private static void ValidateSourceIntakeIssue(SourceIntakeIssue issue)
+    {
+        if (string.IsNullOrWhiteSpace(issue.Code) || issue.Code.Length > MaximumFailureCodeLength)
+        {
+            throw InvalidContract(
+                $"Source-intake issue codes must contain 1 to {MaximumFailureCodeLength} characters.");
+        }
+
+        if (string.IsNullOrWhiteSpace(issue.Description)
+            || issue.Description.Length > MaximumFailureDescriptionLength)
+        {
+            throw InvalidContract(
+                $"Source-intake issue descriptions must contain 1 to {MaximumFailureDescriptionLength} characters.");
+        }
+
+        if (string.IsNullOrWhiteSpace(issue.ArchivePath) || issue.ArchiveNestingLevel < 1)
+        {
+            throw InvalidContract("A source-intake issue requires archive context and a positive nesting level.");
+        }
+
+        ValidatePath(issue.ArchivePath);
+
+        if (issue.EntryPath is { Length: > MaximumPathLength })
+        {
+            throw InvalidContract(
+                $"Source-intake issue entry paths cannot exceed {MaximumPathLength} characters.");
+        }
     }
 
     private static void ValidateProcessingHostAvailabilityEvent(
@@ -263,6 +433,35 @@ public static class IpcContractValidator
         {
             throw InvalidContract("Source paths must be fully qualified.");
         }
+    }
+
+    private static void ValidateRelativeArchivePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path.Length > MaximumPathLength)
+        {
+            throw InvalidContract(
+                $"Archive member paths must contain 1 to {MaximumPathLength} non-whitespace characters.");
+        }
+
+        var normalized = path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+
+        if (Path.IsPathRooted(normalized)
+            || normalized.Split(Path.DirectorySeparatorChar).Any(part => part == ".."))
+        {
+            throw InvalidContract("Archive member paths must remain relative and cannot escape their archive.");
+        }
+    }
+
+    private static bool IsWithinDirectory(string path, string directory)
+    {
+        var resolvedDirectory = Path.GetFullPath(directory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var resolvedPath = Path.GetFullPath(path)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var directoryPrefix = resolvedDirectory + Path.DirectorySeparatorChar;
+
+        return resolvedPath.Equals(resolvedDirectory, StringComparison.OrdinalIgnoreCase)
+            || resolvedPath.StartsWith(directoryPrefix, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void ValidateVersionSevenId(Guid id, string fieldName)

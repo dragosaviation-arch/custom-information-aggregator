@@ -51,6 +51,9 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private double? _appliedMaximumSizeMb;
     private string _statusTitle = "Load workspace ready";
     private string _statusDetail = "No active operation";
+    private string _progressText = "Idle";
+    private string _currentArchiveText = "Current archive: —";
+    private int _lastIntakeIssueCount;
     private WorkflowArtifactStatus _discoveryStatus;
     private int _disposed;
 
@@ -140,7 +143,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public int IncludedCount => Sources.Count(source => source.IsIncluded);
     public string IncludedSummary => $"{IncludedCount} / {Sources.Count} included";
     public string SourceSummary =>
-        $"Files found {Sources.Count} · Loaded {Sources.Count} · Issues {Sources.Count(source => source.Status != LoadedSourceStatus.Ready)}";
+        $"Files found {Sources.Count} · Loaded {Sources.Count} · Issues {_lastIntakeIssueCount + Sources.Count(source => source.Status != LoadedSourceStatus.Ready)}";
 
     public string FilterText
     {
@@ -255,6 +258,18 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _statusDetail, value);
     }
 
+    public string ProgressText
+    {
+        get => _progressText;
+        private set => SetProperty(ref _progressText, value);
+    }
+
+    public string CurrentArchiveText
+    {
+        get => _currentArchiveText;
+        private set => SetProperty(ref _currentArchiveText, value);
+    }
+
     public WorkflowArtifactStatus DiscoveryStatus
     {
         get => _discoveryStatus;
@@ -346,6 +361,10 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         IsBusy = true;
         StatusTitle = "Loading sources";
         StatusDetail = "Validating the selected path in the Processing Host…";
+        ProgressText = "Working";
+        CurrentArchiveText = selectionKind == SourceSelectionKind.Archive
+            ? $"Current archive: {Path.GetFileName(path)}"
+            : "Current archive: —";
 
         try
         {
@@ -353,19 +372,35 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
                 ? new SourceLoadSettings(IncludeXmlFiles, IncludeArchives, SearchSubfolders)
                 : SourceLoadSettings.Default;
             var result = await _loadingCoordinator.AddAsync(selectionKind, path, settings);
+            _lastIntakeIssueCount = result.Issues.Count;
+            OnPropertyChanged(nameof(SourceSummary));
 
             if (!result.Accepted)
             {
                 StatusTitle = "Source not added";
                 StatusDetail = result.FailureDescription ?? "The selected source could not be loaded.";
+                ProgressText = "Stopped";
                 return false;
             }
 
             SelectedSource = Sources.LastOrDefault();
-            StatusTitle = result.AddedCount == 1 ? "Source loaded" : "Sources loaded";
+            ProgressText = result.Issues.Count > 0 ? "Completed with issues" : "Completed";
+            CurrentArchiveText = SelectedSource?.ArchiveProvenance is { } provenance
+                ? $"Current archive: {Path.GetFileName(provenance.OriginalArchivePath)} · nesting level {provenance.ArchiveNestingLevel}"
+                : "Current archive: —";
+            StatusTitle = result.Issues.Count > 0
+                ? "Sources loaded with issues"
+                : result.AddedCount == 1
+                    ? "Source loaded"
+                    : "Sources loaded";
             StatusDetail = result.DuplicateCount == 0
                 ? $"Added {result.AddedCount} supported source(s)."
                 : $"Added {result.AddedCount} supported source(s); skipped {result.DuplicateCount} duplicate path(s).";
+
+            if (result.Issues.Count > 0)
+            {
+                StatusDetail += $" {result.Issues.Count} archive item issue(s) were skipped.";
+            }
 
             if (allowNavigation && OpenDiscoveryWhenLoadingCompletes)
             {
@@ -687,6 +722,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private void OnSourcePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(LoadedSourceItem.IsIncluded)
+            or nameof(LoadedSourceItem.Path)
             or nameof(LoadedSourceItem.Status)
             or nameof(LoadedSourceItem.SizeBytes))
         {

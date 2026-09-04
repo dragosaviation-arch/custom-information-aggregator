@@ -1,6 +1,8 @@
+using System.IO.Compression;
 using System.Xml;
 using System.Xml.Linq;
 using CIA.Contracts.Sources;
+using CIA.Core.Runtime;
 using CIA.Core.Sources;
 using CIA.ProcessingHost.SourceIntake;
 using CIA.ProcessingHost.SourceInterpretation;
@@ -17,7 +19,7 @@ public sealed class SourceRefreshServiceTests
         using var directory = new TemporarySourceDirectory();
         var path = directory.WriteFile("catalog.xml", "<catalog><item>  Exact value  </item></catalog>");
         var source = CreateSource(path);
-        var service = CreateService(new CatalogAdapter());
+        var service = CreateService(directory.Path, new CatalogAdapter());
 
         var result = await service.RefreshAsync(source);
 
@@ -35,7 +37,7 @@ public sealed class SourceRefreshServiceTests
         using var directory = new TemporarySourceDirectory();
         var path = directory.WriteFile("catalog.xml", "<catalog><item></catalog>");
         var source = CreateSource(path);
-        var service = CreateService(new CatalogAdapter());
+        var service = CreateService(directory.Path, new CatalogAdapter());
 
         var result = await service.RefreshAsync(source);
 
@@ -48,8 +50,9 @@ public sealed class SourceRefreshServiceTests
     [TestMethod]
     public async Task RefreshReturnsControlledUnavailableStatusWhenOriginalPathIsGone()
     {
+        using var directory = new TemporarySourceDirectory();
         var source = CreateSource(Path.GetFullPath("missing.xml"));
-        var service = CreateService(new CatalogAdapter());
+        var service = CreateService(directory.Path, new CatalogAdapter());
 
         var result = await service.RefreshAsync(source);
 
@@ -59,10 +62,50 @@ public sealed class SourceRefreshServiceTests
         Assert.AreEqual("source-not-found", result.Failure?.Code);
     }
 
-    private static SourceRefreshService CreateService(params ISourceAdapter[] adapters)
+    [TestMethod]
+    public async Task ArchiveDerivedRefreshReextractsOriginalArchiveAndRetainsSourceIdentity()
     {
+        using var directory = new TemporarySourceDirectory();
+        var archivePath = directory.CreateZip(
+            "catalog.zip",
+            "folder/catalog.xml",
+            "<catalog><item>Archive value</item></catalog>");
+        var applicationPaths = ApplicationPaths.FromLocalApplicationData(
+            Path.Combine(directory.Path, "LocalAppData"));
+        var intake = new SourceIntakeService(new ArchiveExtractionService(applicationPaths));
+        var load = await intake.LoadAsync(
+            SourceSelectionKind.Archive,
+            archivePath,
+            SourceLoadSettings.Default);
+        var source = load.Sources.Single() with { IsIncluded = false };
+        var originalWorkingPath = source.Path;
+        var service = new SourceRefreshService(
+            intake,
+            new SourceInterpreter([new CatalogAdapter()], NullLogger<SourceInterpreter>.Instance));
+
+        var result = await service.RefreshAsync(source);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreEqual(source.SourceId, result.Source.SourceId);
+        Assert.IsFalse(result.Source.IsIncluded);
+        Assert.AreNotEqual(originalWorkingPath, result.Source.Path);
+        Assert.AreEqual(
+            source.ArchiveProvenance?.OriginalArchiveSourceId,
+            result.Source.ArchiveProvenance?.OriginalArchiveSourceId);
+        Assert.AreEqual(
+            source.ArchiveProvenance?.ArchiveMemberPath,
+            result.Source.ArchiveProvenance?.ArchiveMemberPath);
+        Assert.IsTrue(File.Exists(result.Source.Path));
+    }
+
+    private static SourceRefreshService CreateService(
+        string testRoot,
+        params ISourceAdapter[] adapters)
+    {
+        var applicationPaths = ApplicationPaths.FromLocalApplicationData(
+            Path.Combine(testRoot, "LocalAppData"));
         return new SourceRefreshService(
-            new SourceIntakeService(),
+            new SourceIntakeService(new ArchiveExtractionService(applicationPaths)),
             new SourceInterpreter(adapters, NullLogger<SourceInterpreter>.Instance));
     }
 
@@ -116,6 +159,17 @@ public sealed class SourceRefreshServiceTests
         {
             var path = System.IO.Path.Combine(Path, fileName);
             File.WriteAllText(path, content);
+            return path;
+        }
+
+        public string CreateZip(string fileName, string entryPath, string content)
+        {
+            var path = System.IO.Path.Combine(Path, fileName);
+            using var stream = File.Create(path);
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
+            var entry = archive.CreateEntry(entryPath);
+            using var writer = new StreamWriter(entry.Open());
+            writer.Write(content);
             return path;
         }
 
