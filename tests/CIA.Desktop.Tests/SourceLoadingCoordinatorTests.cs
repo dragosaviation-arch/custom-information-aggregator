@@ -1,5 +1,6 @@
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
@@ -19,10 +20,13 @@ public sealed class SourceLoadingCoordinatorTests
         var sourceSet = new ActiveLoadedSourceSet();
         using var workflow = CreateWorkflowCoordinator();
         var loadingCoordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        var shell = new MainWindowViewModel(new ApplicationSession());
         var viewModel = new LoadWorkspaceViewModel(
             new StubSourcePathPicker(path),
             loadingCoordinator,
-            sourceSet);
+            sourceSet,
+            workflow,
+            shell);
 
         await viewModel.AddXmlFileCommand.ExecuteAsync(null);
 
@@ -31,6 +35,116 @@ public sealed class SourceLoadingCoordinatorTests
         Assert.AreEqual("Source loaded", viewModel.StatusTitle);
         Assert.AreSame(viewModel.Sources[0], sourceSet.Items[0]);
         Assert.AreEqual(loadedSource.SourceId, viewModel.Sources[0].SourceId);
+        Assert.AreEqual(SourceLoadSettings.Default, client.LastSettings);
+    }
+
+    [TestMethod]
+    public async Task FilteredBulkInclusionUsesVisibleRowsAndUpdatesCompactCount()
+    {
+        var alphaPath = Path.GetFullPath("alpha.xml");
+        var betaPath = Path.GetFullPath("beta.xml");
+        var client = new StubSourceIntakeClient(
+            Accept(CreateXml(alphaPath), CreateXml(betaPath)));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var shell = new MainWindowViewModel(new ApplicationSession());
+        using var viewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(alphaPath),
+            new SourceLoadingCoordinator(client, sourceSet, workflow),
+            sourceSet,
+            workflow,
+            shell);
+
+        await viewModel.AddXmlFileCommand.ExecuteAsync(null);
+        viewModel.FilterText = "alpha";
+        viewModel.ExcludeVisibleCommand.Execute(null);
+
+        Assert.IsFalse(sourceSet.Items.Single(source => source.Path == alphaPath).IsIncluded);
+        Assert.IsTrue(sourceSet.Items.Single(source => source.Path == betaPath).IsIncluded);
+        Assert.AreEqual("1 / 2 included", viewModel.IncludedSummary);
+        Assert.IsTrue(workflow.Current.HasValidSourceSelection);
+
+        viewModel.FilterText = string.Empty;
+        viewModel.ExcludeVisibleCommand.Execute(null);
+
+        Assert.IsTrue(sourceSet.Items.All(source => !source.IsIncluded));
+        Assert.AreEqual("0 / 2 included", viewModel.IncludedSummary);
+        Assert.IsFalse(workflow.Current.HasValidSourceSelection);
+    }
+
+    [TestMethod]
+    public async Task FolderSettingsApplyOnlyToFolderIntake()
+    {
+        var path = Path.GetFullPath("selected-source");
+        var folderClient = new StubSourceIntakeClient(Accept(CreateXml(Path.GetFullPath("folder.xml"))));
+        var folderSources = new ActiveLoadedSourceSet();
+        using var folderWorkflow = CreateWorkflowCoordinator();
+        using var folderViewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(path),
+            new SourceLoadingCoordinator(folderClient, folderSources, folderWorkflow),
+            folderSources,
+            folderWorkflow,
+            new MainWindowViewModel(new ApplicationSession()))
+        {
+            IncludeXmlFiles = false,
+            IncludeArchives = true,
+            SearchSubfolders = false
+        };
+
+        await folderViewModel.AddFolderCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(
+            new SourceLoadSettings(false, true, false),
+            folderClient.LastSettings);
+
+        var archiveClient = new StubSourceIntakeClient(
+            Accept(new LoadedSourceContract(
+                SourceId.CreateNew(),
+                Path.GetFullPath("archive.zip"),
+                IsIncluded: true,
+                LoadedSourceStatus.Ready,
+                LoadedSourceKind.Archive)));
+        var archiveSources = new ActiveLoadedSourceSet();
+        using var archiveWorkflow = CreateWorkflowCoordinator();
+        using var archiveViewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(path),
+            new SourceLoadingCoordinator(archiveClient, archiveSources, archiveWorkflow),
+            archiveSources,
+            archiveWorkflow,
+            new MainWindowViewModel(new ApplicationSession()))
+        {
+            IncludeXmlFiles = false,
+            IncludeArchives = false,
+            SearchSubfolders = false
+        };
+
+        await archiveViewModel.AddArchiveCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(SourceLoadSettings.Default, archiveClient.LastSettings);
+    }
+
+    [TestMethod]
+    public async Task SuccessfulLoadCanNavigateToDiscoveryWithoutStartingIt()
+    {
+        var path = Path.GetFullPath("source.xml");
+        var client = new StubSourceIntakeClient(Accept(CreateXml(path)));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var shell = new MainWindowViewModel(new ApplicationSession());
+        using var viewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(path),
+            new SourceLoadingCoordinator(client, sourceSet, workflow),
+            sourceSet,
+            workflow,
+            shell)
+        {
+            OpenDiscoveryWhenLoadingCompletes = true
+        };
+
+        await viewModel.AddXmlFileCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(WorkspaceArea.Discovery, shell.SelectedWorkspace.Area);
+        Assert.IsNull(workflow.Current.ActiveOperation);
     }
 
     [TestMethod]
@@ -185,6 +299,8 @@ public sealed class SourceLoadingCoordinatorTests
     {
         public int CallCount { get; private set; }
 
+        public SourceLoadSettings? LastSettings { get; private set; }
+
         public Task<SourceIntakeClientResult> LoadAsync(
             SourceSelectionKind selectionKind,
             string path,
@@ -192,7 +308,7 @@ public sealed class SourceLoadingCoordinatorTests
             CancellationToken cancellationToken = default)
         {
             CallCount++;
-            Assert.AreEqual(SourceLoadSettings.Default, settings);
+            LastSettings = settings;
             return Task.FromResult(result);
         }
     }

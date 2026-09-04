@@ -14,10 +14,10 @@ public sealed class MainWindowViewModel : ObservableObject
         Session = session;
         Workspaces = Array.AsReadOnly<WorkspaceDefinition>(
         [
-            new(WorkspaceArea.Load, "Load", "Source loading and active-session source selection."),
-            new(WorkspaceArea.Discovery, "Discovery", "Information discovery and mapping."),
-            new(WorkspaceArea.Database, "Database", "Structured results, extraction, review, and export."),
-            new(WorkspaceArea.Settings, "Settings", "Application settings, history, diagnostics, and maintenance.")
+            new(WorkspaceArea.Load, "▣", "Load", "Add and manage sources"),
+            new(WorkspaceArea.Discovery, "◎", "Discovery", "Discover and select information"),
+            new(WorkspaceArea.Database, "◫", "Database", "Filter, extract, review and export"),
+            new(WorkspaceArea.Settings, "⚙", "Settings", "Configuration, history and support")
         ]);
         _selectedWorkspace = Workspaces[0];
     }

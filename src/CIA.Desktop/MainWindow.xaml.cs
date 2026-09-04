@@ -5,6 +5,8 @@ namespace CIA.Desktop;
 
 public partial class MainWindow : Window
 {
+    private const double CompactNavigationBreakpoint = 1180;
+
     public MainWindow(
         MainWindowViewModel viewModel,
         GlobalStatusViewModel globalStatus,
@@ -23,4 +25,16 @@ public partial class MainWindow : Window
     public GlobalStatusViewModel GlobalStatus { get; }
 
     public LoadWorkspaceViewModel LoadWorkspace { get; }
+
+    private void OnWindowSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (WorkspaceTabs is null)
+        {
+            return;
+        }
+
+        WorkspaceTabs.Resources["CiaNavigationSubtitleVisibility"] = ActualWidth < CompactNavigationBreakpoint
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+    }
 }

@@ -4,11 +4,12 @@
         xmlns:presentation="clr-namespace:CIA.Desktop.Presentation"
         xmlns:views="clr-namespace:CIA.Desktop.Views"
         x:Name="WindowRoot"
-        Title="CIA"
-        Width="1440"
-        Height="900"
-        MinWidth="980"
-        MinHeight="620"
+        Title="CIA — Custom Information Aggregator"
+        Width="1400"
+        Height="760"
+        MinWidth="1000"
+        MinHeight="520"
+        SizeChanged="OnWindowSizeChanged"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource CiaBackgroundBrush}"
         FontFamily="{StaticResource CiaFontFamily}"
@@ -16,61 +17,48 @@
         SnapsToDevicePixels="True">
     <Grid Background="{StaticResource CiaBackgroundBrush}">
         <Grid.RowDefinitions>
-            <RowDefinition Height="52" />
-            <RowDefinition Height="54" />
+            <RowDefinition Height="38" />
+            <RowDefinition Height="60" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="34" />
+            <RowDefinition Height="32" />
         </Grid.RowDefinitions>
 
         <Border Grid.Row="0"
                 Style="{StaticResource CiaTopBarStyle}">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-
-                <StackPanel VerticalAlignment="Center"
-                            Orientation="Horizontal">
-                    <Border Width="28"
-                            Height="28"
-                            Background="{StaticResource CiaLogoBrush}"
-                            CornerRadius="8">
-                        <TextBlock HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   FontWeight="ExtraBold"
-                                   Foreground="{StaticResource CiaPanelBrush}"
-                                   Text="C" />
-                    </Border>
-                    <StackPanel Margin="10,0,0,0"
-                                VerticalAlignment="Center">
-                        <TextBlock FontWeight="Bold"
-                                   Foreground="{StaticResource CiaTextPrimaryBrush}"
-                                   Text="CIA" />
-                        <TextBlock Margin="0,1,0,0"
-                                   FontSize="11"
-                                   Foreground="{StaticResource CiaTextSecondaryBrush}"
-                                   Text="Custom Information Aggregator" />
-                    </StackPanel>
-                </StackPanel>
-
-                <StackPanel Grid.Column="1"
-                            VerticalAlignment="Center"
-                            Orientation="Horizontal">
-                    <Ellipse Width="8"
-                             Height="8"
-                             Margin="0,0,8,0"
-                             Fill="{StaticResource CiaSuccessBrush}" />
-                    <TextBlock VerticalAlignment="Center"
-                               Style="{StaticResource CiaSecondaryTextStyle}"
-                               Text="Session active" />
-                </StackPanel>
-            </Grid>
+            <StackPanel VerticalAlignment="Center"
+                        Orientation="Horizontal">
+                <Border Width="24"
+                        Height="24"
+                        Background="{StaticResource CiaLogoBrush}"
+                        CornerRadius="7">
+                    <TextBlock HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               FontSize="12"
+                               FontWeight="ExtraBold"
+                               Foreground="{StaticResource CiaPanelBrush}"
+                               Text="C" />
+                </Border>
+                <TextBlock Margin="10,0,0,0"
+                           VerticalAlignment="Center"
+                           FontSize="18"
+                           FontWeight="Bold"
+                           Foreground="{StaticResource CiaTextPrimaryBrush}"
+                           Text="CIA" />
+                <Border Width="1"
+                        Height="18"
+                        Margin="10,0"
+                        Background="{StaticResource CiaBorderStrongBrush}" />
+                <TextBlock VerticalAlignment="Center"
+                           FontSize="12.5"
+                           Foreground="{StaticResource CiaTextPrimaryBrush}"
+                           Text="Custom Information Aggregator" />
+            </StackPanel>
         </Border>
 
         <Border Grid.Row="1"
                 Style="{StaticResource CiaNavigationBarStyle}">
-            <ListBox AutomationProperties.Name="Principal workspaces"
+            <ListBox x:Name="WorkspaceTabs"
+                     AutomationProperties.Name="Principal workspaces"
                      ItemContainerStyle="{StaticResource CiaWorkspaceTabItemStyle}"
                      ItemTemplate="{StaticResource CiaWorkspaceTabTemplate}"
                      ItemsSource="{Binding Workspaces}"
@@ -78,7 +66,9 @@
                      Style="{StaticResource CiaWorkspaceTabsStyle}" />
         </Border>
 
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="2"
+              MinHeight="0"
+              ClipToBounds="True">
             <views:LoadWorkspaceView DataContext="{Binding LoadWorkspace, ElementName=WindowRoot}">
                 <views:LoadWorkspaceView.Style>
                     <Style TargetType="views:LoadWorkspaceView">
@@ -125,35 +115,51 @@
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="24" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="18" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <StackPanel VerticalAlignment="Center"
-                            Orientation="Horizontal">
-                    <TextBlock Margin="0,0,7,0"
-                               Style="{StaticResource CiaStatusLabelTextStyle}"
-                               Text="Host" />
-                    <TextBlock AutomationProperties.LiveSetting="Polite"
-                               AutomationProperties.Name="Processing Host status"
-                               VerticalAlignment="Center"
-                               Style="{StaticResource CiaSecondaryTextStyle}"
-                               Text="{Binding GlobalStatus.HostStatusText, ElementName=WindowRoot}" />
-                </StackPanel>
+                <Ellipse Width="7"
+                         Height="7"
+                         Margin="0,0,9,0"
+                         VerticalAlignment="Center"
+                         AutomationProperties.Name="Session active"
+                         Fill="{StaticResource CiaSuccessBrush}"
+                         ToolTip="Session active" />
+                <TextBlock Grid.Column="1"
+                           Margin="0,0,5,0"
+                           VerticalAlignment="Center"
+                           Style="{StaticResource CiaStatusLabelTextStyle}"
+                           Text="Host" />
+                <TextBlock Grid.Column="2"
+                           AutomationProperties.LiveSetting="Polite"
+                           AutomationProperties.Name="Processing Host status"
+                           VerticalAlignment="Center"
+                           Style="{StaticResource CiaSecondaryTextStyle}"
+                           Text="{Binding GlobalStatus.HostStatusText, ElementName=WindowRoot}" />
 
-                <StackPanel Grid.Column="2"
-                            VerticalAlignment="Center"
-                            Orientation="Horizontal">
-                    <TextBlock Margin="0,0,7,0"
-                               Style="{StaticResource CiaStatusLabelTextStyle}"
-                               Text="Operation" />
-                    <TextBlock AutomationProperties.LiveSetting="Polite"
-                               AutomationProperties.Name="Global operation status"
-                               VerticalAlignment="Center"
-                               Style="{StaticResource CiaSecondaryTextStyle}"
-                               Text="{Binding GlobalStatus.OperationStatusText, ElementName=WindowRoot}"
-                               TextTrimming="CharacterEllipsis" />
-                </StackPanel>
+                <TextBlock Grid.Column="4"
+                           Margin="0,0,5,0"
+                           VerticalAlignment="Center"
+                           Style="{StaticResource CiaStatusLabelTextStyle}"
+                           Text="Operation" />
+                <TextBlock Grid.Column="5"
+                           AutomationProperties.LiveSetting="Polite"
+                           AutomationProperties.Name="Global operation status"
+                           VerticalAlignment="Center"
+                           Style="{StaticResource CiaSecondaryTextStyle}"
+                           Text="{Binding GlobalStatus.OperationStatusText, ElementName=WindowRoot}"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="6"
+                           Margin="12,0,0,0"
+                           VerticalAlignment="Center"
+                           FontWeight="Bold"
+                           Foreground="{StaticResource CiaTextPrimaryBrush}"
+                           Text="{Binding LoadWorkspace.IncludedSummary, ElementName=WindowRoot}" />
             </Grid>
         </Border>
     </Grid>
