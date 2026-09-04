@@ -20,7 +20,18 @@ public sealed class ActiveLoadedSourceSet
 
     internal bool Contains(string path)
     {
-        return _items.Any(item => string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
+        return _items.Any(item =>
+            string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                item.ArchiveProvenance?.OriginalArchivePath,
+                path,
+                StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal bool Contains(LoadedSourceContract source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return _items.Any(item => item.HasSameLogicalSource(source));
     }
 
     internal bool Contains(LoadedSourceItem source)
@@ -47,6 +58,7 @@ public sealed class ActiveLoadedSourceSet
 
 public sealed class LoadedSourceItem : ObservableObject
 {
+    private string _path;
     private bool _isIncluded;
     private LoadedSourceStatus _status;
     private string? _statusDetail;
@@ -60,16 +72,27 @@ public sealed class LoadedSourceItem : ObservableObject
         ArgumentNullException.ThrowIfNull(source);
 
         SourceId = source.SourceId;
-        Path = source.Path;
+        _path = source.Path;
         _isIncluded = source.IsIncluded;
         _status = source.Status;
         Kind = source.Kind;
+        ArchiveProvenance = source.ArchiveProvenance;
         RefreshMetadata();
     }
 
     public SourceId SourceId { get; }
 
-    public string Path { get; }
+    public string Path
+    {
+        get => _path;
+        private set
+        {
+            if (SetProperty(ref _path, value))
+            {
+                OnPropertyChanged(nameof(DisplayName));
+            }
+        }
+    }
 
     public bool IsIncluded
     {
@@ -105,6 +128,8 @@ public sealed class LoadedSourceItem : ObservableObject
 
     public LoadedSourceKind Kind { get; }
 
+    public ArchiveSourceProvenance? ArchiveProvenance { get; private set; }
+
     public string DisplayName => System.IO.Path.GetFileName(Path);
 
     public string StatusText => Status switch
@@ -116,19 +141,30 @@ public sealed class LoadedSourceItem : ObservableObject
         _ => Status.ToString()
     };
 
-    public string LevelText => "—";
+    public string LevelText => ArchiveProvenance?.ArchiveNestingLevel.ToString(
+        CultureInfo.InvariantCulture) ?? "—";
 
     public string KindText => Kind == LoadedSourceKind.XmlFile ? "XML file" : "Archive";
 
     public string TypeBadgeText => Kind == LoadedSourceKind.XmlFile ? "XML" : "ARC";
 
-    public string SourceText => "File system";
+    public string SourceText => ArchiveProvenance is null
+        ? "File system"
+        : $"Archive: {System.IO.Path.GetFileName(ArchiveProvenance.OriginalArchivePath)}";
 
-    public string ArchiveDepthText => Kind == LoadedSourceKind.Archive
-        ? "Selected archive"
-        : "Not archived";
+    public string ArchiveDepthText => ArchiveProvenance is null
+        ? "Not archived"
+        : $"Level {ArchiveProvenance.ArchiveNestingLevel} of {ArchiveProvenance.MaximumArchiveNestingDepth.Value}";
 
-    public string BreadcrumbText => DisplayName;
+    public string BreadcrumbText => ArchiveProvenance is null
+        ? DisplayName
+        : string.Join(
+            "  ›  ",
+            ArchiveProvenance.ArchiveLineage
+                .Select(item => System.IO.Path.GetFileName(item.Path))
+                .Concat(ArchiveProvenance.ArchiveMemberPath.Split(
+                    ['/', '\\'],
+                    StringSplitOptions.RemoveEmptyEntries)));
 
     public long? SizeBytes
     {
@@ -158,17 +194,18 @@ public sealed class LoadedSourceItem : ObservableObject
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        if (source.SourceId != SourceId
-            || !string.Equals(source.Path, Path, StringComparison.OrdinalIgnoreCase)
-            || source.Kind != Kind)
+        if (source.SourceId != SourceId || source.Kind != Kind)
         {
             throw new ArgumentException(
-                "A source refresh must retain the loaded source identity, path and kind.",
+                "A source refresh must retain the loaded source identity and kind.",
                 nameof(source));
         }
 
+        Path = source.Path;
+        ArchiveProvenance = source.ArchiveProvenance;
         Status = source.Status;
         StatusDetail = null;
+        NotifyArchiveContextChanged();
         RefreshMetadata();
     }
 
@@ -189,6 +226,37 @@ public sealed class LoadedSourceItem : ObservableObject
         SizeText = metadata.SizeText;
         ModifiedText = metadata.ModifiedText;
         CreatedText = metadata.CreatedText;
+    }
+
+    internal bool HasSameLogicalSource(LoadedSourceContract source)
+    {
+        if (ArchiveProvenance is null || source.ArchiveProvenance is null)
+        {
+            return string.Equals(Path, source.Path, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return string.Equals(
+                ArchiveProvenance.OriginalArchivePath,
+                source.ArchiveProvenance.OriginalArchivePath,
+                StringComparison.OrdinalIgnoreCase)
+            && string.Equals(
+                ArchiveProvenance.ArchiveMemberPath,
+                source.ArchiveProvenance.ArchiveMemberPath,
+                StringComparison.OrdinalIgnoreCase)
+            && ArchiveProvenance.ArchiveLineage
+                .Skip(1)
+                .Select(item => item.Path)
+                .SequenceEqual(
+                    source.ArchiveProvenance.ArchiveLineage.Skip(1).Select(item => item.Path),
+                    StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void NotifyArchiveContextChanged()
+    {
+        OnPropertyChanged(nameof(LevelText));
+        OnPropertyChanged(nameof(SourceText));
+        OnPropertyChanged(nameof(ArchiveDepthText));
+        OnPropertyChanged(nameof(BreadcrumbText));
     }
 
     private static SourceFileMetadata ReadFileMetadata(string path)

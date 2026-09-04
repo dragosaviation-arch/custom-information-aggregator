@@ -1,6 +1,7 @@
 using System.Xml;
 using System.Xml.Linq;
 using CIA.Contracts.Sources;
+using CIA.Core.Sources;
 using Microsoft.Extensions.Logging;
 
 namespace CIA.ProcessingHost.SourceInterpretation;
@@ -128,7 +129,12 @@ public sealed class SourceInterpreter : ISourceInterpreter
                     "The source adapter returned content for a different source or declared structure.");
             }
 
-            return SourceInterpretationResult.Usable(interpretedSource);
+            return SourceInterpretationResult.Usable(
+                new InterpretedSourceDocument(
+                    interpretedSource.OriginatingSourceId,
+                    interpretedSource.StructureId,
+                    interpretedSource.Values,
+                    source.ArchiveProvenance));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

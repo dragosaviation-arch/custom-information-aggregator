@@ -78,14 +78,15 @@ public sealed class SourceLoadingCoordinator(
             {
                 return SourceLoadingResult.Reject(
                     intakeResult.FailureCode ?? "source-load-rejected",
-                    intakeResult.FailureDescription ?? "The selected source could not be loaded.");
+                    intakeResult.FailureDescription ?? "The selected source could not be loaded.",
+                    intakeResult.Issues);
             }
 
             var distinct = intakeResult.Sources
                 .DistinctBy(source => source.Path, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             var additions = distinct
-                .Where(source => !sourceSet.Contains(source.Path))
+                .Where(source => !sourceSet.Contains(source))
                 .ToArray();
             var duplicateCount = distinct.Length - additions.Length;
 
@@ -95,7 +96,8 @@ public sealed class SourceLoadingCoordinator(
                     duplicateCount > 0 ? "duplicate-path" : "no-supported-sources",
                     duplicateCount > 0
                         ? "All selected source paths are already loaded."
-                        : "The selected folder contains no supported sources under the current load settings.");
+                        : "The selected folder contains no supported sources under the current load settings.",
+                    intakeResult.Issues);
             }
 
             var workflowResult = workflowCoordinator.RecordSourceSelectionChanged(
@@ -105,11 +107,15 @@ public sealed class SourceLoadingCoordinator(
             {
                 return SourceLoadingResult.Reject(
                     "workflow-rejected",
-                    workflowResult.Rejection?.Reason ?? "The workflow rejected the source-selection change.");
+                    workflowResult.Rejection?.Reason ?? "The workflow rejected the source-selection change.",
+                    intakeResult.Issues);
             }
 
             sourceSet.AddRange(additions);
-            return SourceLoadingResult.Accept(additions.Length, duplicateCount);
+            return SourceLoadingResult.Accept(
+                additions.Length,
+                duplicateCount,
+                intakeResult.Issues);
         }
         finally
         {
@@ -230,7 +236,10 @@ public sealed class SourceLoadingCoordinator(
                 source.Path,
                 source.IsIncluded,
                 source.Status,
-                source.Kind);
+                source.Kind)
+            {
+                ArchiveProvenance = source.ArchiveProvenance
+            };
             var intakeResult = await intakeClient.RefreshAsync(
                 refreshRequest,
                 cancellationToken);
@@ -263,9 +272,7 @@ public sealed class SourceLoadingCoordinator(
 
             var refreshed = intakeResult.Source;
 
-            if (refreshed.SourceId != source.SourceId
-                || !string.Equals(refreshed.Path, source.Path, StringComparison.OrdinalIgnoreCase)
-                || refreshed.Kind != source.Kind)
+            if (refreshed.SourceId != source.SourceId || refreshed.Kind != source.Kind)
             {
                 const string failureDescription =
                     "The Processing Host did not return the requested source during refresh.";
@@ -291,10 +298,13 @@ public sealed class SourceLoadingCoordinator(
 
             var retainedIdentity = new LoadedSourceContract(
                 source.SourceId,
-                source.Path,
+                refreshed.Path,
                 source.IsIncluded,
                 refreshed.Status,
-                source.Kind);
+                source.Kind)
+            {
+                ArchiveProvenance = refreshed.ArchiveProvenance
+            };
             var hasValidSourceSelection = HasValidSourceSelectionExcept(source)
                 || retainedIdentity.IsIncluded
                 && retainedIdentity.Status == LoadedSourceStatus.Ready;
@@ -346,14 +356,28 @@ public sealed record SourceLoadingResult(
     string? FailureCode,
     string? FailureDescription)
 {
-    internal static SourceLoadingResult Accept(int addedCount, int duplicateCount)
+    public IReadOnlyList<SourceIntakeIssue> Issues { get; init; } = [];
+
+    internal static SourceLoadingResult Accept(
+        int addedCount,
+        int duplicateCount,
+        IReadOnlyList<SourceIntakeIssue>? issues = null)
     {
-        return new SourceLoadingResult(true, addedCount, duplicateCount, null, null);
+        return new SourceLoadingResult(true, addedCount, duplicateCount, null, null)
+        {
+            Issues = issues ?? []
+        };
     }
 
-    internal static SourceLoadingResult Reject(string code, string description)
+    internal static SourceLoadingResult Reject(
+        string code,
+        string description,
+        IReadOnlyList<SourceIntakeIssue>? issues = null)
     {
-        return new SourceLoadingResult(false, 0, 0, code, description);
+        return new SourceLoadingResult(false, 0, 0, code, description)
+        {
+            Issues = issues ?? []
+        };
     }
 }
 

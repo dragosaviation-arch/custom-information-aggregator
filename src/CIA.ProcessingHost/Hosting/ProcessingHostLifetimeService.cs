@@ -164,7 +164,10 @@ public sealed class ProcessingHostLifetimeService(
                                     ? CommandAcceptance.Accepted
                                     : CommandAcceptance.Rejected,
                                 result.Sources,
-                                result.Failure),
+                                result.Failure)
+                            {
+                                Issues = result.Issues
+                            },
                             cancellationToken)
                         .ConfigureAwait(false);
                     break;

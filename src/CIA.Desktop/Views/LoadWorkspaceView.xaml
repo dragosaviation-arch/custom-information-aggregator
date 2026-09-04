@@ -430,7 +430,7 @@
                         <TextBlock Grid.Column="1"
                                    VerticalAlignment="Center"
                                    Style="{StaticResource CiaSecondaryTextStyle}"
-                                   Text="0%" />
+                                   Text="{Binding ProgressText}" />
                     </Grid>
                     <ProgressBar Height="5"
                                  Margin="0,6,0,0"
@@ -446,7 +446,7 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                   Text="Current archive: —"
+                                   Text="{Binding CurrentArchiveText}"
                                    TextTrimming="CharacterEllipsis" />
                         <TextBlock Grid.Column="1"
                                    Style="{StaticResource CiaSecondaryTextStyle}"

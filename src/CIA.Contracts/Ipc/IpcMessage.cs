@@ -80,7 +80,10 @@ public sealed record LoadSourcesResponse(
     CommandAcceptance Acceptance,
     IReadOnlyList<LoadedSourceContract> Sources,
     IpcFailure? Failure)
-    : IpcResponse(MessageId, TimestampUtc);
+    : IpcResponse(MessageId, TimestampUtc)
+{
+    public IReadOnlyList<SourceIntakeIssue> Issues { get; init; } = [];
+}
 
 public sealed record RefreshSourceResponse(
     Guid MessageId,

@@ -1,12 +1,16 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.IO.Compression;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Diagnostics;
+using CIA.Core.Runtime;
 using CIA.Desktop.Hosting;
 using CIA.ProcessingHost.Hosting;
 using CIA.ProcessingHost.Operations;
+using CIA.ProcessingHost.SourceIntake;
+using CIA.ProcessingHost.SourceInterpretation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -82,6 +86,75 @@ public sealed class ProcessingHostLifecycleTests
         Assert.HasCount(1, response.Sources);
         Assert.AreEqual(Path.GetFullPath(sourcePath), response.Sources[0].Path);
         Assert.AreEqual(LoadedSourceKind.XmlFile, response.Sources[0].Kind);
+    }
+
+    [TestMethod]
+    public async Task DesktopAndProcessingHostExchangeArchiveDerivedSourcesOverTypedIpc()
+    {
+        using var workspace = new TemporaryLifecycleLogDirectory();
+        using var timeout = new CancellationTokenSource(TestTimeout);
+        var archivePath = Path.Combine(workspace.Path, "sources.zip");
+
+        await using (var stream = File.Create(archivePath))
+        {
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true);
+            var entry = archive.CreateEntry("nested/source.xml");
+            await using var writer = new StreamWriter(entry.Open());
+            await writer.WriteAsync("<root />");
+        }
+
+        var pipeName = $"CIA.Tests.SPR64.{Guid.NewGuid():N}";
+        var builder = Host.CreateApplicationBuilder();
+        builder.Logging.ClearProviders();
+        builder.Services.AddSingleton(new ProcessingHostRuntimeOptions(pipeName, Environment.ProcessId));
+        builder.Services.AddSingleton<IProcessingHistoryRecorder, ClefProcessingHistoryRecorder>();
+        builder.Services.AddSingleton<CooperativeOperationCancellation>();
+        builder.Services.AddSingleton(
+            ApplicationPaths.FromLocalApplicationData(Path.Combine(workspace.Path, "LocalAppData")));
+        builder.Services.AddSingleton<ArchiveExtractionService>();
+        builder.Services.AddSingleton<SourceIntakeService>();
+        builder.Services.AddSingleton<ISourceInterpreter, SourceInterpreter>();
+        builder.Services.AddSingleton<SourceRefreshService>();
+        builder.Services.AddHostedService<ProcessingHostLifetimeService>();
+        using var host = builder.Build();
+
+        await host.StartAsync(timeout.Token);
+        await using var connection = await CIA.Desktop.Ipc.ProcessingHostIpcClient
+            .ConnectAsync(pipeName, timeout.Token);
+        await CompleteReadinessHandshakeAsync(connection, timeout.Token);
+        var command = new LoadSourcesCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            SourceSelectionKind.Archive,
+            archivePath,
+            SourceLoadSettings.Default);
+
+        await connection.SendAsync(command, timeout.Token);
+        var response = await connection.ReceiveAsync(timeout.Token);
+
+        Assert.IsInstanceOfType<LoadSourcesResponse>(response);
+        var typedResponse = (LoadSourcesResponse)response;
+        Assert.AreEqual(CommandAcceptance.Accepted, typedResponse.Acceptance);
+        Assert.IsNull(typedResponse.Failure);
+        Assert.HasCount(1, typedResponse.Sources);
+        Assert.HasCount(0, typedResponse.Issues);
+        var source = typedResponse.Sources[0];
+        var provenance = source.ArchiveProvenance;
+        Assert.AreEqual(LoadedSourceKind.XmlFile, source.Kind);
+        Assert.IsNotNull(provenance);
+        Assert.AreEqual(Path.GetFullPath(archivePath), provenance.OriginalArchivePath);
+        Assert.AreEqual("nested/source.xml", provenance.ArchiveMemberPath);
+        Assert.AreEqual(1, provenance.ArchiveNestingLevel);
+        Assert.IsTrue(File.Exists(source.Path));
+
+        var stop = new StopProcessingHostCommand(Guid.CreateVersion7(), DateTimeOffset.UtcNow);
+        await connection.SendAsync(stop, timeout.Token);
+        await ReceiveAcknowledgementAsync(
+            connection,
+            stop.MessageId,
+            CommandAcceptance.Accepted,
+            timeout.Token);
+        await host.StopAsync(timeout.Token);
     }
 
     [TestMethod]

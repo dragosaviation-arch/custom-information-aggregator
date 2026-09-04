@@ -36,7 +36,10 @@ public sealed class ProcessingHostSourceIntakeClient(
                 response.Acceptance == CommandAcceptance.Accepted,
                 response.Sources,
                 response.Failure?.Code,
-                response.Failure?.Description);
+                response.Failure?.Description)
+            {
+                Issues = response.Issues
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

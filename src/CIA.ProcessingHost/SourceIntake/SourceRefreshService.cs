@@ -13,6 +13,12 @@ public sealed class SourceRefreshService(
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
+
+        if (source.ArchiveProvenance is not null)
+        {
+            return await RefreshArchiveMemberAsync(source, cancellationToken).ConfigureAwait(false);
+        }
+
         var selectionKind = source.Kind == LoadedSourceKind.XmlFile
             ? SourceSelectionKind.XmlFile
             : SourceSelectionKind.Archive;
@@ -50,8 +56,64 @@ public sealed class SourceRefreshService(
                 RetainIdentity(source, LoadedSourceStatus.Ready));
         }
 
+        return await InterpretAsync(
+            RetainIdentity(source, reloaded, LoadedSourceStatus.Ready),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SourceRefreshHostResult> RefreshArchiveMemberAsync(
+        LoadedSourceContract source,
+        CancellationToken cancellationToken)
+    {
+        var provenance = source.ArchiveProvenance!;
+        var intake = await sourceIntake
+            .ReloadArchiveAsync(provenance, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!intake.Accepted)
+        {
+            var failure = intake.Failure
+                ?? new IpcFailure("source-refresh-rejected", "The source archive could not be reloaded.");
+            return SourceRefreshHostResult.Reject(
+                RetainIdentity(source, MapIntakeFailure(failure.Code)),
+                failure);
+        }
+
+        var reloaded = intake.Sources.FirstOrDefault(candidate =>
+            candidate.Kind == source.Kind
+            && candidate.ArchiveProvenance is { } candidateProvenance
+            && candidateProvenance.OriginalArchiveSourceId == provenance.OriginalArchiveSourceId
+            && string.Equals(
+                candidateProvenance.ArchiveMemberPath,
+                provenance.ArchiveMemberPath,
+                StringComparison.OrdinalIgnoreCase)
+            && candidateProvenance.ArchiveLineage
+                .Skip(1)
+                .Select(item => item.Path)
+                .SequenceEqual(
+                    provenance.ArchiveLineage.Skip(1).Select(item => item.Path),
+                    StringComparer.OrdinalIgnoreCase));
+
+        if (reloaded is null)
+        {
+            return SourceRefreshHostResult.Reject(
+                RetainIdentity(source, LoadedSourceStatus.Unavailable),
+                new IpcFailure(
+                    "archive-member-not-found",
+                    "The source archive no longer contains the requested XML source."));
+        }
+
+        return await InterpretAsync(
+            RetainIdentity(source, reloaded, LoadedSourceStatus.Ready),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SourceRefreshHostResult> InterpretAsync(
+        LoadedSourceContract source,
+        CancellationToken cancellationToken)
+    {
         var interpretation = await sourceInterpreter
-            .InterpretAsync(RetainIdentity(source, LoadedSourceStatus.Ready), cancellationToken)
+            .InterpretAsync(source, cancellationToken)
             .ConfigureAwait(false);
 
         return interpretation.Status switch
@@ -72,12 +134,20 @@ public sealed class SourceRefreshService(
         LoadedSourceContract source,
         LoadedSourceStatus status)
     {
-        return new LoadedSourceContract(
-            source.SourceId,
-            source.Path,
-            source.IsIncluded,
-            status,
-            source.Kind);
+        return source with { Status = status };
+    }
+
+    private static LoadedSourceContract RetainIdentity(
+        LoadedSourceContract source,
+        LoadedSourceContract reloaded,
+        LoadedSourceStatus status)
+    {
+        return reloaded with
+        {
+            SourceId = source.SourceId,
+            IsIncluded = source.IsIncluded,
+            Status = status
+        };
     }
 
     private static IpcFailure ToIpcFailure(SourceInterpretationResult result)

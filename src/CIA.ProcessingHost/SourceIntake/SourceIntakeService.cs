@@ -5,7 +5,7 @@ using SharpCompress.Common;
 
 namespace CIA.ProcessingHost.SourceIntake;
 
-public sealed class SourceIntakeService
+public sealed class SourceIntakeService(ArchiveExtractionService archiveExtraction)
 {
     public Task<SourceIntakeResult> LoadAsync(
         SourceSelectionKind selectionKind,
@@ -20,17 +20,42 @@ public sealed class SourceIntakeService
             cancellationToken);
     }
 
-    private static SourceIntakeResult Load(
+    public Task<SourceIntakeResult> ReloadArchiveAsync(
+        ArchiveSourceProvenance provenance,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(provenance);
+        var settings = SourceLoadSettings.Default with
+        {
+            MaximumArchiveNestingDepth = provenance.MaximumArchiveNestingDepth,
+            PersistentArchiveExtractionEnabled =
+                provenance.Retention == ArchiveExtractionRetention.Persistent,
+            PersistentArchiveExtractionDirectory = provenance.PersistentExtractionDirectory
+        };
+
+        return Task.Run(
+            () => LoadArchive(
+                provenance.OriginalArchivePath,
+                settings,
+                cancellationToken,
+                provenance.OriginalArchiveSourceId),
+            cancellationToken);
+    }
+
+    private SourceIntakeResult Load(
         SourceSelectionKind selectionKind,
         string path,
         SourceLoadSettings settings,
         CancellationToken cancellationToken)
     {
-        if (settings.MaximumArchiveNestingDepth.Value < 1)
+        if (settings.MaximumArchiveNestingDepth.Value < 1
+            || settings.PersistentArchiveExtractionEnabled
+            && (string.IsNullOrWhiteSpace(settings.PersistentArchiveExtractionDirectory)
+                || !Path.IsPathFullyQualified(settings.PersistentArchiveExtractionDirectory)))
         {
             return Reject(
                 "invalid-load-settings",
-                "The maximum archive nesting depth must be at least 1.");
+                "Archive depth and persistent extraction settings must be valid before loading sources.");
         }
 
         try
@@ -41,7 +66,7 @@ public sealed class SourceIntakeService
             return selectionKind switch
             {
                 SourceSelectionKind.XmlFile => LoadXmlFile(fullPath),
-                SourceSelectionKind.Archive => LoadArchive(fullPath),
+                SourceSelectionKind.Archive => LoadArchive(fullPath, settings, cancellationToken),
                 SourceSelectionKind.Folder => LoadFolder(fullPath, settings, cancellationToken),
                 _ => Reject("unsupported-selection", "The requested source-selection kind is not supported.")
             };
@@ -72,7 +97,11 @@ public sealed class SourceIntakeService
         return Accept(CreateSource(path, LoadedSourceKind.XmlFile));
     }
 
-    private static SourceIntakeResult LoadArchive(string path)
+    private SourceIntakeResult LoadArchive(
+        string path,
+        SourceLoadSettings settings,
+        CancellationToken cancellationToken,
+        SourceId? retainedOriginalArchiveSourceId = null)
     {
         if (!File.Exists(path))
         {
@@ -84,10 +113,21 @@ public sealed class SourceIntakeService
             return Reject("unsupported-archive", "The selected file is not a supported archive.");
         }
 
-        return Accept(CreateSource(path, LoadedSourceKind.Archive));
+        var extraction = archiveExtraction.Extract(
+            path,
+            settings,
+            cancellationToken,
+            retainedOriginalArchiveSourceId);
+        return new SourceIntakeResult(
+            extraction.Accepted,
+            extraction.Sources,
+            extraction.Failure)
+        {
+            Issues = extraction.Issues
+        };
     }
 
-    private static SourceIntakeResult LoadFolder(
+    private SourceIntakeResult LoadFolder(
         string path,
         SourceLoadSettings settings,
         CancellationToken cancellationToken)
@@ -101,6 +141,7 @@ public sealed class SourceIntakeService
             ? SearchOption.AllDirectories
             : SearchOption.TopDirectoryOnly;
         var sources = new List<LoadedSourceContract>();
+        var issues = new List<SourceIntakeIssue>();
 
         foreach (var filePath in Directory.EnumerateFiles(path, "*", searchOption))
         {
@@ -115,9 +156,44 @@ public sealed class SourceIntakeService
                 continue;
             }
 
-            if (settings.IncludeArchiveFiles && IsSupportedArchive(fullPath))
+            if (!settings.IncludeArchiveFiles)
             {
-                sources.Add(CreateSource(fullPath, LoadedSourceKind.Archive));
+                continue;
+            }
+
+            try
+            {
+                if (!IsSupportedArchive(fullPath))
+                {
+                    continue;
+                }
+
+                var archiveResult = LoadArchive(fullPath, settings, cancellationToken);
+                if (archiveResult.Accepted)
+                {
+                    sources.AddRange(archiveResult.Sources);
+                    issues.AddRange(archiveResult.Issues);
+                }
+                else
+                {
+                    issues.AddRange(archiveResult.Issues);
+                    issues.Add(new SourceIntakeIssue(
+                        archiveResult.Failure?.Code ?? "archive-load-failed",
+                        archiveResult.Failure?.Description
+                            ?? "An archive in the selected folder could not be processed.",
+                        fullPath,
+                        ArchiveNestingLevel: 1,
+                        EntryPath: null));
+                }
+            }
+            catch (Exception exception) when (IsControlledPathFailure(exception))
+            {
+                issues.Add(new SourceIntakeIssue(
+                    "archive-unreadable",
+                    "An archive in the selected folder could not be read and was skipped.",
+                    fullPath,
+                    ArchiveNestingLevel: 1,
+                    EntryPath: null));
             }
         }
 
@@ -125,7 +201,20 @@ public sealed class SourceIntakeService
             .DistinctBy(source => source.Path, StringComparer.OrdinalIgnoreCase)
             .OrderBy(source => source.Path, StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        return Accept(distinctSources);
+        if (distinctSources.Length == 0 && issues.Count > 0)
+        {
+            return new SourceIntakeResult(
+                false,
+                Array.Empty<LoadedSourceContract>(),
+                new IpcFailure(
+                    "folder-no-usable-sources",
+                    "The selected folder did not contain any usable supported sources under the active load settings."))
+            {
+                Issues = issues
+            };
+        }
+
+        return Accept(distinctSources, issues);
     }
 
     private static bool IsSupportedArchive(string path)
@@ -163,7 +252,17 @@ public sealed class SourceIntakeService
 
     private static SourceIntakeResult Accept(params IReadOnlyList<LoadedSourceContract> sources)
     {
-        return new SourceIntakeResult(true, sources, Failure: null);
+        return Accept(sources, []);
+    }
+
+    private static SourceIntakeResult Accept(
+        IReadOnlyList<LoadedSourceContract> sources,
+        IReadOnlyList<SourceIntakeIssue> issues)
+    {
+        return new SourceIntakeResult(true, sources, Failure: null)
+        {
+            Issues = issues
+        };
     }
 
     private static SourceIntakeResult Reject(string code, string description)
@@ -195,4 +294,7 @@ public sealed class SourceIntakeService
 public sealed record SourceIntakeResult(
     bool Accepted,
     IReadOnlyList<LoadedSourceContract> Sources,
-    IpcFailure? Failure);
+    IpcFailure? Failure)
+{
+    public IReadOnlyList<SourceIntakeIssue> Issues { get; init; } = [];
+}

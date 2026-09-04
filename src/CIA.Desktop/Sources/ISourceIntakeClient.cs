@@ -19,7 +19,10 @@ public sealed record SourceIntakeClientResult(
     bool Accepted,
     IReadOnlyList<LoadedSourceContract> Sources,
     string? FailureCode,
-    string? FailureDescription);
+    string? FailureDescription)
+{
+    public IReadOnlyList<SourceIntakeIssue> Issues { get; init; } = [];
+}
 
 public sealed record SourceRefreshClientResult(
     bool Accepted,

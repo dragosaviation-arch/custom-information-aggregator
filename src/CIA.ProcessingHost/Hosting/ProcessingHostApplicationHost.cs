@@ -1,4 +1,5 @@
 using CIA.Core.Diagnostics;
+using CIA.Core.Runtime;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.SourceIntake;
 using CIA.ProcessingHost.SourceInterpretation;
@@ -30,6 +31,8 @@ public static class ProcessingHostApplicationHost
 
         builder.Services.AddSingleton<IProcessingHistoryRecorder, ClefProcessingHistoryRecorder>();
         builder.Services.AddSingleton<CooperativeOperationCancellation>();
+        builder.Services.AddSingleton(_ => ApplicationPaths.ForCurrentUser());
+        builder.Services.AddSingleton<ArchiveExtractionService>();
         builder.Services.AddSingleton<SourceIntakeService>();
         builder.Services.AddSingleton<ISourceInterpreter, SourceInterpreter>();
         builder.Services.AddSingleton<SourceRefreshService>();

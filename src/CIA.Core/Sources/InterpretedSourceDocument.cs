@@ -7,7 +7,8 @@ public sealed class InterpretedSourceDocument
     public InterpretedSourceDocument(
         SourceId originatingSourceId,
         string structureId,
-        IEnumerable<InterpretedSourceValue> values)
+        IEnumerable<InterpretedSourceValue> values,
+        ArchiveSourceProvenance? archiveProvenance = null)
     {
         if (originatingSourceId == default)
         {
@@ -31,6 +32,7 @@ public sealed class InterpretedSourceDocument
         OriginatingSourceId = originatingSourceId;
         StructureId = structureId;
         Values = Array.AsReadOnly(valueArray);
+        ArchiveProvenance = archiveProvenance;
     }
 
     public SourceId OriginatingSourceId { get; }
@@ -38,6 +40,8 @@ public sealed class InterpretedSourceDocument
     public string StructureId { get; }
 
     public IReadOnlyList<InterpretedSourceValue> Values { get; }
+
+    public ArchiveSourceProvenance? ArchiveProvenance { get; }
 }
 
 public sealed class InterpretedSourceValue
