@@ -36,6 +36,32 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="DiscoveryBlacklistButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource CiaButtonStyle}">
+            <Setter Property="Height" Value="23" />
+            <Setter Property="Padding" Value="6,0" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsBlacklisted}" Value="True">
+                    <Setter Property="Background" Value="#FFFFF1F1" />
+                    <Setter Property="BorderBrush" Value="#FFEFCACA" />
+                    <Setter Property="Foreground" Value="{StaticResource CiaDangerBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="DiscoveryDispositionTextStyle"
+               TargetType="TextBlock"
+               BasedOn="{StaticResource CiaSecondaryTextStyle}">
+            <Setter Property="FontWeight" Value="Bold" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding SelectedInformation.IsSelected}" Value="True">
+                    <Setter Property="Foreground" Value="{StaticResource CiaSuccessBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding SelectedInformation.IsBlacklisted}" Value="True">
+                    <Setter Property="Foreground" Value="{StaticResource CiaDangerBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
     </UserControl.Resources>
 
     <Grid x:Name="DiscoveryLayout"
@@ -116,15 +142,13 @@
                     <ComboBoxItem Content="No Profile" />
                 </ComboBox>
                 <Button Margin="0,0,2,0"
-                        IsEnabled="False"
+                        Command="{Binding SelectVisibleCommand}"
                         Style="{StaticResource CiaGhostButtonStyle}"
-                        Content="Select visible"
-                        ToolTip="Discovery selection is implemented by SPR-70." />
+                        Content="Select visible" />
                 <Button Margin="0,0,6,0"
-                        IsEnabled="False"
+                        Command="{Binding DeselectVisibleCommand}"
                         Style="{StaticResource CiaGhostButtonStyle}"
-                        Content="Deselect visible"
-                        ToolTip="Discovery selection is implemented by SPR-70." />
+                        Content="Deselect visible" />
                 <TextBlock VerticalAlignment="Center"
                            FontWeight="Bold"
                            Foreground="{StaticResource CiaTextPrimaryBrush}"
@@ -221,6 +245,13 @@
                                     <Setter Property="BorderThickness" Value="0,0,0,1" />
                                     <Setter Property="FocusVisualStyle" Value="{x:Null}" />
                                     <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource CiaSelectedRowBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsBlacklisted}" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource CiaPanelAlternateBrush}" />
+                                            <Setter Property="Opacity" Value="0.62" />
+                                        </DataTrigger>
                                         <Trigger Property="IsMouseOver" Value="True">
                                             <Setter Property="Background" Value="{StaticResource CiaHoverBrush}" />
                                         </Trigger>
@@ -244,8 +275,10 @@
                                         </Grid.ColumnDefinitions>
                                         <CheckBox HorizontalAlignment="Center"
                                                   VerticalAlignment="Center"
-                                                  IsEnabled="False"
-                                                  ToolTip="Discovery selection is implemented by SPR-70." />
+                                                  AutomationProperties.Name="Select discovered information"
+                                                  Command="{Binding DataContext.ToggleSelectionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                  CommandParameter="{Binding}"
+                                                  IsChecked="{Binding IsSelected, Mode=OneWay}" />
                                         <TextBlock Grid.Column="1"
                                                    FontFamily="Consolas"
                                                    FontWeight="SemiBold"
@@ -272,12 +305,11 @@
                                                    Style="{StaticResource DiscoveryRowTextStyle}"
                                                    Text="{Binding SampleValue}" />
                                         <Button Grid.Column="6"
-                                                Height="23"
-                                                Padding="6,0"
-                                                IsEnabled="False"
-                                                Style="{StaticResource CiaButtonStyle}"
-                                                Content="Blacklist"
-                                                ToolTip="Blacklist behavior is implemented by SPR-70." />
+                                                AutomationProperties.Name="Toggle information blacklist"
+                                                Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}"
+                                                Content="{Binding BlacklistActionText}"
+                                                Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
                                     </Grid>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
@@ -421,15 +453,23 @@
                             <RowDefinition Height="8" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <Border HorizontalAlignment="Left"
-                                Padding="7,4"
-                                Background="{StaticResource CiaAccentSoftBrush}"
-                                CornerRadius="6">
-                            <TextBlock FontFamily="Consolas"
-                                       FontWeight="Bold"
-                                       Foreground="{StaticResource CiaAccentBrush}"
-                                       Text="{Binding SelectedInformation.InformationType, TargetNullValue=No tag selected}" />
-                        </Border>
+                        <StackPanel HorizontalAlignment="Left" Orientation="Horizontal">
+                            <Border Padding="7,4"
+                                    Background="{StaticResource CiaAccentSoftBrush}"
+                                    CornerRadius="6">
+                                <TextBlock FontFamily="Consolas"
+                                           FontWeight="Bold"
+                                           Foreground="{StaticResource CiaAccentBrush}"
+                                           Text="{Binding SelectedInformation.InformationType, TargetNullValue=No tag selected}" />
+                            </Border>
+                            <Border Margin="6,0,0,0"
+                                    Padding="7,4"
+                                    Background="{StaticResource CiaPanelAlternateBrush}"
+                                    CornerRadius="6">
+                                <TextBlock Style="{StaticResource DiscoveryDispositionTextStyle}"
+                                           Text="{Binding SelectedInformation.DispositionText, TargetNullValue=Neutral}" />
+                            </Border>
+                        </StackPanel>
                         <Border Grid.Row="2"
                                 Padding="14,12"
                                 Background="#FFFCFCFE"
@@ -530,12 +570,11 @@
                                                    Foreground="{StaticResource CiaAccentBrush}"
                                                    Text="LIST VIEW" />
                                         <CheckBox Margin="0,4"
-                                                  IsChecked="True"
-                                                  IsEnabled="False"
-                                                  Content="Show blacklisted tags" />
+                                                  Content="Show blacklisted tags"
+                                                  IsChecked="{Binding ShowBlacklisted}" />
                                         <CheckBox Margin="0,4"
-                                                  IsEnabled="False"
-                                                  Content="Show only selected" />
+                                                  Content="Show only selected"
+                                                  IsChecked="{Binding ShowOnlySelected}" />
                                         <CheckBox Margin="0,4"
                                                   IsEnabled="False"
                                                   Content="Show only tags with Database Tag Name Override" />

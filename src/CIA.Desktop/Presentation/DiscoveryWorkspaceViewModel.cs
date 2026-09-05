@@ -16,6 +16,7 @@ namespace CIA.Desktop.Presentation;
 public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 {
     private readonly IDiscoveryClient _discoveryClient;
+    private readonly ActiveDiscoveryConfiguration _activeConfiguration;
     private readonly ActiveLoadedSourceSet _sourceSet;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly ObservableCollection<DiscoveredInformationItemViewModel> _visibleInformation = [];
@@ -23,8 +24,13 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _previousPageCommand;
     private readonly RelayCommand _nextPageCommand;
     private readonly RelayCommand<DiscoveredInformationItemViewModel> _inspectSourcesCommand;
+    private readonly RelayCommand<DiscoveredInformationItemViewModel> _toggleSelectionCommand;
+    private readonly RelayCommand<DiscoveredInformationItemViewModel> _toggleBlacklistCommand;
+    private readonly RelayCommand _selectVisibleCommand;
+    private readonly RelayCommand _deselectVisibleCommand;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private IReadOnlyList<DiscoveredInformationItemViewModel> _allInformation = [];
+    private IReadOnlyList<DiscoveredInformationItemViewModel> _filteredInformation = [];
     private string _searchText = string.Empty;
     private string _sortColumn = "Tag";
     private bool _sortAscending = true;
@@ -33,6 +39,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool _isBusy;
     private bool _hasCompletedDiscovery;
     private bool _isSourceInspectionOpen;
+    private bool _showBlacklisted = true;
+    private bool _showOnlySelected;
     private int _issueCount;
     private WorkflowArtifactStatus _discoveryStatus;
     private string _statusTitle = "Discovery ready";
@@ -43,14 +51,17 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public DiscoveryWorkspaceViewModel(
         IDiscoveryClient discoveryClient,
+        ActiveDiscoveryConfiguration activeConfiguration,
         ActiveLoadedSourceSet sourceSet,
         IApplicationWorkflowCoordinator workflowCoordinator)
     {
         ArgumentNullException.ThrowIfNull(discoveryClient);
+        ArgumentNullException.ThrowIfNull(activeConfiguration);
         ArgumentNullException.ThrowIfNull(sourceSet);
         ArgumentNullException.ThrowIfNull(workflowCoordinator);
 
         _discoveryClient = discoveryClient;
+        _activeConfiguration = activeConfiguration;
         _sourceSet = sourceSet;
         _workflowCoordinator = workflowCoordinator;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
@@ -69,6 +80,18 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _inspectSourcesCommand = new RelayCommand<DiscoveredInformationItemViewModel>(
             InspectSources,
             information => information?.SourceCount > 0);
+        _toggleSelectionCommand = new RelayCommand<DiscoveredInformationItemViewModel>(
+            ToggleSelection,
+            CanToggleSelection);
+        _toggleBlacklistCommand = new RelayCommand<DiscoveredInformationItemViewModel>(
+            ToggleBlacklist,
+            CanToggleBlacklist);
+        _selectVisibleCommand = new RelayCommand(
+            () => SetVisibleSelection(isSelected: true),
+            CanSelectVisible);
+        _deselectVisibleCommand = new RelayCommand(
+            () => SetVisibleSelection(isSelected: false),
+            CanDeselectVisible);
         CloseSourceInspectionCommand = new RelayCommand(
             () => IsSourceInspectionOpen = false);
 
@@ -97,6 +120,16 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public IRelayCommand<DiscoveredInformationItemViewModel> InspectSourcesCommand =>
         _inspectSourcesCommand;
+
+    public IRelayCommand<DiscoveredInformationItemViewModel> ToggleSelectionCommand =>
+        _toggleSelectionCommand;
+
+    public IRelayCommand<DiscoveredInformationItemViewModel> ToggleBlacklistCommand =>
+        _toggleBlacklistCommand;
+
+    public IRelayCommand SelectVisibleCommand => _selectVisibleCommand;
+
+    public IRelayCommand DeselectVisibleCommand => _deselectVisibleCommand;
 
     public IRelayCommand CloseSourceInspectionCommand { get; }
 
@@ -147,6 +180,32 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public bool HasInformation => _allInformation.Count > 0;
 
+    public bool ShowBlacklisted
+    {
+        get => _showBlacklisted;
+        set
+        {
+            if (SetProperty(ref _showBlacklisted, value))
+            {
+                _currentPage = 1;
+                RefreshPresentation();
+            }
+        }
+    }
+
+    public bool ShowOnlySelected
+    {
+        get => _showOnlySelected;
+        set
+        {
+            if (SetProperty(ref _showOnlySelected, value))
+            {
+                _currentPage = 1;
+                RefreshPresentation();
+            }
+        }
+    }
+
     public bool IsBusy
     {
         get => _isBusy;
@@ -157,6 +216,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(RunButtonText));
                 OnPropertyChanged(nameof(DiscoveryStateText));
                 RunDiscoveryCommand.NotifyCanExecuteChanged();
+                NotifyConfigurationCommandsChanged();
             }
         }
     }
@@ -196,7 +256,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public string SelectionSummary => string.Format(
         CultureInfo.CurrentCulture,
-        "0 / {0:N0} selected",
+        "{0:N0} / {1:N0} selected",
+        _activeConfiguration.Current.SelectedCount,
         _allInformation.Count);
 
     public string ShowingSummary
@@ -347,8 +408,16 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 return;
             }
 
+            _activeConfiguration.Synchronize(
+                result.Information.Select(information => information.InformationType));
+            var dispositions = _activeConfiguration.Current.Items.ToDictionary(
+                item => item.InformationType,
+                item => item.Disposition,
+                StringComparer.Ordinal);
             _allInformation = result.Information
-                .Select(information => new DiscoveredInformationItemViewModel(information))
+                .Select(information => new DiscoveredInformationItemViewModel(
+                    information,
+                    dispositions[information.InformationType]))
                 .ToArray();
             _issueCount = result.Issues.Count;
             _hasCompletedDiscovery = true;
@@ -414,6 +483,111 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         RefreshPresentation();
     }
 
+    private bool CanChangeConfiguration()
+    {
+        return !IsBusy && DiscoveryStatus == WorkflowArtifactStatus.Current;
+    }
+
+    private bool CanToggleSelection(DiscoveredInformationItemViewModel? information)
+    {
+        return information is not null
+            && !information.IsBlacklisted
+            && CanChangeConfiguration();
+    }
+
+    private bool CanToggleBlacklist(DiscoveredInformationItemViewModel? information)
+    {
+        return information is not null && CanChangeConfiguration();
+    }
+
+    private bool CanSelectVisible()
+    {
+        return CanChangeConfiguration()
+            && _filteredInformation.Any(
+                information => !information.IsSelected && !information.IsBlacklisted);
+    }
+
+    private bool CanDeselectVisible()
+    {
+        return CanChangeConfiguration()
+            && _filteredInformation.Any(information => information.IsSelected);
+    }
+
+    private void ToggleSelection(DiscoveredInformationItemViewModel? information)
+    {
+        if (information is null || information.IsBlacklisted)
+        {
+            return;
+        }
+
+        ApplyConfigurationChange(
+            () => _activeConfiguration.SetSelection(
+                [information.InformationType],
+                !information.IsSelected));
+    }
+
+    private void ToggleBlacklist(DiscoveredInformationItemViewModel? information)
+    {
+        if (information is null)
+        {
+            return;
+        }
+
+        ApplyConfigurationChange(
+            () => _activeConfiguration.SetBlacklisted(
+                    information.InformationType,
+                    !information.IsBlacklisted)
+                ? 1
+                : 0);
+    }
+
+    private void SetVisibleSelection(bool isSelected)
+    {
+        var targets = _filteredInformation
+            .Where(information => isSelected
+                ? !information.IsSelected && !information.IsBlacklisted
+                : information.IsSelected)
+            .Select(information => information.InformationType)
+            .ToArray();
+        if (targets.Length == 0)
+        {
+            return;
+        }
+
+        ApplyConfigurationChange(
+            () => _activeConfiguration.SetSelection(targets, isSelected));
+    }
+
+    private void ApplyConfigurationChange(Func<int> applyChange)
+    {
+        if (!CanChangeConfiguration())
+        {
+            return;
+        }
+
+        var workflowResult = _workflowCoordinator.RecordDiscoveryConfigurationChanged();
+        if (!workflowResult.Accepted || applyChange() == 0)
+        {
+            return;
+        }
+
+        ApplyActiveConfiguration();
+    }
+
+    private void ApplyActiveConfiguration()
+    {
+        var dispositions = _activeConfiguration.Current.Items.ToDictionary(
+            item => item.InformationType,
+            item => item.Disposition,
+            StringComparer.Ordinal);
+        foreach (var information in _allInformation)
+        {
+            information.ApplyDisposition(dispositions[information.InformationType]);
+        }
+
+        RefreshPresentation();
+    }
+
     private void RefreshPresentation()
     {
         IEnumerable<DiscoveredInformationItemViewModel> query = _allInformation;
@@ -425,8 +599,19 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 || information.SampleValue.Contains(SearchText, StringComparison.OrdinalIgnoreCase));
         }
 
+        if (!ShowBlacklisted)
+        {
+            query = query.Where(information => !information.IsBlacklisted);
+        }
+
+        if (ShowOnlySelected)
+        {
+            query = query.Where(information => information.IsSelected);
+        }
+
         query = ApplySort(query);
         var filtered = query.ToArray();
+        _filteredInformation = filtered;
         FilteredCount = filtered.Length;
         _currentPage = Math.Clamp(_currentPage, 1, PageCount);
 
@@ -448,6 +633,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(ResultSummary));
         _previousPageCommand.NotifyCanExecuteChanged();
         _nextPageCommand.NotifyCanExecuteChanged();
+        NotifyConfigurationCommandsChanged();
     }
 
     private IEnumerable<DiscoveredInformationItemViewModel> ApplySort(
@@ -515,6 +701,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             {
                 DiscoveryStatus = state.Discovery;
                 RunDiscoveryCommand.NotifyCanExecuteChanged();
+                NotifyConfigurationCommandsChanged();
             });
     }
 
@@ -537,6 +724,14 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(OccurrencesHeaderText));
         OnPropertyChanged(nameof(SourcesHeaderText));
         OnPropertyChanged(nameof(SampleHeaderText));
+    }
+
+    private void NotifyConfigurationCommandsChanged()
+    {
+        _toggleSelectionCommand.NotifyCanExecuteChanged();
+        _toggleBlacklistCommand.NotifyCanExecuteChanged();
+        _selectVisibleCommand.NotifyCanExecuteChanged();
+        _deselectVisibleCommand.NotifyCanExecuteChanged();
     }
 
     private string HeaderText(string column, string label)
@@ -574,11 +769,20 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     }
 }
 
-public sealed class DiscoveredInformationItemViewModel
+public sealed class DiscoveredInformationItemViewModel : ObservableObject
 {
-    public DiscoveredInformationItemViewModel(DiscoveredInformation information)
+    private DiscoveryInformationDisposition _disposition;
+
+    public DiscoveredInformationItemViewModel(
+        DiscoveredInformation information,
+        DiscoveryInformationDisposition disposition)
     {
         ArgumentNullException.ThrowIfNull(information);
+        if (!Enum.IsDefined(disposition))
+        {
+            throw new ArgumentOutOfRangeException(nameof(disposition), disposition, null);
+        }
+
         InformationType = information.InformationType;
         DatabaseTag = information.InformationType;
         TotalOccurrenceCount = information.TotalOccurrenceCount;
@@ -586,6 +790,7 @@ public sealed class DiscoveredInformationItemViewModel
             .Select(source => new DiscoveredSourceContributionViewModel(source))
             .ToArray();
         SampleValue = information.SampleValue;
+        _disposition = disposition;
     }
 
     public string InformationType { get; }
@@ -603,6 +808,36 @@ public sealed class DiscoveredInformationItemViewModel
     public string SourceCountText => SourceCount.ToString("N0", CultureInfo.CurrentCulture);
 
     public string SampleValue { get; }
+
+    public DiscoveryInformationDisposition Disposition => _disposition;
+
+    public bool IsSelected => Disposition == DiscoveryInformationDisposition.Selected;
+
+    public bool IsBlacklisted => Disposition == DiscoveryInformationDisposition.Blacklisted;
+
+    public string DispositionText => Disposition switch
+    {
+        DiscoveryInformationDisposition.Selected => "Selected",
+        DiscoveryInformationDisposition.Blacklisted => "Excluded",
+        _ => "Neutral"
+    };
+
+    public string BlacklistActionText => IsBlacklisted ? "Blacklisted" : "Blacklist";
+
+    internal void ApplyDisposition(DiscoveryInformationDisposition disposition)
+    {
+        if (_disposition == disposition)
+        {
+            return;
+        }
+
+        _disposition = disposition;
+        OnPropertyChanged(nameof(Disposition));
+        OnPropertyChanged(nameof(IsSelected));
+        OnPropertyChanged(nameof(IsBlacklisted));
+        OnPropertyChanged(nameof(DispositionText));
+        OnPropertyChanged(nameof(BlacklistActionText));
+    }
 }
 
 public sealed class DiscoveredSourceContributionViewModel
