@@ -21,4 +21,24 @@
     <ProjectReference Include="..\CIA.Core\CIA.Core.csproj" />
   </ItemGroup>
 
+  <Target
+    Name="GetProcessingHostCompanionFiles"
+    DependsOnTargets="Build;GetCopyToOutputDirectoryItems"
+    Returns="@(_ProcessingHostCompanionFile)">
+    <ItemGroup>
+      <_ProcessingHostCompanionFile Include="$(TargetPath)">
+        <TargetPath>$(TargetFileName)</TargetPath>
+      </_ProcessingHostCompanionFile>
+      <_ProcessingHostCompanionFile Include="$(TargetDir)$(TargetName).pdb" Condition="Exists('$(TargetDir)$(TargetName).pdb')">
+        <TargetPath>$(TargetName).pdb</TargetPath>
+      </_ProcessingHostCompanionFile>
+      <_ProcessingHostCompanionFile Include="@(ReferenceCopyLocalPaths)">
+        <TargetPath>%(ReferenceCopyLocalPaths.DestinationSubDirectory)%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)</TargetPath>
+      </_ProcessingHostCompanionFile>
+      <_ProcessingHostCompanionFile Include="@(AllItemsFullPathWithTargetPath)">
+        <TargetPath>%(AllItemsFullPathWithTargetPath.TargetPath)</TargetPath>
+      </_ProcessingHostCompanionFile>
+    </ItemGroup>
+  </Target>
+
 </Project>

@@ -21,6 +21,42 @@
   <ItemGroup>
     <ProjectReference Include="..\CIA.Contracts\CIA.Contracts.csproj" />
     <ProjectReference Include="..\CIA.Core\CIA.Core.csproj" />
+    <ProjectReference
+      Include="..\CIA.ProcessingHost\CIA.ProcessingHost.csproj"
+      Private="false"
+      ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <Target
+    Name="_CollectProcessingHostCompanionFiles"
+    BeforeTargets="GetCopyToOutputDirectoryItems"
+    Condition="'$(DesignTimeBuild)' != 'true' and '$(_IsPublishing)' != 'true'">
+    <MSBuild
+      Projects="..\CIA.ProcessingHost\CIA.ProcessingHost.csproj"
+      Targets="GetProcessingHostCompanionFiles"
+      BuildInParallel="false"
+      Properties="Configuration=$(Configuration);Platform=$(Platform)">
+      <Output TaskParameter="TargetOutputs" ItemName="_ProcessingHostCompanionFile" />
+    </MSBuild>
+
+    <ItemGroup>
+      <ContentWithTargetPath Include="@(_ProcessingHostCompanionFile)">
+        <CopyToOutputDirectory>IfDifferent</CopyToOutputDirectory>
+        <TargetPath>%(_ProcessingHostCompanionFile.TargetPath)</TargetPath>
+      </ContentWithTargetPath>
+    </ItemGroup>
+  </Target>
+
+  <Target
+    Name="_VerifyProcessingHostCompanionDevelopmentOutput"
+    AfterTargets="CopyFilesToOutputDirectory"
+    Condition="'$(DesignTimeBuild)' != 'true' and '$(_IsPublishing)' != 'true'">
+    <Error
+      Condition="!Exists('$(TargetDir)CIA.ProcessingHost.exe')"
+      Text="The CIA Processing Host executable is missing from the runnable Desktop development output." />
+    <Error
+      Condition="!Exists('$(TargetDir)CIA.ProcessingHost.dll') Or !Exists('$(TargetDir)CIA.ProcessingHost.deps.json') Or !Exists('$(TargetDir)CIA.ProcessingHost.runtimeconfig.json')"
+      Text="Required CIA Processing Host application files are missing from the runnable Desktop development output." />
+  </Target>
 
 </Project>
