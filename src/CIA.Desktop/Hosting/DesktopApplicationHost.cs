@@ -1,6 +1,7 @@
 using System.IO;
 using CIA.Core;
 using CIA.Core.Diagnostics;
+using CIA.Desktop.Discovery;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
@@ -48,6 +49,8 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ISourceIntakeClient, ProcessingHostSourceIntakeClient>();
         builder.Services.AddSingleton<SourceLoadingCoordinator>();
         builder.Services.AddSingleton<ISourcePathPicker, WindowsSourcePathPicker>();
+        builder.Services.AddSingleton<IDiscoveryClient, ProcessingHostDiscoveryClient>();
+        builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
 
         ConfigureLogging(builder);
         return builder.Build();

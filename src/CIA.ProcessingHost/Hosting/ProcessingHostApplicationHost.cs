@@ -1,5 +1,6 @@
 using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
+using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceIntake;
@@ -37,6 +38,7 @@ public static class ProcessingHostApplicationHost
         builder.Services.AddSingleton<SourceIntakeService>();
         builder.Services.AddSingleton<ISourceInterpreter, SourceInterpreter>();
         builder.Services.AddSingleton<SourceRefreshService>();
+        builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();
 
         if (runtimeOptions is not null)

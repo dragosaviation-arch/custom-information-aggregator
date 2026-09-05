@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using CIA.Contracts.Ipc;
+using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Ipc;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.SourceIntake;
@@ -14,6 +15,7 @@ public sealed class ProcessingHostLifetimeService(
     CooperativeOperationCancellation operationCancellation,
     SourceIntakeService sourceIntake,
     SourceRefreshService sourceRefresh,
+    DiscoveryService discovery,
     IHostApplicationLifetime applicationLifetime,
     ILogger<ProcessingHostLifetimeService> logger) : BackgroundService
 {
@@ -186,6 +188,26 @@ public sealed class ProcessingHostLifetimeService(
                                     : CommandAcceptance.Rejected,
                                 refreshResult.Source,
                                 refreshResult.Failure),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+
+                case RunDiscoveryCommand command when established:
+                    var discoveryResult = await discovery
+                        .RunAsync(command.Correlation, command.Sources, cancellationToken)
+                        .ConfigureAwait(false);
+                    await connection.SendAsync(
+                            new RunDiscoveryResponse(
+                                Guid.CreateVersion7(),
+                                DateTimeOffset.UtcNow,
+                                command.MessageId,
+                                discoveryResult.Accepted
+                                    ? CommandAcceptance.Accepted
+                                    : CommandAcceptance.Rejected,
+                                discoveryResult.Completion,
+                                discoveryResult.Information,
+                                discoveryResult.Issues,
+                                discoveryResult.Failure),
                             cancellationToken)
                         .ConfigureAwait(false);
                     break;

@@ -1,5 +1,7 @@
 namespace CIA.Contracts.Ipc;
 
+using CIA.Contracts.Discovery;
+using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 
 public static class IpcContractValidator
@@ -39,6 +41,9 @@ public static class IpcContractValidator
             case RefreshSourceCommand command:
                 ValidateRefreshSourceCommand(command);
                 break;
+            case RunDiscoveryCommand command:
+                ValidateRunDiscoveryCommand(command);
+                break;
             case CommandAcknowledgement acknowledgement:
                 ValidateCommandAcknowledgement(acknowledgement);
                 break;
@@ -47,6 +52,9 @@ public static class IpcContractValidator
                 break;
             case RefreshSourceResponse response:
                 ValidateRefreshSourceResponse(response);
+                break;
+            case RunDiscoveryResponse response:
+                ValidateRunDiscoveryResponse(response);
                 break;
             case ProcessingHostAvailabilityEvent availabilityEvent:
                 ValidateProcessingHostAvailabilityEvent(availabilityEvent);
@@ -193,6 +201,39 @@ public static class IpcContractValidator
         ValidateLoadedSource(command.Source);
     }
 
+    private static void ValidateRunDiscoveryCommand(RunDiscoveryCommand command)
+    {
+        ValidateOperationCorrelation(command.Correlation);
+
+        if (command.Sources is null || command.Sources.Count == 0)
+        {
+            throw InvalidContract("A Discovery command requires an active source set.");
+        }
+
+        var sourceIds = new HashSet<SourceId>();
+
+        foreach (var source in command.Sources)
+        {
+            if (source is null)
+            {
+                throw InvalidContract("A Discovery command cannot contain null sources.");
+            }
+
+            ValidateLoadedSource(source);
+
+            if (!source.IsIncluded || source.Status != LoadedSourceStatus.Ready)
+            {
+                throw InvalidContract(
+                    "Discovery command sources must be included and ready for processing.");
+            }
+
+            if (!sourceIds.Add(source.SourceId))
+            {
+                throw InvalidContract("Discovery command Source IDs must be unique.");
+            }
+        }
+    }
+
     private static void ValidateRefreshSourceResponse(RefreshSourceResponse response)
     {
         ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
@@ -224,6 +265,100 @@ public static class IpcContractValidator
         {
             throw InvalidContract(
                 "An unsuccessful source-refresh response requires a non-ready status and controlled failure information.");
+        }
+
+        ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateRunDiscoveryResponse(RunDiscoveryResponse response)
+    {
+        ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+
+        if (!Enum.IsDefined(response.Acceptance)
+            || response.Completion is null
+            || response.Information is null
+            || response.Issues is null)
+        {
+            throw InvalidContract("The Discovery response is incomplete or unsupported.");
+        }
+
+        ValidateOperationCorrelation(response.Completion.Correlation);
+
+        var informationTypes = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var information in response.Information)
+        {
+            if (information is null
+                || string.IsNullOrWhiteSpace(information.InformationType)
+                || information.SampleValue is null
+                || information.TotalOccurrenceCount < 1
+                || information.ContributingSources is null
+                || information.ContributingSources.Count == 0)
+            {
+                throw InvalidContract("A discovered information item is invalid.");
+            }
+
+            if (!informationTypes.Add(information.InformationType))
+            {
+                throw InvalidContract("Discovered information identities must be unique.");
+            }
+
+            var sourceIds = new HashSet<SourceId>();
+            long sourceOccurrenceTotal = 0;
+
+            foreach (var contribution in information.ContributingSources)
+            {
+                if (contribution is null
+                    || !SourceId.IsValid(contribution.SourceId.Value)
+                    || string.IsNullOrWhiteSpace(contribution.SourceName)
+                    || contribution.OccurrenceCount < 1
+                    || !sourceIds.Add(contribution.SourceId))
+                {
+                    throw InvalidContract("A Discovery source contribution is invalid.");
+                }
+
+                sourceOccurrenceTotal += contribution.OccurrenceCount;
+            }
+
+            if (sourceOccurrenceTotal != information.TotalOccurrenceCount)
+            {
+                throw InvalidContract(
+                    "Discovery per-source occurrence counts must match the aggregate count.");
+            }
+        }
+
+        foreach (var issue in response.Issues)
+        {
+            if (issue is null || !SourceId.IsValid(issue.SourceId.Value))
+            {
+                throw InvalidContract("A Discovery source issue requires a Source ID.");
+            }
+
+            ValidateFailure(new IpcFailure(issue.Code, issue.Description));
+        }
+
+        if (response.Acceptance == CommandAcceptance.Accepted)
+        {
+            if (response.Failure is not null
+                || response.Completion.Outcome is not (
+                    OperationOutcome.CompletedSuccessfully
+                    or OperationOutcome.CompletedWithIssues))
+            {
+                throw InvalidContract(
+                    "An accepted Discovery response requires a completed outcome and no failure.");
+            }
+
+            return;
+        }
+
+        if (response.Information.Count != 0
+            || response.Failure is null
+            || response.Completion.Outcome is not (
+                OperationOutcome.Failed
+                or OperationOutcome.Cancelled
+                or OperationOutcome.InterruptedIncomplete))
+        {
+            throw InvalidContract(
+                "An unsuccessful Discovery response requires no result and controlled failure context.");
         }
 
         ValidateFailure(response.Failure);
@@ -419,6 +554,17 @@ public static class IpcContractValidator
         {
             throw InvalidContract(
                 $"Failure descriptions must contain 1 to {MaximumFailureDescriptionLength} non-whitespace characters.");
+        }
+    }
+
+    private static void ValidateOperationCorrelation(OperationCorrelation correlation)
+    {
+        if (correlation is null
+            || !OperationId.IsValid(correlation.OperationId.Value)
+            || correlation.InitiatedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw InvalidContract(
+                "Operation correlation requires a UUIDv7 Operation ID and UTC initiation time.");
         }
     }
 

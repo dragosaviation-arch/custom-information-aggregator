@@ -7,6 +7,7 @@ using CIA.Contracts.Sources;
 using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
 using CIA.Desktop.Hosting;
+using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Hosting;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.SourceIntake;
@@ -115,6 +116,7 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<SourceIntakeService>();
         builder.Services.AddSingleton<ISourceInterpreter, SourceInterpreter>();
         builder.Services.AddSingleton<SourceRefreshService>();
+        builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddHostedService<ProcessingHostLifetimeService>();
         using var host = builder.Build();
 
