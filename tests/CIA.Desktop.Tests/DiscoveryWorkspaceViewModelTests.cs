@@ -39,7 +39,11 @@ public sealed class DiscoveryWorkspaceViewModelTests
                     "SN-001");
                 return Accept(correlation, sources, [information]);
             });
-        using var viewModel = new DiscoveryWorkspaceViewModel(client, sourceSet, workflow);
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
 
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
 
@@ -76,7 +80,11 @@ public sealed class DiscoveryWorkspaceViewModelTests
                     1,
                     [new DiscoveredSourceContribution(source.SourceId, "source.xml", 1)],
                     "PN-1")]));
-        using var viewModel = new DiscoveryWorkspaceViewModel(client, sourceSet, workflow);
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
 
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
         var inclusion = loading.SetInclusion(sourceSet.Items, isIncluded: false);
@@ -105,7 +113,11 @@ public sealed class DiscoveryWorkspaceViewModelTests
             .ToArray();
         var client = new StubDiscoveryClient(
             (correlation, sources) => Accept(correlation, sources, information));
-        using var viewModel = new DiscoveryWorkspaceViewModel(client, sourceSet, workflow)
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow)
         {
             PageSize = 25
         };
@@ -126,6 +138,167 @@ public sealed class DiscoveryWorkspaceViewModelTests
         var filtered = viewModel.Information[0];
         Assert.AreEqual("Tag29", filtered.InformationType);
         Assert.AreEqual(29, filtered.ContributingSources.Sum(item => item.OccurrenceCount));
+    }
+
+    [TestMethod]
+    public async Task SelectionAndBlacklistRemainDistinctInTheActiveConfiguration()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var information = CreateInformation(source.SourceId, "Alpha", "Beta");
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(correlation, sources, information));
+        var configuration = new ActiveDiscoveryConfiguration();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow);
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var alpha = viewModel.Information.Single(item => item.InformationType == "Alpha");
+
+        viewModel.ToggleSelectionCommand.Execute(alpha);
+
+        Assert.IsTrue(alpha.IsSelected);
+        Assert.IsFalse(alpha.IsBlacklisted);
+        Assert.AreEqual("1 / 2 selected", viewModel.SelectionSummary);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Selected,
+            GetDisposition(configuration, "Alpha"));
+
+        viewModel.ToggleBlacklistCommand.Execute(alpha);
+
+        Assert.IsFalse(alpha.IsSelected);
+        Assert.IsTrue(alpha.IsBlacklisted);
+        Assert.AreEqual("0 / 2 selected", viewModel.SelectionSummary);
+        Assert.IsFalse(viewModel.ToggleSelectionCommand.CanExecute(alpha));
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Blacklisted,
+            GetDisposition(configuration, "Alpha"));
+
+        viewModel.ToggleBlacklistCommand.Execute(alpha);
+        Assert.IsFalse(alpha.IsBlacklisted);
+        Assert.AreEqual("Neutral", alpha.DispositionText);
+        Assert.IsTrue(viewModel.ToggleSelectionCommand.CanExecute(alpha));
+
+        viewModel.ToggleSelectionCommand.Execute(alpha);
+        viewModel.ToggleSelectionCommand.Execute(alpha);
+        Assert.IsFalse(alpha.IsSelected);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Neutral,
+            GetDisposition(configuration, "Alpha"));
+        Assert.AreEqual(WorkflowArtifactStatus.Unavailable, workflow.Current.Database);
+        Assert.AreEqual(1, client.CallCount);
+    }
+
+    [TestMethod]
+    public async Task BulkSelectionAffectsOnlyTheFilteredVisibleSubset()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(
+                correlation,
+                sources,
+                CreateInformation(source.SourceId, "Alpha", "Alpine", "Beta", "Gamma")));
+        var configuration = new ActiveDiscoveryConfiguration();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow);
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var alpine = viewModel.Information.Single(item => item.InformationType == "Alpine");
+        viewModel.ToggleBlacklistCommand.Execute(alpine);
+        viewModel.SearchText = "Alp";
+
+        viewModel.SelectVisibleCommand.Execute(null);
+
+        Assert.AreEqual(1, configuration.Current.SelectedCount);
+        Assert.AreEqual(1, configuration.Current.BlacklistedCount);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Selected,
+            GetDisposition(configuration, "Alpha"));
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Blacklisted,
+            GetDisposition(configuration, "Alpine"));
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Neutral,
+            GetDisposition(configuration, "Beta"));
+        Assert.AreEqual("1 / 4 selected", viewModel.SelectionSummary);
+
+        viewModel.ShowBlacklisted = false;
+        Assert.AreEqual(1, viewModel.FilteredCount);
+        viewModel.DeselectVisibleCommand.Execute(null);
+
+        Assert.AreEqual(0, configuration.Current.SelectedCount);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Blacklisted,
+            GetDisposition(configuration, "Alpine"));
+        Assert.AreEqual(WorkflowArtifactStatus.Unavailable, workflow.Current.Database);
+        Assert.AreEqual(1, client.CallCount);
+    }
+
+    [TestMethod]
+    public async Task ReRunRetainsMatchingActiveSelectionAndDropsUnavailableIdentities()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var run = 0;
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(
+                correlation,
+                sources,
+                ++run == 1
+                    ? CreateInformation(source.SourceId, "Alpha", "Removed")
+                    : CreateInformation(source.SourceId, "Alpha", "Added")));
+        var configuration = new ActiveDiscoveryConfiguration();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow);
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var alpha = viewModel.Information.Single(item => item.InformationType == "Alpha");
+        viewModel.ToggleSelectionCommand.Execute(alpha);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(2, client.CallCount);
+        Assert.HasCount(2, configuration.Current.Items);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Selected,
+            GetDisposition(configuration, "Alpha"));
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Neutral,
+            GetDisposition(configuration, "Added"));
+        Assert.IsFalse(configuration.Current.Items.Any(item => item.InformationType == "Removed"));
+        Assert.AreEqual("1 / 2 selected", viewModel.SelectionSummary);
+    }
+
+    private static IReadOnlyList<DiscoveredInformation> CreateInformation(
+        SourceId sourceId,
+        params string[] informationTypes)
+    {
+        return informationTypes
+            .Select(informationType => new DiscoveredInformation(
+                informationType,
+                1,
+                [new DiscoveredSourceContribution(sourceId, "source.xml", 1)],
+                $"{informationType} value"))
+            .ToArray();
+    }
+
+    private static DiscoveryInformationDisposition GetDisposition(
+        ActiveDiscoveryConfiguration configuration,
+        string informationType)
+    {
+        return configuration.Current.Items
+            .Single(item => item.InformationType == informationType)
+            .Disposition;
     }
 
     private static async Task<(ActiveLoadedSourceSet SourceSet, SourceLoadingCoordinator Loading)>
@@ -190,11 +363,14 @@ public sealed class DiscoveryWorkspaceViewModelTests
     {
         public IReadOnlyList<LoadedSourceContract> LastSources { get; private set; } = [];
 
+        public int CallCount { get; private set; }
+
         public Task<DiscoveryClientResult> RunAsync(
             OperationCorrelation correlation,
             IReadOnlyList<LoadedSourceContract> sources,
             CancellationToken cancellationToken = default)
         {
+            CallCount++;
             LastSources = sources;
             return Task.FromResult(resultFactory(correlation, sources));
         }

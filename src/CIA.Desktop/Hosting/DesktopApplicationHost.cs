@@ -50,6 +50,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<SourceLoadingCoordinator>();
         builder.Services.AddSingleton<ISourcePathPicker, WindowsSourcePathPicker>();
         builder.Services.AddSingleton<IDiscoveryClient, ProcessingHostDiscoveryClient>();
+        builder.Services.AddSingleton<ActiveDiscoveryConfiguration>();
         builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
 
         ConfigureLogging(builder);
