@@ -18,6 +18,22 @@ public sealed class ActiveLoadedSourceSet
 
     public ReadOnlyObservableCollection<LoadedSourceItem> Items => _readOnlyItems;
 
+    public IReadOnlyList<LoadedSourceContract> CreateIncludedReadySnapshot()
+    {
+        return _items
+            .Where(source => source.IsIncluded && source.Status == LoadedSourceStatus.Ready)
+            .Select(source => new LoadedSourceContract(
+                source.SourceId,
+                source.Path,
+                source.IsIncluded,
+                source.Status,
+                source.Kind)
+            {
+                ArchiveProvenance = source.ArchiveProvenance
+            })
+            .ToArray();
+    }
+
     internal bool Contains(string path)
     {
         return _items.Any(item =>

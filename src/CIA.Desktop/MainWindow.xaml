@@ -83,6 +83,20 @@
                 </views:LoadWorkspaceView.Style>
             </views:LoadWorkspaceView>
 
+            <views:DiscoveryWorkspaceView DataContext="{Binding DiscoveryWorkspace, ElementName=WindowRoot}">
+                <views:DiscoveryWorkspaceView.Style>
+                    <Style TargetType="views:DiscoveryWorkspaceView">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding DataContext.SelectedWorkspace.Area, ElementName=WindowRoot}"
+                                         Value="{x:Static presentation:WorkspaceArea.Discovery}">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </views:DiscoveryWorkspaceView.Style>
+            </views:DiscoveryWorkspaceView>
+
             <Grid Margin="{StaticResource CiaWorkspaceMargin}">
                 <Grid.Style>
                     <Style TargetType="Grid">
@@ -90,6 +104,10 @@
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding SelectedWorkspace.Area}"
                                          Value="{x:Static presentation:WorkspaceArea.Load}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding SelectedWorkspace.Area}"
+                                         Value="{x:Static presentation:WorkspaceArea.Discovery}">
                                 <Setter Property="Visibility" Value="Collapsed" />
                             </DataTrigger>
                         </Style.Triggers>

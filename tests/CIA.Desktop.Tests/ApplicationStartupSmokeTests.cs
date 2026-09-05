@@ -55,6 +55,7 @@ public sealed class ApplicationStartupSmokeTests
             var viewModel = host.Services.GetRequiredService<MainWindowViewModel>();
             var globalStatus = host.Services.GetRequiredService<GlobalStatusViewModel>();
             var loadWorkspace = host.Services.GetRequiredService<LoadWorkspaceViewModel>();
+            var discoveryWorkspace = host.Services.GetRequiredService<DiscoveryWorkspaceViewModel>();
             application.MainWindow = window;
 
             Assert.IsTrue(lifetime.ApplicationStarted.IsCancellationRequested);
@@ -62,6 +63,7 @@ public sealed class ApplicationStartupSmokeTests
             Assert.AreSame(viewModel, window.DataContext);
             Assert.AreSame(globalStatus, window.GlobalStatus);
             Assert.AreSame(loadWorkspace, window.LoadWorkspace);
+            Assert.AreSame(discoveryWorkspace, window.DiscoveryWorkspace);
             Assert.HasCount(4, viewModel.Workspaces);
             Assert.AreEqual(WorkspaceArea.Load, viewModel.SelectedWorkspace.Area);
         }

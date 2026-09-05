@@ -10,14 +10,17 @@ public partial class MainWindow : Window
     public MainWindow(
         MainWindowViewModel viewModel,
         GlobalStatusViewModel globalStatus,
-        LoadWorkspaceViewModel loadWorkspace)
+        LoadWorkspaceViewModel loadWorkspace,
+        DiscoveryWorkspaceViewModel discoveryWorkspace)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
         ArgumentNullException.ThrowIfNull(globalStatus);
         ArgumentNullException.ThrowIfNull(loadWorkspace);
+        ArgumentNullException.ThrowIfNull(discoveryWorkspace);
 
         GlobalStatus = globalStatus;
         LoadWorkspace = loadWorkspace;
+        DiscoveryWorkspace = discoveryWorkspace;
         InitializeComponent();
         DataContext = viewModel;
     }
@@ -25,6 +28,8 @@ public partial class MainWindow : Window
     public GlobalStatusViewModel GlobalStatus { get; }
 
     public LoadWorkspaceViewModel LoadWorkspace { get; }
+
+    public DiscoveryWorkspaceViewModel DiscoveryWorkspace { get; }
 
     private void OnWindowSizeChanged(object sender, SizeChangedEventArgs e)
     {

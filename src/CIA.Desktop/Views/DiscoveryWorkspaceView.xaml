@@ -1,0 +1,677 @@
+<UserControl x:Class="CIA.Desktop.Views.DiscoveryWorkspaceView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:workflow="clr-namespace:CIA.Desktop.Workflow"
+             Loaded="OnViewLoaded"
+             SizeChanged="OnViewSizeChanged"
+             SnapsToDevicePixels="True">
+    <UserControl.Resources>
+        <Style x:Key="DiscoverySortHeaderStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource CiaGhostButtonStyle}">
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="FontSize" Value="10.8" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+        <Style x:Key="DiscoveryRowTextStyle" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="3,0" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style x:Key="DiscoveryStateBadgeStyle"
+               TargetType="Border"
+               BasedOn="{StaticResource CiaNeutralStateBadgeStyle}">
+            <Setter Property="Height" Value="22" />
+            <Setter Property="Padding" Value="8,0" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding DiscoveryStatus}"
+                             Value="{x:Static workflow:WorkflowArtifactStatus.Current}">
+                    <Setter Property="Background" Value="#FFEAF7EF" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding DiscoveryStatus}"
+                             Value="{x:Static workflow:WorkflowArtifactStatus.Stale}">
+                    <Setter Property="Background" Value="{StaticResource CiaWarningSoftBrush}" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid x:Name="DiscoveryLayout"
+          Margin="{StaticResource CiaWorkspaceMargin}"
+          MinHeight="0">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="DiscoveryLeftColumn" Width="3*" MinWidth="580" />
+            <ColumnDefinition x:Name="DiscoveryGapColumn" Width="8" />
+            <ColumnDefinition x:Name="DiscoveryRightColumn" Width="2*" MinWidth="0" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition x:Name="DiscoveryTopRow" Height="*" />
+            <RowDefinition x:Name="DiscoveryStackGapRow" Height="0" />
+            <RowDefinition x:Name="DiscoveryBottomRow" Height="0" />
+        </Grid.RowDefinitions>
+
+        <Grid x:Name="DiscoveryLeftPane"
+              Grid.Row="0"
+              Grid.Column="0"
+              MinHeight="0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="6" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="6" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="6" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <WrapPanel VerticalAlignment="Center">
+                <Button Margin="0,0,6,0"
+                        AutomationProperties.Name="Run Discovery"
+                        Command="{Binding RunDiscoveryCommand}"
+                        Content="{Binding RunButtonText}"
+                        Style="{StaticResource CiaPrimaryButtonStyle}" />
+                <Border Margin="0,3,8,3"
+                        Style="{StaticResource DiscoveryStateBadgeStyle}">
+                    <TextBlock VerticalAlignment="Center"
+                               FontSize="10.8"
+                               FontWeight="Bold"
+                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                               Text="{Binding DiscoveryStateText}" />
+                </Border>
+                <TextBlock VerticalAlignment="Center"
+                           Style="{StaticResource CiaSecondaryTextStyle}"
+                           Text="{Binding IncludedSourceSummary}" />
+            </WrapPanel>
+
+            <WrapPanel Grid.Row="2" VerticalAlignment="Center">
+                <Grid Width="190" Margin="0,0,6,0">
+                    <TextBox AutomationProperties.Name="Search discovered tags"
+                             Style="{StaticResource CiaTextInputStyle}"
+                             Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Margin="9,0"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource CiaTextMutedBrush}"
+                               IsHitTestVisible="False"
+                               Text="Search tags…">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SearchText}" Value="">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+                <ComboBox Width="180"
+                          Height="29"
+                          Margin="0,0,6,0"
+                          IsEnabled="False"
+                          SelectedIndex="0"
+                          ToolTip="Selection profiles are implemented by a later story.">
+                    <ComboBoxItem Content="No Profile" />
+                </ComboBox>
+                <Button Margin="0,0,2,0"
+                        IsEnabled="False"
+                        Style="{StaticResource CiaGhostButtonStyle}"
+                        Content="Select visible"
+                        ToolTip="Discovery selection is implemented by SPR-70." />
+                <Button Margin="0,0,6,0"
+                        IsEnabled="False"
+                        Style="{StaticResource CiaGhostButtonStyle}"
+                        Content="Deselect visible"
+                        ToolTip="Discovery selection is implemented by SPR-70." />
+                <TextBlock VerticalAlignment="Center"
+                           FontWeight="Bold"
+                           Foreground="{StaticResource CiaTextPrimaryBrush}"
+                           Text="{Binding SelectionSummary}" />
+            </WrapPanel>
+
+            <Border Grid.Row="4"
+                    ClipToBounds="True"
+                    Style="{StaticResource CiaPanelStyle}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="29" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="30" />
+                    </Grid.RowDefinitions>
+
+                    <Border Background="{StaticResource CiaPanelAlternateBrush}"
+                            BorderBrush="{StaticResource CiaBorderBrush}"
+                            BorderThickness="0,0,0,1">
+                        <Grid Margin="6,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="34" />
+                                <ColumnDefinition Width="1.1*" MinWidth="90" />
+                                <ColumnDefinition Width="1.15*" MinWidth="100" />
+                                <ColumnDefinition Width="82" />
+                                <ColumnDefinition Width="60" />
+                                <ColumnDefinition Width="1.55*" MinWidth="110" />
+                                <ColumnDefinition Width="76" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="1"
+                                    Command="{Binding SortCommand}"
+                                    CommandParameter="Tag"
+                                    Content="{Binding TagHeaderText}"
+                                    Style="{StaticResource DiscoverySortHeaderStyle}" />
+                            <Button Grid.Column="2"
+                                    Command="{Binding SortCommand}"
+                                    CommandParameter="DatabaseTag"
+                                    Content="{Binding DatabaseTagHeaderText}"
+                                    Style="{StaticResource DiscoverySortHeaderStyle}" />
+                            <Button Grid.Column="3"
+                                    Command="{Binding SortCommand}"
+                                    CommandParameter="Occurrences"
+                                    Content="{Binding OccurrencesHeaderText}"
+                                    Style="{StaticResource DiscoverySortHeaderStyle}" />
+                            <Button Grid.Column="4"
+                                    Command="{Binding SortCommand}"
+                                    CommandParameter="Sources"
+                                    Content="{Binding SourcesHeaderText}"
+                                    Style="{StaticResource DiscoverySortHeaderStyle}" />
+                            <Button Grid.Column="5"
+                                    Command="{Binding SortCommand}"
+                                    CommandParameter="Sample"
+                                    Content="{Binding SampleHeaderText}"
+                                    Style="{StaticResource DiscoverySortHeaderStyle}" />
+                            <TextBlock Grid.Column="6"
+                                       Style="{StaticResource CiaSourceHeaderTextStyle}"
+                                       Text="Blacklist" />
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Row="1" MinHeight="0">
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasInformation}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <TextBlock Style="{StaticResource CiaEmptyStateTitleTextStyle}"
+                                       Text="No Discovery result" />
+                            <TextBlock Margin="0,5,0,0"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="Run Discovery to inspect real information in the active source set." />
+                        </StackPanel>
+
+                        <ListBox x:Name="DiscoveryRows"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 HorizontalContentAlignment="Stretch"
+                                 ItemsSource="{Binding Information}"
+                                 SelectedItem="{Binding SelectedInformation, Mode=TwoWay}"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="MinHeight" Value="31" />
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="BorderBrush" Value="{StaticResource CiaDividerBrush}" />
+                                    <Setter Property="BorderThickness" Value="0,0,0,1" />
+                                    <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+                                    <Style.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource CiaHoverBrush}" />
+                                        </Trigger>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource CiaSelectedRowBrush}" />
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="6,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="34" />
+                                            <ColumnDefinition Width="1.1*" MinWidth="90" />
+                                            <ColumnDefinition Width="1.15*" MinWidth="100" />
+                                            <ColumnDefinition Width="82" />
+                                            <ColumnDefinition Width="60" />
+                                            <ColumnDefinition Width="1.55*" MinWidth="110" />
+                                            <ColumnDefinition Width="76" />
+                                        </Grid.ColumnDefinitions>
+                                        <CheckBox HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"
+                                                  IsEnabled="False"
+                                                  ToolTip="Discovery selection is implemented by SPR-70." />
+                                        <TextBlock Grid.Column="1"
+                                                   FontFamily="Consolas"
+                                                   FontWeight="SemiBold"
+                                                   Style="{StaticResource DiscoveryRowTextStyle}"
+                                                   Text="{Binding InformationType}" />
+                                        <TextBlock Grid.Column="2"
+                                                   FontWeight="SemiBold"
+                                                   Style="{StaticResource DiscoveryRowTextStyle}"
+                                                   Text="{Binding DatabaseTag}" />
+                                        <TextBlock Grid.Column="3"
+                                                   Style="{StaticResource DiscoveryRowTextStyle}"
+                                                   Text="{Binding TotalOccurrenceText}" />
+                                        <Button Grid.Column="4"
+                                                Height="24"
+                                                Padding="5,0"
+                                                Command="{Binding DataContext.InspectSourcesCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                CommandParameter="{Binding}"
+                                                Content="{Binding SourceCountText}"
+                                                Foreground="{StaticResource CiaAccentBrush}"
+                                                Style="{StaticResource CiaGhostButtonStyle}"
+                                                ToolTip="Inspect contributing source identities and occurrence counts." />
+                                        <TextBlock Grid.Column="5"
+                                                   Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                                   Style="{StaticResource DiscoveryRowTextStyle}"
+                                                   Text="{Binding SampleValue}" />
+                                        <Button Grid.Column="6"
+                                                Height="23"
+                                                Padding="6,0"
+                                                IsEnabled="False"
+                                                Style="{StaticResource CiaButtonStyle}"
+                                                Content="Blacklist"
+                                                ToolTip="Blacklist behavior is implemented by SPR-70." />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+
+                    <Grid Grid.Row="2" Margin="8,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock VerticalAlignment="Center"
+                                   Style="{StaticResource CiaSecondaryTextStyle}"
+                                   Text="{Binding ShowingSummary}" />
+                        <Button Grid.Column="2"
+                                Width="25"
+                                Height="23"
+                                Padding="0"
+                                Command="{Binding PreviousPageCommand}"
+                                Style="{StaticResource CiaButtonStyle}"
+                                Content="‹" />
+                        <TextBlock Grid.Column="3"
+                                   Margin="6,0"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource CiaSecondaryTextStyle}"
+                                   Text="{Binding PageSummary}" />
+                        <Button Grid.Column="4"
+                                Width="25"
+                                Height="23"
+                                Padding="0"
+                                Command="{Binding NextPageCommand}"
+                                Style="{StaticResource CiaButtonStyle}"
+                                Content="›" />
+                        <StackPanel Grid.Column="5" Margin="8,0,0,0" Orientation="Horizontal">
+                            <TextBlock VerticalAlignment="Center"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="Tags per page:" />
+                            <ComboBox Width="58"
+                                      Height="24"
+                                      Margin="5,0,0,0"
+                                      ItemsSource="{Binding PageSizes}"
+                                      SelectedItem="{Binding PageSize}" />
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="6"
+                    Padding="9,6"
+                    Style="{StaticResource CiaPanelStyle}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="5" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock FontWeight="Bold" Text="{Binding StatusTitle}" />
+                            <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="{Binding StatusDetail}" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="1"
+                                   VerticalAlignment="Top"
+                                   Text="100%">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource CiaSecondaryTextStyle}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsBusy}" Value="True">
+                                            <Setter Property="Text" Value="Working" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+                    <ProgressBar Grid.Row="1"
+                                 Height="5"
+                                 BorderThickness="0"
+                                 IsIndeterminate="{Binding IsBusy}"
+                                 Maximum="100"
+                                 Value="100" />
+                    <Grid Grid.Row="2">
+                        <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
+                                   Text="{Binding ProgressStage}" />
+                        <TextBlock HorizontalAlignment="Right"
+                                   Style="{StaticResource CiaSecondaryTextStyle}"
+                                   Text="{Binding ResultSummary}" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <Grid x:Name="DiscoveryRightRail"
+              Grid.Row="0"
+              Grid.Column="2"
+              MinHeight="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="PreviewColumn" Width="*" />
+                <ColumnDefinition x:Name="RightRailGapColumn" Width="0" />
+                <ColumnDefinition x:Name="SettingsColumn" Width="0" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition x:Name="PreviewRow" Height="3*" />
+                <RowDefinition x:Name="RightRailGapRow" Height="8" />
+                <RowDefinition x:Name="SettingsRow" Height="2*" />
+            </Grid.RowDefinitions>
+
+            <Border x:Name="PreviewPanel"
+                    Grid.Row="0"
+                    Grid.Column="0"
+                    Style="{StaticResource CiaPanelStyle}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Border Style="{StaticResource CiaPanelHeaderStyle}">
+                        <Grid>
+                            <TextBlock Style="{StaticResource CiaPanelTitleTextStyle}"
+                                       Text="TAG PREVIEW" />
+                            <TextBlock HorizontalAlignment="Right"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="Readable occurrence content" />
+                        </Grid>
+                    </Border>
+                    <Grid Grid.Row="1" Margin="10,8" MinHeight="0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="7" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="8" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Border HorizontalAlignment="Left"
+                                Padding="7,4"
+                                Background="{StaticResource CiaAccentSoftBrush}"
+                                CornerRadius="6">
+                            <TextBlock FontFamily="Consolas"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource CiaAccentBrush}"
+                                       Text="{Binding SelectedInformation.InformationType, TargetNullValue=No tag selected}" />
+                        </Border>
+                        <Border Grid.Row="2"
+                                Padding="14,12"
+                                Background="#FFFCFCFE"
+                                BorderBrush="{StaticResource CiaBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="8">
+                            <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollBarVisibility="Auto">
+                                <TextBlock FontSize="13"
+                                           LineHeight="20"
+                                           Text="{Binding SelectedInformation.SampleValue, TargetNullValue=Select a discovered tag to inspect its sample value.}"
+                                           TextWrapping="Wrap" />
+                            </ScrollViewer>
+                        </Border>
+                        <Grid Grid.Row="4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="72" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock VerticalAlignment="Center"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="Database Tag" />
+                            <TextBox Grid.Column="1"
+                                     IsEnabled="False"
+                                     Style="{StaticResource CiaTextInputStyle}"
+                                     Text="{Binding SelectedInformation.DatabaseTag}" />
+                            <Button Grid.Column="2"
+                                    Margin="6,0,0,0"
+                                    IsEnabled="False"
+                                    Style="{StaticResource CiaGhostButtonStyle}"
+                                    Content="Clear"
+                                    ToolTip="Database Tag Name Override is implemented by SPR-72." />
+                        </Grid>
+                    </Grid>
+                    <Grid Grid.Row="2" Margin="10,7">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Button IsEnabled="False"
+                                Style="{StaticResource CiaButtonStyle}"
+                                Content="‹ Previous"
+                                ToolTip="Occurrence navigation is implemented by SPR-71." />
+                        <TextBlock Grid.Column="1"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource CiaSecondaryTextStyle}"
+                                   Text="Occurrence preview navigation available in SPR-71" />
+                        <Button Grid.Column="2"
+                                IsEnabled="False"
+                                Style="{StaticResource CiaButtonStyle}"
+                                Content="Next ›"
+                                ToolTip="Occurrence navigation is implemented by SPR-71." />
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <Border x:Name="SettingsPanel"
+                    Grid.Row="2"
+                    Grid.Column="0"
+                    Style="{StaticResource CiaPanelStyle}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TabControl Background="Transparent" BorderThickness="0">
+                        <TabItem Header="General">
+                            <ScrollViewer Padding="10,8" VerticalScrollBarVisibility="Auto">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="16" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Margin="0,0,0,5"
+                                                   FontSize="10"
+                                                   FontWeight="Bold"
+                                                   Foreground="{StaticResource CiaAccentBrush}"
+                                                   Text="WORKFLOW" />
+                                        <CheckBox Margin="0,4"
+                                                  IsEnabled="False"
+                                                  Content="Open Database when creation completes"
+                                                  ToolTip="Database creation is outside SPR-69." />
+                                        <CheckBox Margin="0,4"
+                                                  IsChecked="True"
+                                                  IsEnabled="False"
+                                                  Content="Confirm before re-running Discovery when Database is current"
+                                                  ToolTip="Database-current confirmation is implemented by a later story." />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Margin="0,0,0,5"
+                                                   FontSize="10"
+                                                   FontWeight="Bold"
+                                                   Foreground="{StaticResource CiaAccentBrush}"
+                                                   Text="LIST VIEW" />
+                                        <CheckBox Margin="0,4"
+                                                  IsChecked="True"
+                                                  IsEnabled="False"
+                                                  Content="Show blacklisted tags" />
+                                        <CheckBox Margin="0,4"
+                                                  IsEnabled="False"
+                                                  Content="Show only selected" />
+                                        <CheckBox Margin="0,4"
+                                                  IsEnabled="False"
+                                                  Content="Show only tags with Database Tag Name Override" />
+                                    </StackPanel>
+                                </Grid>
+                            </ScrollViewer>
+                        </TabItem>
+                        <TabItem Header="Profiles">
+                            <StackPanel Margin="20,14" HorizontalAlignment="Center">
+                                <TextBlock Margin="0,0,0,7"
+                                           FontSize="10"
+                                           FontWeight="Bold"
+                                           Foreground="{StaticResource CiaAccentBrush}"
+                                           Text="SELECTION PROFILE MANAGEMENT" />
+                                <TextBox Width="264"
+                                         IsEnabled="False"
+                                         Style="{StaticResource CiaTextInputStyle}"
+                                         Text="No Profile" />
+                                <WrapPanel Margin="0,7,0,0" HorizontalAlignment="Center">
+                                    <Button Margin="0,0,6,0" IsEnabled="False" Style="{StaticResource CiaButtonStyle}" Content="Save as Profile" />
+                                    <Button IsEnabled="False" Style="{StaticResource CiaButtonStyle}" Content="Update Profile" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </TabItem>
+                        <TabItem Header="Blacklist">
+                            <StackPanel Margin="20,14" HorizontalAlignment="Center">
+                                <TextBlock Margin="0,0,0,7"
+                                           FontSize="10"
+                                           FontWeight="Bold"
+                                           Foreground="{StaticResource CiaAccentBrush}"
+                                           Text="BLACKLIST PROFILE MANAGEMENT" />
+                                <ComboBox Width="264" Height="29" IsEnabled="False" SelectedIndex="0">
+                                    <ComboBoxItem Content="No Blacklist" />
+                                </ComboBox>
+                                <WrapPanel Margin="0,7,0,0" HorizontalAlignment="Center">
+                                    <Button Margin="0,0,6,0" IsEnabled="False" Style="{StaticResource CiaButtonStyle}" Content="Load Blacklist" />
+                                    <Button IsEnabled="False" Style="{StaticResource CiaButtonStyle}" Content="Save Current" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </TabItem>
+                    </TabControl>
+                    <Border Grid.Row="1"
+                            Padding="9,7"
+                            Background="#FFFCFCFE"
+                            BorderBrush="{StaticResource CiaBorderBrush}"
+                            BorderThickness="0,1,0,0">
+                        <WrapPanel VerticalAlignment="Center">
+                            <Border Margin="0,0,6,0" Style="{StaticResource CiaNeutralStateBadgeStyle}">
+                                <TextBlock VerticalAlignment="Center"
+                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                           Text="Database not created" />
+                            </Border>
+                            <TextBlock Margin="0,0,6,0"
+                                       VerticalAlignment="Center"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="Database creation/update is outside SPR-69." />
+                            <Button IsEnabled="False"
+                                    Style="{StaticResource CiaPrimaryButtonStyle}"
+                                    Content="Create Database" />
+                        </WrapPanel>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <Popup AllowsTransparency="True"
+               IsOpen="{Binding IsSourceInspectionOpen, Mode=TwoWay}"
+               Placement="MousePoint"
+               StaysOpen="False">
+            <Border Width="390"
+                    MaxHeight="420"
+                    Background="{StaticResource CiaPanelBrush}"
+                    BorderBrush="{StaticResource CiaBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="9">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Border Padding="11,9" Style="{StaticResource CiaPanelHeaderStyle}">
+                        <Grid>
+                            <TextBlock FontWeight="Bold"
+                                       Text="{Binding InspectedInformation.InformationType, StringFormat={}{0} · contributing sources}" />
+                            <Button HorizontalAlignment="Right"
+                                    Width="24"
+                                    Height="22"
+                                    Padding="0"
+                                    Command="{Binding CloseSourceInspectionCommand}"
+                                    Content="×"
+                                    Style="{StaticResource CiaGhostButtonStyle}" />
+                        </Grid>
+                    </Border>
+                    <ScrollViewer Grid.Row="1" MaxHeight="330" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding InspectedInformation.ContributingSources}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid MinHeight="31" Margin="10,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="145" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="64" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock VerticalAlignment="Center"
+                                                   FontFamily="Consolas"
+                                                   FontSize="10.3"
+                                                   Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                                   Text="{Binding SourceIdText}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding SourceIdText}" />
+                                        <TextBlock Grid.Column="1"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding SourceName}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding SourceName}" />
+                                        <TextBlock Grid.Column="2"
+                                                   HorizontalAlignment="Right"
+                                                   VerticalAlignment="Center"
+                                                   FontWeight="Bold"
+                                                   Text="{Binding OccurrenceCountText}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                    <Border Grid.Row="2"
+                            Padding="10,8"
+                            Background="{StaticResource CiaPanelAlternateBrush}"
+                            BorderBrush="{StaticResource CiaBorderBrush}"
+                            BorderThickness="0,1,0,0">
+                        <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
+                                   Text="{Binding SourceInspectionSummary}" />
+                    </Border>
+                </Grid>
+            </Border>
+        </Popup>
+    </Grid>
+</UserControl>
