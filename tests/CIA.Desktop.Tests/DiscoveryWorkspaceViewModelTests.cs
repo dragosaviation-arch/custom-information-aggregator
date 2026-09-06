@@ -177,6 +177,42 @@ public sealed class DiscoveryWorkspaceViewModelTests
     }
 
     [TestMethod]
+    public async Task FailedReRunRetainsPriorRowsButMarksThemOutOfDate()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var callCount = 0;
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => ++callCount == 1
+                ? Accept(
+                    correlation,
+                    sources,
+                    [new DiscoveredInformation(
+                        "RetainedTag",
+                        1,
+                        [new DiscoveredSourceContribution(source.SourceId, "source.xml", 1)],
+                        "retained value")])
+                : Reject(correlation, sources, "processing-host-unavailable"));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreEqual("RetainedTag", viewModel.Information[0].InformationType);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
+        Assert.AreEqual("Discovery out of date", viewModel.DiscoveryStateText);
+        Assert.AreEqual("Discovery re-run failed", viewModel.StatusTitle);
+        StringAssert.Contains(viewModel.StatusDetail, "Previous Discovery results are retained");
+        Assert.AreEqual("Stage: Failed", viewModel.ProgressStage);
+    }
+
+    [TestMethod]
     public async Task SelectionAndBlacklistRemainDistinctInTheActiveConfiguration()
     {
         var source = CreateSource("source.xml");
@@ -313,6 +349,9 @@ public sealed class DiscoveryWorkspaceViewModelTests
             GetDisposition(configuration, "Added"));
         Assert.IsFalse(configuration.Current.Items.Any(item => item.InformationType == "Removed"));
         Assert.AreEqual("1 / 2 selected", viewModel.SelectionSummary);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Discovery);
+        Assert.AreEqual("Discovery current", viewModel.DiscoveryStateText);
+        Assert.AreEqual("Stage: Complete", viewModel.ProgressStage);
     }
 
     private static IReadOnlyList<DiscoveredInformation> CreateInformation(
@@ -391,6 +430,25 @@ public sealed class DiscoveryWorkspaceViewModelTests
             completion,
             FailureCode: null,
             FailureDescription: null);
+    }
+
+    private static DiscoveryClientResult Reject(
+        OperationCorrelation correlation,
+        IReadOnlyList<LoadedSourceContract> sources,
+        string failureCode)
+    {
+        return new DiscoveryClientResult(
+            false,
+            [],
+            [],
+            OperationCompletion.FromTerminalOutcome(
+                correlation,
+                OperationOutcome.Failed,
+                sources.Select(source => OperationItemStatus.Unprocessed(
+                    source.SourceId.ToString(),
+                    failureCode))),
+            failureCode,
+            "The Processing Host could not complete Discovery.");
     }
 
     private sealed class StubDiscoveryClient(

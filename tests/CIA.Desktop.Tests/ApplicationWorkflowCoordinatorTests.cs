@@ -122,7 +122,7 @@ public sealed class ApplicationWorkflowCoordinatorTests
     }
 
     [TestMethod]
-    public async Task FailedAttemptPreservesPublishedStateAndNextAttemptHasNewIdentity()
+    public async Task FailedDiscoveryAttemptMarksRetainedStateStaleAndNextAttemptHasNewIdentity()
     {
         var coordinator = CreateCoordinator(new StubProcessingHostSupervisor());
         coordinator.RecordSourceSelectionChanged(true);
@@ -135,7 +135,7 @@ public sealed class ApplicationWorkflowCoordinatorTests
         var nextAttempt = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
 
         Assert.IsTrue(failedCompletion.Accepted);
-        Assert.AreEqual(WorkflowArtifactStatus.Current, coordinator.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, coordinator.Current.Discovery);
         Assert.AreNotEqual(
             failedAttempt.Operation.OperationId,
             nextAttempt.Operation?.OperationId);

@@ -405,10 +405,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 _issueCount = result.Issues.Count;
                 _progressStage = "Stage: Failed";
                 RefreshPresentation();
-                StatusTitle = "Discovery failed";
-                StatusDetail = result.FailureDescription
+                PresentFailure(
+                    result.FailureDescription
                     ?? completion.Rejection?.Reason
-                    ?? "Discovery did not produce a usable result.";
+                    ?? "Discovery did not produce a usable result.");
                 return;
             }
 
@@ -457,15 +457,27 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                     OperationOutcome.Failed);
             }
 
-            StatusTitle = "Discovery failed";
-            StatusDetail = "Discovery could not be completed by the Processing Host.";
             _progressStage = "Stage: Failed";
+            PresentFailure("Discovery could not be completed by the Processing Host.");
         }
         finally
         {
             IsBusy = false;
             NotifyProgressChanged();
         }
+    }
+
+    private void PresentFailure(string detail)
+    {
+        if (_hasCompletedDiscovery)
+        {
+            StatusTitle = "Discovery re-run failed";
+            StatusDetail = $"{detail} Previous Discovery results are retained and marked out of date.";
+            return;
+        }
+
+        StatusTitle = "Discovery failed";
+        StatusDetail = detail;
     }
 
     private void SortBy(string? column)
