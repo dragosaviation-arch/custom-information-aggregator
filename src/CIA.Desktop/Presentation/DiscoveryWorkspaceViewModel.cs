@@ -42,6 +42,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool _showBlacklisted = true;
     private bool _showOnlySelected;
     private int _issueCount;
+    private string _progressStage = "Stage: Ready";
     private WorkflowArtifactStatus _discoveryStatus;
     private string _statusTitle = "Discovery ready";
     private string _statusDetail = "Run Discovery against the current active source set.";
@@ -304,7 +305,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _statusDetail, value);
     }
 
-    public string ProgressStage => IsBusy ? "Stage: Interpreting sources" : "Stage: Complete";
+    public string ProgressStage => IsBusy ? "Stage: Interpreting sources" : _progressStage;
 
     public string ResultSummary => string.Format(
         CultureInfo.CurrentCulture,
@@ -401,6 +402,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
             if (!result.Accepted || !completion.Accepted)
             {
+                _issueCount = result.Issues.Count;
+                _progressStage = "Stage: Failed";
+                RefreshPresentation();
                 StatusTitle = "Discovery failed";
                 StatusDetail = result.FailureDescription
                     ?? completion.Rejection?.Reason
@@ -420,6 +424,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                     dispositions[information.InformationType]))
                 .ToArray();
             _issueCount = result.Issues.Count;
+            _progressStage = "Stage: Complete";
             _hasCompletedDiscovery = true;
             _currentPage = 1;
             RefreshPresentation();
@@ -441,6 +446,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
             StatusTitle = "Discovery cancelled";
             StatusDetail = "The Discovery operation was cancelled.";
+            _progressStage = "Stage: Cancelled";
         }
         catch (Exception)
         {
@@ -453,6 +459,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
             StatusTitle = "Discovery failed";
             StatusDetail = "Discovery could not be completed by the Processing Host.";
+            _progressStage = "Stage: Failed";
         }
         finally
         {

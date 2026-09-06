@@ -36,6 +36,8 @@ public static class ProcessingHostApplicationHost
         builder.Services.AddSingleton(_ => ApplicationPaths.ForCurrentUser());
         builder.Services.AddSingleton<ArchiveExtractionService>();
         builder.Services.AddSingleton<SourceIntakeService>();
+        builder.Services.AddSingleton<ISourceAdapter>(
+            _ => new XmlElementValueSourceAdapter(ReleaseSupportedSourceStructures.Cml));
         builder.Services.AddSingleton<ISourceInterpreter, SourceInterpreter>();
         builder.Services.AddSingleton<SourceRefreshService>();
         builder.Services.AddSingleton<DiscoveryService>();
