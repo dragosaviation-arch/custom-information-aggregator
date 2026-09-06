@@ -401,7 +401,10 @@ public sealed class ApplicationWorkflowCoordinator :
                 return;
             }
 
-            _current = _current with
+            _current = ApplyCompletion(
+                _current,
+                activeOperation.Kind,
+                ToOperationOutcome(terminalState)) with
             {
                 ActiveOperation = null,
                 LatestOperation = new WorkflowOperationStatus(
@@ -532,6 +535,15 @@ public sealed class ApplicationWorkflowCoordinator :
         WorkflowOperationKind operationKind,
         OperationOutcome outcome)
     {
+        if (operationKind == WorkflowOperationKind.Discovery
+            && outcome is OperationOutcome.Failed or OperationOutcome.InterruptedIncomplete)
+        {
+            return current with
+            {
+                Discovery = MakeStaleIfAvailable(current.Discovery)
+            };
+        }
+
         if (outcome is not (
             OperationOutcome.CompletedSuccessfully or
             OperationOutcome.CompletedWithIssues))

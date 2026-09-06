@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -359,6 +360,59 @@ public sealed class NamedPipeIpcTests
 
         Assert.AreEqual(expected, actual);
         Assert.AreEqual(fragmentedFrame.Length, fragmentedFrame.Position);
+    }
+
+    [TestMethod]
+    public async Task DiscoveryResponseAtObservedSourceScaleExceedsLegacyLimitAndRoundTrips()
+    {
+        const int observedSourceCount = 3481;
+        const int observedInformationTypeCount = 30;
+        const int legacyMaximumPayloadLength = 1024 * 1024;
+        var correlation = OperationCorrelation.CreateNew();
+        var sourceIds = Enumerable.Range(0, observedSourceCount)
+            .Select(_ => SourceId.CreateNew())
+            .ToArray();
+        var contributions = sourceIds
+            .Select((sourceId, index) => new DiscoveredSourceContribution(
+                sourceId,
+                $"source-{index:D4}.xml",
+                1))
+            .ToArray();
+        var completion = OperationCompletion.FromCompletedItems(
+            correlation,
+            sourceIds.Select(sourceId => OperationItemStatus.ProcessedSuccessfully(
+                sourceId.ToString())));
+        var response = new RunDiscoveryResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            Guid.CreateVersion7(),
+            CommandAcceptance.Accepted,
+            completion,
+            Enumerable.Range(0, observedInformationTypeCount)
+                .Select(index => new DiscoveredInformation(
+                    $"Tag{index:D2}",
+                    observedSourceCount,
+                    contributions,
+                    "sample"))
+                .ToArray(),
+            [],
+            Failure: null);
+        await using var stream = new MemoryStream();
+
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
+
+        Assert.IsGreaterThan(legacyMaximumPayloadLength, stream.Length);
+        Assert.IsLessThanOrEqualTo(
+            IpcProtocol.MaximumPayloadLength + IpcProtocol.FrameHeaderLength,
+            stream.Length);
+        stream.Position = 0;
+        var roundTripped = (RunDiscoveryResponse)await LengthPrefixedJsonMessageFramer
+            .ReadAsync(stream);
+        Assert.HasCount(observedInformationTypeCount, roundTripped.Information);
+        Assert.HasCount(
+            observedSourceCount,
+            roundTripped.Information[0].ContributingSources);
+        Assert.AreEqual(correlation, roundTripped.Completion.Correlation);
     }
 
     [TestMethod]
