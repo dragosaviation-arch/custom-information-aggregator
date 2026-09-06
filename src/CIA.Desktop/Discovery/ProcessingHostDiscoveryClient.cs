@@ -55,6 +55,51 @@ public sealed class ProcessingHostDiscoveryClient(
         }
     }
 
+    public async Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
+        OperationId discoveryOperationId,
+        string informationType,
+        int ordinal,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
+
+        try
+        {
+            var host = await hostSupervisor.EnsureAvailableAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (host.State != ProcessingHostLifecycleState.Ready)
+            {
+                return RejectOccurrence("processing-host-unavailable");
+            }
+
+            var response = await requestClient.RequestDiscoveryOccurrenceAsync(
+                    discoveryOperationId,
+                    informationType,
+                    ordinal,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return new DiscoveryOccurrenceClientResult(
+                response.Acceptance == CommandAcceptance.Accepted,
+                response.Occurrence,
+                response.Failure?.Code,
+                response.Failure?.Description);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Discovery occurrence {OccurrenceOrdinal} for {InformationType} could not be retrieved from operation {OperationId}",
+                ordinal,
+                informationType,
+                discoveryOperationId);
+            return RejectOccurrence("processing-host-unavailable");
+        }
+    }
+
     private static DiscoveryClientResult Reject(
         OperationCorrelation correlation,
         IReadOnlyList<LoadedSourceContract> sources,
@@ -73,5 +118,14 @@ public sealed class ProcessingHostDiscoveryClient(
             completion,
             failureCode,
             "The Processing Host could not complete Discovery.");
+    }
+
+    private static DiscoveryOccurrenceClientResult RejectOccurrence(string failureCode)
+    {
+        return new DiscoveryOccurrenceClientResult(
+            false,
+            Occurrence: null,
+            failureCode,
+            "The Processing Host could not retrieve the Discovery occurrence.");
     }
 }

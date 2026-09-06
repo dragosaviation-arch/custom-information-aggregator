@@ -44,6 +44,9 @@ public static class IpcContractValidator
             case RunDiscoveryCommand command:
                 ValidateRunDiscoveryCommand(command);
                 break;
+            case GetDiscoveryOccurrenceCommand command:
+                ValidateGetDiscoveryOccurrenceCommand(command);
+                break;
             case CommandAcknowledgement acknowledgement:
                 ValidateCommandAcknowledgement(acknowledgement);
                 break;
@@ -55,6 +58,9 @@ public static class IpcContractValidator
                 break;
             case RunDiscoveryResponse response:
                 ValidateRunDiscoveryResponse(response);
+                break;
+            case GetDiscoveryOccurrenceResponse response:
+                ValidateGetDiscoveryOccurrenceResponse(response);
                 break;
             case ProcessingHostAvailabilityEvent availabilityEvent:
                 ValidateProcessingHostAvailabilityEvent(availabilityEvent);
@@ -270,6 +276,18 @@ public static class IpcContractValidator
         ValidateFailure(response.Failure);
     }
 
+    private static void ValidateGetDiscoveryOccurrenceCommand(
+        GetDiscoveryOccurrenceCommand command)
+    {
+        ValidateOperationId(command.DiscoveryOperationId, "Discovery occurrence requests");
+
+        if (string.IsNullOrWhiteSpace(command.InformationType) || command.Ordinal < 1)
+        {
+            throw InvalidContract(
+                "A Discovery occurrence request requires an information identity and positive ordinal.");
+        }
+    }
+
     private static void ValidateRunDiscoveryResponse(RunDiscoveryResponse response)
     {
         ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
@@ -362,6 +380,51 @@ public static class IpcContractValidator
         }
 
         ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateGetDiscoveryOccurrenceResponse(
+        GetDiscoveryOccurrenceResponse response)
+    {
+        ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+        ValidateOperationId(response.DiscoveryOperationId, "Discovery occurrence responses");
+
+        if (!Enum.IsDefined(response.Acceptance))
+        {
+            throw InvalidContract(
+                "The Discovery occurrence response has an unsupported acceptance value.");
+        }
+
+        if (response.Acceptance == CommandAcceptance.Accepted)
+        {
+            if (response.Occurrence is null || response.Failure is not null)
+            {
+                throw InvalidContract(
+                    "An accepted Discovery occurrence response requires one occurrence and no failure.");
+            }
+
+            ValidateDiscoveredOccurrence(response.Occurrence);
+            return;
+        }
+
+        if (response.Occurrence is not null || response.Failure is null)
+        {
+            throw InvalidContract(
+                "A rejected Discovery occurrence response requires no occurrence and controlled failure information.");
+        }
+
+        ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateDiscoveredOccurrence(DiscoveredOccurrence occurrence)
+    {
+        if (string.IsNullOrWhiteSpace(occurrence.InformationType)
+            || occurrence.Ordinal < 1
+            || occurrence.TotalOccurrenceCount < occurrence.Ordinal
+            || !SourceId.IsValid(occurrence.SourceId.Value)
+            || occurrence.Value is null)
+        {
+            throw InvalidContract("A discovered occurrence is invalid.");
+        }
     }
 
     private static void ValidateLoadedSource(LoadedSourceContract source)
@@ -565,6 +628,14 @@ public static class IpcContractValidator
         {
             throw InvalidContract(
                 "Operation correlation requires a UUIDv7 Operation ID and UTC initiation time.");
+        }
+    }
+
+    private static void ValidateOperationId(OperationId operationId, string contractName)
+    {
+        if (!OperationId.IsValid(operationId.Value))
+        {
+            throw InvalidContract($"{contractName} require a non-empty UUIDv7 Operation ID.");
         }
     }
 

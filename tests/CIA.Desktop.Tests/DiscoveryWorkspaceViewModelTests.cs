@@ -141,6 +141,124 @@ public sealed class DiscoveryWorkspaceViewModelTests
     }
 
     [TestMethod]
+    public async Task OccurrencePreviewLoadsFirstValueAndNavigatesWithinBoundaries()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var values = new[] { "First value", "Second value", "Third value" };
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(
+                correlation,
+                sources,
+                [new DiscoveredInformation(
+                    "Tag",
+                    values.Length,
+                    [new DiscoveredSourceContribution(source.SourceId, "source.xml", values.Length)],
+                    values[0])]),
+            (operationId, informationType, ordinal) => AcceptOccurrence(
+                informationType,
+                ordinal,
+                values.Length,
+                source.SourceId,
+                values[ordinal - 1]));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreEqual("First value", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual("1", viewModel.OccurrenceOrdinalInput);
+        Assert.AreEqual("of 3", viewModel.OccurrenceTotalText);
+        Assert.IsFalse(viewModel.PreviousOccurrenceCommand.CanExecute(null));
+        Assert.IsTrue(viewModel.NextOccurrenceCommand.CanExecute(null));
+
+        await viewModel.NextOccurrenceCommand.ExecuteAsync(null);
+        await viewModel.NextOccurrenceCommand.ExecuteAsync(null);
+
+        Assert.AreEqual("Third value", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(3, viewModel.CurrentOccurrenceOrdinal);
+        Assert.IsFalse(viewModel.NextOccurrenceCommand.CanExecute(null));
+
+        await viewModel.PreviousOccurrenceCommand.ExecuteAsync(null);
+
+        Assert.AreEqual("Second value", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(2, viewModel.CurrentOccurrenceOrdinal);
+    }
+
+    [TestMethod]
+    public async Task DirectOrdinalRejectsInvalidInputAndTagChangeLoadsFirstOccurrence()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var values = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["Alpha"] = ["Alpha 1", "Alpha 2", "Alpha 3"],
+            ["Beta"] = ["Beta 1", "Beta 2"]
+        };
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(
+                correlation,
+                sources,
+                values.Select(pair => new DiscoveredInformation(
+                    pair.Key,
+                    pair.Value.Length,
+                    [new DiscoveredSourceContribution(
+                        source.SourceId,
+                        "source.xml",
+                        pair.Value.Length)],
+                    pair.Value[0])).ToArray()),
+            (operationId, informationType, ordinal) => AcceptOccurrence(
+                informationType,
+                ordinal,
+                values[informationType].Length,
+                source.SourceId,
+                values[informationType][ordinal - 1]));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        viewModel.OccurrenceOrdinalInput = "3";
+        await AwaitOrdinalJumpAsync(viewModel);
+
+        Assert.AreEqual("Alpha 3", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(3, viewModel.CurrentOccurrenceOrdinal);
+        var requestsBeforeInvalidInput = client.OccurrenceCallCount;
+
+        viewModel.OccurrenceOrdinalInput = "not-a-number";
+        await AwaitOrdinalJumpAsync(viewModel);
+        Assert.AreEqual("Alpha 3", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(3, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual("3", viewModel.OccurrenceOrdinalInput);
+
+        viewModel.OccurrenceOrdinalInput = "4";
+        await AwaitOrdinalJumpAsync(viewModel);
+        Assert.AreEqual("Alpha 3", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(3, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual("3", viewModel.OccurrenceOrdinalInput);
+        Assert.AreEqual(requestsBeforeInvalidInput, client.OccurrenceCallCount);
+
+        viewModel.SelectedInformation = viewModel.Information.Single(
+            information => information.InformationType == "Beta");
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreEqual("Beta 1", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual(2, viewModel.OccurrenceTotal);
+    }
+
+    [TestMethod]
     public async Task FailedDiscoveryReportsRealIssueCountAndFailureStage()
     {
         var source = CreateSource("source.xml");
@@ -451,13 +569,72 @@ public sealed class DiscoveryWorkspaceViewModelTests
             "The Processing Host could not complete Discovery.");
     }
 
-    private sealed class StubDiscoveryClient(
-        Func<OperationCorrelation, IReadOnlyList<LoadedSourceContract>, DiscoveryClientResult>
-            resultFactory) : IDiscoveryClient
+    private static DiscoveryOccurrenceClientResult AcceptOccurrence(
+        string informationType,
+        int ordinal,
+        int totalOccurrenceCount,
+        SourceId sourceId,
+        string value)
     {
+        return new DiscoveryOccurrenceClientResult(
+            true,
+            new DiscoveredOccurrence(
+                informationType,
+                ordinal,
+                totalOccurrenceCount,
+                sourceId,
+                value),
+            FailureCode: null,
+            FailureDescription: null);
+    }
+
+    private static async Task AwaitSelectedOccurrenceAsync(
+        DiscoveryWorkspaceViewModel viewModel)
+    {
+        if (viewModel.SelectInformationCommand.ExecutionTask is { } task)
+        {
+            await task;
+        }
+    }
+
+    private static async Task AwaitOrdinalJumpAsync(DiscoveryWorkspaceViewModel viewModel)
+    {
+        await viewModel.JumpToOccurrenceCommand.ExecuteAsync(null);
+    }
+
+    private sealed class StubDiscoveryClient : IDiscoveryClient
+    {
+        private readonly Func<
+            OperationCorrelation,
+            IReadOnlyList<LoadedSourceContract>,
+            DiscoveryClientResult> _resultFactory;
+        private readonly Func<
+            OperationId,
+            string,
+            int,
+            DiscoveryOccurrenceClientResult>? _occurrenceResultFactory;
+        private IReadOnlyList<DiscoveredInformation> _lastInformation = [];
+
+        public StubDiscoveryClient(
+            Func<
+                OperationCorrelation,
+                IReadOnlyList<LoadedSourceContract>,
+                DiscoveryClientResult> resultFactory,
+            Func<
+                OperationId,
+                string,
+                int,
+                DiscoveryOccurrenceClientResult>? occurrenceResultFactory = null)
+        {
+            _resultFactory = resultFactory;
+            _occurrenceResultFactory = occurrenceResultFactory;
+        }
+
         public IReadOnlyList<LoadedSourceContract> LastSources { get; private set; } = [];
 
         public int CallCount { get; private set; }
+
+        public int OccurrenceCallCount { get; private set; }
 
         public Task<DiscoveryClientResult> RunAsync(
             OperationCorrelation correlation,
@@ -466,7 +643,37 @@ public sealed class DiscoveryWorkspaceViewModelTests
         {
             CallCount++;
             LastSources = sources;
-            return Task.FromResult(resultFactory(correlation, sources));
+            var result = _resultFactory(correlation, sources);
+            _lastInformation = result.Information;
+            return Task.FromResult(result);
+        }
+
+        public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
+            OperationId discoveryOperationId,
+            string informationType,
+            int ordinal,
+            CancellationToken cancellationToken = default)
+        {
+            OccurrenceCallCount++;
+
+            if (_occurrenceResultFactory is not null)
+            {
+                return Task.FromResult(_occurrenceResultFactory(
+                    discoveryOperationId,
+                    informationType,
+                    ordinal));
+            }
+
+            var information = _lastInformation.Single(
+                item => item.InformationType == informationType);
+            return Task.FromResult(AcceptOccurrence(
+                informationType,
+                ordinal,
+                information.TotalOccurrenceCount,
+                information.ContributingSources[0].SourceId,
+                ordinal == 1
+                    ? information.SampleValue
+                    : $"{informationType} occurrence {ordinal}"));
         }
     }
 

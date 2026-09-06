@@ -13,6 +13,13 @@ public sealed record DiscoveredInformation(
     IReadOnlyList<DiscoveredSourceContribution> ContributingSources,
     string SampleValue);
 
+public sealed record DiscoveredOccurrence(
+    string InformationType,
+    int Ordinal,
+    int TotalOccurrenceCount,
+    SourceId SourceId,
+    string Value);
+
 public sealed record DiscoverySourceIssue(
     SourceId SourceId,
     string Code,

@@ -212,6 +212,26 @@ public sealed class ProcessingHostLifetimeService(
                         .ConfigureAwait(false);
                     break;
 
+                case GetDiscoveryOccurrenceCommand command when established:
+                    var occurrenceResult = discovery.GetOccurrence(
+                        command.DiscoveryOperationId,
+                        command.InformationType,
+                        command.Ordinal);
+                    await connection.SendAsync(
+                            new GetDiscoveryOccurrenceResponse(
+                                Guid.CreateVersion7(),
+                                DateTimeOffset.UtcNow,
+                                command.MessageId,
+                                command.DiscoveryOperationId,
+                                occurrenceResult.Accepted
+                                    ? CommandAcceptance.Accepted
+                                    : CommandAcceptance.Rejected,
+                                occurrenceResult.Occurrence,
+                                occurrenceResult.Failure),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+
                 case StopProcessingHostCommand command when established:
                     await SendAcceptedAsync(connection, command.MessageId, cancellationToken)
                         .ConfigureAwait(false);

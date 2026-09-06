@@ -59,6 +59,33 @@ public sealed class ProductionXmlSourceAdapterTests
     }
 
     [TestMethod]
+    public async Task ReleaseDeclaredCmlOccurrenceLookupPreservesExactValueAndSourceId()
+    {
+        using var workspace = new TemporaryXmlDirectory();
+        var source = workspace.CreateSource(
+            "occurrences.xml",
+            """
+            <cml>
+              <identifier>First</identifier>
+              <identifier><![CDATA[  Exact MiXeD-Case Value  ]]></identifier>
+            </cml>
+            """);
+        using var host = CreateHost(workspace.Path);
+        var service = host.Services.GetRequiredService<DiscoveryService>();
+        var correlation = OperationCorrelation.CreateNew();
+
+        var discovery = await service.RunAsync(correlation, [source]);
+        var occurrence = service.GetOccurrence(correlation.OperationId, "identifier", 2);
+
+        Assert.IsTrue(discovery.Accepted);
+        Assert.IsTrue(occurrence.Accepted);
+        Assert.AreEqual("  Exact MiXeD-Case Value  ", occurrence.Occurrence?.Value);
+        Assert.AreEqual(source.SourceId, occurrence.Occurrence?.SourceId);
+        Assert.AreEqual(2, occurrence.Occurrence?.Ordinal);
+        Assert.AreEqual(2, occurrence.Occurrence?.TotalOccurrenceCount);
+    }
+
+    [TestMethod]
     public async Task ProductionInterpreterRejectsUndeclaredRootAndNamespace()
     {
         using var workspace = new TemporaryXmlDirectory();

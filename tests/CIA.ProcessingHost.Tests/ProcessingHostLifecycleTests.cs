@@ -90,6 +90,37 @@ public sealed class ProcessingHostLifecycleTests
     }
 
     [TestMethod]
+    public async Task DesktopSupervisorRetrievesOccurrenceThroughRealProcessingHost()
+    {
+        await using var fixture = new SupervisorFixture();
+        var sourcePath = Path.Combine(fixture.WorkDirectory, "occurrences.xml");
+        await File.WriteAllTextAsync(
+            sourcePath,
+            "<cml><identifier>First</identifier><identifier>Exact second</identifier></cml>");
+        await fixture.Supervisor.EnsureAvailableAsync();
+        var load = await fixture.Supervisor.RequestSourceLoadAsync(
+            SourceSelectionKind.XmlFile,
+            sourcePath,
+            SourceLoadSettings.Default);
+        var correlation = OperationCorrelation.CreateNew();
+
+        var discovery = await fixture.Supervisor.RequestDiscoveryAsync(
+            correlation,
+            load.Sources);
+        var occurrence = await fixture.Supervisor.RequestDiscoveryOccurrenceAsync(
+            correlation.OperationId,
+            "identifier",
+            2);
+
+        Assert.AreEqual(CommandAcceptance.Accepted, discovery.Acceptance);
+        Assert.AreEqual(CommandAcceptance.Accepted, occurrence.Acceptance);
+        Assert.AreEqual("Exact second", occurrence.Occurrence?.Value);
+        Assert.AreEqual(load.Sources[0].SourceId, occurrence.Occurrence?.SourceId);
+        Assert.AreEqual(2, occurrence.Occurrence?.Ordinal);
+        Assert.AreEqual(2, occurrence.Occurrence?.TotalOccurrenceCount);
+    }
+
+    [TestMethod]
     public async Task DesktopAndProcessingHostExchangeArchiveDerivedSourcesOverTypedIpc()
     {
         using var workspace = new TemporaryLifecycleLogDirectory();

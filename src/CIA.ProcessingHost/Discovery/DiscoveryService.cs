@@ -9,6 +9,8 @@ namespace CIA.ProcessingHost.Discovery;
 
 public sealed class DiscoveryService(ISourceInterpreter sourceInterpreter)
 {
+    private PublishedDiscovery? _publishedDiscovery;
+
     public async Task<DiscoveryHostResult> RunAsync(
         OperationCorrelation correlation,
         IReadOnlyList<LoadedSourceContract> sources,
@@ -68,22 +70,79 @@ public sealed class DiscoveryService(ISourceInterpreter sourceInterpreter)
                 "Discovery could not interpret any source in the active source set.");
         }
 
+        var occurrences = CreateOccurrences(interpretedSources);
+        var information = Aggregate(occurrences, sourceNames);
         var completion = OperationCompletion.FromCompletedItems(correlation, itemStatuses);
+        _publishedDiscovery = PublishedDiscovery.Create(correlation.OperationId, occurrences);
         return DiscoveryHostResult.Accept(
-            Aggregate(interpretedSources, sourceNames),
+            information,
             issues,
             completion);
     }
 
-    private static IReadOnlyList<DiscoveredInformation> Aggregate(
-        IEnumerable<InterpretedSourceDocument> sources,
-        IReadOnlyDictionary<SourceId, string> sourceNames)
+    public DiscoveryOccurrenceHostResult GetOccurrence(
+        OperationId discoveryOperationId,
+        string informationType,
+        int ordinal)
+    {
+        if (discoveryOperationId == default)
+        {
+            throw new ArgumentException(
+                "A Discovery occurrence request requires an Operation ID.",
+                nameof(discoveryOperationId));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
+
+        var publishedDiscovery = _publishedDiscovery;
+        if (publishedDiscovery is null
+            || publishedDiscovery.OperationId != discoveryOperationId)
+        {
+            return DiscoveryOccurrenceHostResult.Reject(
+                "discovery-result-unavailable",
+                "The requested Discovery result is not available in the Processing Host.");
+        }
+
+        if (!publishedDiscovery.Occurrences.TryGetValue(informationType, out var occurrences))
+        {
+            return DiscoveryOccurrenceHostResult.Reject(
+                "discovery-information-unavailable",
+                "The requested information identity is not available in the Discovery result.");
+        }
+
+        if (ordinal < 1 || ordinal > occurrences.Count)
+        {
+            return DiscoveryOccurrenceHostResult.Reject(
+                "occurrence-ordinal-out-of-range",
+                "The requested occurrence ordinal is outside the available range.");
+        }
+
+        var occurrence = occurrences[ordinal - 1];
+        return DiscoveryOccurrenceHostResult.Accept(
+            new DiscoveredOccurrence(
+                occurrence.InformationType,
+                ordinal,
+                occurrences.Count,
+                occurrence.SourceId,
+                occurrence.Value));
+    }
+
+    private static IReadOnlyList<DiscoveredOccurrenceValue> CreateOccurrences(
+        IEnumerable<InterpretedSourceDocument> sources)
     {
         return sources
-            .SelectMany(source => source.Values.Select(value => new DiscoveryOccurrence(
+            .SelectMany(source => source.Values.Select(value => new DiscoveredOccurrenceValue(
                 value.InformationType,
                 value.Content,
                 source.OriginatingSourceId)))
+            .ToArray();
+    }
+
+    private static IReadOnlyList<DiscoveredInformation> Aggregate(
+        IEnumerable<DiscoveredOccurrenceValue> occurrences,
+        IReadOnlyDictionary<SourceId, string> sourceNames)
+    {
+        return occurrences
             .GroupBy(occurrence => occurrence.InformationType, StringComparer.Ordinal)
             .Select(group => new DiscoveredInformation(
                 group.Key,
@@ -109,10 +168,29 @@ public sealed class DiscoveryService(ISourceInterpreter sourceInterpreter)
             : name;
     }
 
-    private sealed record DiscoveryOccurrence(
+    private sealed record DiscoveredOccurrenceValue(
         string InformationType,
         string Value,
         SourceId SourceId);
+
+    private sealed record PublishedDiscovery(
+        OperationId OperationId,
+        IReadOnlyDictionary<string, IReadOnlyList<DiscoveredOccurrenceValue>> Occurrences)
+    {
+        public static PublishedDiscovery Create(
+            OperationId operationId,
+            IEnumerable<DiscoveredOccurrenceValue> occurrences)
+        {
+            return new PublishedDiscovery(
+                operationId,
+                occurrences
+                    .GroupBy(occurrence => occurrence.InformationType, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => (IReadOnlyList<DiscoveredOccurrenceValue>)group.ToArray(),
+                        StringComparer.Ordinal));
+        }
+    }
 }
 
 public sealed record DiscoveryHostResult(
@@ -141,6 +219,25 @@ public sealed record DiscoveryHostResult(
             Array.Empty<DiscoveredInformation>(),
             issues,
             completion,
+            new IpcFailure(code, description));
+    }
+}
+
+public sealed record DiscoveryOccurrenceHostResult(
+    bool Accepted,
+    DiscoveredOccurrence? Occurrence,
+    IpcFailure? Failure)
+{
+    internal static DiscoveryOccurrenceHostResult Accept(DiscoveredOccurrence occurrence)
+    {
+        return new DiscoveryOccurrenceHostResult(true, occurrence, Failure: null);
+    }
+
+    internal static DiscoveryOccurrenceHostResult Reject(string code, string description)
+    {
+        return new DiscoveryOccurrenceHostResult(
+            false,
+            Occurrence: null,
             new IpcFailure(code, description));
     }
 }

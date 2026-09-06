@@ -1,3 +1,4 @@
+using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using CIA.Contracts.Discovery;
@@ -53,6 +54,99 @@ public sealed class DiscoveryServiceTests
         CollectionAssert.AreEquivalent(
             new[] { first.SourceId, second.SourceId },
             names.ContributingSources.Select(source => source.SourceId).ToArray());
+    }
+
+    [TestMethod]
+    public async Task OccurrencesAreRetrievedInStableOrderWithSourceProvenance()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var first = workspace.CreateSource(
+            "first.xml",
+            "<catalog><name>Alpha</name><name>Bravo</name></catalog>");
+        var second = workspace.CreateSource(
+            "second.xml",
+            "<catalog><name>Charlie</name></catalog>");
+        var service = CreateService();
+        var correlation = OperationCorrelation.CreateNew();
+
+        var discovery = await service.RunAsync(correlation, [first, second]);
+        var firstOccurrence = service.GetOccurrence(correlation.OperationId, "Name", 1);
+        var secondOccurrence = service.GetOccurrence(correlation.OperationId, "Name", 2);
+        var thirdOccurrence = service.GetOccurrence(correlation.OperationId, "Name", 3);
+
+        Assert.IsTrue(discovery.Accepted);
+        Assert.AreEqual("Alpha", firstOccurrence.Occurrence?.Value);
+        Assert.AreEqual(first.SourceId, firstOccurrence.Occurrence?.SourceId);
+        Assert.AreEqual("Bravo", secondOccurrence.Occurrence?.Value);
+        Assert.AreEqual(first.SourceId, secondOccurrence.Occurrence?.SourceId);
+        Assert.AreEqual("Charlie", thirdOccurrence.Occurrence?.Value);
+        Assert.AreEqual(second.SourceId, thirdOccurrence.Occurrence?.SourceId);
+        Assert.AreEqual(3, thirdOccurrence.Occurrence?.TotalOccurrenceCount);
+
+        var beforeFirst = service.GetOccurrence(correlation.OperationId, "Name", 0);
+        var afterLast = service.GetOccurrence(correlation.OperationId, "Name", 4);
+
+        Assert.IsFalse(beforeFirst.Accepted);
+        Assert.AreEqual("occurrence-ordinal-out-of-range", beforeFirst.Failure?.Code);
+        Assert.IsFalse(afterLast.Accepted);
+        Assert.AreEqual("occurrence-ordinal-out-of-range", afterLast.Failure?.Code);
+    }
+
+    [TestMethod]
+    public async Task NormalDiscoveryResponseContainsOnlySampleWhileOtherValuesRemainOnDemand()
+    {
+        const string onDemandOnlyValue = "VALUE_AVAILABLE_ONLY_THROUGH_OCCURRENCE_REQUEST";
+        using var workspace = new DiscoveryWorkspace();
+        var source = workspace.CreateSource(
+            "source.xml",
+            $"<catalog><name>Sample</name><name>{onDemandOnlyValue}</name></catalog>");
+        var service = CreateService();
+        var correlation = OperationCorrelation.CreateNew();
+        var result = await service.RunAsync(correlation, [source]);
+        var response = new RunDiscoveryResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            Guid.CreateVersion7(),
+            CommandAcceptance.Accepted,
+            result.Completion,
+            result.Information,
+            result.Issues,
+            Failure: null);
+        await using var stream = new MemoryStream();
+
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
+        var normalResponseJson = Encoding.UTF8.GetString(
+            stream.ToArray().AsSpan(IpcProtocol.FrameHeaderLength));
+        var occurrence = service.GetOccurrence(correlation.OperationId, "Name", 2);
+
+        Assert.IsFalse(normalResponseJson.Contains(onDemandOnlyValue, StringComparison.Ordinal));
+        Assert.AreEqual(onDemandOnlyValue, occurrence.Occurrence?.Value);
+    }
+
+    [TestMethod]
+    public async Task FailedReRunDoesNotReplaceLastPublishedOccurrenceCatalog()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var usable = workspace.CreateSource(
+            "usable.xml",
+            "<catalog><name>Retained value</name></catalog>");
+        var unsupported = workspace.CreateSource(
+            "unsupported.xml",
+            "<different><name>Not published</name></different>");
+        var service = CreateService();
+        var successfulCorrelation = OperationCorrelation.CreateNew();
+        var failedCorrelation = OperationCorrelation.CreateNew();
+
+        var successful = await service.RunAsync(successfulCorrelation, [usable]);
+        var failed = await service.RunAsync(failedCorrelation, [unsupported]);
+        var retained = service.GetOccurrence(successfulCorrelation.OperationId, "Name", 1);
+        var failedAttempt = service.GetOccurrence(failedCorrelation.OperationId, "Name", 1);
+
+        Assert.IsTrue(successful.Accepted);
+        Assert.IsFalse(failed.Accepted);
+        Assert.AreEqual("Retained value", retained.Occurrence?.Value);
+        Assert.IsFalse(failedAttempt.Accepted);
+        Assert.AreEqual("discovery-result-unavailable", failedAttempt.Failure?.Code);
     }
 
     [TestMethod]
