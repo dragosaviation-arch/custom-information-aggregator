@@ -187,7 +187,9 @@ public sealed class SourceInterpreter : ISourceInterpreter
             CheckCharacters = true,
             CloseInput = false,
             ConformanceLevel = ConformanceLevel.Document,
-            DtdProcessing = DtdProcessing.Prohibit,
+            // DTD declarations are not processed or resolved. Ignoring the declaration allows
+            // release-declared legacy XML to reach its adapter without enabling DTD semantics.
+            DtdProcessing = DtdProcessing.Ignore,
             IgnoreComments = false,
             IgnoreWhitespace = false,
             XmlResolver = null

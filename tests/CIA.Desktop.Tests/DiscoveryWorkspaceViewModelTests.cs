@@ -141,6 +141,42 @@ public sealed class DiscoveryWorkspaceViewModelTests
     }
 
     [TestMethod]
+    public async Task FailedDiscoveryReportsRealIssueCountAndFailureStage()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => new DiscoveryClientResult(
+                false,
+                [],
+                [new DiscoverySourceIssue(
+                    source.SourceId,
+                    "unsupported-xml-structure",
+                    "The source structure is not supported.")],
+                OperationCompletion.FromTerminalOutcome(
+                    correlation,
+                    OperationOutcome.Failed,
+                    sources.Select(item => OperationItemStatus.Failed(
+                        item.SourceId.ToString(),
+                        "unsupported-xml-structure"))),
+                "discovery-no-usable-sources",
+                "Discovery could not interpret any source in the active source set."));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+
+        Assert.AreEqual("Discovery failed", viewModel.StatusTitle);
+        StringAssert.Contains(viewModel.ResultSummary, "1 issues");
+        Assert.AreEqual("Stage: Failed", viewModel.ProgressStage);
+        Assert.AreNotEqual("Stage: Complete", viewModel.ProgressStage);
+    }
+
+    [TestMethod]
     public async Task SelectionAndBlacklistRemainDistinctInTheActiveConfiguration()
     {
         var source = CreateSource("source.xml");
