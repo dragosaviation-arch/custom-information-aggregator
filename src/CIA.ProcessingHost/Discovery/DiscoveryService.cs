@@ -38,23 +38,26 @@ public sealed class DiscoveryService
                 nameof(sources));
         }
 
-        var interpretedSources = new List<InterpretedSourceDocument>();
-        var sourceNames = new Dictionary<SourceId, string>();
+        var aggregation = new DiscoveryAggregation();
         var itemStatuses = new List<OperationItemStatus>(sources.Count);
         var issues = new List<DiscoverySourceIssue>();
+        var usableSourceCount = 0;
 
         foreach (var source in sources)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var sourceName = GetSourceName(source);
-            sourceNames.Add(source.SourceId, sourceName);
             var interpretation = await _sourceInterpreter
                 .InterpretAsync(source, cancellationToken)
                 .ConfigureAwait(false);
 
             if (interpretation.Status == SourceInterpretationStatus.Usable)
             {
-                interpretedSources.Add(interpretation.Source!);
+                aggregation.AddSource(
+                    interpretation.Source!,
+                    sourceName,
+                    usableSourceCount);
+                usableSourceCount++;
                 itemStatuses.Add(OperationItemStatus.ProcessedSuccessfully(
                     source.SourceId.ToString()));
                 continue;
@@ -70,7 +73,7 @@ public sealed class DiscoveryService
                 failure.Description));
         }
 
-        if (interpretedSources.Count == 0)
+        if (usableSourceCount == 0)
         {
             return DiscoveryHostResult.Reject(
                 OperationCompletion.FromTerminalOutcome(
@@ -82,7 +85,7 @@ public sealed class DiscoveryService
                 "Discovery could not interpret any source in the active source set.");
         }
 
-        var information = Aggregate(interpretedSources, sourceNames);
+        var information = aggregation.CreateInformation();
         var completion = OperationCompletion.FromCompletedItems(correlation, itemStatuses);
         return DiscoveryHostResult.Accept(
             information,
@@ -148,36 +151,109 @@ public sealed class DiscoveryService
                 read.Value));
     }
 
-    private static IReadOnlyList<DiscoveredInformation> Aggregate(
-        IEnumerable<InterpretedSourceDocument> sources,
-        IReadOnlyDictionary<SourceId, string> sourceNames)
+    private sealed class DiscoveryAggregation
     {
-        var sourceArray = sources.ToArray();
-        var sourceOrder = sourceArray
-            .Select((source, index) => new { source.OriginatingSourceId, Index = index })
-            .ToDictionary(item => item.OriginatingSourceId, item => item.Index);
+        private readonly Dictionary<string, InformationAggregation> _information = new(
+            StringComparer.Ordinal);
 
-        return sourceArray
-            .SelectMany(source => source.Values.Select(value => new
+        public void AddSource(
+            InterpretedSourceDocument source,
+            string sourceName,
+            int sourceOrder)
+        {
+            foreach (var value in source.Values)
             {
-                value.InformationType,
-                Value = value.Content,
-                SourceId = source.OriginatingSourceId
-            }))
-            .GroupBy(occurrence => occurrence.InformationType, StringComparer.Ordinal)
-            .Select(group => new DiscoveredInformation(
-                group.Key,
-                group.Count(),
-                group.GroupBy(occurrence => occurrence.SourceId)
-                    .OrderBy(sourceGroup => sourceOrder[sourceGroup.Key])
-                    .Select(sourceGroup => new DiscoveredSourceContribution(
-                        sourceGroup.Key,
-                        sourceNames[sourceGroup.Key],
-                        sourceGroup.Count()))
+                if (!_information.TryGetValue(value.InformationType, out var aggregate))
+                {
+                    aggregate = new InformationAggregation(
+                        value.InformationType,
+                        value.Content);
+                    _information.Add(value.InformationType, aggregate);
+                }
+
+                aggregate.AddOccurrence(
+                    source.OriginatingSourceId,
+                    sourceName,
+                    sourceOrder);
+            }
+        }
+
+        public IReadOnlyList<DiscoveredInformation> CreateInformation()
+        {
+            return _information.Values
+                .OrderBy(information => information.InformationType, StringComparer.Ordinal)
+                .Select(information => information.CreateContract())
+                .ToArray();
+        }
+    }
+
+    private sealed class InformationAggregation
+    {
+        private readonly Dictionary<SourceId, SourceContributionAggregation> _sources = [];
+
+        public InformationAggregation(string informationType, string sampleValue)
+        {
+            InformationType = informationType;
+            SampleValue = sampleValue;
+        }
+
+        public string InformationType { get; }
+
+        private string SampleValue { get; }
+
+        private int TotalOccurrenceCount { get; set; }
+
+        public void AddOccurrence(SourceId sourceId, string sourceName, int sourceOrder)
+        {
+            TotalOccurrenceCount++;
+            if (!_sources.TryGetValue(sourceId, out var source))
+            {
+                source = new SourceContributionAggregation(sourceId, sourceName, sourceOrder);
+                _sources.Add(sourceId, source);
+            }
+
+            source.AddOccurrence();
+        }
+
+        public DiscoveredInformation CreateContract()
+        {
+            return new DiscoveredInformation(
+                InformationType,
+                TotalOccurrenceCount,
+                _sources.Values
+                    .OrderBy(source => source.SourceOrder)
+                    .Select(source => source.CreateContract())
                     .ToArray(),
-                group.First().Value))
-            .OrderBy(information => information.InformationType, StringComparer.Ordinal)
-            .ToArray();
+                SampleValue);
+        }
+    }
+
+    private sealed class SourceContributionAggregation
+    {
+        public SourceContributionAggregation(SourceId sourceId, string sourceName, int sourceOrder)
+        {
+            SourceId = sourceId;
+            SourceName = sourceName;
+            SourceOrder = sourceOrder;
+        }
+
+        public SourceId SourceId { get; }
+
+        public string SourceName { get; }
+
+        public int SourceOrder { get; }
+
+        private int OccurrenceCount { get; set; }
+
+        public void AddOccurrence()
+        {
+            OccurrenceCount++;
+        }
+
+        public DiscoveredSourceContribution CreateContract()
+        {
+            return new DiscoveredSourceContribution(SourceId, SourceName, OccurrenceCount);
+        }
     }
 
     private static string GetSourceName(LoadedSourceContract source)
