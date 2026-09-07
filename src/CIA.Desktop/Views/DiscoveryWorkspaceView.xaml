@@ -238,6 +238,8 @@
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ListBox.ItemContainerStyle>
                                 <Style TargetType="ListBoxItem">
+                                    <EventSetter Event="PreviewMouseDown"
+                                                 Handler="OnDiscoveryRowPreviewMouseDown" />
                                     <Setter Property="MinHeight" Value="31" />
                                     <Setter Property="Padding" Value="0" />
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -245,9 +247,6 @@
                                     <Setter Property="BorderThickness" Value="0,0,0,1" />
                                     <Setter Property="FocusVisualStyle" Value="{x:Null}" />
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                            <Setter Property="Background" Value="{StaticResource CiaSelectedRowBrush}" />
-                                        </DataTrigger>
                                         <DataTrigger Binding="{Binding IsBlacklisted}" Value="True">
                                             <Setter Property="Background" Value="{StaticResource CiaPanelAlternateBrush}" />
                                             <Setter Property="Opacity" Value="0.62" />
@@ -496,7 +495,7 @@
                             <TextBox Grid.Column="1"
                                      IsEnabled="False"
                                      Style="{StaticResource CiaTextInputStyle}"
-                                     Text="{Binding SelectedInformation.DatabaseTag}" />
+                                     Text="{Binding SelectedInformation.DatabaseTag, Mode=OneWay}" />
                             <Button Grid.Column="2"
                                     Margin="6,0,0,0"
                                     IsEnabled="False"

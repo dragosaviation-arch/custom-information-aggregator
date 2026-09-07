@@ -991,12 +991,17 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         FilteredCount = filtered.Length;
         _currentPage = Math.Clamp(_currentPage, 1, PageCount);
 
-        _visibleInformation.Clear();
-        foreach (var information in filtered
-                     .Skip((CurrentPage - 1) * PageSize)
-                     .Take(PageSize))
+        var visible = filtered
+            .Skip((CurrentPage - 1) * PageSize)
+            .Take(PageSize)
+            .ToArray();
+        if (!_visibleInformation.SequenceEqual(visible))
         {
-            _visibleInformation.Add(information);
+            _visibleInformation.Clear();
+            foreach (var information in visible)
+            {
+                _visibleInformation.Add(information);
+            }
         }
 
         OnPropertyChanged(nameof(FilteredCount));
