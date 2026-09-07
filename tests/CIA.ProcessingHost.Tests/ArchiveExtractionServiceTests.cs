@@ -180,7 +180,38 @@ public sealed class ArchiveExtractionServiceTests
         Assert.IsTrue(result.Issues.All(issue => issue.Code == "unsafe-archive-entry"));
         Assert.IsTrue(result.Issues.Any(issue => issue.EntryPath == "../escape.xml"));
         Assert.IsTrue(result.Issues.Any(issue => issue.EntryPath == "C:/absolute.xml"));
+        Assert.IsTrue(result.Issues.All(
+            issue => issue.ArchivePath == Path.GetFullPath(archivePath)));
+        Assert.IsTrue(result.Issues.All(issue => issue.ArchiveNestingLevel == 1));
+        Assert.AreEqual(LoadedSourceStatus.Ready, result.Sources[0].Status);
         Assert.IsFalse(File.Exists(Path.Combine(environment.TestRoot, "escape.xml")));
+    }
+
+    [TestMethod]
+    public async Task ArchiveRejectsWhenEverySupportedMemberIsUnsafeAndRetainsContext()
+    {
+        using var environment = new ArchiveTestEnvironment();
+        var archivePath = environment.CreateArchive(
+            "all-failed.zip",
+            TextEntry("../first.xml", "<first />"),
+            TextEntry("C:/second.xml", "<second />"));
+
+        var result = await environment.Intake.LoadAsync(
+            SourceSelectionKind.Archive,
+            archivePath,
+            SourceLoadSettings.Default);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("archive-no-usable-sources", result.Failure?.Code);
+        Assert.IsEmpty(result.Sources);
+        Assert.HasCount(2, result.Issues);
+        Assert.IsTrue(result.Issues.All(issue => issue.Code == "unsafe-archive-entry"));
+        Assert.IsTrue(result.Issues.All(
+            issue => issue.ArchivePath == Path.GetFullPath(archivePath)));
+        Assert.IsTrue(result.Issues.All(issue => issue.ArchiveNestingLevel == 1));
+        CollectionAssert.AreEquivalent(
+            new[] { "../first.xml", "C:/second.xml" },
+            result.Issues.Select(issue => issue.EntryPath).ToArray());
     }
 
     [TestMethod]
@@ -234,6 +265,9 @@ public sealed class ArchiveExtractionServiceTests
         Assert.AreEqual("usable.xml", result.Sources[0].ArchiveProvenance?.ArchiveMemberPath);
         Assert.HasCount(1, result.Issues);
         Assert.IsTrue(result.Issues[0].Code is "nested-archive-unreadable" or "archive-entry-failed");
+        Assert.AreEqual(Path.GetFullPath(archivePath), result.Issues[0].ArchivePath);
+        Assert.IsGreaterThanOrEqualTo(1, result.Issues[0].ArchiveNestingLevel);
+        Assert.AreEqual("broken.zip", result.Issues[0].EntryPath);
     }
 
     [TestMethod]
