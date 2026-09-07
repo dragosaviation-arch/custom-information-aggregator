@@ -46,6 +46,8 @@ public sealed class DiscoveryWorkspaceViewModelTests
             sourceSet,
             workflow);
 
+        Assert.AreEqual("Discovery not available", viewModel.DiscoveryStateText);
+
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
 
         Assert.HasCount(1, client.LastSources);
@@ -574,6 +576,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual(
             DiscoveryInformationDisposition.Neutral,
             GetDisposition(configuration, "Alpha"));
+        Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Discovery);
         Assert.AreEqual(WorkflowArtifactStatus.Unavailable, workflow.Current.Database);
         Assert.AreEqual(1, client.CallCount);
     }

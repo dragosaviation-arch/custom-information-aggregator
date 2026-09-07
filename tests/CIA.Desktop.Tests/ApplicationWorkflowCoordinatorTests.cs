@@ -1,5 +1,7 @@
 using CIA.Contracts.Operations;
+using CIA.Core;
 using CIA.Desktop.Hosting;
+using CIA.Desktop.Presentation;
 using CIA.Desktop.Workflow;
 
 namespace CIA.Desktop.Tests;
@@ -139,6 +141,42 @@ public sealed class ApplicationWorkflowCoordinatorTests
         Assert.AreNotEqual(
             failedAttempt.Operation.OperationId,
             nextAttempt.Operation?.OperationId);
+    }
+
+    [TestMethod]
+    public async Task InterruptedDiscoveryAttemptMarksRetainedStateStale()
+    {
+        var coordinator = CreateCoordinator(new StubProcessingHostSupervisor());
+        coordinator.RecordSourceSelectionChanged(true);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.Discovery);
+        var interruptedAttempt = await coordinator.BeginOperationAsync(
+            WorkflowOperationKind.Discovery);
+
+        var completion = coordinator.CompleteOperation(
+            interruptedAttempt.Operation!.OperationId,
+            OperationOutcome.InterruptedIncomplete);
+
+        Assert.IsTrue(completion.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, coordinator.Current.Discovery);
+        Assert.AreEqual(
+            WorkflowOperationState.InterruptedIncomplete,
+            coordinator.Current.LatestOperation?.State);
+    }
+
+    [TestMethod]
+    public async Task WorkspaceNavigationDoesNotMutateWorkflowState()
+    {
+        var coordinator = CreateCoordinator(new StubProcessingHostSupervisor());
+        coordinator.RecordSourceSelectionChanged(true);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.Discovery);
+        var expectedState = coordinator.Current;
+        var shell = new MainWindowViewModel(new ApplicationSession());
+
+        foreach (var workspace in shell.Workspaces.Reverse())
+        {
+            shell.SelectedWorkspace = workspace;
+            Assert.AreEqual(expectedState, coordinator.Current);
+        }
     }
 
     [TestMethod]
