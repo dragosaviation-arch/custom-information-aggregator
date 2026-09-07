@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
@@ -17,30 +18,33 @@ namespace CIA.ProcessingHost.Tests;
 public sealed class DiscoveryServiceTests
 {
     [TestMethod]
-    public async Task RealInterpretedValuesAggregateByInformationAndSourceIdentity()
+    public async Task ThreeSourcesAggregateCountsAndDistinctProvenanceInSourceOrder()
     {
         using var workspace = new DiscoveryWorkspace();
         var first = workspace.CreateSource(
-            "zeta.xml",
+            "first/shared.xml",
             "<catalog><name>Alpha</name><name>Bravo</name><code>A-1</code></catalog>");
         var second = workspace.CreateSource(
-            "alpha.xml",
+            "second/shared.xml",
             "<catalog><name>Charlie</name><code>B-2</code></catalog>");
+        var third = workspace.CreateSource(
+            "third.xml",
+            "<catalog><name>Delta</name><category>Reference</category></catalog>");
         var service = CreateService();
 
         var result = await service.RunAsync(
             OperationCorrelation.CreateNew(),
-            [first, second]);
+            [first, second, third]);
 
         Assert.IsTrue(result.Accepted);
         Assert.AreEqual(OperationOutcome.CompletedSuccessfully, result.Completion.Outcome);
         Assert.IsEmpty(result.Issues);
-        Assert.HasCount(2, result.Information);
+        Assert.HasCount(3, result.Information);
 
         var names = result.Information.Single(item => item.InformationType == "Name");
-        Assert.AreEqual(3, names.TotalOccurrenceCount);
+        Assert.AreEqual(4, names.TotalOccurrenceCount);
         Assert.AreEqual("Alpha", names.SampleValue);
-        Assert.HasCount(2, names.ContributingSources);
+        Assert.HasCount(3, names.ContributingSources);
         Assert.AreEqual(
             names.TotalOccurrenceCount,
             names.ContributingSources.Sum(source => source.OccurrenceCount));
@@ -52,9 +56,18 @@ public sealed class DiscoveryServiceTests
             1,
             names.ContributingSources.Single(source => source.SourceId == second.SourceId)
                 .OccurrenceCount);
+        Assert.AreEqual(
+            1,
+            names.ContributingSources.Single(source => source.SourceId == third.SourceId)
+                .OccurrenceCount);
         CollectionAssert.AreEqual(
-            new[] { first.SourceId, second.SourceId },
+            new[] { first.SourceId, second.SourceId, third.SourceId },
             names.ContributingSources.Select(source => source.SourceId).ToArray());
+        Assert.AreEqual("shared.xml", names.ContributingSources[0].SourceName);
+        Assert.AreEqual("shared.xml", names.ContributingSources[1].SourceName);
+        CollectionAssert.AreEqual(
+            new[] { "Code", "Name", "category" },
+            result.Information.Select(item => item.InformationType).ToArray());
     }
 
     [TestMethod]
@@ -191,6 +204,25 @@ public sealed class DiscoveryServiceTests
     }
 
     [TestMethod]
+    public void RunAsyncDoesNotRetainAWorkloadCollectionOfInterpretedDocuments()
+    {
+        var runAsync = typeof(DiscoveryService).GetMethod(nameof(DiscoveryService.RunAsync))!;
+        var stateMachine = runAsync
+            .GetCustomAttribute<AsyncStateMachineAttribute>()!
+            .StateMachineType;
+
+        var retainsDocumentCollection = stateMachine
+            .GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+            .Select(field => field.FieldType)
+            .Any(type => type.IsGenericType
+                && type.GetGenericArguments().Contains(typeof(InterpretedSourceDocument)));
+
+        Assert.IsFalse(
+            retainsDocumentCollection,
+            "Discovery must aggregate each source without retaining a workload-wide interpreted-document collection.");
+    }
+
+    [TestMethod]
     public async Task EachPreviewReadsOnlyTargetSourceWithoutFullInterpretationOrCache()
     {
         using var workspace = new DiscoveryWorkspace();
@@ -267,23 +299,32 @@ public sealed class DiscoveryServiceTests
     }
 
     [TestMethod]
-    public async Task ProblematicSourceProducesTruthfulPartialDiscoveryResult()
+    public async Task ProblematicSourceDoesNotPreventIndependentSourcesFromAggregating()
     {
         using var workspace = new DiscoveryWorkspace();
-        var usable = workspace.CreateSource(
-            "usable.xml",
+        var first = workspace.CreateSource(
+            "first.xml",
             "<catalog><name>Alpha</name></catalog>");
         var malformed = workspace.CreateSource(
             "malformed.xml",
             "<catalog><name>Broken</catalog>");
+        var second = workspace.CreateSource(
+            "second.xml",
+            "<catalog><name>Bravo</name></catalog>");
 
         var result = await CreateService().RunAsync(
             OperationCorrelation.CreateNew(),
-            [usable, malformed]);
+            [first, malformed, second]);
 
         Assert.IsTrue(result.Accepted);
         Assert.AreEqual(OperationOutcome.CompletedWithIssues, result.Completion.Outcome);
         Assert.HasCount(1, result.Information);
+        Assert.AreEqual(2, result.Information[0].TotalOccurrenceCount);
+        CollectionAssert.AreEqual(
+            new[] { first.SourceId, second.SourceId },
+            result.Information[0].ContributingSources
+                .Select(source => source.SourceId)
+                .ToArray());
         Assert.HasCount(1, result.Issues);
         Assert.AreEqual(malformed.SourceId, result.Issues[0].SourceId);
         Assert.AreEqual("malformed-xml", result.Issues[0].Code);
@@ -522,6 +563,7 @@ public sealed class DiscoveryServiceTests
         public LoadedSourceContract CreateSource(string fileName, string content)
         {
             var path = System.IO.Path.Combine(Path, fileName);
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
             File.WriteAllText(path, content);
             return new LoadedSourceContract(
                 SourceId.CreateNew(),
