@@ -611,6 +611,122 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    public async Task AddingSourceMakesCurrentDiscoveryAndDownstreamArtifactsStale()
+    {
+        var firstPath = Path.GetFullPath("first.xml");
+        var secondPath = Path.GetFullPath("second.xml");
+        var client = new SequencedSourceIntakeClient(
+            Accept(CreateXml(firstPath)),
+            Accept(CreateXml(secondPath)));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, firstPath);
+        await CompleteWorkflowThroughExtractionAsync(workflow);
+
+        var result = await coordinator.AddAsync(SourceSelectionKind.XmlFile, secondPath);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Extraction);
+        Assert.IsNull(workflow.Current.ActiveOperation);
+    }
+
+    [TestMethod]
+    public async Task IncludeAndExcludeChangesEachMakeCurrentDiscoveryStale()
+    {
+        var included = CreateXml(Path.GetFullPath("included.xml"));
+        var excluded = CreateXml(Path.GetFullPath("excluded.xml")) with
+        {
+            IsIncluded = false
+        };
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(
+            new StubSourceIntakeClient(Accept(included, excluded)),
+            sourceSet,
+            workflow);
+        await coordinator.AddAsync(SourceSelectionKind.Folder, Path.GetFullPath("folder"));
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.Discovery);
+
+        var inclusion = coordinator.SetInclusion(
+            [sourceSet.Items.Single(source => source.SourceId == excluded.SourceId)],
+            isIncluded: true);
+
+        Assert.IsTrue(inclusion.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
+
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.Discovery);
+        var exclusion = coordinator.SetInclusion(
+            [sourceSet.Items.Single(source => source.SourceId == included.SourceId)],
+            isIncluded: false);
+
+        Assert.IsTrue(exclusion.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
+        Assert.IsTrue(workflow.Current.HasValidSourceSelection);
+    }
+
+    [TestMethod]
+    public async Task FailedRefreshValidityChangeMakesCurrentArtifactsStale()
+    {
+        var path = Path.GetFullPath("source.xml");
+        var client = new SequencedSourceIntakeClient(
+            Accept(CreateXml(path)),
+            new SourceIntakeClientResult(
+                false,
+                [],
+                "source-unreadable",
+                "The source is no longer readable."));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, path);
+        await CompleteWorkflowThroughExtractionAsync(workflow);
+
+        var result = await coordinator.RefreshAsync(sourceSet.Items.Single());
+
+        Assert.IsFalse(result.Accepted);
+        Assert.IsTrue(result.SourceUpdated);
+        Assert.AreEqual(LoadedSourceStatus.Unavailable, sourceSet.Items[0].Status);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Extraction);
+    }
+
+    [TestMethod]
+    public async Task NoOpAndRejectedSourceChangesPreserveCurrentWorkflowState()
+    {
+        var path = Path.GetFullPath("source.xml");
+        var client = new SequencedSourceIntakeClient(
+            Accept(CreateXml(path)),
+            new SourceIntakeClientResult(
+                false,
+                [],
+                "source-unreadable",
+                "The source could not be read."));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, path);
+        await CompleteWorkflowThroughExtractionAsync(workflow);
+        var expectedState = workflow.Current;
+
+        var unchangedInclusion = coordinator.SetInclusion(sourceSet.Items, isIncluded: true);
+        var emptyRemoval = coordinator.Remove(Array.Empty<LoadedSourceItem>());
+        var duplicate = await coordinator.AddAsync(SourceSelectionKind.XmlFile, path);
+        var rejected = await coordinator.AddAsync(
+            SourceSelectionKind.XmlFile,
+            Path.GetFullPath("unreadable.xml"));
+
+        Assert.AreEqual(0, unchangedInclusion.ChangedCount);
+        Assert.AreEqual(0, emptyRemoval.RemovedCount);
+        Assert.AreEqual("duplicate-path", duplicate.FailureCode);
+        Assert.AreEqual("source-unreadable", rejected.FailureCode);
+        Assert.AreEqual(expectedState, workflow.Current);
+    }
+
+    [TestMethod]
     public async Task RemovalMakesCurrentDiscoveryStaleWithoutStartingAnotherOperation()
     {
         var path = Path.GetFullPath("source.xml");
@@ -743,6 +859,27 @@ public sealed class SourceLoadingCoordinatorTests
         return new ApplicationWorkflowCoordinator(
             new StubProcessingHostSupervisor(),
             new RecordingProcessingHistoryRecorder());
+    }
+
+    private static async Task CompleteWorkflowThroughExtractionAsync(
+        IApplicationWorkflowCoordinator workflow)
+    {
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.Discovery);
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.DatabaseBuild);
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.Extraction);
+    }
+
+    private static async Task CompleteSuccessfullyAsync(
+        IApplicationWorkflowCoordinator workflow,
+        WorkflowOperationKind operationKind)
+    {
+        var begin = await workflow.BeginOperationAsync(operationKind);
+        Assert.IsTrue(begin.Accepted);
+
+        var completion = workflow.CompleteOperation(
+            begin.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully);
+        Assert.IsTrue(completion.Accepted);
     }
 
     private sealed class StubSourceIntakeClient(SourceIntakeClientResult result) : ISourceIntakeClient
