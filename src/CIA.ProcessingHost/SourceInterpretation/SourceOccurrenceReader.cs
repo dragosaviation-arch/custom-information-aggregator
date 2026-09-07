@@ -16,21 +16,31 @@ public interface ISourceOccurrenceReader
 
 public sealed class SourceOccurrenceReader : ISourceOccurrenceReader
 {
-    private readonly IReadOnlyDictionary<XName, ISourceOccurrenceAdapter> _adaptersByRoot;
+    private readonly IReadOnlyDictionary<XName, ISourceAdapter> _adaptersByRoot;
+    private readonly IGenericXmlSourceAdapter _genericAdapter;
     private readonly ILogger<SourceOccurrenceReader> _logger;
 
     public SourceOccurrenceReader(
         IEnumerable<ISourceAdapter> adapters,
         ILogger<SourceOccurrenceReader> logger)
+        : this(adapters, new GenericXmlElementValueSourceAdapter(), logger)
+    {
+    }
+
+    public SourceOccurrenceReader(
+        IEnumerable<ISourceAdapter> adapters,
+        IGenericXmlSourceAdapter genericAdapter,
+        ILogger<SourceOccurrenceReader> logger)
     {
         ArgumentNullException.ThrowIfNull(adapters);
+        ArgumentNullException.ThrowIfNull(genericAdapter);
         ArgumentNullException.ThrowIfNull(logger);
 
         _adaptersByRoot = adapters
-            .Where(adapter => adapter is ISourceOccurrenceAdapter)
             .ToDictionary(
                 adapter => adapter.Declaration.RootElementName,
-                adapter => (ISourceOccurrenceAdapter)adapter);
+                adapter => adapter);
+        _genericAdapter = genericAdapter;
         _logger = logger;
     }
 
@@ -104,21 +114,37 @@ public sealed class SourceOccurrenceReader : ISourceOccurrenceReader
             }
 
             var rootName = XName.Get(reader.LocalName, reader.NamespaceURI);
-            if (!_adaptersByRoot.TryGetValue(rootName, out var adapter))
-            {
-                return SourceOccurrenceReadResult.Reject(
-                    "unsupported-xml-structure",
-                    "The XML document structure is not declared supported by this release.");
-            }
+            SourceOccurrenceRead occurrence;
 
-            var occurrence = await adapter
-                .ReadOccurrenceAsync(
-                    source.SourceId,
-                    reader,
-                    informationType,
-                    localOrdinal,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            if (_adaptersByRoot.TryGetValue(rootName, out var specializedAdapter))
+            {
+                if (specializedAdapter is not ISourceOccurrenceAdapter occurrenceAdapter)
+                {
+                    return SourceOccurrenceReadResult.Reject(
+                        "specialized-preview-unsupported",
+                        "The specialized XML source adapter does not support occurrence preview.");
+                }
+
+                occurrence = await occurrenceAdapter
+                    .ReadOccurrenceAsync(
+                        source.SourceId,
+                        reader,
+                        informationType,
+                        localOrdinal,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                occurrence = await _genericAdapter
+                    .ReadOccurrenceAsync(
+                        source.SourceId,
+                        reader,
+                        informationType,
+                        localOrdinal,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             while (await reader.ReadAsync().ConfigureAwait(false))
             {
@@ -147,7 +173,7 @@ public sealed class SourceOccurrenceReader : ISourceOccurrenceReader
         {
             _logger.LogWarning(
                 exception,
-                "Declared XML occurrence retrieval failed for {SourcePath}",
+                "XML occurrence retrieval failed for {SourcePath}",
                 fullPath);
             return SourceOccurrenceReadResult.Reject(
                 exception.FailureCode,

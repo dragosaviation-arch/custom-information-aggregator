@@ -89,19 +89,23 @@ public sealed class SourceInterpreterTests
     }
 
     [TestMethod]
-    public async Task UndeclaredXmlAndNonXmlInputRemainExplicitlyUnsupported()
+    public async Task UndeclaredXmlUsesGenericFallbackWhileNonXmlRemainsUnsupported()
     {
         using var files = new TemporaryXmlDirectory();
-        var undeclaredXml = files.WriteFile("unknown.xml", "<unknown />");
+        var undeclaredXml = files.WriteFile(
+            "unknown.xml",
+            "<unknown><value>generic content</value></unknown>");
         var nonXml = files.WriteFile("notes.txt", "not an XML source");
         var interpreter = CreateInterpreter(new CatalogSourceAdapter());
 
         var undeclaredResult = await interpreter.InterpretAsync(CreateLoadedXml(undeclaredXml));
         var nonXmlResult = await interpreter.InterpretAsync(CreateLoadedXml(nonXml));
 
-        Assert.AreEqual(SourceInterpretationStatus.Unsupported, undeclaredResult.Status);
-        Assert.AreEqual("unsupported-xml-structure", undeclaredResult.Failure?.Code);
-        Assert.IsNull(undeclaredResult.Source);
+        Assert.AreEqual(SourceInterpretationStatus.Usable, undeclaredResult.Status);
+        Assert.AreEqual(
+            GenericXmlElementValueSourceAdapter.GenericStructureId,
+            undeclaredResult.Source?.StructureId);
+        Assert.AreEqual("generic content", undeclaredResult.Source?.Values.Single().Content);
         Assert.AreEqual(SourceInterpretationStatus.Unsupported, nonXmlResult.Status);
         Assert.AreEqual("unsupported-input", nonXmlResult.Failure?.Code);
         Assert.IsNull(nonXmlResult.Source);

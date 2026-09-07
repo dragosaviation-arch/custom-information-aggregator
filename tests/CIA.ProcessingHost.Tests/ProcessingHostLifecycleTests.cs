@@ -223,10 +223,10 @@ public sealed class ProcessingHostLifecycleTests
 
         var refresh = await fixture.Supervisor.RequestSourceRefreshAsync(source);
 
-        Assert.AreEqual(CommandAcceptance.Rejected, refresh.Acceptance);
+        Assert.AreEqual(CommandAcceptance.Accepted, refresh.Acceptance);
         Assert.AreEqual(source.SourceId, refresh.Source.SourceId);
-        Assert.AreEqual(LoadedSourceStatus.Unsupported, refresh.Source.Status);
-        Assert.AreEqual("unsupported-xml-structure", refresh.Failure?.Code);
+        Assert.AreEqual(LoadedSourceStatus.Ready, refresh.Source.Status);
+        Assert.IsNull(refresh.Failure);
         Assert.IsTrue(File.Exists(sourcePath));
     }
 
