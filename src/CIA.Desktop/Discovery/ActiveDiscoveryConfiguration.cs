@@ -9,6 +9,8 @@ public sealed class ActiveDiscoveryConfiguration
         StringComparer.Ordinal);
     private Dictionary<string, string> _databaseTagOverrides = new(StringComparer.Ordinal);
 
+    public event EventHandler? Changed;
+
     public DiscoveryConfigurationSnapshot Current
     {
         get
@@ -64,6 +66,8 @@ public sealed class ActiveDiscoveryConfiguration
                     identity => _databaseTagOverrides[identity],
                     StringComparer.Ordinal);
         }
+
+        Changed?.Invoke(this, EventArgs.Empty);
     }
 
     public bool SetDatabaseTagOverride(string informationType, string? databaseTagOverride)
@@ -96,9 +100,10 @@ public sealed class ActiveDiscoveryConfiguration
             {
                 _databaseTagOverrides[informationType] = next;
             }
-
-            return true;
         }
+
+        Changed?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     public int SetSelection(IEnumerable<string> informationTypes, bool isSelected)
@@ -129,6 +134,11 @@ public sealed class ActiveDiscoveryConfiguration
             }
         }
 
+        if (changedCount > 0)
+        {
+            Changed?.Invoke(this, EventArgs.Empty);
+        }
+
         return changedCount;
     }
 
@@ -152,8 +162,10 @@ public sealed class ActiveDiscoveryConfiguration
             }
 
             _items[informationType] = next;
-            return true;
         }
+
+        Changed?.Invoke(this, EventArgs.Empty);
+        return true;
     }
 
     private DiscoveryConfigurationSnapshot CreateSnapshot()

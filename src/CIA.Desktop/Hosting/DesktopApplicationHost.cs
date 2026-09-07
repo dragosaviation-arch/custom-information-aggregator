@@ -52,6 +52,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<IDiscoveryClient, ProcessingHostDiscoveryClient>();
         builder.Services.AddSingleton<ActiveDiscoveryConfiguration>();
         builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
+        builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();
 
         ConfigureLogging(builder);
         return builder.Build();

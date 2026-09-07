@@ -1,0 +1,202 @@
+{
+  "meta": {
+    "name": "CIA Database UI Preview",
+    "version": "1.1",
+    "status": "Canonical Database UI/UX baseline reconciled to source-agnostic dynamic columns",
+    "sourceReference": "User-approved Database v1.1 preview and specification"
+  },
+  "authority": {
+    "purpose": "Visual and presentation guidance for the Database WPF workspace",
+    "behaviorOwner": "Approved Jira and Confluence requirements remain authoritative",
+    "databaseBackendIncluded": false
+  },
+  "shell": {
+    "topLevelTabs": [
+      "Load",
+      "Discovery",
+      "Database",
+      "Settings"
+    ],
+    "minimumWindow": {
+      "width": 1000,
+      "height": 520
+    },
+    "responsiveBreakpointPx": 1180,
+    "pageLevelVerticalScroll": false,
+    "persistentGlobalStatus": true,
+    "rule": "Use the existing shared CIA title, navigation and global status chrome."
+  },
+  "layout": {
+    "verticalSplit": {
+      "databaseReview": "approximately 50%",
+      "lowerPanels": "approximately 50%"
+    },
+    "lowerPanels": [
+      "Export Column Configuration",
+      "Excel Export"
+    ],
+    "wideLowerSplit": "50% / 50%",
+    "narrowBehavior": "Below 1180px, Export Fields and Excel Export become tabs with one lower panel visible at a time.",
+    "scrolling": "Database grid and individual lower panels may scroll; the workspace itself does not."
+  },
+  "database": {
+    "orientation": "Dynamic tag-derived columns with occurrence values beneath those columns",
+    "columnSource": "The selected Discovery configuration",
+    "columnNaming": {
+      "default": "Exact discovered XML tag identity",
+      "override": "Explicit effective Database Tag Name supplied by Discovery",
+      "semanticInference": false,
+      "databaseRenameEditor": false
+    },
+    "dynamicColumnExamples": [
+      "Tag_A",
+      "Tag_B",
+      "Tag_C"
+    ],
+    "records": {
+      "source": "A later Database creation/update backend",
+      "prototypeSampleDataInRuntime": false,
+      "currentUiState": "Truthful empty/unavailable state until real records exist"
+    },
+    "statePresentation": {
+      "source": "Existing workflow Database artifact state",
+      "values": [
+        "Unavailable",
+        "Current",
+        "Stale / Out of date"
+      ],
+      "placement": "Main Database header",
+      "lowerStateStrip": false
+    },
+    "toolbar": {
+      "controls": [
+        "Columns",
+        "real record count when available"
+      ],
+      "omitted": [
+        "Search",
+        "Filters",
+        "filter chips",
+        "row selection"
+      ]
+    },
+    "columnsControl": {
+      "model": "The same dynamic Database columns used by the review grid and export configuration",
+      "controls": [
+        "Visible",
+        "Width",
+        "Order",
+        "Reset layout"
+      ],
+      "scope": "Session presentation only",
+      "discoverySelectionImpact": false,
+      "dataDeletion": false
+    },
+    "omittedConcepts": [
+      "Fixed Database Tag / Value long-form rows",
+      "Tag Level as a fundamental field",
+      "Hierarchy Path as a fundamental field",
+      "Occurrence ID as a fundamental field",
+      "Record Details drawer",
+      "Source Status",
+      "Discovery counters"
+    ]
+  },
+  "provenance": {
+    "futureSystemFields": [
+      "Source Filename",
+      "Source Path",
+      "Source ID",
+      "Source Type"
+    ],
+    "rule": "Expose only when a completed backend contract supplies truthful record association.",
+    "fabricatedRecords": false
+  },
+  "exportColumnConfiguration": {
+    "columnSource": "Current dynamic Database columns",
+    "position": {
+      "sourceOfTruth": "Current Database presentation order",
+      "editable": false
+    },
+    "databaseField": {
+      "value": "Effective Database column name from Discovery",
+      "editable": false
+    },
+    "excelHeaderOverride": {
+      "editable": true,
+      "defaultValue": "Current Database field name",
+      "blankOnBlur": "Restore current Database field name",
+      "scope": "Excel heading only",
+      "modifiedStateVisible": true
+    },
+    "exportTick": {
+      "scope": "Include or exclude the column from Excel",
+      "independentFromDatabaseVisibility": true,
+      "databaseMembershipImpact": false
+    },
+    "resetActions": [
+      "Reset headers",
+      "Reset export"
+    ],
+    "helperText": "Every exportable field can also be made visible through Columns."
+  },
+  "excelExport": {
+    "primaryAction": {
+      "label": "Export to Excel",
+      "placement": "Top-right Database header",
+      "enabledOnlyWhenBackendExists": true,
+      "fakeSuccessAllowed": false
+    },
+    "localSettings": [
+      "Output folder",
+      "Browse",
+      "Always ask where to export",
+      "Filename",
+      "Auto-fit Columns",
+      "Freeze Header Row"
+    ],
+    "info": {
+      "Workbook": "Excel Workbook (.xlsx)",
+      "Worksheet": "Results",
+      "Headers": "Current names / overrides",
+      "Export fields": "selected count"
+    },
+    "omitted": [
+      "Export Profile",
+      "Format dropdown",
+      "Include Headers toggle",
+      "Split large export",
+      "Post-Export block",
+      "Export Status block"
+    ]
+  },
+  "ownership": {
+    "discovery": [
+      "tag selection",
+      "tag exclusion / blacklist",
+      "Database Tag Name Override"
+    ],
+    "databaseWorkspace": [
+      "Database column visibility",
+      "Database column width",
+      "Database column order",
+      "Excel header override",
+      "Excel export-column inclusion"
+    ]
+  },
+  "scopeExclusions": [
+    "Database creation or population",
+    "Database persistence or SQLite wiring",
+    "cross-occurrence association",
+    "row filtering",
+    "extraction",
+    "Excel workbook generation",
+    "collision handling",
+    "reusable Database Views",
+    "Export Profiles",
+    "calculated columns",
+    "normalization",
+    "fuzzy merge or deduplication",
+    "persisted UI configuration"
+  ]
+}

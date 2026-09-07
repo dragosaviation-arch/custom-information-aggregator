@@ -2,6 +2,7 @@ using System.Windows;
 using CIA.Core.Diagnostics;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
+using CIA.Desktop.Views;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -42,6 +43,7 @@ public sealed class ApplicationStartupSmokeTests
             var globalStatus = host.Services.GetRequiredService<GlobalStatusViewModel>();
             var loadWorkspace = host.Services.GetRequiredService<LoadWorkspaceViewModel>();
             var discoveryWorkspace = host.Services.GetRequiredService<DiscoveryWorkspaceViewModel>();
+            var databaseWorkspace = host.Services.GetRequiredService<DatabaseWorkspaceViewModel>();
             Application.Current.MainWindow = window;
 
             Assert.IsTrue(lifetime.ApplicationStarted.IsCancellationRequested);
@@ -50,8 +52,24 @@ public sealed class ApplicationStartupSmokeTests
             Assert.AreSame(globalStatus, window.GlobalStatus);
             Assert.AreSame(loadWorkspace, window.LoadWorkspace);
             Assert.AreSame(discoveryWorkspace, window.DiscoveryWorkspace);
+            Assert.AreSame(databaseWorkspace, window.DatabaseWorkspace);
             Assert.HasCount(4, viewModel.Workspaces);
             Assert.AreEqual(WorkspaceArea.Load, viewModel.SelectedWorkspace.Area);
+
+            var databaseView = (DatabaseWorkspaceView)window.FindName("DatabaseWorkspaceView");
+            var placeholder = (System.Windows.Controls.Grid)window.FindName(
+                "WorkspacePlaceholder");
+            viewModel.SelectedWorkspace = viewModel.Workspaces.Single(
+                workspace => workspace.Area == WorkspaceArea.Database);
+            window.UpdateLayout();
+            Assert.AreEqual(Visibility.Visible, databaseView.Visibility);
+            Assert.AreEqual(Visibility.Collapsed, placeholder.Visibility);
+
+            viewModel.SelectedWorkspace = viewModel.Workspaces.Single(
+                workspace => workspace.Area == WorkspaceArea.Settings);
+            window.UpdateLayout();
+            Assert.AreEqual(Visibility.Collapsed, databaseView.Visibility);
+            Assert.AreEqual(Visibility.Visible, placeholder.Visibility);
         }
         catch (Exception exception)
         {
