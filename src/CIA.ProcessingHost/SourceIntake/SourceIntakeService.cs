@@ -151,8 +151,21 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
             if (settings.IncludeXmlFiles
                 && string.Equals(Path.GetExtension(fullPath), ".xml", StringComparison.OrdinalIgnoreCase))
             {
-                VerifyReadableFile(fullPath);
-                sources.Add(CreateSource(fullPath, LoadedSourceKind.XmlFile));
+                try
+                {
+                    VerifyReadableFile(fullPath);
+                    sources.Add(CreateSource(fullPath, LoadedSourceKind.XmlFile));
+                }
+                catch (Exception exception) when (IsControlledPathFailure(exception))
+                {
+                    issues.Add(new SourceIntakeIssue(
+                        "source-unreadable",
+                        "An XML file in the selected folder could not be read and was skipped.",
+                        fullPath,
+                        ArchiveNestingLevel: 1,
+                        EntryPath: null));
+                }
+
                 continue;
             }
 

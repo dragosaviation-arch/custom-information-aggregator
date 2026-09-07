@@ -230,6 +230,90 @@ public sealed class SourceIntakeServiceTests
         Assert.HasCount(0, result.Sources);
     }
 
+    [TestMethod]
+    public async Task FolderContainsUnreadableXmlWhileRetainingIndependentReadableSources()
+    {
+        using var files = new TemporarySourceDirectory();
+        var firstPath = files.WriteFile("first.xml", "<first />");
+        var unreadablePath = files.WriteFile("unreadable.xml", "<unreadable />");
+        var secondPath = files.WriteFile("second.xml", "<second />");
+        var service = files.CreateService();
+        await using var unreadableFile = new FileStream(
+            unreadablePath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
+
+        var result = await service.LoadAsync(
+            SourceSelectionKind.Folder,
+            files.Path,
+            new SourceLoadSettings(true, false, false));
+
+        Assert.IsTrue(result.Accepted);
+        Assert.IsNull(result.Failure);
+        CollectionAssert.AreEqual(
+            new[] { Path.GetFullPath(firstPath), Path.GetFullPath(secondPath) },
+            result.Sources.Select(source => source.Path).ToArray());
+        Assert.IsTrue(result.Sources.All(source => source.Status == LoadedSourceStatus.Ready));
+        Assert.IsTrue(result.Sources.All(source => source.SourceId != default));
+        Assert.IsFalse(result.Sources.Any(source => source.Path == Path.GetFullPath(unreadablePath)));
+        Assert.HasCount(1, result.Issues);
+        Assert.AreEqual("source-unreadable", result.Issues[0].Code);
+        Assert.AreEqual(Path.GetFullPath(unreadablePath), result.Issues[0].ArchivePath);
+        Assert.AreEqual(1, result.Issues[0].ArchiveNestingLevel);
+        Assert.IsNull(result.Issues[0].EntryPath);
+    }
+
+    [TestMethod]
+    public async Task FolderRejectsWhenEverySupportedXmlIsUnreadableAndRetainsEveryIssue()
+    {
+        using var files = new TemporarySourceDirectory();
+        var firstPath = files.WriteFile("first.xml", "<first />");
+        var secondPath = files.WriteFile("second.xml", "<second />");
+        var service = files.CreateService();
+        await using var firstFile = new FileStream(
+            firstPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
+        await using var secondFile = new FileStream(
+            secondPath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.None);
+
+        var result = await service.LoadAsync(
+            SourceSelectionKind.Folder,
+            files.Path,
+            new SourceLoadSettings(true, false, false));
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("folder-no-usable-sources", result.Failure?.Code);
+        Assert.IsEmpty(result.Sources);
+        Assert.HasCount(2, result.Issues);
+        CollectionAssert.AreEquivalent(
+            new[] { Path.GetFullPath(firstPath), Path.GetFullPath(secondPath) },
+            result.Issues.Select(issue => issue.ArchivePath).ToArray());
+        Assert.IsTrue(result.Issues.All(issue => issue.Code == "source-unreadable"));
+    }
+
+    [TestMethod]
+    public async Task PreCancelledFolderLoadPropagatesCancellationWithoutCreatingIssues()
+    {
+        using var files = new TemporarySourceDirectory();
+        files.WriteFile("source.xml", "<source />");
+        var service = files.CreateService();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsExactlyAsync<TaskCanceledException>(
+            () => service.LoadAsync(
+                SourceSelectionKind.Folder,
+                files.Path,
+                SourceLoadSettings.Default,
+                cancellation.Token));
+    }
+
     private sealed class TemporarySourceDirectory : IDisposable
     {
         private readonly string _root = System.IO.Path.Combine(

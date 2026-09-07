@@ -132,6 +132,14 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
         }
         catch (Exception exception) when (IsControlledArchiveFailure(exception))
         {
+            var originalArchivePath = archiveItem.Lineage[0].Path;
+            var nestedArchiveEntryPath = archiveItem.NestingLevel == 1
+                ? null
+                : string.Join(
+                    "/",
+                    archiveItem.Lineage
+                        .Skip(1)
+                        .Select(item => NormalizeContextPath(item.Path)));
             issues.Add(new SourceIntakeIssue(
                 archiveItem.NestingLevel == 1
                     ? "archive-unreadable"
@@ -139,9 +147,9 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
                 archiveItem.NestingLevel == 1
                     ? "The selected archive could not be read."
                     : "A nested archive could not be read and was skipped.",
-                archiveItem.ArchivePath,
+                originalArchivePath,
                 archiveItem.NestingLevel,
-                EntryPath: null));
+                nestedArchiveEntryPath));
         }
     }
 
