@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CIA Database UI Preview v1.1</title>
+<style>
+:root{--bg:#f7f8fc;--panel:#fff;--text:#1f2430;--muted:#667085;--accent:#6e6bff;--accent2:#4e8cff;--soft:#efeeff;--border:#dde2ea;--ok:#2f8a59;--warn:#9a6500;--titleH:38px;--navH:60px;--statusH:32px;--pad:8px;--gap:8px}
+*{box-sizing:border-box}html,body{height:100%;margin:0}body{font:12.5px "Segoe UI",Arial,sans-serif;color:var(--text);background:var(--bg);overflow:hidden}
+button,input{font:inherit}.app{height:100%;display:grid;grid-template-rows:var(--titleH) var(--navH) minmax(0,1fr) var(--statusH);min-width:1000px;min-height:520px}
+.title{display:flex;align-items:center;justify-content:space-between;padding:0 15px;background:#fff;border-bottom:1px solid var(--border)}.brand{display:flex;align-items:center;gap:10px}.logo{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,var(--accent2),var(--accent));display:grid;place-items:center;color:#fff;font-weight:800}.cia{font-size:18px;font-weight:750}.sep{width:1px;height:18px;background:#cbd2dd}.product{font-size:12.5px}.ver{font-size:10.5px;color:#98a1af}
+.nav{display:flex;gap:5px;padding:0 10px;background:#fff;border-bottom:1px solid var(--border)}.tab{flex:1;border:0;background:#fff;display:grid;grid-template-columns:34px 1fr;align-items:center;text-align:left;padding:5px 9px;position:relative;border-radius:9px 9px 0 0}.tab.active{background:linear-gradient(#f2f1ff,#fcfcff)}.tab.active:after{content:"";position:absolute;left:7px;right:7px;bottom:0;height:3px;border-radius:5px;background:linear-gradient(90deg,var(--accent),var(--accent2))}.ico{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-size:17px;color:#727991}.active .ico{background:var(--soft);color:var(--accent)}.t1{font-size:13.5px;font-weight:750}.active .t1{color:#5149e8}.t2{font-size:10.2px;color:var(--muted)}
+.workspace{padding:var(--pad);overflow:hidden;min-height:0}.dbgrid{height:100%;display:grid;grid-template-rows:minmax(0,1fr) minmax(0,1fr);gap:var(--gap);min-height:0}.panel{background:var(--panel);border:1px solid var(--border);border-radius:9px;box-shadow:0 1px 2px rgba(16,24,40,.04);min-width:0;min-height:0}.ptitle{padding:7px 9px;border-bottom:1px solid var(--border);font-weight:750;font-size:13px;display:flex;align-items:center;gap:8px;min-width:0}.grow{flex:1;min-width:0}.sub,.statecontext{font-size:10.5px;color:var(--muted);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.btn{height:29px;border:1px solid #cbd2dd;background:#fff;border-radius:7px;padding:0 9px;font-weight:650;white-space:nowrap}.btn.primary{background:linear-gradient(135deg,#756fff,#5e68f4);color:#fff;border-color:#6863f5}.btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}.btn:disabled{opacity:.45}.statepill{height:22px;padding:0 8px;border-radius:999px;display:inline-flex;align-items:center;font-size:10.7px;font-weight:750;white-space:nowrap}.statepill.none{background:#eef1f5;color:#667085}
+.tablepanel{display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}.controlrow{display:flex;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--border)}.count{font-weight:750}.count b{color:var(--accent)}.popoverHost{position:relative}.pop{display:none;position:absolute;top:35px;left:0;width:385px;background:#fff;border:1px solid var(--border);border-radius:9px;box-shadow:0 12px 28px rgba(20,30,50,.16);z-index:30;padding:9px}.pop.show{display:block}.section{font-size:10px;font-weight:800;color:#5b57d6;letter-spacing:.04em;margin:1px 0 6px}.tiny{font-size:10px;color:var(--muted)}.colhead,.colrow{display:grid;grid-template-columns:20px minmax(0,1fr) 58px 54px;gap:6px;align-items:center}.colhead{font-size:9.7px;color:var(--muted);font-weight:700;margin-top:7px}.colrow{padding:5px 2px;border-bottom:1px solid #eef1f5}.colrow input{accent-color:var(--accent)}.widthinput{width:56px;height:24px;border:1px solid #d8dde6;border-radius:5px;padding:0 5px;text-align:right}.move{display:flex;gap:2px}.move button{width:24px;height:24px;border:1px solid #d8dde6;background:#fff;border-radius:5px}.pf{display:flex;justify-content:flex-end;margin-top:6px}
+.gridarea{position:relative;min-height:0;overflow:auto}.dbtable{border-collapse:separate;border-spacing:0;min-width:640px;width:100%;font-size:10.8px}.dbtable th{position:sticky;top:0;background:#fafbfd;border-bottom:1px solid var(--border);text-align:left;color:#5d6675;font-size:10.4px;padding:7px 8px;white-space:nowrap}.empty{height:100%;min-height:130px;display:grid;place-items:center;text-align:center;color:var(--muted)}.empty b{display:block;color:var(--text);font-size:15px;margin-bottom:5px}
+.lower{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--gap);min-height:0;position:relative}.lower>.panel{display:grid;grid-template-rows:auto minmax(0,1fr) auto;overflow:hidden}.lower>.panel>.ptitle{padding:6px 8px;font-size:12.4px}.panelbody{padding:7px 8px;overflow:auto;min-height:0}.lowerTabs{display:none}.exportfields{width:100%;border-collapse:collapse;font-size:10.6px}.exportfields th{text-align:left;color:var(--muted);font-size:10.2px;padding:4px;border-bottom:1px solid var(--border)}.exportfields td{padding:5px 4px;border-bottom:1px solid #eef1f5}.exportfields input{accent-color:var(--accent)}.headerinput{height:25px;width:100%;min-width:100px;border:1px solid #d8dde6;border-radius:5px;padding:0 6px}.headerinput.modified{border-color:#8d88ff;background:#f7f6ff;font-weight:700}.handle{color:#98a1af}.summaryline{display:flex;align-items:center;gap:6px;padding:6px 8px;border-top:1px solid #eef1f5;font-size:10.4px;color:var(--muted)}.summaryline strong{color:var(--text)}
+.excelgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}.formrow{display:grid;grid-template-columns:82px minmax(0,1fr) auto;gap:6px;align-items:center;margin:6px 0}.formrow label{font-size:10.6px;color:var(--muted)}.formrow input{height:29px;min-width:0;width:100%;border:1px solid #cbd2dd;border-radius:7px;padding:0 7px}.setting{display:flex;align-items:center;gap:7px;padding:5px 0;border-bottom:1px solid #eef1f5}.setting input{accent-color:var(--accent)}.kvgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;margin-top:6px}.kv .k{font-size:9.8px;color:var(--muted)}.kv .v{font-size:10.7px;font-weight:700}.note{padding:7px 8px;border:1px solid #e5e8ef;background:#fafbfd;border-radius:7px;color:var(--muted);font-size:10.3px;margin-top:8px}
+.statusbar{display:flex;align-items:center;gap:9px;padding:0 10px;border-top:1px solid var(--border);background:#fff;color:var(--muted);font-size:10.8px}.dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}.statusbar strong{color:var(--text)}.sgrow{flex:1}
+@media(max-width:1180px){.t2{display:none}.lower{display:block;padding-top:34px}.lowerTabs{display:flex;position:absolute;left:0;right:0;top:0;height:34px}.lowerTabs button{flex:1;border:1px solid var(--border);background:#fff;color:var(--muted);font-weight:700}.lowerTabs button.active{color:#5149e8;background:#fbfaff;border-bottom-color:var(--accent)}.lower>.panel{position:absolute;left:0;right:0;top:34px;bottom:0;display:none;border-radius:0 0 9px 9px}.lower>.panel.mobileActive{display:grid}.excelgrid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="app">
+ <div class="title"><div class="brand"><div class="logo">C</div><div class="cia">CIA</div><div class="sep"></div><div class="product">Custom Information Aggregator</div></div><div class="ver">Database UI/UX preview v1.1</div></div>
+ <div class="nav">
+  <button class="tab"><span class="ico">▣</span><span><span class="t1">Load</span><br><span class="t2">Add and manage sources</span></span></button>
+  <button class="tab"><span class="ico">◎</span><span><span class="t1">Discovery</span><br><span class="t2">Discover and select information</span></span></button>
+  <button class="tab active"><span class="ico">▥</span><span><span class="t1">Database</span><br><span class="t2">Review and export</span></span></button>
+  <button class="tab"><span class="ico">⚙</span><span><span class="t1">Settings</span><br><span class="t2">Configuration, history and support</span></span></button>
+ </div>
+ <main class="workspace">
+  <div class="dbgrid">
+   <section class="panel tablepanel">
+    <div>
+     <div class="ptitle"><span>DATABASE</span><span class="statepill none">Database not available</span><span class="statecontext">No Database has been published for the current session.</span><div class="grow"></div><button class="btn primary" disabled>▣ Export to Excel</button></div>
+     <div class="controlrow">
+      <div class="popoverHost"><button class="btn" id="columnsBtn">▥ Columns</button><div class="pop" id="columnPop"><div class="section">DATABASE COLUMNS</div><div class="tiny">Visibility, order and width affect CIA presentation only. Discovery owns selection and Database Tag naming.</div><div class="colhead"><div></div><div>Column</div><div>Width</div><div>Order</div></div><div id="columnRows"></div><div class="pf"><button class="btn ghost" id="resetColumns">Reset layout</button></div></div></div>
+      <div class="count"><b>0</b> / <b>0</b> records</div><span class="sub" id="columnCount">3 / 3 columns</span>
+     </div>
+    </div>
+    <div class="gridarea"><table class="dbtable"><thead><tr id="databaseHeaders"></tr></thead></table><div class="empty"><div><b>Database not available</b>Database records will appear after a later Database creation/update workflow.</div></div></div>
+   </section>
+   <section class="lower">
+    <div class="lowerTabs"><button class="active" data-panel="exportFieldsPanel">Export Fields</button><button data-panel="excelPanel">Excel Export</button></div>
+    <div class="panel mobileActive" id="exportFieldsPanel">
+     <div class="ptitle">EXPORT COLUMN CONFIGURATION<div class="grow"></div><span class="sub" id="exportFieldCount">3 / 3 fields</span></div>
+     <div class="panelbody"><table class="exportfields"><thead><tr><th></th><th>Position</th><th>Database Field</th><th>Excel Header (Override)</th><th>Export</th></tr></thead><tbody id="exportFieldRows"></tbody></table></div>
+     <div class="summaryline"><span>Every exportable field can also be made visible through <strong>Columns</strong>.</span><div class="grow"></div><button class="btn ghost" id="resetHeaders">Reset headers</button><button class="btn ghost" id="resetExport">Reset export</button></div>
+    </div>
+    <div class="panel" id="excelPanel">
+     <div class="ptitle">EXCEL EXPORT</div>
+     <div class="panelbody"><div class="excelgrid">
+      <div><div class="section">LOCAL SETTINGS</div><div class="formrow"><label>Output folder</label><input value="Documents\CIA\Exports"><button class="btn" disabled>Browse</button></div><label class="setting"><input type="checkbox" checked>Always ask where to export</label><div class="formrow"><label>Filename</label><input value="CIA_Export_YYYY-MM-DD_HHmm.xlsx"><span></span></div><label class="setting"><input type="checkbox" checked>Auto-fit Columns</label><label class="setting"><input type="checkbox" checked>Freeze Header Row</label></div>
+      <div><div class="section">INFO</div><div class="kvgrid"><div class="kv"><div class="k">Workbook</div><div class="v">Excel Workbook (.xlsx)</div></div><div class="kv"><div class="k">Worksheet</div><div class="v">Results</div></div><div class="kv"><div class="k">Headers</div><div class="v">Current names / overrides</div></div><div class="kv"><div class="k">Export fields</div><div class="v" id="workbookFieldCount">3 selected</div></div></div><div class="note">Excel generation is intentionally unavailable in this UI-only baseline.</div></div>
+     </div></div>
+    </div>
+   </section>
+  </div>
+ </main>
+ <footer class="statusbar"><span class="dot" title="Session active"></span><strong>Host</strong><span>Ready</span><strong>Operation</strong><span class="sgrow">Idle</span><strong>0 / 0 included</strong></footer>
+</div>
+<script>
+const columns=[
+ {id:"tag-a",field:"Tag_A",visible:true,width:180,exported:true,header:"Tag_A"},
+ {id:"tag-b",field:"Tag_B",visible:true,width:180,exported:true,header:"Tag_B"},
+ {id:"tag-c",field:"Tag_C",visible:true,width:180,exported:true,header:"Tag_C"}
+];
+const $=id=>document.getElementById(id);
+function render(){
+ $("databaseHeaders").innerHTML=columns.filter(c=>c.visible).map(c=>`<th style="width:${c.width}px">${c.field}</th>`).join("");
+ $("columnCount").textContent=`${columns.filter(c=>c.visible).length} / ${columns.length} columns`;
+ $("columnRows").innerHTML=columns.map((c,i)=>`<div class="colrow"><input type="checkbox" data-visible="${c.id}" ${c.visible?"checked":""}><div>${c.field}</div><input class="widthinput" data-width="${c.id}" value="${c.width}"><div class="move"><button data-up="${c.id}">↑</button><button data-down="${c.id}">↓</button></div></div>`).join("");
+ $("exportFieldRows").innerHTML=columns.map((c,i)=>`<tr><td class="handle">⋮⋮</td><td>${i+1}</td><td><b>${c.field}</b></td><td><input class="headerinput ${c.header===c.field?"":"modified"}" data-header="${c.id}" value="${c.header}"></td><td><input type="checkbox" data-export="${c.id}" ${c.exported?"checked":""}></td></tr>`).join("");
+ const n=columns.filter(c=>c.exported).length;$("exportFieldCount").textContent=`${n} / ${columns.length} fields`;$("workbookFieldCount").textContent=`${n} selected`;
+ document.querySelectorAll("[data-visible]").forEach(x=>x.onchange=()=>{columns.find(c=>c.id===x.dataset.visible).visible=x.checked;render()});
+ document.querySelectorAll("[data-width]").forEach(x=>x.onchange=()=>{const c=columns.find(c=>c.id===x.dataset.width);c.width=Math.max(60,Math.min(500,Number(x.value)||c.width));render()});
+ document.querySelectorAll("[data-up]").forEach(x=>x.onclick=()=>move(x.dataset.up,-1));document.querySelectorAll("[data-down]").forEach(x=>x.onclick=()=>move(x.dataset.down,1));
+ document.querySelectorAll("[data-header]").forEach(x=>x.onchange=()=>{const c=columns.find(c=>c.id===x.dataset.header);c.header=x.value.trim()||c.field;render()});
+ document.querySelectorAll("[data-export]").forEach(x=>x.onchange=()=>{columns.find(c=>c.id===x.dataset.export).exported=x.checked;render()});
+}
+function move(id,d){const i=columns.findIndex(c=>c.id===id),j=i+d;if(j<0||j>=columns.length)return;[columns[i],columns[j]]=[columns[j],columns[i]];render()}
+$("columnsBtn").onclick=()=>$("columnPop").classList.toggle("show");
+$("resetColumns").onclick=()=>{columns.sort((a,b)=>a.id.localeCompare(b.id));columns.forEach(c=>{c.visible=true;c.width=180});render()};
+$("resetHeaders").onclick=()=>{columns.forEach(c=>c.header=c.field);render()};$("resetExport").onclick=()=>{columns.forEach(c=>c.exported=true);render()};
+document.querySelectorAll(".lowerTabs button").forEach(b=>b.onclick=()=>{document.querySelectorAll(".lowerTabs button").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.querySelectorAll(".lower>.panel").forEach(x=>x.classList.remove("mobileActive"));$(b.dataset.panel).classList.add("mobileActive")});
+render();
+</script>
+</body>
+</html>

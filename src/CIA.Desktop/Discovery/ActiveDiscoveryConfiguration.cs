@@ -96,9 +96,9 @@ public sealed class ActiveDiscoveryConfiguration
             {
                 _databaseTagOverrides[informationType] = next;
             }
-
-            return true;
         }
+
+        return true;
     }
 
     public int SetSelection(IEnumerable<string> informationTypes, bool isSelected)
@@ -152,8 +152,9 @@ public sealed class ActiveDiscoveryConfiguration
             }
 
             _items[informationType] = next;
-            return true;
         }
+
+        return true;
     }
 
     private DiscoveryConfigurationSnapshot CreateSnapshot()

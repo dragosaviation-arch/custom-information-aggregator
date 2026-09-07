@@ -97,7 +97,23 @@
                 </views:DiscoveryWorkspaceView.Style>
             </views:DiscoveryWorkspaceView>
 
-            <Grid Margin="{StaticResource CiaWorkspaceMargin}">
+            <views:DatabaseWorkspaceView x:Name="DatabaseWorkspaceView"
+                                         DataContext="{Binding DatabaseWorkspace, ElementName=WindowRoot}">
+                <views:DatabaseWorkspaceView.Style>
+                    <Style TargetType="views:DatabaseWorkspaceView">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding DataContext.SelectedWorkspace.Area, ElementName=WindowRoot}"
+                                         Value="{x:Static presentation:WorkspaceArea.Database}">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </views:DatabaseWorkspaceView.Style>
+            </views:DatabaseWorkspaceView>
+
+            <Grid x:Name="WorkspacePlaceholder"
+                  Margin="{StaticResource CiaWorkspaceMargin}">
                 <Grid.Style>
                     <Style TargetType="Grid">
                         <Setter Property="Visibility" Value="Visible" />
@@ -108,6 +124,10 @@
                             </DataTrigger>
                             <DataTrigger Binding="{Binding SelectedWorkspace.Area}"
                                          Value="{x:Static presentation:WorkspaceArea.Discovery}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding DataContext.SelectedWorkspace.Area, ElementName=WindowRoot}"
+                                         Value="{x:Static presentation:WorkspaceArea.Database}">
                                 <Setter Property="Visibility" Value="Collapsed" />
                             </DataTrigger>
                         </Style.Triggers>
