@@ -16,6 +16,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly Dictionary<string, DatabaseColumnPresentation> _columnCache = new(
         StringComparer.Ordinal);
+    private readonly List<string> _publishedColumnOrder = [];
     private readonly ObservableCollection<DatabaseColumnPresentation> _columns = [];
     private readonly ObservableCollection<DatabaseColumnPresentation> _visibleColumns = [];
     private WorkflowArtifactStatus _databaseStatus;
@@ -45,8 +46,6 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         ResetExportCommand = new RelayCommand(ResetExport, HasColumns);
 
         _databaseStatus = workflowCoordinator.Current.Database;
-        SynchronizeColumns();
-        _discoveryConfiguration.Changed += OnDiscoveryConfigurationChanged;
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
     }
 
@@ -146,7 +145,6 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
-        _discoveryConfiguration.Changed -= OnDiscoveryConfigurationChanged;
         _workflowCoordinator.StateChanged -= OnWorkflowStateChanged;
         foreach (var column in _columnCache.Values)
         {
@@ -203,15 +201,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private void ResetColumnLayout()
     {
-        var configuredOrder = GetSelectedConfiguration()
-            .Select(item => item.InformationType)
-            .ToArray();
         foreach (var column in _columns)
         {
             column.ResetPresentation();
         }
 
-        ReorderColumns(configuredOrder);
+        ReorderColumns(_publishedColumnOrder);
         UpdatePositionsAndPresentation();
     }
 
@@ -231,39 +226,63 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void SynchronizeColumns()
+    private IReadOnlyList<PublishedColumnDefinition> CapturePublishedColumns()
     {
         var selectedConfiguration = GetSelectedConfiguration();
         var overrides = _discoveryConfiguration.DatabaseTagOverrides;
-        var selectedIds = selectedConfiguration
-            .Select(item => item.InformationType)
+
+        return selectedConfiguration
+            .Select(item => new PublishedColumnDefinition(
+                item.InformationType,
+                GetEffectiveDatabaseField(item.InformationType, overrides)))
+            .ToArray();
+    }
+
+    private void PublishDatabaseGeneration(
+        IReadOnlyList<PublishedColumnDefinition> publishedColumns)
+    {
+        var publishedIds = publishedColumns
+            .Select(column => column.InformationType)
             .ToHashSet(StringComparer.Ordinal);
 
-        foreach (var item in selectedConfiguration)
+        foreach (var publishedColumn in publishedColumns)
         {
-            if (!_columnCache.TryGetValue(item.InformationType, out var column))
+            if (!_columnCache.TryGetValue(publishedColumn.InformationType, out var column))
             {
                 column = new DatabaseColumnPresentation(
-                    item.InformationType,
-                    GetEffectiveDatabaseField(item.InformationType, overrides));
+                    publishedColumn.InformationType,
+                    publishedColumn.DatabaseField);
                 column.PropertyChanged += OnColumnPropertyChanged;
-                _columnCache.Add(item.InformationType, column);
+                _columnCache.Add(publishedColumn.InformationType, column);
             }
             else
             {
-                column.UpdateDatabaseField(
-                    GetEffectiveDatabaseField(item.InformationType, overrides));
+                column.UpdateDatabaseField(publishedColumn.DatabaseField);
             }
         }
 
-        var retainedOrder = _columns
-            .Where(column => selectedIds.Contains(column.InformationType))
+        foreach (var removedIdentity in _columnCache.Keys
+                     .Where(identity => !publishedIds.Contains(identity))
+                     .ToArray())
+        {
+            _columnCache[removedIdentity].PropertyChanged -= OnColumnPropertyChanged;
+            _columnCache.Remove(removedIdentity);
+        }
+
+        var retainedPresentationOrder = _columns
+            .Where(column => publishedIds.Contains(column.InformationType))
             .Select(column => column.InformationType)
             .ToList();
-        retainedOrder.AddRange(selectedConfiguration
-            .Select(item => item.InformationType)
-            .Where(identity => !retainedOrder.Contains(identity, StringComparer.Ordinal)));
-        ReorderColumns(retainedOrder);
+        retainedPresentationOrder.AddRange(publishedColumns
+            .Select(column => column.InformationType)
+            .Where(identity => !retainedPresentationOrder.Contains(
+                identity,
+                StringComparer.Ordinal)));
+
+        _publishedColumnOrder.Clear();
+        _publishedColumnOrder.AddRange(
+            publishedColumns.Select(column => column.InformationType));
+        ReorderColumns(retainedPresentationOrder);
         UpdatePositionsAndPresentation();
     }
 
@@ -334,14 +353,20 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void OnDiscoveryConfigurationChanged(object? sender, EventArgs e)
-    {
-        DispatchToUi(SynchronizeColumns);
-    }
-
     private void OnWorkflowStateChanged(object? sender, WorkflowStateSnapshot e)
     {
-        DispatchToUi(() => DatabaseStatus = e.Database);
+        var publishedColumns = IsSuccessfulDatabasePublication(e)
+            ? CapturePublishedColumns()
+            : null;
+        DispatchToUi(() =>
+        {
+            if (publishedColumns is not null)
+            {
+                PublishDatabaseGeneration(publishedColumns);
+            }
+
+            DatabaseStatus = e.Database;
+        });
     }
 
     private void DispatchToUi(Action update)
@@ -362,6 +387,22 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     {
         return overrides.GetValueOrDefault(informationType) ?? informationType;
     }
+
+    private static bool IsSuccessfulDatabasePublication(WorkflowStateSnapshot state)
+    {
+        return state.Database == WorkflowArtifactStatus.Current
+            && state.ActiveOperation is null
+            && state.LatestOperation is
+            {
+                Kind: WorkflowOperationKind.DatabaseBuild,
+                State: WorkflowOperationState.CompletedSuccessfully
+                    or WorkflowOperationState.CompletedWithIssues
+            };
+    }
+
+    private sealed record PublishedColumnDefinition(
+        string InformationType,
+        string DatabaseField);
 }
 
 public sealed class DatabaseColumnPresentation : ObservableObject

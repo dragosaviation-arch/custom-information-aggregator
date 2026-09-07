@@ -7,7 +7,8 @@
   },
   "authority": {
     "purpose": "Visual and presentation guidance for the Database WPF workspace",
-    "behaviorOwner": "Approved Jira and Confluence requirements remain authoritative",
+    "clarifiedProductModel": "This canonical Database UI uses dynamic tag-derived columns and no row-filter stage.",
+    "controlledDocumentationStatus": "Older controlled row-filter and extraction-scope wording is pending reconciliation; this PR does not modify Jira or Confluence.",
     "databaseBackendIncluded": false
   },
   "shell": {

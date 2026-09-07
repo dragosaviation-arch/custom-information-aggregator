@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using CIA.Contracts.Operations;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
@@ -30,6 +31,9 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             new ReadyProcessingHostSupervisor(),
             new RecordingProcessingHistoryRecorder());
         using var viewModel = new DatabaseWorkspaceViewModel(configuration, workflow);
+        Assert.IsTrue(workflow.RecordSourceSelectionChanged(true).Accepted);
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.Discovery);
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.DatabaseBuild);
         var view = new DatabaseWorkspaceView
         {
             DataContext = viewModel
@@ -80,6 +84,17 @@ public sealed class DatabaseWorkspaceViewInteractionTests
         {
             window.Close();
         }
+    }
+
+    private static async Task CompleteSuccessfullyAsync(
+        IApplicationWorkflowCoordinator workflow,
+        WorkflowOperationKind operationKind)
+    {
+        var begin = await workflow.BeginOperationAsync(operationKind);
+        Assert.IsTrue(begin.Accepted);
+        Assert.IsTrue(workflow.CompleteOperation(
+            begin.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully).Accepted);
     }
 
     private sealed class ReadyProcessingHostSupervisor : IProcessingHostSupervisor
