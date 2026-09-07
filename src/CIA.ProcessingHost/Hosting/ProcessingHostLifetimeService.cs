@@ -213,10 +213,13 @@ public sealed class ProcessingHostLifetimeService(
                     break;
 
                 case GetDiscoveryOccurrenceCommand command when established:
-                    var occurrenceResult = discovery.GetOccurrence(
-                        command.DiscoveryOperationId,
-                        command.InformationType,
-                        command.Ordinal);
+                    var occurrenceResult = await discovery
+                        .GetOccurrenceAsync(
+                            command.DiscoveryOperationId,
+                            command.InformationType,
+                            command.Ordinal,
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     await connection.SendAsync(
                             new GetDiscoveryOccurrenceResponse(
                                 Guid.CreateVersion7(),

@@ -75,7 +75,10 @@ public sealed class ProductionXmlSourceAdapterTests
         var correlation = OperationCorrelation.CreateNew();
 
         var discovery = await service.RunAsync(correlation, [source]);
-        var occurrence = service.GetOccurrence(correlation.OperationId, "identifier", 2);
+        var occurrence = await service.GetOccurrenceAsync(
+            correlation.OperationId,
+            "identifier",
+            2);
 
         Assert.IsTrue(discovery.Accepted);
         Assert.IsTrue(occurrence.Accepted);
