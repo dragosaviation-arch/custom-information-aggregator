@@ -668,6 +668,131 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual("Stage: Complete", viewModel.ProgressStage);
     }
 
+    [TestMethod]
+    public async Task DatabaseTagOverrideAssignChangeClearPreservesIdentityAndSelectionSeparation()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(
+                correlation,
+                sources,
+                CreateInformation(source.SourceId, "Alpha", "Beta")));
+        var configuration = new ActiveDiscoveryConfiguration();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow);
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var alpha = viewModel.Information.Single(item => item.InformationType == "Alpha");
+
+        Assert.AreEqual("Alpha", alpha.DatabaseTag);
+        Assert.IsFalse(alpha.HasDatabaseTagOverride);
+
+        viewModel.SelectedInformation = alpha;
+        viewModel.SelectedDatabaseTag = "Mapped Alpha";
+        Assert.AreEqual("Mapped Alpha", alpha.DatabaseTag);
+        Assert.AreEqual("Mapped Alpha", alpha.DatabaseTagOverride);
+        Assert.IsTrue(alpha.HasDatabaseTagOverride);
+        Assert.AreEqual("Revert", viewModel.DatabaseTagOverrideActionText);
+
+        viewModel.SelectedDatabaseTag = "Changed Alpha";
+        viewModel.ToggleSelectionCommand.Execute(alpha);
+        viewModel.ToggleBlacklistCommand.Execute(alpha);
+        viewModel.ToggleBlacklistCommand.Execute(alpha);
+
+        Assert.AreEqual("Alpha", alpha.InformationType);
+        Assert.AreEqual("Changed Alpha", alpha.DatabaseTag);
+        Assert.AreEqual("Changed Alpha", configuration.DatabaseTagOverrides["Alpha"]);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Neutral,
+            GetDisposition(configuration, "Alpha"));
+        var selectionProfileJson = System.Text.Json.JsonSerializer.Serialize(
+            configuration.Current);
+        Assert.IsFalse(selectionProfileJson.Contains("Changed Alpha", StringComparison.Ordinal));
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        alpha = viewModel.Information.Single(item => item.InformationType == "Alpha");
+        Assert.AreEqual("Changed Alpha", alpha.DatabaseTag);
+
+        viewModel.SelectedInformation = alpha;
+        viewModel.ClearDatabaseTagOverrideCommand.Execute(null);
+
+        Assert.AreEqual("Alpha", alpha.InformationType);
+        Assert.AreEqual("Alpha", alpha.DatabaseTag);
+        Assert.IsFalse(alpha.HasDatabaseTagOverride);
+        Assert.IsFalse(configuration.DatabaseTagOverrides.ContainsKey("Alpha"));
+        Assert.AreEqual("Default", viewModel.DatabaseTagOverrideActionText);
+    }
+
+    [TestMethod]
+    public async Task ModifiedDatabaseTagFilterShowsOnlyOverrideMappings()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(
+                correlation,
+                sources,
+                CreateInformation(source.SourceId, "Alpha", "Beta", "Gamma")));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var alpha = viewModel.Information.Single(item => item.InformationType == "Alpha");
+        viewModel.SelectedInformation = alpha;
+        viewModel.SelectedDatabaseTag = "Mapped Alpha";
+
+        viewModel.ShowOnlyDatabaseTagOverrides = true;
+
+        Assert.AreEqual(1, viewModel.FilteredCount);
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreSame(alpha, viewModel.Information[0]);
+        Assert.IsTrue(viewModel.Information[0].HasDatabaseTagOverride);
+
+        viewModel.SearchText = "Mapped Alpha";
+        Assert.HasCount(1, viewModel.Information);
+        viewModel.ClearDatabaseTagOverrideCommand.Execute(null);
+        Assert.AreEqual(0, viewModel.FilteredCount);
+        Assert.IsEmpty(viewModel.Information);
+    }
+
+    [TestMethod]
+    public async Task DatabaseTagOverrideMakesDependentDatabaseStaleWithoutRebuild()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(
+                correlation,
+                sources,
+                CreateInformation(source.SourceId, "Alpha")));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var database = await workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
+        workflow.CompleteOperation(
+            database.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Database);
+
+        viewModel.SelectedDatabaseTag = "Mapped Alpha";
+
+        Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Database);
+        Assert.AreEqual(1, client.CallCount);
+        Assert.IsNull(workflow.Current.ActiveOperation);
+    }
+
     private static IReadOnlyList<DiscoveredInformation> CreateInformation(
         SourceId sourceId,
         params string[] informationTypes)

@@ -7,6 +7,7 @@ public sealed class ActiveDiscoveryConfiguration
     private readonly object _stateGate = new();
     private Dictionary<string, DiscoveryInformationDisposition> _items = new(
         StringComparer.Ordinal);
+    private Dictionary<string, string> _databaseTagOverrides = new(StringComparer.Ordinal);
 
     public DiscoveryConfigurationSnapshot Current
     {
@@ -15,6 +16,19 @@ public sealed class ActiveDiscoveryConfiguration
             lock (_stateGate)
             {
                 return CreateSnapshot();
+            }
+        }
+    }
+
+    public IReadOnlyDictionary<string, string> DatabaseTagOverrides
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return new Dictionary<string, string>(
+                    _databaseTagOverrides,
+                    StringComparer.Ordinal);
             }
         }
     }
@@ -43,6 +57,47 @@ public sealed class ActiveDiscoveryConfiguration
                     identity,
                     DiscoveryInformationDisposition.Neutral),
                 StringComparer.Ordinal);
+            _databaseTagOverrides = uniqueIdentities
+                .Where(_databaseTagOverrides.ContainsKey)
+                .ToDictionary(
+                    identity => identity,
+                    identity => _databaseTagOverrides[identity],
+                    StringComparer.Ordinal);
+        }
+    }
+
+    public bool SetDatabaseTagOverride(string informationType, string? databaseTagOverride)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
+
+        lock (_stateGate)
+        {
+            if (!_items.ContainsKey(informationType))
+            {
+                return false;
+            }
+
+            var candidate = databaseTagOverride?.Trim();
+            string? next = string.IsNullOrWhiteSpace(candidate)
+                || string.Equals(candidate, informationType, StringComparison.Ordinal)
+                    ? null
+                    : candidate;
+            _databaseTagOverrides.TryGetValue(informationType, out var current);
+            if (string.Equals(current, next, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (next is null)
+            {
+                _databaseTagOverrides.Remove(informationType);
+            }
+            else
+            {
+                _databaseTagOverrides[informationType] = next;
+            }
+
+            return true;
         }
     }
 
