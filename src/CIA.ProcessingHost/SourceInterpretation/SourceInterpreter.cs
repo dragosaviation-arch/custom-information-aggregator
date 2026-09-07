@@ -179,7 +179,7 @@ public sealed class SourceInterpreter : ISourceInterpreter
         }
     }
 
-    private static XmlReaderSettings CreateReaderSettings()
+    internal static XmlReaderSettings CreateReaderSettings()
     {
         return new XmlReaderSettings
         {

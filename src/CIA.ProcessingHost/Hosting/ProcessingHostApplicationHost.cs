@@ -39,6 +39,7 @@ public static class ProcessingHostApplicationHost
         builder.Services.AddSingleton<ISourceAdapter>(
             _ => new XmlElementValueSourceAdapter(ReleaseSupportedSourceStructures.Cml));
         builder.Services.AddSingleton<ISourceInterpreter, SourceInterpreter>();
+        builder.Services.AddSingleton<ISourceOccurrenceReader, SourceOccurrenceReader>();
         builder.Services.AddSingleton<SourceRefreshService>();
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();

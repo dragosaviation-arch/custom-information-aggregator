@@ -12,9 +12,7 @@ public interface IDiscoveryClient
         CancellationToken cancellationToken = default);
 
     Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
-        OperationId discoveryOperationId,
-        string informationType,
-        int ordinal,
+        DiscoveryOccurrenceLookup lookup,
         CancellationToken cancellationToken = default);
 }
 
