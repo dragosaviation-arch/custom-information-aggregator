@@ -53,6 +53,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private DiscoveredInformationItemViewModel? _selectedInformation;
     private DiscoveredInformationItemViewModel? _inspectedInformation;
     private OperationId? _publishedDiscoveryOperationId;
+    private IReadOnlyDictionary<SourceId, LoadedSourceContract> _publishedDiscoverySources =
+        new Dictionary<SourceId, LoadedSourceContract>();
     private string _occurrencePreviewText =
         "Select a discovered tag to inspect its occurrence value.";
     private string _occurrenceOrdinalInput = string.Empty;
@@ -522,6 +524,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                     dispositions[information.InformationType]))
                 .ToArray();
             _publishedDiscoveryOperationId = result.Completion.Correlation.OperationId;
+            _publishedDiscoverySources = CreatePublishedSourceSnapshot(
+                sources,
+                result.Information);
             _issueCount = result.Issues.Count;
             _progressStage = "Stage: Complete";
             _hasCompletedDiscovery = true;
@@ -665,14 +670,28 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
+        if (!TryCreateOccurrenceLookup(
+                discoveryOperationId.Value,
+                information,
+                ordinal,
+                out var lookup))
+        {
+            if (IsCurrentPreviewRequest(requestVersion, information)
+                && CurrentOccurrenceOrdinal == 0)
+            {
+                OccurrencePreviewText = "The selected occurrence could not be retrieved.";
+                IsOccurrenceLoading = false;
+            }
+
+            RestoreOccurrenceOrdinalInput();
+            return;
+        }
+
         IsOccurrenceLoading = true;
 
         try
         {
-            var result = await _discoveryClient.GetOccurrenceAsync(
-                discoveryOperationId.Value,
-                information.InformationType,
-                ordinal);
+            var result = await _discoveryClient.GetOccurrenceAsync(lookup);
 
             if (!IsCurrentPreviewRequest(requestVersion, information))
             {
@@ -686,7 +705,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                     occurrence.InformationType,
                     information.InformationType,
                     StringComparison.Ordinal)
-                || occurrence.TotalOccurrenceCount != information.TotalOccurrenceCount)
+                || occurrence.Ordinal != ordinal
+                || occurrence.TotalOccurrenceCount != information.TotalOccurrenceCount
+                || occurrence.SourceId != lookup.Source.SourceId)
             {
                 if (CurrentOccurrenceOrdinal == 0)
                 {
@@ -721,6 +742,55 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 IsOccurrenceLoading = false;
             }
         }
+    }
+
+    private static IReadOnlyDictionary<SourceId, LoadedSourceContract>
+        CreatePublishedSourceSnapshot(
+            IEnumerable<LoadedSourceContract> sources,
+            IEnumerable<DiscoveredInformation> information)
+    {
+        var contributingSourceIds = information
+            .SelectMany(item => item.ContributingSources)
+            .Select(contribution => contribution.SourceId)
+            .ToHashSet();
+        return sources
+            .Where(source => contributingSourceIds.Contains(source.SourceId))
+            .ToDictionary(source => source.SourceId);
+    }
+
+    private bool TryCreateOccurrenceLookup(
+        OperationId discoveryOperationId,
+        DiscoveredInformationItemViewModel information,
+        int globalOrdinal,
+        out DiscoveryOccurrenceLookup lookup)
+    {
+        var localOrdinal = globalOrdinal;
+        foreach (var contribution in information.ContributingSources)
+        {
+            if (localOrdinal > contribution.OccurrenceCount)
+            {
+                localOrdinal -= contribution.OccurrenceCount;
+                continue;
+            }
+
+            if (_publishedDiscoverySources.TryGetValue(contribution.SourceId, out var source))
+            {
+                lookup = new DiscoveryOccurrenceLookup(
+                    discoveryOperationId,
+                    information.InformationType,
+                    globalOrdinal,
+                    information.TotalOccurrenceCount,
+                    source,
+                    localOrdinal,
+                    contribution.OccurrenceCount);
+                return true;
+            }
+
+            break;
+        }
+
+        lookup = null!;
+        return false;
     }
 
     private bool IsCurrentPreviewRequest(
@@ -921,12 +991,17 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         FilteredCount = filtered.Length;
         _currentPage = Math.Clamp(_currentPage, 1, PageCount);
 
-        _visibleInformation.Clear();
-        foreach (var information in filtered
-                     .Skip((CurrentPage - 1) * PageSize)
-                     .Take(PageSize))
+        var visible = filtered
+            .Skip((CurrentPage - 1) * PageSize)
+            .Take(PageSize)
+            .ToArray();
+        if (!_visibleInformation.SequenceEqual(visible))
         {
-            _visibleInformation.Add(information);
+            _visibleInformation.Clear();
+            foreach (var information in visible)
+            {
+                _visibleInformation.Add(information);
+            }
         }
 
         OnPropertyChanged(nameof(FilteredCount));

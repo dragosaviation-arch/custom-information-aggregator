@@ -15,6 +15,20 @@ public interface ISourceAdapter
         CancellationToken cancellationToken = default);
 }
 
+public interface ISourceOccurrenceAdapter
+{
+    ValueTask<SourceOccurrenceRead> ReadOccurrenceAsync(
+        SourceId originatingSourceId,
+        XmlReader reader,
+        string informationType,
+        int localOrdinal,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed record SourceOccurrenceRead(
+    string? Value,
+    int OccurrenceCount);
+
 public sealed class SourceStructureDeclaration
 {
     public SourceStructureDeclaration(string structureId, XName rootElementName)

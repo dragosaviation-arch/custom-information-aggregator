@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -294,12 +295,10 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
     }
 
     public async Task<GetDiscoveryOccurrenceResponse> RequestDiscoveryOccurrenceAsync(
-        OperationId discoveryOperationId,
-        string informationType,
-        int ordinal,
+        DiscoveryOccurrenceLookup lookup,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
+        ArgumentNullException.ThrowIfNull(lookup);
         ThrowIfDisposed();
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -319,21 +318,21 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                 var command = new GetDiscoveryOccurrenceCommand(
                     Guid.CreateVersion7(),
                     DateTimeOffset.UtcNow,
-                    discoveryOperationId,
-                    informationType,
-                    ordinal);
+                    lookup);
                 await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
                 var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
 
                 if (response is not GetDiscoveryOccurrenceResponse occurrenceResponse
                     || occurrenceResponse.CommandMessageId != command.MessageId
-                    || occurrenceResponse.DiscoveryOperationId != discoveryOperationId
+                    || occurrenceResponse.DiscoveryOperationId != lookup.DiscoveryOperationId
                     || occurrenceResponse.Occurrence is { } occurrence
                     && (!string.Equals(
                             occurrence.InformationType,
-                            informationType,
+                            lookup.InformationType,
                             StringComparison.Ordinal)
-                        || occurrence.Ordinal != ordinal))
+                        || occurrence.Ordinal != lookup.GlobalOrdinal
+                        || occurrence.TotalOccurrenceCount != lookup.TotalOccurrenceCount
+                        || occurrence.SourceId != lookup.Source.SourceId))
                 {
                     throw new IpcProtocolException(
                         IpcProtocolError.InvalidContract,

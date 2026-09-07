@@ -1,3 +1,4 @@
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -56,12 +57,10 @@ public sealed class ProcessingHostDiscoveryClient(
     }
 
     public async Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
-        OperationId discoveryOperationId,
-        string informationType,
-        int ordinal,
+        DiscoveryOccurrenceLookup lookup,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
+        ArgumentNullException.ThrowIfNull(lookup);
 
         try
         {
@@ -73,9 +72,7 @@ public sealed class ProcessingHostDiscoveryClient(
             }
 
             var response = await requestClient.RequestDiscoveryOccurrenceAsync(
-                    discoveryOperationId,
-                    informationType,
-                    ordinal,
+                    lookup,
                     cancellationToken)
                 .ConfigureAwait(false);
             return new DiscoveryOccurrenceClientResult(
@@ -93,9 +90,9 @@ public sealed class ProcessingHostDiscoveryClient(
             logger.LogWarning(
                 exception,
                 "Discovery occurrence {OccurrenceOrdinal} for {InformationType} could not be retrieved from operation {OperationId}",
-                ordinal,
-                informationType,
-                discoveryOperationId);
+                lookup.GlobalOrdinal,
+                lookup.InformationType,
+                lookup.DiscoveryOperationId);
             return RejectOccurrence("processing-host-unavailable");
         }
     }

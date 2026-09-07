@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -107,13 +108,28 @@ public sealed class ProcessingHostLifecycleTests
         var discovery = await fixture.Supervisor.RequestDiscoveryAsync(
             correlation,
             load.Sources);
-        var occurrence = await fixture.Supervisor.RequestDiscoveryOccurrenceAsync(
+        var lookup = new DiscoveryOccurrenceLookup(
             correlation.OperationId,
             "identifier",
-            2);
+            GlobalOrdinal: 2,
+            TotalOccurrenceCount: 2,
+            load.Sources[0],
+            LocalOrdinal: 2,
+            ExpectedSourceOccurrenceCount: 2);
+
+        var firstHostProcessId = fixture.Supervisor.Current.ProcessId!.Value;
+        KillOwnedProcess(firstHostProcessId);
+        await WaitForStateAsync(
+            fixture.Supervisor,
+            state => state.State == ProcessingHostLifecycleState.Ready
+                && state.ProcessId is not null
+                && state.ProcessId != firstHostProcessId);
+
+        var occurrence = await fixture.Supervisor.RequestDiscoveryOccurrenceAsync(lookup);
 
         Assert.AreEqual(CommandAcceptance.Accepted, discovery.Acceptance);
         Assert.AreEqual(CommandAcceptance.Accepted, occurrence.Acceptance);
+        Assert.AreEqual(2, fixture.Launcher.AttemptCount);
         Assert.AreEqual("Exact second", occurrence.Occurrence?.Value);
         Assert.AreEqual(load.Sources[0].SourceId, occurrence.Occurrence?.SourceId);
         Assert.AreEqual(2, occurrence.Occurrence?.Ordinal);
@@ -146,6 +162,7 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<ArchiveExtractionService>();
         builder.Services.AddSingleton<SourceIntakeService>();
         builder.Services.AddSingleton<ISourceInterpreter, SourceInterpreter>();
+        builder.Services.AddSingleton<ISourceOccurrenceReader, SourceOccurrenceReader>();
         builder.Services.AddSingleton<SourceRefreshService>();
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddHostedService<ProcessingHostLifetimeService>();

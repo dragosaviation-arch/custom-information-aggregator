@@ -1,3 +1,4 @@
+using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 
 namespace CIA.Contracts.Discovery;
@@ -19,6 +20,15 @@ public sealed record DiscoveredOccurrence(
     int TotalOccurrenceCount,
     SourceId SourceId,
     string Value);
+
+public sealed record DiscoveryOccurrenceLookup(
+    OperationId DiscoveryOperationId,
+    string InformationType,
+    int GlobalOrdinal,
+    int TotalOccurrenceCount,
+    LoadedSourceContract Source,
+    int LocalOrdinal,
+    int ExpectedSourceOccurrenceCount);
 
 public sealed record DiscoverySourceIssue(
     SourceId SourceId,

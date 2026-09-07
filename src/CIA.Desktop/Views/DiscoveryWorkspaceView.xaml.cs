@@ -35,6 +35,18 @@ public partial class DiscoveryWorkspaceView : UserControl
         e.Handled = true;
     }
 
+    private void OnDiscoveryRowPreviewMouseDown(
+        object sender,
+        MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left
+            && sender is ListBoxItem item
+            && !item.IsSelected)
+        {
+            item.IsSelected = true;
+        }
+    }
+
     private void OnOccurrenceOrdinalLostFocus(object sender, RoutedEventArgs e)
     {
         CommitOccurrenceOrdinal();

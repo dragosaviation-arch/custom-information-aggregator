@@ -279,12 +279,27 @@ public static class IpcContractValidator
     private static void ValidateGetDiscoveryOccurrenceCommand(
         GetDiscoveryOccurrenceCommand command)
     {
-        ValidateOperationId(command.DiscoveryOperationId, "Discovery occurrence requests");
+        var lookup = command.Lookup;
+        if (lookup is null || lookup.Source is null)
+        {
+            throw InvalidContract("A Discovery occurrence request requires lookup metadata.");
+        }
 
-        if (string.IsNullOrWhiteSpace(command.InformationType) || command.Ordinal < 1)
+        ValidateOperationId(lookup.DiscoveryOperationId, "Discovery occurrence requests");
+        ValidateLoadedSource(lookup.Source);
+
+        if (string.IsNullOrWhiteSpace(lookup.InformationType)
+            || lookup.GlobalOrdinal < 1
+            || lookup.TotalOccurrenceCount < lookup.GlobalOrdinal
+            || lookup.LocalOrdinal < 1
+            || lookup.ExpectedSourceOccurrenceCount < lookup.LocalOrdinal
+            || lookup.ExpectedSourceOccurrenceCount > lookup.TotalOccurrenceCount
+            || !lookup.Source.IsIncluded
+            || lookup.Source.Kind != LoadedSourceKind.XmlFile
+            || lookup.Source.Status != LoadedSourceStatus.Ready)
         {
             throw InvalidContract(
-                "A Discovery occurrence request requires an information identity and positive ordinal.");
+                "A Discovery occurrence request contains invalid source or ordinal metadata.");
         }
     }
 

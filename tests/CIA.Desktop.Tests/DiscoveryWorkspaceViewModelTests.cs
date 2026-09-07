@@ -157,12 +157,12 @@ public sealed class DiscoveryWorkspaceViewModelTests
                     values.Length,
                     [new DiscoveredSourceContribution(source.SourceId, "source.xml", values.Length)],
                     values[0])]),
-            (operationId, informationType, ordinal) => AcceptOccurrence(
-                informationType,
-                ordinal,
+            lookup => AcceptOccurrence(
+                lookup.InformationType,
+                lookup.GlobalOrdinal,
                 values.Length,
                 source.SourceId,
-                values[ordinal - 1]));
+                values[lookup.GlobalOrdinal - 1]));
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
             new ActiveDiscoveryConfiguration(),
@@ -243,7 +243,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
                         "source.xml",
                         occurrenceCount)],
                     "sample")]),
-            (_, _, _) => new DiscoveryOccurrenceClientResult(
+            _ => new DiscoveryOccurrenceClientResult(
                 false,
                 Occurrence: null,
                 "discovery-preview-source-unavailable",
@@ -292,12 +292,12 @@ public sealed class DiscoveryWorkspaceViewModelTests
                         "source.xml",
                         pair.Value.Length)],
                     pair.Value[0])).ToArray()),
-            (operationId, informationType, ordinal) => AcceptOccurrence(
-                informationType,
-                ordinal,
-                values[informationType].Length,
+            lookup => AcceptOccurrence(
+                lookup.InformationType,
+                lookup.GlobalOrdinal,
+                values[lookup.InformationType].Length,
                 source.SourceId,
-                values[informationType][ordinal - 1]));
+                values[lookup.InformationType][lookup.GlobalOrdinal - 1]));
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
             new ActiveDiscoveryConfiguration(),
@@ -334,6 +334,54 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual("Beta 1", viewModel.OccurrencePreviewText);
         Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
         Assert.AreEqual(2, viewModel.OccurrenceTotal);
+    }
+
+    [TestMethod]
+    public async Task GlobalOrdinalMapsToOrderedContributingSourceAndLocalOrdinal()
+    {
+        var first = CreateSource("first.xml");
+        var second = CreateSource("second.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, first, second);
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(
+                correlation,
+                sources,
+                [new DiscoveredInformation(
+                    "Tag",
+                    5,
+                    [
+                        new DiscoveredSourceContribution(first.SourceId, "first.xml", 2),
+                        new DiscoveredSourceContribution(second.SourceId, "second.xml", 3)
+                    ],
+                    "First source value")]),
+            lookup => AcceptOccurrence(
+                lookup.InformationType,
+                lookup.GlobalOrdinal,
+                lookup.TotalOccurrenceCount,
+                lookup.Source.SourceId,
+                $"Local occurrence {lookup.LocalOrdinal}"));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreEqual(first.SourceId, client.LastOccurrenceLookup?.Source.SourceId);
+        Assert.AreEqual(1, client.LastOccurrenceLookup?.LocalOrdinal);
+        Assert.AreEqual(2, client.LastOccurrenceLookup?.ExpectedSourceOccurrenceCount);
+
+        viewModel.OccurrenceOrdinalInput = "4";
+        await AwaitOrdinalJumpAsync(viewModel);
+
+        Assert.AreEqual(second.SourceId, client.LastOccurrenceLookup?.Source.SourceId);
+        Assert.AreEqual(4, client.LastOccurrenceLookup?.GlobalOrdinal);
+        Assert.AreEqual(2, client.LastOccurrenceLookup?.LocalOrdinal);
+        Assert.AreEqual(3, client.LastOccurrenceLookup?.ExpectedSourceOccurrenceCount);
+        Assert.AreEqual("Local occurrence 2", viewModel.OccurrencePreviewText);
     }
 
     [TestMethod]
@@ -389,7 +437,13 @@ public sealed class DiscoveryWorkspaceViewModelTests
                         3,
                         [new DiscoveredSourceContribution(source.SourceId, "source.xml", 3)],
                         "retained value")])
-                : Reject(correlation, sources, "processing-host-unavailable"));
+                : Reject(correlation, sources, "processing-host-unavailable"),
+            lookup => AcceptOccurrence(
+                lookup.InformationType,
+                lookup.GlobalOrdinal,
+                lookup.TotalOccurrenceCount,
+                lookup.Source.SourceId,
+                lookup.GlobalOrdinal == 1 ? "retained value" : "retained second value"));
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
             new ActiveDiscoveryConfiguration(),
@@ -417,6 +471,12 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual("Discovery re-run failed", viewModel.StatusTitle);
         StringAssert.Contains(viewModel.StatusDetail, "Previous Discovery results are retained");
         Assert.AreEqual("Stage: Failed", viewModel.ProgressStage);
+
+        await viewModel.NextOccurrenceCommand.ExecuteAsync(null);
+
+        Assert.AreEqual("retained second value", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(2, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual(source.SourceId, client.LastOccurrenceLookup?.Source.SourceId);
     }
 
     [TestMethod]
@@ -745,9 +805,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
             IReadOnlyList<LoadedSourceContract>,
             DiscoveryClientResult> _resultFactory;
         private readonly Func<
-            OperationId,
-            string,
-            int,
+            DiscoveryOccurrenceLookup,
             DiscoveryOccurrenceClientResult>? _occurrenceResultFactory;
         private IReadOnlyList<DiscoveredInformation> _lastInformation = [];
 
@@ -757,9 +815,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 IReadOnlyList<LoadedSourceContract>,
                 DiscoveryClientResult> resultFactory,
             Func<
-                OperationId,
-                string,
-                int,
+                DiscoveryOccurrenceLookup,
                 DiscoveryOccurrenceClientResult>? occurrenceResultFactory = null)
         {
             _resultFactory = resultFactory;
@@ -771,6 +827,8 @@ public sealed class DiscoveryWorkspaceViewModelTests
         public int CallCount { get; private set; }
 
         public int OccurrenceCallCount { get; private set; }
+
+        public DiscoveryOccurrenceLookup? LastOccurrenceLookup { get; private set; }
 
         public Task<DiscoveryClientResult> RunAsync(
             OperationCorrelation correlation,
@@ -785,31 +843,27 @@ public sealed class DiscoveryWorkspaceViewModelTests
         }
 
         public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
-            OperationId discoveryOperationId,
-            string informationType,
-            int ordinal,
+            DiscoveryOccurrenceLookup lookup,
             CancellationToken cancellationToken = default)
         {
             OccurrenceCallCount++;
+            LastOccurrenceLookup = lookup;
 
             if (_occurrenceResultFactory is not null)
             {
-                return Task.FromResult(_occurrenceResultFactory(
-                    discoveryOperationId,
-                    informationType,
-                    ordinal));
+                return Task.FromResult(_occurrenceResultFactory(lookup));
             }
 
             var information = _lastInformation.Single(
-                item => item.InformationType == informationType);
+                item => item.InformationType == lookup.InformationType);
             return Task.FromResult(AcceptOccurrence(
-                informationType,
-                ordinal,
+                lookup.InformationType,
+                lookup.GlobalOrdinal,
                 information.TotalOccurrenceCount,
-                information.ContributingSources[0].SourceId,
-                ordinal == 1
+                lookup.Source.SourceId,
+                lookup.GlobalOrdinal == 1
                     ? information.SampleValue
-                    : $"{informationType} occurrence {ordinal}"));
+                    : $"{lookup.InformationType} occurrence {lookup.GlobalOrdinal}"));
         }
     }
 
@@ -836,13 +890,11 @@ public sealed class DiscoveryWorkspaceViewModelTests
         }
 
         public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
-            OperationId discoveryOperationId,
-            string informationType,
-            int ordinal,
+            DiscoveryOccurrenceLookup lookup,
             CancellationToken cancellationToken = default)
         {
-            Assert.AreEqual("ecoef", informationType);
-            Assert.AreEqual(1, ordinal);
+            Assert.AreEqual("ecoef", lookup.InformationType);
+            Assert.AreEqual(1, lookup.GlobalOrdinal);
             return _firstOccurrence.Task;
         }
 

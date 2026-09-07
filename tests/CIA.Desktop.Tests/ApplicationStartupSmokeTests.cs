@@ -1,3 +1,4 @@
+using System.Windows;
 using CIA.Core.Diagnostics;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
@@ -16,36 +17,21 @@ public sealed class ApplicationStartupSmokeTests
     public async Task DesktopResourcesAndPersistentShellComposeOnStaThread()
     {
         using var logs = new TemporaryStartupLogDirectory();
-        var completion = new TaskCompletionSource<Exception?>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var thread = new Thread(
-            () => RunDesktopComposition(logs.Path, completion))
-        {
-            IsBackground = true,
-            Name = "CIA SPR-60 desktop startup smoke test"
-        };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
+        Exception? failure = null;
 
-        var failure = await completion.Task.WaitAsync(TestTimeout);
-
-        Assert.IsTrue(thread.Join(TestTimeout), "The desktop startup STA thread did not exit.");
+        await WpfTestApplication.RunAsync(
+            () => failure = RunDesktopComposition(logs.Path)).WaitAsync(TestTimeout);
         Assert.IsNull(failure, failure?.ToString());
     }
 
-    private static void RunDesktopComposition(
-        string logDirectory,
-        TaskCompletionSource<Exception?> completion)
+    private static Exception? RunDesktopComposition(string logDirectory)
     {
-        App? application = null;
         IHost? host = null;
         MainWindow? window = null;
         Exception? failure = null;
 
         try
         {
-            application = new App();
-            application.InitializeComponent();
             host = DesktopApplicationHost.Create(
                 [$"--{ApplicationLogPaths.DirectoryConfigurationKey}={logDirectory}"]);
             host.StartAsync().GetAwaiter().GetResult();
@@ -56,7 +42,7 @@ public sealed class ApplicationStartupSmokeTests
             var globalStatus = host.Services.GetRequiredService<GlobalStatusViewModel>();
             var loadWorkspace = host.Services.GetRequiredService<LoadWorkspaceViewModel>();
             var discoveryWorkspace = host.Services.GetRequiredService<DiscoveryWorkspaceViewModel>();
-            application.MainWindow = window;
+            Application.Current.MainWindow = window;
 
             Assert.IsTrue(lifetime.ApplicationStarted.IsCancellationRequested);
             Assert.IsNotNull(window.Content);
@@ -87,9 +73,9 @@ public sealed class ApplicationStartupSmokeTests
                         host?.Dispose();
                     }
                 });
-            failure = CaptureCleanupFailure(failure, () => application?.Shutdown());
-            completion.TrySetResult(failure);
         }
+
+        return failure;
     }
 
     private static Exception? CaptureCleanupFailure(Exception? currentFailure, Action cleanup)

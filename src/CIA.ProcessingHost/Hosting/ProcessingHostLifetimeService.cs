@@ -215,9 +215,7 @@ public sealed class ProcessingHostLifetimeService(
                 case GetDiscoveryOccurrenceCommand command when established:
                     var occurrenceResult = await discovery
                         .GetOccurrenceAsync(
-                            command.DiscoveryOperationId,
-                            command.InformationType,
-                            command.Ordinal,
+                            command.Lookup,
                             cancellationToken)
                         .ConfigureAwait(false);
                     await connection.SendAsync(
@@ -225,7 +223,7 @@ public sealed class ProcessingHostLifetimeService(
                                 Guid.CreateVersion7(),
                                 DateTimeOffset.UtcNow,
                                 command.MessageId,
-                                command.DiscoveryOperationId,
+                                command.Lookup.DiscoveryOperationId,
                                 occurrenceResult.Accepted
                                     ? CommandAcceptance.Accepted
                                     : CommandAcceptance.Rejected,

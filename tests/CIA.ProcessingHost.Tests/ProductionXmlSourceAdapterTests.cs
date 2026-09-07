@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Diagnostics;
@@ -26,6 +27,8 @@ public sealed class ProductionXmlSourceAdapterTests
             ReleaseSupportedSourceStructures.CmlStructureId,
             adapters[0].Declaration.StructureId);
         Assert.AreEqual(XName.Get("cml", string.Empty), adapters[0].Declaration.RootElementName);
+        Assert.IsInstanceOfType<ISourceOccurrenceAdapter>(adapters[0]);
+        Assert.IsNotNull(host.Services.GetRequiredService<ISourceOccurrenceReader>());
     }
 
     [TestMethod]
@@ -59,7 +62,7 @@ public sealed class ProductionXmlSourceAdapterTests
     }
 
     [TestMethod]
-    public async Task ReleaseDeclaredCmlOccurrenceLookupPreservesExactValueAndSourceId()
+    public async Task FreshProductionCompositionReadsExactOccurrenceWithoutDiscoveryRun()
     {
         using var workspace = new TemporaryXmlDirectory();
         var source = workspace.CreateSource(
@@ -74,13 +77,15 @@ public sealed class ProductionXmlSourceAdapterTests
         var service = host.Services.GetRequiredService<DiscoveryService>();
         var correlation = OperationCorrelation.CreateNew();
 
-        var discovery = await service.RunAsync(correlation, [source]);
-        var occurrence = await service.GetOccurrenceAsync(
+        var occurrence = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
             correlation.OperationId,
             "identifier",
-            2);
+            GlobalOrdinal: 2,
+            TotalOccurrenceCount: 2,
+            source,
+            LocalOrdinal: 2,
+            ExpectedSourceOccurrenceCount: 2));
 
-        Assert.IsTrue(discovery.Accepted);
         Assert.IsTrue(occurrence.Accepted);
         Assert.AreEqual("  Exact MiXeD-Case Value  ", occurrence.Occurrence?.Value);
         Assert.AreEqual(source.SourceId, occurrence.Occurrence?.SourceId);
@@ -128,7 +133,10 @@ public sealed class ProductionXmlSourceAdapterTests
         var interpreter = new SourceInterpreter(
             [adapter],
             NullLogger<SourceInterpreter>.Instance);
-        var service = new DiscoveryService(interpreter);
+        var occurrenceReader = new SourceOccurrenceReader(
+            [adapter],
+            NullLogger<SourceOccurrenceReader>.Instance);
+        var service = new DiscoveryService(interpreter, occurrenceReader);
 
         var result = await service.RunAsync(OperationCorrelation.CreateNew(), [source]);
 

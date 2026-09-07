@@ -75,9 +75,7 @@ public sealed record RunDiscoveryCommand(
 public sealed record GetDiscoveryOccurrenceCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc,
-    OperationId DiscoveryOperationId,
-    string InformationType,
-    int Ordinal)
+    DiscoveryOccurrenceLookup Lookup)
     : IpcCommand(MessageId, TimestampUtc);
 
 public sealed record StopProcessingHostCommand(
