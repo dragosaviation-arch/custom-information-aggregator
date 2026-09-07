@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -192,6 +193,83 @@ public sealed class DiscoveryWorkspaceViewModelTests
     }
 
     [TestMethod]
+    public async Task SelectingTagImmediatelyShowsKnownTotalThenLoadsFirstOccurrence()
+    {
+        const int occurrenceCount = 202;
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var client = new DeferredOccurrenceDiscoveryClient(source.SourceId, occurrenceCount);
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+
+        Assert.AreEqual("ecoef", viewModel.SelectedInformation?.InformationType);
+        Assert.AreEqual(occurrenceCount, viewModel.OccurrenceTotal);
+        Assert.AreEqual("of 202", viewModel.OccurrenceTotalText);
+        Assert.AreEqual("Loading occurrence...", viewModel.OccurrencePreviewText);
+        Assert.IsTrue(viewModel.IsOccurrenceLoading);
+
+        client.CompleteFirstOccurrence("Exact first value");
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreEqual("Exact first value", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual(occurrenceCount, viewModel.OccurrenceTotal);
+        Assert.IsFalse(viewModel.PreviousOccurrenceCommand.CanExecute(null));
+        Assert.IsTrue(viewModel.NextOccurrenceCommand.CanExecute(null));
+    }
+
+    [TestMethod]
+    public async Task FirstOccurrenceFailureRetainsSelectedTagAndKnownTotal()
+    {
+        const int occurrenceCount = 202;
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(
+                correlation,
+                sources,
+                [new DiscoveredInformation(
+                    "ecoef",
+                    occurrenceCount,
+                    [new DiscoveredSourceContribution(
+                        source.SourceId,
+                        "source.xml",
+                        occurrenceCount)],
+                    "sample")]),
+            (_, _, _) => new DiscoveryOccurrenceClientResult(
+                false,
+                Occurrence: null,
+                "discovery-preview-source-unavailable",
+                "The occurrence preview could not be retrieved."));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreEqual("ecoef", viewModel.SelectedInformation?.InformationType);
+        Assert.AreEqual(occurrenceCount, viewModel.OccurrenceTotal);
+        Assert.AreEqual("of 202", viewModel.OccurrenceTotalText);
+        Assert.AreEqual(0, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual(
+            "The occurrence preview could not be retrieved.",
+            viewModel.OccurrencePreviewText);
+        Assert.AreNotEqual(
+            "Select a discovered tag to inspect its occurrence value.",
+            viewModel.OccurrencePreviewText);
+    }
+
+    [TestMethod]
     public async Task DirectOrdinalRejectsInvalidInputAndTagChangeLoadsFirstOccurrence()
     {
         var source = CreateSource("source.xml");
@@ -308,8 +386,8 @@ public sealed class DiscoveryWorkspaceViewModelTests
                     sources,
                     [new DiscoveredInformation(
                         "RetainedTag",
-                        1,
-                        [new DiscoveredSourceContribution(source.SourceId, "source.xml", 1)],
+                        3,
+                        [new DiscoveredSourceContribution(source.SourceId, "source.xml", 3)],
                         "retained value")])
                 : Reject(correlation, sources, "processing-host-unavailable"));
         using var viewModel = new DiscoveryWorkspaceViewModel(
@@ -319,15 +397,73 @@ public sealed class DiscoveryWorkspaceViewModelTests
             workflow);
 
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        var selectedInformation = viewModel.SelectedInformation;
+        var collectionChangeCount = 0;
+        ((INotifyCollectionChanged)viewModel.Information).CollectionChanged +=
+            (_, _) => collectionChangeCount++;
+
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
 
         Assert.HasCount(1, viewModel.Information);
         Assert.AreEqual("RetainedTag", viewModel.Information[0].InformationType);
+        Assert.AreSame(selectedInformation, viewModel.SelectedInformation);
+        Assert.AreEqual("retained value", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual(3, viewModel.OccurrenceTotal);
+        Assert.AreEqual(0, collectionChangeCount);
         Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
         Assert.AreEqual("Discovery out of date", viewModel.DiscoveryStateText);
         Assert.AreEqual("Discovery re-run failed", viewModel.StatusTitle);
         StringAssert.Contains(viewModel.StatusDetail, "Previous Discovery results are retained");
         Assert.AreEqual("Stage: Failed", viewModel.ProgressStage);
+    }
+
+    [TestMethod]
+    public async Task FailedReRunCannotTemporarilyPresentCurrentWithDeferredWorkflowNotifications()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var callCount = 0;
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => ++callCount == 1
+                ? Accept(correlation, sources, CreateInformation(source.SourceId, "RetainedTag"))
+                : Reject(correlation, sources, "processing-host-unavailable"));
+        var queuedContext = new QueuedSynchronizationContext();
+        var previousContext = SynchronizationContext.Current;
+        DiscoveryWorkspaceViewModel viewModel;
+
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(queuedContext);
+            viewModel = new DiscoveryWorkspaceViewModel(
+                client,
+                new ActiveDiscoveryConfiguration(),
+                sourceSet,
+                workflow);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+        }
+
+        using (viewModel)
+        {
+            await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+            queuedContext.Drain();
+            Assert.AreEqual("Discovery current", viewModel.DiscoveryStateText);
+
+            await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+
+            Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
+            Assert.AreEqual("Discovery out of date", viewModel.DiscoveryStateText);
+            Assert.AreEqual("Discovery re-run failed", viewModel.StatusTitle);
+            Assert.AreEqual("Stage: Failed", viewModel.ProgressStage);
+
+            queuedContext.Drain();
+            Assert.AreEqual("Discovery out of date", viewModel.DiscoveryStateText);
+        }
     }
 
     [TestMethod]
@@ -674,6 +810,68 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 ordinal == 1
                     ? information.SampleValue
                     : $"{informationType} occurrence {ordinal}"));
+        }
+    }
+
+    private sealed class DeferredOccurrenceDiscoveryClient(
+        SourceId sourceId,
+        int occurrenceCount) : IDiscoveryClient
+    {
+        private readonly TaskCompletionSource<DiscoveryOccurrenceClientResult> _firstOccurrence =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<DiscoveryClientResult> RunAsync(
+            OperationCorrelation correlation,
+            IReadOnlyList<LoadedSourceContract> sources,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Accept(
+                correlation,
+                sources,
+                [new DiscoveredInformation(
+                    "ecoef",
+                    occurrenceCount,
+                    [new DiscoveredSourceContribution(sourceId, "source.xml", occurrenceCount)],
+                    "sample")]));
+        }
+
+        public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
+            OperationId discoveryOperationId,
+            string informationType,
+            int ordinal,
+            CancellationToken cancellationToken = default)
+        {
+            Assert.AreEqual("ecoef", informationType);
+            Assert.AreEqual(1, ordinal);
+            return _firstOccurrence.Task;
+        }
+
+        public void CompleteFirstOccurrence(string value)
+        {
+            _firstOccurrence.SetResult(AcceptOccurrence(
+                "ecoef",
+                1,
+                occurrenceCount,
+                sourceId,
+                value));
+        }
+    }
+
+    private sealed class QueuedSynchronizationContext : SynchronizationContext
+    {
+        private readonly Queue<(SendOrPostCallback Callback, object? State)> _callbacks = [];
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            _callbacks.Enqueue((d, state));
+        }
+
+        public void Drain()
+        {
+            while (_callbacks.TryDequeue(out var callback))
+            {
+                callback.Callback(callback.State);
+            }
         }
     }
 

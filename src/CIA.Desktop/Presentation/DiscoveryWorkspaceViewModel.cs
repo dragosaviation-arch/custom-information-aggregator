@@ -355,6 +355,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _selectedInformation, value))
             {
+                PrepareOccurrenceSelection(value);
                 _selectInformationCommand.Execute(value);
             }
         }
@@ -496,12 +497,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             operation = begin.Operation;
             var result = await _discoveryClient.RunAsync(operation, sources);
             var completion = _workflowCoordinator.CompleteOperation(result.Completion);
+            SynchronizeDiscoveryStatus();
 
             if (!result.Accepted || !completion.Accepted)
             {
                 _issueCount = result.Issues.Count;
                 _progressStage = "Stage: Failed";
-                RefreshPresentation();
                 PresentFailure(
                     result.FailureDescription
                     ?? completion.Rejection?.Reason
@@ -540,6 +541,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 _workflowCoordinator.CompleteOperation(
                     operation.OperationId,
                     OperationOutcome.Cancelled);
+                SynchronizeDiscoveryStatus();
             }
 
             StatusTitle = "Discovery cancelled";
@@ -553,6 +555,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 _workflowCoordinator.CompleteOperation(
                     operation.OperationId,
                     OperationOutcome.Failed);
+                SynchronizeDiscoveryStatus();
             }
 
             _progressStage = "Stage: Failed";
@@ -580,20 +583,40 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     private async Task SelectInformationAsync(DiscoveredInformationItemViewModel? information)
     {
-        var requestVersion = Interlocked.Increment(ref _previewRequestVersion);
-        OccurrenceTotal = information?.TotalOccurrenceCount ?? 0;
+        var requestVersion = Volatile.Read(ref _previewRequestVersion);
+        if (information is null
+            || _publishedDiscoveryOperationId is null
+            || !ReferenceEquals(SelectedInformation, information))
+        {
+            return;
+        }
+
+        await LoadOccurrenceAsync(information, ordinal: 1, requestVersion);
+    }
+
+    private void PrepareOccurrenceSelection(DiscoveredInformationItemViewModel? information)
+    {
+        Interlocked.Increment(ref _previewRequestVersion);
+        var canLoadOccurrence = information is not null
+            && _publishedDiscoveryOperationId is not null;
+        IsOccurrenceLoading = canLoadOccurrence;
         CurrentOccurrenceOrdinal = 0;
+        OccurrenceTotal = information?.TotalOccurrenceCount ?? 0;
         SetOccurrenceOrdinalInput(string.Empty);
 
-        if (information is null || _publishedDiscoveryOperationId is null)
+        if (information is null)
         {
             OccurrencePreviewText = "Select a discovered tag to inspect its occurrence value.";
-            IsOccurrenceLoading = false;
+            return;
+        }
+
+        if (!canLoadOccurrence)
+        {
+            OccurrencePreviewText = "The selected occurrence could not be retrieved.";
             return;
         }
 
         OccurrencePreviewText = "Loading occurrence...";
-        await LoadOccurrenceAsync(information, ordinal: 1, requestVersion);
     }
 
     private Task NavigateOccurrenceAsync(int ordinal)
@@ -982,10 +1005,15 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         DispatchToUi(
             () =>
             {
-                DiscoveryStatus = state.Discovery;
+                SynchronizeDiscoveryStatus();
                 RunDiscoveryCommand.NotifyCanExecuteChanged();
                 NotifyConfigurationCommandsChanged();
             });
+    }
+
+    private void SynchronizeDiscoveryStatus()
+    {
+        DiscoveryStatus = _workflowCoordinator.Current.Discovery;
     }
 
     private void NotifySourceStateChanged()
