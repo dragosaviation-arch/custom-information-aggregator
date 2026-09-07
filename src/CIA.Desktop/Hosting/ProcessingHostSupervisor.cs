@@ -293,6 +293,66 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         }
     }
 
+    public async Task<GetDiscoveryOccurrenceResponse> RequestDiscoveryOccurrenceAsync(
+        OperationId discoveryOperationId,
+        string informationType,
+        int ordinal,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
+        ThrowIfDisposed();
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (!IsCurrentHostReady())
+            {
+                throw new InvalidOperationException(
+                    "The Processing Host is not ready for Discovery occurrence requests.");
+            }
+
+            var connection = _connection!;
+            await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                var command = new GetDiscoveryOccurrenceCommand(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    discoveryOperationId,
+                    informationType,
+                    ordinal);
+                await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+                var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+
+                if (response is not GetDiscoveryOccurrenceResponse occurrenceResponse
+                    || occurrenceResponse.CommandMessageId != command.MessageId
+                    || occurrenceResponse.DiscoveryOperationId != discoveryOperationId
+                    || occurrenceResponse.Occurrence is { } occurrence
+                    && (!string.Equals(
+                            occurrence.InformationType,
+                            informationType,
+                            StringComparison.Ordinal)
+                        || occurrence.Ordinal != ordinal))
+                {
+                    throw new IpcProtocolException(
+                        IpcProtocolError.InvalidContract,
+                        "The Processing Host returned an invalid Discovery occurrence response.");
+                }
+
+                return occurrenceResponse;
+            }
+            finally
+            {
+                _requestGate.Release();
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)

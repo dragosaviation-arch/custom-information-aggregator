@@ -23,6 +23,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly ReadOnlyObservableCollection<DiscoveredInformationItemViewModel> _readOnlyInformation;
     private readonly RelayCommand _previousPageCommand;
     private readonly RelayCommand _nextPageCommand;
+    private readonly AsyncRelayCommand<DiscoveredInformationItemViewModel?> _selectInformationCommand;
+    private readonly AsyncRelayCommand _previousOccurrenceCommand;
+    private readonly AsyncRelayCommand _nextOccurrenceCommand;
+    private readonly AsyncRelayCommand _jumpToOccurrenceCommand;
     private readonly RelayCommand<DiscoveredInformationItemViewModel> _inspectSourcesCommand;
     private readonly RelayCommand<DiscoveredInformationItemViewModel> _toggleSelectionCommand;
     private readonly RelayCommand<DiscoveredInformationItemViewModel> _toggleBlacklistCommand;
@@ -48,6 +52,14 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private string _statusDetail = "Run Discovery against the current active source set.";
     private DiscoveredInformationItemViewModel? _selectedInformation;
     private DiscoveredInformationItemViewModel? _inspectedInformation;
+    private OperationId? _publishedDiscoveryOperationId;
+    private string _occurrencePreviewText =
+        "Select a discovered tag to inspect its occurrence value.";
+    private string _occurrenceOrdinalInput = string.Empty;
+    private int _currentOccurrenceOrdinal;
+    private int _occurrenceTotal;
+    private bool _isOccurrenceLoading;
+    private int _previewRequestVersion;
     private int _disposed;
 
     public DiscoveryWorkspaceViewModel(
@@ -78,6 +90,19 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _nextPageCommand = new RelayCommand(
             () => CurrentPage++,
             () => CurrentPage < PageCount);
+        _selectInformationCommand = new AsyncRelayCommand<DiscoveredInformationItemViewModel?>(
+            SelectInformationAsync,
+            _ => true,
+            AsyncRelayCommandOptions.AllowConcurrentExecutions);
+        _previousOccurrenceCommand = new AsyncRelayCommand(
+            () => NavigateOccurrenceAsync(CurrentOccurrenceOrdinal - 1),
+            CanNavigateToPreviousOccurrence);
+        _nextOccurrenceCommand = new AsyncRelayCommand(
+            () => NavigateOccurrenceAsync(CurrentOccurrenceOrdinal + 1),
+            CanNavigateToNextOccurrence);
+        _jumpToOccurrenceCommand = new AsyncRelayCommand(
+            JumpToOccurrenceAsync,
+            CanJumpToOccurrence);
         _inspectSourcesCommand = new RelayCommand<DiscoveredInformationItemViewModel>(
             InspectSources,
             information => information?.SourceCount > 0);
@@ -118,6 +143,15 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand PreviousPageCommand => _previousPageCommand;
 
     public IRelayCommand NextPageCommand => _nextPageCommand;
+
+    public IAsyncRelayCommand<DiscoveredInformationItemViewModel?> SelectInformationCommand =>
+        _selectInformationCommand;
+
+    public IAsyncRelayCommand PreviousOccurrenceCommand => _previousOccurrenceCommand;
+
+    public IAsyncRelayCommand NextOccurrenceCommand => _nextOccurrenceCommand;
+
+    public IAsyncRelayCommand JumpToOccurrenceCommand => _jumpToOccurrenceCommand;
 
     public IRelayCommand<DiscoveredInformationItemViewModel> InspectSourcesCommand =>
         _inspectSourcesCommand;
@@ -218,6 +252,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(DiscoveryStateText));
                 RunDiscoveryCommand.NotifyCanExecuteChanged();
                 NotifyConfigurationCommandsChanged();
+                NotifyOccurrenceCommandsChanged();
             }
         }
     }
@@ -316,7 +351,68 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public DiscoveredInformationItemViewModel? SelectedInformation
     {
         get => _selectedInformation;
-        set => SetProperty(ref _selectedInformation, value);
+        set
+        {
+            if (SetProperty(ref _selectedInformation, value))
+            {
+                PrepareOccurrenceSelection(value);
+                _selectInformationCommand.Execute(value);
+            }
+        }
+    }
+
+    public string OccurrencePreviewText
+    {
+        get => _occurrencePreviewText;
+        private set => SetProperty(ref _occurrencePreviewText, value);
+    }
+
+    public string OccurrenceOrdinalInput
+    {
+        get => _occurrenceOrdinalInput;
+        set => SetProperty(ref _occurrenceOrdinalInput, value);
+    }
+
+    public int CurrentOccurrenceOrdinal
+    {
+        get => _currentOccurrenceOrdinal;
+        private set
+        {
+            if (SetProperty(ref _currentOccurrenceOrdinal, value))
+            {
+                NotifyOccurrenceCommandsChanged();
+            }
+        }
+    }
+
+    public int OccurrenceTotal
+    {
+        get => _occurrenceTotal;
+        private set
+        {
+            if (SetProperty(ref _occurrenceTotal, value))
+            {
+                OnPropertyChanged(nameof(OccurrenceTotalText));
+                NotifyOccurrenceCommandsChanged();
+            }
+        }
+    }
+
+    public string OccurrenceTotalText => string.Format(
+        CultureInfo.CurrentCulture,
+        "of {0:N0}",
+        OccurrenceTotal);
+
+    public bool IsOccurrenceLoading
+    {
+        get => _isOccurrenceLoading;
+        private set
+        {
+            if (SetProperty(ref _isOccurrenceLoading, value))
+            {
+                NotifyOccurrenceCommandsChanged();
+            }
+        }
     }
 
     public DiscoveredInformationItemViewModel? InspectedInformation
@@ -359,6 +455,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             source.PropertyChanged -= OnSourcePropertyChanged;
         }
+
+        Interlocked.Increment(ref _previewRequestVersion);
     }
 
     private bool CanRunDiscovery()
@@ -399,12 +497,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             operation = begin.Operation;
             var result = await _discoveryClient.RunAsync(operation, sources);
             var completion = _workflowCoordinator.CompleteOperation(result.Completion);
+            SynchronizeDiscoveryStatus();
 
             if (!result.Accepted || !completion.Accepted)
             {
                 _issueCount = result.Issues.Count;
                 _progressStage = "Stage: Failed";
-                RefreshPresentation();
                 PresentFailure(
                     result.FailureDescription
                     ?? completion.Rejection?.Reason
@@ -423,6 +521,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                     information,
                     dispositions[information.InformationType]))
                 .ToArray();
+            _publishedDiscoveryOperationId = result.Completion.Correlation.OperationId;
             _issueCount = result.Issues.Count;
             _progressStage = "Stage: Complete";
             _hasCompletedDiscovery = true;
@@ -442,6 +541,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 _workflowCoordinator.CompleteOperation(
                     operation.OperationId,
                     OperationOutcome.Cancelled);
+                SynchronizeDiscoveryStatus();
             }
 
             StatusTitle = "Discovery cancelled";
@@ -455,6 +555,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 _workflowCoordinator.CompleteOperation(
                     operation.OperationId,
                     OperationOutcome.Failed);
+                SynchronizeDiscoveryStatus();
             }
 
             _progressStage = "Stage: Failed";
@@ -478,6 +579,192 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         StatusTitle = "Discovery failed";
         StatusDetail = detail;
+    }
+
+    private async Task SelectInformationAsync(DiscoveredInformationItemViewModel? information)
+    {
+        var requestVersion = Volatile.Read(ref _previewRequestVersion);
+        if (information is null
+            || _publishedDiscoveryOperationId is null
+            || !ReferenceEquals(SelectedInformation, information))
+        {
+            return;
+        }
+
+        await LoadOccurrenceAsync(information, ordinal: 1, requestVersion);
+    }
+
+    private void PrepareOccurrenceSelection(DiscoveredInformationItemViewModel? information)
+    {
+        Interlocked.Increment(ref _previewRequestVersion);
+        var canLoadOccurrence = information is not null
+            && _publishedDiscoveryOperationId is not null;
+        IsOccurrenceLoading = canLoadOccurrence;
+        CurrentOccurrenceOrdinal = 0;
+        OccurrenceTotal = information?.TotalOccurrenceCount ?? 0;
+        SetOccurrenceOrdinalInput(string.Empty);
+
+        if (information is null)
+        {
+            OccurrencePreviewText = "Select a discovered tag to inspect its occurrence value.";
+            return;
+        }
+
+        if (!canLoadOccurrence)
+        {
+            OccurrencePreviewText = "The selected occurrence could not be retrieved.";
+            return;
+        }
+
+        OccurrencePreviewText = "Loading occurrence...";
+    }
+
+    private Task NavigateOccurrenceAsync(int ordinal)
+    {
+        var information = SelectedInformation;
+        if (information is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var requestVersion = Interlocked.Increment(ref _previewRequestVersion);
+        return LoadOccurrenceAsync(information, ordinal, requestVersion);
+    }
+
+    private Task JumpToOccurrenceAsync()
+    {
+        if (!int.TryParse(
+                OccurrenceOrdinalInput,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var ordinal)
+            || ordinal < 1
+            || ordinal > OccurrenceTotal)
+        {
+            RestoreOccurrenceOrdinalInput();
+            return Task.CompletedTask;
+        }
+
+        if (ordinal == CurrentOccurrenceOrdinal)
+        {
+            RestoreOccurrenceOrdinalInput();
+            return Task.CompletedTask;
+        }
+
+        return NavigateOccurrenceAsync(ordinal);
+    }
+
+    private async Task LoadOccurrenceAsync(
+        DiscoveredInformationItemViewModel information,
+        int ordinal,
+        int requestVersion)
+    {
+        var discoveryOperationId = _publishedDiscoveryOperationId;
+        if (discoveryOperationId is null)
+        {
+            return;
+        }
+
+        IsOccurrenceLoading = true;
+
+        try
+        {
+            var result = await _discoveryClient.GetOccurrenceAsync(
+                discoveryOperationId.Value,
+                information.InformationType,
+                ordinal);
+
+            if (!IsCurrentPreviewRequest(requestVersion, information))
+            {
+                return;
+            }
+
+            var occurrence = result.Occurrence;
+            if (!result.Accepted
+                || occurrence is null
+                || !string.Equals(
+                    occurrence.InformationType,
+                    information.InformationType,
+                    StringComparison.Ordinal)
+                || occurrence.TotalOccurrenceCount != information.TotalOccurrenceCount)
+            {
+                if (CurrentOccurrenceOrdinal == 0)
+                {
+                    OccurrencePreviewText = result.FailureDescription
+                        ?? "The selected occurrence could not be retrieved.";
+                }
+
+                RestoreOccurrenceOrdinalInput();
+                return;
+            }
+
+            OccurrencePreviewText = occurrence.Value;
+            OccurrenceTotal = occurrence.TotalOccurrenceCount;
+            CurrentOccurrenceOrdinal = occurrence.Ordinal;
+            SetOccurrenceOrdinalInput(
+                occurrence.Ordinal.ToString(CultureInfo.InvariantCulture));
+        }
+        catch (Exception)
+        {
+            if (IsCurrentPreviewRequest(requestVersion, information)
+                && CurrentOccurrenceOrdinal == 0)
+            {
+                OccurrencePreviewText = "The selected occurrence could not be retrieved.";
+            }
+
+            RestoreOccurrenceOrdinalInput();
+        }
+        finally
+        {
+            if (requestVersion == Volatile.Read(ref _previewRequestVersion))
+            {
+                IsOccurrenceLoading = false;
+            }
+        }
+    }
+
+    private bool IsCurrentPreviewRequest(
+        int requestVersion,
+        DiscoveredInformationItemViewModel information)
+    {
+        return Volatile.Read(ref _disposed) == 0
+            && requestVersion == Volatile.Read(ref _previewRequestVersion)
+            && ReferenceEquals(SelectedInformation, information);
+    }
+
+    private bool CanNavigateToPreviousOccurrence()
+    {
+        return !IsBusy
+            && !IsOccurrenceLoading
+            && CurrentOccurrenceOrdinal > 1;
+    }
+
+    private bool CanNavigateToNextOccurrence()
+    {
+        return !IsBusy
+            && !IsOccurrenceLoading
+            && CurrentOccurrenceOrdinal > 0
+            && CurrentOccurrenceOrdinal < OccurrenceTotal;
+    }
+
+    private bool CanJumpToOccurrence()
+    {
+        return !IsBusy
+            && !IsOccurrenceLoading
+            && SelectedInformation is not null
+            && CurrentOccurrenceOrdinal > 0;
+    }
+
+    private void RestoreOccurrenceOrdinalInput()
+    {
+        SetOccurrenceOrdinalInput(CurrentOccurrenceOrdinal > 0
+            ? CurrentOccurrenceOrdinal.ToString(CultureInfo.InvariantCulture)
+            : string.Empty);
+    }
+
+    private void SetOccurrenceOrdinalInput(string value)
+    {
+        OccurrenceOrdinalInput = value;
     }
 
     private void SortBy(string? column)
@@ -718,10 +1005,15 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         DispatchToUi(
             () =>
             {
-                DiscoveryStatus = state.Discovery;
+                SynchronizeDiscoveryStatus();
                 RunDiscoveryCommand.NotifyCanExecuteChanged();
                 NotifyConfigurationCommandsChanged();
             });
+    }
+
+    private void SynchronizeDiscoveryStatus()
+    {
+        DiscoveryStatus = _workflowCoordinator.Current.Discovery;
     }
 
     private void NotifySourceStateChanged()
@@ -751,6 +1043,13 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _toggleBlacklistCommand.NotifyCanExecuteChanged();
         _selectVisibleCommand.NotifyCanExecuteChanged();
         _deselectVisibleCommand.NotifyCanExecuteChanged();
+    }
+
+    private void NotifyOccurrenceCommandsChanged()
+    {
+        _previousOccurrenceCommand.NotifyCanExecuteChanged();
+        _nextOccurrenceCommand.NotifyCanExecuteChanged();
+        _jumpToOccurrenceCommand.NotifyCanExecuteChanged();
     }
 
     private string HeaderText(string column, string label)

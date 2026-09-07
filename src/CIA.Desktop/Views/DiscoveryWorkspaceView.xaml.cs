@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
+using CIA.Desktop.Presentation;
 
 namespace CIA.Desktop.Views;
 
@@ -20,6 +22,31 @@ public partial class DiscoveryWorkspaceView : UserControl
     private void OnViewSizeChanged(object sender, SizeChangedEventArgs e)
     {
         ApplyResponsiveLayout();
+    }
+
+    private void OnOccurrenceOrdinalKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+        {
+            return;
+        }
+
+        CommitOccurrenceOrdinal();
+        e.Handled = true;
+    }
+
+    private void OnOccurrenceOrdinalLostFocus(object sender, RoutedEventArgs e)
+    {
+        CommitOccurrenceOrdinal();
+    }
+
+    private void CommitOccurrenceOrdinal()
+    {
+        if (DataContext is DiscoveryWorkspaceViewModel viewModel
+            && viewModel.JumpToOccurrenceCommand.CanExecute(null))
+        {
+            viewModel.JumpToOccurrenceCommand.Execute(null);
+        }
     }
 
     private void ApplyResponsiveLayout()

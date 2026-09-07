@@ -1,3 +1,4 @@
+using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using CIA.Contracts.Discovery;
@@ -53,6 +54,150 @@ public sealed class DiscoveryServiceTests
         CollectionAssert.AreEquivalent(
             new[] { first.SourceId, second.SourceId },
             names.ContributingSources.Select(source => source.SourceId).ToArray());
+    }
+
+    [TestMethod]
+    public async Task OccurrencesAreRetrievedInStableOrderWithSourceProvenance()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var first = workspace.CreateSource(
+            "first.xml",
+            "<catalog><name>Alpha</name><name>Bravo</name></catalog>");
+        var second = workspace.CreateSource(
+            "second.xml",
+            "<catalog><name>Charlie</name></catalog>");
+        var service = CreateService();
+        var correlation = OperationCorrelation.CreateNew();
+
+        var discovery = await service.RunAsync(correlation, [first, second]);
+        var firstOccurrence = await service.GetOccurrenceAsync(correlation.OperationId, "Name", 1);
+        var secondOccurrence = await service.GetOccurrenceAsync(correlation.OperationId, "Name", 2);
+        var thirdOccurrence = await service.GetOccurrenceAsync(correlation.OperationId, "Name", 3);
+
+        Assert.IsTrue(discovery.Accepted);
+        Assert.AreEqual("Alpha", firstOccurrence.Occurrence?.Value);
+        Assert.AreEqual(first.SourceId, firstOccurrence.Occurrence?.SourceId);
+        Assert.AreEqual("Bravo", secondOccurrence.Occurrence?.Value);
+        Assert.AreEqual(first.SourceId, secondOccurrence.Occurrence?.SourceId);
+        Assert.AreEqual("Charlie", thirdOccurrence.Occurrence?.Value);
+        Assert.AreEqual(second.SourceId, thirdOccurrence.Occurrence?.SourceId);
+        Assert.AreEqual(3, thirdOccurrence.Occurrence?.TotalOccurrenceCount);
+
+        var beforeFirst = await service.GetOccurrenceAsync(correlation.OperationId, "Name", 0);
+        var afterLast = await service.GetOccurrenceAsync(correlation.OperationId, "Name", 4);
+
+        Assert.IsFalse(beforeFirst.Accepted);
+        Assert.AreEqual("occurrence-ordinal-out-of-range", beforeFirst.Failure?.Code);
+        Assert.IsFalse(afterLast.Accepted);
+        Assert.AreEqual("occurrence-ordinal-out-of-range", afterLast.Failure?.Code);
+    }
+
+    [TestMethod]
+    public async Task NormalDiscoveryResponseContainsOnlySampleWhileOtherValuesRemainOnDemand()
+    {
+        const string onDemandOnlyValue = "VALUE_AVAILABLE_ONLY_THROUGH_OCCURRENCE_REQUEST";
+        using var workspace = new DiscoveryWorkspace();
+        var source = workspace.CreateSource(
+            "source.xml",
+            $"<catalog><name>Sample</name><name>{onDemandOnlyValue}</name></catalog>");
+        var service = CreateService();
+        var correlation = OperationCorrelation.CreateNew();
+        var result = await service.RunAsync(correlation, [source]);
+        var response = new RunDiscoveryResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            Guid.CreateVersion7(),
+            CommandAcceptance.Accepted,
+            result.Completion,
+            result.Information,
+            result.Issues,
+            Failure: null);
+        await using var stream = new MemoryStream();
+
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
+        var normalResponseJson = Encoding.UTF8.GetString(
+            stream.ToArray().AsSpan(IpcProtocol.FrameHeaderLength));
+        var occurrence = await service.GetOccurrenceAsync(correlation.OperationId, "Name", 2);
+
+        Assert.IsFalse(normalResponseJson.Contains(onDemandOnlyValue, StringComparison.Ordinal));
+        Assert.AreEqual(onDemandOnlyValue, occurrence.Occurrence?.Value);
+    }
+
+    [TestMethod]
+    public async Task FailedReRunDoesNotReplaceLastPublishedPreviewBasis()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var usable = workspace.CreateSource(
+            "usable.xml",
+            "<catalog><name>Retained value</name></catalog>");
+        var unsupported = workspace.CreateSource(
+            "unsupported.xml",
+            "<different><name>Not published</name></different>");
+        var service = CreateService();
+        var successfulCorrelation = OperationCorrelation.CreateNew();
+        var failedCorrelation = OperationCorrelation.CreateNew();
+
+        var successful = await service.RunAsync(successfulCorrelation, [usable]);
+        var failed = await service.RunAsync(failedCorrelation, [unsupported]);
+        var retained = await service.GetOccurrenceAsync(
+            successfulCorrelation.OperationId,
+            "Name",
+            1);
+        var failedAttempt = await service.GetOccurrenceAsync(
+            failedCorrelation.OperationId,
+            "Name",
+            1);
+
+        Assert.IsTrue(successful.Accepted);
+        Assert.IsFalse(failed.Accepted);
+        Assert.AreEqual("Retained value", retained.Occurrence?.Value);
+        Assert.IsFalse(failedAttempt.Accepted);
+        Assert.AreEqual("discovery-result-unavailable", failedAttempt.Failure?.Code);
+    }
+
+    [TestMethod]
+    public async Task PreviewInterpretsOnlyContributorsAndKeepsOneReplaceableTagIndex()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var names = workspace.CreateSource(
+            "names.xml",
+            "<catalog><name>Alpha</name><name>Bravo</name></catalog>");
+        var codes = workspace.CreateSource(
+            "codes.xml",
+            "<catalog><code>A-1</code></catalog>");
+        var countingInterpreter = new CountingSourceInterpreter(CreateInterpreter());
+        var service = new DiscoveryService(countingInterpreter);
+        var correlation = OperationCorrelation.CreateNew();
+
+        var discovery = await service.RunAsync(correlation, [names, codes]);
+
+        Assert.IsTrue(discovery.Accepted);
+        Assert.AreEqual(1, countingInterpreter.GetCallCount(names.SourceId));
+        Assert.AreEqual(1, countingInterpreter.GetCallCount(codes.SourceId));
+
+        var firstName = await service.GetOccurrenceAsync(correlation.OperationId, "Name", 1);
+
+        Assert.AreEqual("Alpha", firstName.Occurrence?.Value);
+        Assert.AreEqual(2, countingInterpreter.GetCallCount(names.SourceId));
+        Assert.AreEqual(1, countingInterpreter.GetCallCount(codes.SourceId));
+
+        var secondName = await service.GetOccurrenceAsync(correlation.OperationId, "Name", 2);
+
+        Assert.AreEqual("Bravo", secondName.Occurrence?.Value);
+        Assert.AreEqual(2, countingInterpreter.GetCallCount(names.SourceId));
+        Assert.AreEqual(1, countingInterpreter.GetCallCount(codes.SourceId));
+
+        var code = await service.GetOccurrenceAsync(correlation.OperationId, "Code", 1);
+
+        Assert.AreEqual("A-1", code.Occurrence?.Value);
+        Assert.AreEqual(2, countingInterpreter.GetCallCount(names.SourceId));
+        Assert.AreEqual(2, countingInterpreter.GetCallCount(codes.SourceId));
+
+        var rebuiltName = await service.GetOccurrenceAsync(correlation.OperationId, "Name", 1);
+
+        Assert.AreEqual("Alpha", rebuiltName.Occurrence?.Value);
+        Assert.AreEqual(3, countingInterpreter.GetCallCount(names.SourceId));
+        Assert.AreEqual(2, countingInterpreter.GetCallCount(codes.SourceId));
     }
 
     [TestMethod]
@@ -156,10 +301,32 @@ public sealed class DiscoveryServiceTests
 
     private static DiscoveryService CreateService()
     {
-        var interpreter = new SourceInterpreter(
+        return new DiscoveryService(CreateInterpreter());
+    }
+
+    private static SourceInterpreter CreateInterpreter()
+    {
+        return new SourceInterpreter(
             [new CatalogDiscoveryAdapter()],
             NullLogger<SourceInterpreter>.Instance);
-        return new DiscoveryService(interpreter);
+    }
+
+    private sealed class CountingSourceInterpreter(ISourceInterpreter inner) : ISourceInterpreter
+    {
+        private readonly Dictionary<SourceId, int> _callCounts = [];
+
+        public async Task<SourceInterpretationResult> InterpretAsync(
+            LoadedSourceContract source,
+            CancellationToken cancellationToken = default)
+        {
+            _callCounts[source.SourceId] = GetCallCount(source.SourceId) + 1;
+            return await inner.InterpretAsync(source, cancellationToken);
+        }
+
+        public int GetCallCount(SourceId sourceId)
+        {
+            return _callCounts.GetValueOrDefault(sourceId);
+        }
     }
 
     private sealed class CatalogDiscoveryAdapter : ISourceAdapter

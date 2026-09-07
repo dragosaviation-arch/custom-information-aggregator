@@ -14,11 +14,13 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(LoadSourcesCommand), "loadSourcesCommand")]
 [JsonDerivedType(typeof(RefreshSourceCommand), "refreshSourceCommand")]
 [JsonDerivedType(typeof(RunDiscoveryCommand), "runDiscoveryCommand")]
+[JsonDerivedType(typeof(GetDiscoveryOccurrenceCommand), "getDiscoveryOccurrenceCommand")]
 [JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
 [JsonDerivedType(typeof(LoadSourcesResponse), "loadSourcesResponse")]
 [JsonDerivedType(typeof(RefreshSourceResponse), "refreshSourceResponse")]
 [JsonDerivedType(typeof(RunDiscoveryResponse), "runDiscoveryResponse")]
+[JsonDerivedType(typeof(GetDiscoveryOccurrenceResponse), "getDiscoveryOccurrenceResponse")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 public abstract record IpcMessage(Guid MessageId, DateTimeOffset TimestampUtc);
 
@@ -70,6 +72,14 @@ public sealed record RunDiscoveryCommand(
     IReadOnlyList<LoadedSourceContract> Sources)
     : IpcCommand(MessageId, TimestampUtc);
 
+public sealed record GetDiscoveryOccurrenceCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    OperationId DiscoveryOperationId,
+    string InformationType,
+    int Ordinal)
+    : IpcCommand(MessageId, TimestampUtc);
+
 public sealed record StopProcessingHostCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc)
@@ -112,6 +122,16 @@ public sealed record RunDiscoveryResponse(
     OperationCompletion Completion,
     IReadOnlyList<DiscoveredInformation> Information,
     IReadOnlyList<DiscoverySourceIssue> Issues,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record GetDiscoveryOccurrenceResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    OperationId DiscoveryOperationId,
+    CommandAcceptance Acceptance,
+    DiscoveredOccurrence? Occurrence,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 
