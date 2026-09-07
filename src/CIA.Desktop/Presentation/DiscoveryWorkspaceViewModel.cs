@@ -30,6 +30,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand<DiscoveredInformationItemViewModel> _inspectSourcesCommand;
     private readonly RelayCommand<DiscoveredInformationItemViewModel> _toggleSelectionCommand;
     private readonly RelayCommand<DiscoveredInformationItemViewModel> _toggleBlacklistCommand;
+    private readonly RelayCommand _clearDatabaseTagOverrideCommand;
     private readonly RelayCommand _selectVisibleCommand;
     private readonly RelayCommand _deselectVisibleCommand;
     private readonly SynchronizationContext? _uiSynchronizationContext;
@@ -45,6 +46,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool _isSourceInspectionOpen;
     private bool _showBlacklisted = true;
     private bool _showOnlySelected;
+    private bool _showOnlyDatabaseTagOverrides;
     private int _issueCount;
     private string _progressStage = "Stage: Ready";
     private WorkflowArtifactStatus _discoveryStatus;
@@ -114,6 +116,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _toggleBlacklistCommand = new RelayCommand<DiscoveredInformationItemViewModel>(
             ToggleBlacklist,
             CanToggleBlacklist);
+        _clearDatabaseTagOverrideCommand = new RelayCommand(
+            ClearDatabaseTagOverride,
+            CanClearDatabaseTagOverride);
         _selectVisibleCommand = new RelayCommand(
             () => SetVisibleSelection(isSelected: true),
             CanSelectVisible);
@@ -163,6 +168,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public IRelayCommand<DiscoveredInformationItemViewModel> ToggleBlacklistCommand =>
         _toggleBlacklistCommand;
+
+    public IRelayCommand ClearDatabaseTagOverrideCommand => _clearDatabaseTagOverrideCommand;
 
     public IRelayCommand SelectVisibleCommand => _selectVisibleCommand;
 
@@ -243,6 +250,19 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
+    public bool ShowOnlyDatabaseTagOverrides
+    {
+        get => _showOnlyDatabaseTagOverrides;
+        set
+        {
+            if (SetProperty(ref _showOnlyDatabaseTagOverrides, value))
+            {
+                _currentPage = 1;
+                RefreshPresentation();
+            }
+        }
+    }
+
     public bool IsBusy
     {
         get => _isBusy;
@@ -252,6 +272,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             {
                 OnPropertyChanged(nameof(RunButtonText));
                 OnPropertyChanged(nameof(DiscoveryStateText));
+                OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
                 RunDiscoveryCommand.NotifyCanExecuteChanged();
                 NotifyConfigurationCommandsChanged();
                 NotifyOccurrenceCommandsChanged();
@@ -273,6 +294,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _discoveryStatus, value))
             {
                 OnPropertyChanged(nameof(DiscoveryStateText));
+                OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
             }
         }
     }
@@ -357,11 +379,33 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _selectedInformation, value))
             {
+                OnPropertyChanged(nameof(SelectedDatabaseTag));
+                OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
+                OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
+                _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
                 PrepareOccurrenceSelection(value);
                 _selectInformationCommand.Execute(value);
             }
         }
     }
+
+    public string SelectedDatabaseTag
+    {
+        get => SelectedInformation?.DatabaseTag ?? string.Empty;
+        set
+        {
+            if (SelectedInformation is not null)
+            {
+                SetDatabaseTagOverride(SelectedInformation, value);
+            }
+        }
+    }
+
+    public bool CanEditDatabaseTagOverride =>
+        SelectedInformation is not null && CanChangeConfiguration();
+
+    public string DatabaseTagOverrideActionText =>
+        SelectedInformation?.HasDatabaseTagOverride == true ? "Revert" : "Default";
 
     public string OccurrencePreviewText
     {
@@ -518,10 +562,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 item => item.InformationType,
                 item => item.Disposition,
                 StringComparer.Ordinal);
+            var databaseTagOverrides = _activeConfiguration.DatabaseTagOverrides;
             _allInformation = result.Information
                 .Select(information => new DiscoveredInformationItemViewModel(
                     information,
-                    dispositions[information.InformationType]))
+                    dispositions[information.InformationType],
+                    databaseTagOverrides.GetValueOrDefault(information.InformationType)))
                 .ToArray();
             _publishedDiscoveryOperationId = result.Completion.Correlation.OperationId;
             _publishedDiscoverySources = CreatePublishedSourceSnapshot(
@@ -876,6 +922,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         return information is not null && CanChangeConfiguration();
     }
 
+    private bool CanClearDatabaseTagOverride()
+    {
+        return CanEditDatabaseTagOverride
+            && SelectedInformation?.HasDatabaseTagOverride == true;
+    }
+
     private bool CanSelectVisible()
     {
         return CanChangeConfiguration()
@@ -917,6 +969,58 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 : 0);
     }
 
+    private void ClearDatabaseTagOverride()
+    {
+        if (SelectedInformation is not null)
+        {
+            SetDatabaseTagOverride(SelectedInformation, databaseTagOverride: null);
+        }
+    }
+
+    private void SetDatabaseTagOverride(
+        DiscoveredInformationItemViewModel information,
+        string? databaseTagOverride)
+    {
+        if (!CanChangeConfiguration())
+        {
+            OnPropertyChanged(nameof(SelectedDatabaseTag));
+            return;
+        }
+
+        var candidate = databaseTagOverride?.Trim();
+        string? next = string.IsNullOrWhiteSpace(candidate)
+            || string.Equals(
+                candidate,
+                information.InformationType,
+                StringComparison.Ordinal)
+                ? null
+                : candidate;
+        if (string.Equals(
+                information.DatabaseTagOverride,
+                next,
+                StringComparison.Ordinal))
+        {
+            OnPropertyChanged(nameof(SelectedDatabaseTag));
+            return;
+        }
+
+        var workflowResult = _workflowCoordinator.RecordDiscoveryConfigurationChanged();
+        if (!workflowResult.Accepted
+            || !_activeConfiguration.SetDatabaseTagOverride(
+                information.InformationType,
+                next))
+        {
+            OnPropertyChanged(nameof(SelectedDatabaseTag));
+            return;
+        }
+
+        information.ApplyDatabaseTagOverride(next);
+        OnPropertyChanged(nameof(SelectedDatabaseTag));
+        OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
+        _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
+        RefreshPresentation();
+    }
+
     private void SetVisibleSelection(bool isSelected)
     {
         var targets = _filteredInformation
@@ -956,11 +1060,17 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             item => item.InformationType,
             item => item.Disposition,
             StringComparer.Ordinal);
+        var databaseTagOverrides = _activeConfiguration.DatabaseTagOverrides;
         foreach (var information in _allInformation)
         {
             information.ApplyDisposition(dispositions[information.InformationType]);
+            information.ApplyDatabaseTagOverride(
+                databaseTagOverrides.GetValueOrDefault(information.InformationType));
         }
 
+        OnPropertyChanged(nameof(SelectedDatabaseTag));
+        OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
+        _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
         RefreshPresentation();
     }
 
@@ -972,6 +1082,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             query = query.Where(information =>
                 information.InformationType.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
+                || information.DatabaseTag.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
                 || information.SampleValue.Contains(SearchText, StringComparison.OrdinalIgnoreCase));
         }
 
@@ -983,6 +1094,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         if (ShowOnlySelected)
         {
             query = query.Where(information => information.IsSelected);
+        }
+
+        if (ShowOnlyDatabaseTagOverrides)
+        {
+            query = query.Where(information => information.HasDatabaseTagOverride);
         }
 
         query = ApplySort(query);
@@ -1116,6 +1232,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     {
         _toggleSelectionCommand.NotifyCanExecuteChanged();
         _toggleBlacklistCommand.NotifyCanExecuteChanged();
+        _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
         _selectVisibleCommand.NotifyCanExecuteChanged();
         _deselectVisibleCommand.NotifyCanExecuteChanged();
     }
@@ -1165,10 +1282,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 public sealed class DiscoveredInformationItemViewModel : ObservableObject
 {
     private DiscoveryInformationDisposition _disposition;
+    private string? _databaseTagOverride;
 
     public DiscoveredInformationItemViewModel(
         DiscoveredInformation information,
-        DiscoveryInformationDisposition disposition)
+        DiscoveryInformationDisposition disposition,
+        string? databaseTagOverride = null)
     {
         ArgumentNullException.ThrowIfNull(information);
         if (!Enum.IsDefined(disposition))
@@ -1177,7 +1296,14 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         }
 
         InformationType = information.InformationType;
-        DatabaseTag = information.InformationType;
+        var candidate = databaseTagOverride?.Trim();
+        _databaseTagOverride = string.IsNullOrWhiteSpace(candidate)
+            || string.Equals(
+                candidate,
+                information.InformationType,
+                StringComparison.Ordinal)
+                ? null
+                : candidate;
         TotalOccurrenceCount = information.TotalOccurrenceCount;
         ContributingSources = information.ContributingSources
             .Select(source => new DiscoveredSourceContributionViewModel(source))
@@ -1188,7 +1314,11 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
 
     public string InformationType { get; }
 
-    public string DatabaseTag { get; }
+    public string DatabaseTag => DatabaseTagOverride ?? InformationType;
+
+    public string? DatabaseTagOverride => _databaseTagOverride;
+
+    public bool HasDatabaseTagOverride => DatabaseTagOverride is not null;
 
     public int TotalOccurrenceCount { get; }
 
@@ -1230,6 +1360,27 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         OnPropertyChanged(nameof(IsBlacklisted));
         OnPropertyChanged(nameof(DispositionText));
         OnPropertyChanged(nameof(BlacklistActionText));
+    }
+
+    internal void ApplyDatabaseTagOverride(string? databaseTagOverride)
+    {
+        var candidate = databaseTagOverride?.Trim();
+        string? next = string.IsNullOrWhiteSpace(candidate)
+            || string.Equals(
+                candidate,
+                InformationType,
+                StringComparison.Ordinal)
+                ? null
+                : candidate;
+        if (string.Equals(_databaseTagOverride, next, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _databaseTagOverride = next;
+        OnPropertyChanged(nameof(DatabaseTagOverride));
+        OnPropertyChanged(nameof(DatabaseTag));
+        OnPropertyChanged(nameof(HasDatabaseTagOverride));
     }
 }
 

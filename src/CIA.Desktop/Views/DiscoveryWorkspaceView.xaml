@@ -285,8 +285,18 @@
                                                    Text="{Binding InformationType}" />
                                         <TextBlock Grid.Column="2"
                                                    FontWeight="SemiBold"
-                                                   Style="{StaticResource DiscoveryRowTextStyle}"
-                                                   Text="{Binding DatabaseTag}" />
+                                                   Text="{Binding DatabaseTag}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock"
+                                                       BasedOn="{StaticResource DiscoveryRowTextStyle}">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasDatabaseTagOverride}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource CiaWarningBrush}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                         <TextBlock Grid.Column="3"
                                                    Style="{StaticResource DiscoveryRowTextStyle}"
                                                    Text="{Binding TotalOccurrenceText}" />
@@ -484,24 +494,58 @@
                             </ScrollViewer>
                         </Border>
                         <Grid Grid.Row="4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="72" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock VerticalAlignment="Center"
-                                       Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Database Tag" />
-                            <TextBox Grid.Column="1"
-                                     IsEnabled="False"
-                                     Style="{StaticResource CiaTextInputStyle}"
-                                     Text="{Binding SelectedInformation.DatabaseTag, Mode=OneWay}" />
-                            <Button Grid.Column="2"
-                                    Margin="6,0,0,0"
-                                    IsEnabled="False"
-                                    Style="{StaticResource CiaGhostButtonStyle}"
-                                    Content="Clear"
-                                    ToolTip="Database Tag Name Override is implemented by SPR-72." />
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="72" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock VerticalAlignment="Center"
+                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                           Text="Database Tag" />
+                                <TextBox Grid.Column="1"
+                                         AutomationProperties.Name="Database Tag Name Override"
+                                         IsEnabled="{Binding CanEditDatabaseTagOverride}"
+                                         Text="{Binding SelectedDatabaseTag, Mode=TwoWay, UpdateSourceTrigger=LostFocus}">
+                                    <TextBox.Style>
+                                        <Style TargetType="TextBox"
+                                               BasedOn="{StaticResource CiaTextInputStyle}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SelectedInformation.HasDatabaseTagOverride}" Value="True">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource CiaWarningBrush}" />
+                                                    <Setter Property="Foreground" Value="{StaticResource CiaWarningBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBox.Style>
+                                </TextBox>
+                                <Button Grid.Column="2"
+                                        Margin="6,0,0,0"
+                                        AutomationProperties.Name="Revert Database Tag Name Override"
+                                        Command="{Binding ClearDatabaseTagOverrideCommand}"
+                                        Style="{StaticResource CiaGhostButtonStyle}"
+                                        Content="{Binding DatabaseTagOverrideActionText}" />
+                            </Grid>
+                            <TextBlock Grid.Row="1"
+                                       Margin="72,4,0,0"
+                                       FontSize="10"
+                                       Foreground="{StaticResource CiaWarningBrush}"
+                                       Text="Modified mapping — not stored in the selection profile.">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedInformation.HasDatabaseTagOverride}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                         </Grid>
                     </Grid>
                     <WrapPanel Grid.Row="2"
@@ -593,8 +637,8 @@
                                                   Content="Show only selected"
                                                   IsChecked="{Binding ShowOnlySelected}" />
                                         <CheckBox Margin="0,4"
-                                                  IsEnabled="False"
-                                                  Content="Show only tags with Database Tag Name Override" />
+                                                  Content="Show only tags with Database Tag Name Override"
+                                                  IsChecked="{Binding ShowOnlyDatabaseTagOverrides}" />
                                     </StackPanel>
                                 </Grid>
                             </ScrollViewer>

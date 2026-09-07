@@ -119,6 +119,24 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsFalse(viewModel.PreviousOccurrenceCommand.CanExecute(null));
             Assert.AreEqual("beta", client.LastOccurrenceLookup?.InformationType);
             Assert.AreEqual(1, client.LastOccurrenceLookup?.GlobalOrdinal);
+
+            var databaseTagField = FindVisualDescendant<TextBox>(
+                view,
+                textBox => string.Equals(
+                    AutomationProperties.GetName(textBox),
+                    "Database Tag Name Override",
+                    StringComparison.Ordinal));
+            Assert.IsNotNull(databaseTagField);
+            Assert.IsTrue(databaseTagField.IsEnabled);
+            Assert.AreEqual("beta", databaseTagField.Text);
+
+            databaseTagField.Text = "Mapped beta";
+            databaseTagField.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+
+            Assert.AreEqual("Mapped beta", beta.DatabaseTag);
+            Assert.IsTrue(beta.HasDatabaseTagOverride);
+            Assert.AreEqual("Mapped beta", viewModel.SelectedDatabaseTag);
         }
         finally
         {
