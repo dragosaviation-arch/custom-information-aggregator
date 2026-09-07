@@ -15,6 +15,23 @@ public interface ISourceAdapter
         CancellationToken cancellationToken = default);
 }
 
+public interface IGenericXmlSourceAdapter
+{
+    string StructureId { get; }
+
+    ValueTask<InterpretedSourceDocument> InterpretAsync(
+        SourceId originatingSourceId,
+        XmlReader reader,
+        CancellationToken cancellationToken = default);
+
+    ValueTask<SourceOccurrenceRead> ReadOccurrenceAsync(
+        SourceId originatingSourceId,
+        XmlReader reader,
+        string informationType,
+        int localOrdinal,
+        CancellationToken cancellationToken = default);
+}
+
 public interface ISourceOccurrenceAdapter
 {
     ValueTask<SourceOccurrenceRead> ReadOccurrenceAsync(

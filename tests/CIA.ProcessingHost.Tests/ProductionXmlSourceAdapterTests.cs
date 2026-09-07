@@ -15,24 +15,21 @@ namespace CIA.ProcessingHost.Tests;
 public sealed class ProductionXmlSourceAdapterTests
 {
     [TestMethod]
-    public void ProcessingHostCompositionContainsTheReleaseDeclaredCmlAdapter()
+    public void ProcessingHostCompositionContainsTheGenericXmlFallback()
     {
         using var workspace = new TemporaryXmlDirectory();
         using var host = CreateHost(workspace.Path);
 
-        var adapters = host.Services.GetServices<ISourceAdapter>().ToArray();
+        var adapter = host.Services.GetRequiredService<IGenericXmlSourceAdapter>();
 
-        Assert.HasCount(1, adapters);
-        Assert.AreEqual(
-            ReleaseSupportedSourceStructures.CmlStructureId,
-            adapters[0].Declaration.StructureId);
-        Assert.AreEqual(XName.Get("cml", string.Empty), adapters[0].Declaration.RootElementName);
-        Assert.IsInstanceOfType<ISourceOccurrenceAdapter>(adapters[0]);
+        Assert.IsInstanceOfType<GenericXmlElementValueSourceAdapter>(adapter);
+        Assert.AreEqual(GenericXmlElementValueSourceAdapter.GenericStructureId, adapter.StructureId);
+        Assert.IsEmpty(host.Services.GetServices<ISourceAdapter>());
         Assert.IsNotNull(host.Services.GetRequiredService<ISourceOccurrenceReader>());
     }
 
     [TestMethod]
-    public async Task ReleaseDeclaredCmlRunsDiscoveryThroughProductionComposition()
+    public async Task CmlRunsGenericDiscoveryThroughProductionComposition()
     {
         using var workspace = new TemporaryXmlDirectory();
         var source = workspace.CreateSource(
@@ -62,16 +59,16 @@ public sealed class ProductionXmlSourceAdapterTests
     }
 
     [TestMethod]
-    public async Task FreshProductionCompositionReadsExactOccurrenceWithoutDiscoveryRun()
+    public async Task AmmOccurrenceIsReadByFreshProductionCompositionWithoutDiscoveryRun()
     {
         using var workspace = new TemporaryXmlDirectory();
         var source = workspace.CreateSource(
             "occurrences.xml",
             """
-            <cml>
+            <amm>
               <identifier>First</identifier>
               <identifier><![CDATA[  Exact MiXeD-Case Value  ]]></identifier>
-            </cml>
+            </amm>
             """);
         using var host = CreateHost(workspace.Path);
         var service = host.Services.GetRequiredService<DiscoveryService>();
@@ -94,29 +91,35 @@ public sealed class ProductionXmlSourceAdapterTests
     }
 
     [TestMethod]
-    public async Task ProductionInterpreterRejectsUndeclaredRootAndNamespace()
+    [DataRow("cml")]
+    [DataRow("amm")]
+    [DataRow("unrelatedInventory")]
+    public async Task ArbitraryRootNamesNeedNoReleaseDeclaration(string rootName)
     {
         using var workspace = new TemporaryXmlDirectory();
-        var undeclaredRoot = workspace.CreateSource(
-            "undeclared-root.xml",
-            "<unknown><value>content</value></unknown>");
-        var undeclaredNamespace = workspace.CreateSource(
-            "undeclared-namespace.xml",
-            "<cml xmlns=\"urn:cia:not-supported\"><value>content</value></cml>");
+        var source = workspace.CreateSource(
+            $"{rootName}.xml",
+            $"<{rootName}><value>content</value></{rootName}>");
         using var host = CreateHost(workspace.Path);
         var interpreter = host.Services.GetRequiredService<ISourceInterpreter>();
+        var discoveryService = host.Services.GetRequiredService<DiscoveryService>();
 
-        var rootResult = await interpreter.InterpretAsync(undeclaredRoot);
-        var namespaceResult = await interpreter.InterpretAsync(undeclaredNamespace);
+        var interpretation = await interpreter.InterpretAsync(source);
+        var discovery = await discoveryService.RunAsync(OperationCorrelation.CreateNew(), [source]);
 
-        Assert.AreEqual(SourceInterpretationStatus.Unsupported, rootResult.Status);
-        Assert.AreEqual("unsupported-xml-structure", rootResult.Failure?.Code);
-        Assert.AreEqual(SourceInterpretationStatus.Unsupported, namespaceResult.Status);
-        Assert.AreEqual("unsupported-xml-structure", namespaceResult.Failure?.Code);
+        Assert.AreEqual(SourceInterpretationStatus.Usable, interpretation.Status);
+        Assert.AreEqual(
+            GenericXmlElementValueSourceAdapter.GenericStructureId,
+            interpretation.Source?.StructureId);
+        Assert.AreEqual(source.SourceId, interpretation.Source?.OriginatingSourceId);
+        Assert.IsTrue(discovery.Accepted);
+        Assert.HasCount(1, discovery.Information);
+        Assert.AreEqual("content", discovery.Information[0].SampleValue);
+        Assert.AreEqual(source.SourceId, discovery.Information[0].ContributingSources[0].SourceId);
     }
 
     [TestMethod]
-    public async Task SameElementValueAdapterRunsDeclaredNonAircraftDiscovery()
+    public async Task ArbitraryNamespacedNonAircraftXmlRunsGenericDiscovery()
     {
         using var workspace = new TemporaryXmlDirectory();
         var source = workspace.CreateSource(
@@ -126,17 +129,8 @@ public sealed class ProductionXmlSourceAdapterTests
               <stockCode>  STOCK-01  </stockCode>
             </inventory>
             """);
-        var adapter = new XmlElementValueSourceAdapter(
-            new SourceStructureDeclaration(
-                "test.inventory.v1",
-                XName.Get("inventory", "urn:cia:test:inventory")));
-        var interpreter = new SourceInterpreter(
-            [adapter],
-            NullLogger<SourceInterpreter>.Instance);
-        var occurrenceReader = new SourceOccurrenceReader(
-            [adapter],
-            NullLogger<SourceOccurrenceReader>.Instance);
-        var service = new DiscoveryService(interpreter, occurrenceReader);
+        using var host = CreateHost(workspace.Path);
+        var service = host.Services.GetRequiredService<DiscoveryService>();
 
         var result = await service.RunAsync(OperationCorrelation.CreateNew(), [source]);
 
@@ -145,6 +139,57 @@ public sealed class ProductionXmlSourceAdapterTests
         Assert.AreEqual("stockCode", result.Information[0].InformationType);
         Assert.AreEqual("  STOCK-01  ", result.Information[0].SampleValue);
         Assert.AreEqual(source.SourceId, result.Information[0].ContributingSources[0].SourceId);
+    }
+
+    [TestMethod]
+    public async Task MalformedAndProhibitedEntityXmlFailWithoutResolvingExternalContent()
+    {
+        using var workspace = new TemporaryXmlDirectory();
+        var secretPath = Path.Combine(workspace.Path, "must-not-be-read.txt");
+        File.WriteAllText(secretPath, "external content");
+        var malformed = workspace.CreateSource("malformed.xml", "<root><value></root>");
+        var entity = workspace.CreateSource(
+            "entity.xml",
+            $"<!DOCTYPE root [<!ENTITY external SYSTEM \"{new Uri(secretPath).AbsoluteUri}\">]><root><value>&external;</value></root>");
+        using var host = CreateHost(workspace.Path);
+        var interpreter = host.Services.GetRequiredService<ISourceInterpreter>();
+
+        var malformedResult = await interpreter.InterpretAsync(malformed);
+        var entityResult = await interpreter.InterpretAsync(entity);
+
+        Assert.AreEqual(SourceInterpretationStatus.FailedValidation, malformedResult.Status);
+        Assert.AreEqual("malformed-xml", malformedResult.Failure?.Code);
+        Assert.AreEqual(SourceInterpretationStatus.FailedValidation, entityResult.Status);
+        Assert.AreEqual("malformed-xml", entityResult.Failure?.Code);
+        Assert.IsNull(entityResult.Source);
+    }
+
+    [TestMethod]
+    public async Task ExactSpecializedAdapterTakesPrecedenceOverGenericFallback()
+    {
+        using var workspace = new TemporaryXmlDirectory();
+        var source = workspace.CreateSource(
+            "specialized.xml",
+            "<specialized><value>content</value></specialized>");
+        var specialized = new XmlElementValueSourceAdapter(
+            new SourceStructureDeclaration("test.specialized.v1", XName.Get("specialized")));
+        var generic = new GenericXmlElementValueSourceAdapter();
+        var interpreter = new SourceInterpreter(
+            [specialized],
+            generic,
+            NullLogger<SourceInterpreter>.Instance);
+        var occurrenceReader = new SourceOccurrenceReader(
+            [specialized],
+            generic,
+            NullLogger<SourceOccurrenceReader>.Instance);
+
+        var interpretation = await interpreter.InterpretAsync(source);
+        var occurrence = await occurrenceReader.ReadAsync(source, "value", 1);
+
+        Assert.AreEqual(SourceInterpretationStatus.Usable, interpretation.Status);
+        Assert.AreEqual("test.specialized.v1", interpretation.Source?.StructureId);
+        Assert.IsTrue(occurrence.Accepted);
+        Assert.AreEqual("content", occurrence.Value);
     }
 
     private static Microsoft.Extensions.Hosting.IHost CreateHost(string logDirectory)

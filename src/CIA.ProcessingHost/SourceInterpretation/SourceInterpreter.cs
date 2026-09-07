@@ -16,19 +16,30 @@ public interface ISourceInterpreter
 public sealed class SourceInterpreter : ISourceInterpreter
 {
     private readonly IReadOnlyDictionary<XName, ISourceAdapter> _adaptersByRoot;
+    private readonly IGenericXmlSourceAdapter _genericAdapter;
     private readonly ILogger<SourceInterpreter> _logger;
 
     public SourceInterpreter(
         IEnumerable<ISourceAdapter> adapters,
         ILogger<SourceInterpreter> logger)
+        : this(adapters, new GenericXmlElementValueSourceAdapter(), logger)
+    {
+    }
+
+    public SourceInterpreter(
+        IEnumerable<ISourceAdapter> adapters,
+        IGenericXmlSourceAdapter genericAdapter,
+        ILogger<SourceInterpreter> logger)
     {
         ArgumentNullException.ThrowIfNull(adapters);
+        ArgumentNullException.ThrowIfNull(genericAdapter);
         ArgumentNullException.ThrowIfNull(logger);
 
         var adapterArray = adapters.ToArray();
         ValidateDeclarations(adapterArray);
         _adaptersByRoot = adapterArray.ToDictionary(
             adapter => adapter.Declaration.RootElementName);
+        _genericAdapter = genericAdapter;
         _logger = logger;
     }
 
@@ -102,16 +113,23 @@ public sealed class SourceInterpreter : ISourceInterpreter
 
             var rootName = XName.Get(reader.LocalName, reader.NamespaceURI);
 
-            if (!_adaptersByRoot.TryGetValue(rootName, out var adapter))
-            {
-                return SourceInterpretationResult.Unsupported(
-                    "unsupported-xml-structure",
-                    "The XML document structure is not declared supported by this release.");
-            }
+            InterpretedSourceDocument interpretedSource;
+            string expectedStructureId;
 
-            var interpretedSource = await adapter
-                .InterpretAsync(source.SourceId, reader, cancellationToken)
-                .ConfigureAwait(false);
+            if (_adaptersByRoot.TryGetValue(rootName, out var adapter))
+            {
+                interpretedSource = await adapter
+                    .InterpretAsync(source.SourceId, reader, cancellationToken)
+                    .ConfigureAwait(false);
+                expectedStructureId = adapter.Declaration.StructureId;
+            }
+            else
+            {
+                interpretedSource = await _genericAdapter
+                    .InterpretAsync(source.SourceId, reader, cancellationToken)
+                    .ConfigureAwait(false);
+                expectedStructureId = _genericAdapter.StructureId;
+            }
 
             while (await reader.ReadAsync().ConfigureAwait(false))
             {
@@ -120,7 +138,7 @@ public sealed class SourceInterpreter : ISourceInterpreter
 
             if (!string.Equals(
                     interpretedSource.StructureId,
-                    adapter.Declaration.StructureId,
+                    expectedStructureId,
                     StringComparison.Ordinal)
                 || interpretedSource.OriginatingSourceId != source.SourceId)
             {
@@ -154,7 +172,7 @@ public sealed class SourceInterpreter : ISourceInterpreter
         {
             _logger.LogWarning(
                 exception,
-                "Declared XML source validation failed for {SourcePath}",
+                "XML source validation failed for {SourcePath}",
                 fullPath);
             return SourceInterpretationResult.FailedValidation(
                 exception.FailureCode,
@@ -175,7 +193,7 @@ public sealed class SourceInterpreter : ISourceInterpreter
                 fullPath);
             return SourceInterpretationResult.FailedValidation(
                 "source-interpretation-failed",
-                "The XML source could not be interpreted by its declared adapter.");
+                "The XML source could not be interpreted.");
         }
     }
 

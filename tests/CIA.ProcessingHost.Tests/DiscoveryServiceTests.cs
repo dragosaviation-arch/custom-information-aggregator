@@ -293,22 +293,22 @@ public sealed class DiscoveryServiceTests
     }
 
     [TestMethod]
-    public async Task NoUsableSourceReturnsControlledFailureWithoutDiscoveredRows()
+    public async Task NoUsableMalformedSourceReturnsControlledFailureWithoutDiscoveredRows()
     {
         using var workspace = new DiscoveryWorkspace();
-        var unsupported = workspace.CreateSource(
-            "unsupported.xml",
-            "<different><value>content</value></different>");
+        var malformed = workspace.CreateSource(
+            "malformed.xml",
+            "<different><value></different>");
 
         var result = await CreateService().RunAsync(
             OperationCorrelation.CreateNew(),
-            [unsupported]);
+            [malformed]);
 
         Assert.IsFalse(result.Accepted);
         Assert.AreEqual(OperationOutcome.Failed, result.Completion.Outcome);
         Assert.IsEmpty(result.Information);
         Assert.HasCount(1, result.Issues);
-        Assert.AreEqual("unsupported-xml-structure", result.Issues[0].Code);
+        Assert.AreEqual("malformed-xml", result.Issues[0].Code);
         Assert.AreEqual("discovery-no-usable-sources", result.Failure?.Code);
     }
 
