@@ -251,11 +251,110 @@ public sealed class SourceLoadingCoordinatorTests
         Assert.AreEqual("Sources loaded with issues", viewModel.StatusTitle);
         StringAssert.Contains(viewModel.StatusDetail, "1 archive item issue");
         Assert.AreEqual("Completed with issues", viewModel.ProgressText);
-        Assert.AreEqual("Current archive: package.zip · nesting level 2", viewModel.CurrentArchiveText);
+        Assert.AreEqual("Archive: package.zip · Level 2", viewModel.CurrentArchiveText);
         StringAssert.Contains(viewModel.SourceSummary, "Issues 1");
         Assert.IsFalse(duplicate.Accepted);
         Assert.AreEqual("duplicate-path", duplicate.FailureCode);
         Assert.AreEqual(1, client.CallCount);
+    }
+
+    [TestMethod]
+    public Task LoadWorkspaceShowsTruthfulLiveAndDeterminateProgressThenSettlesOnCompletion()
+    {
+        var archivePath = Path.GetFullPath("progress.zip");
+        var source = CreateArchiveDerivedXml(
+            archivePath,
+            Path.GetFullPath("working/progress"),
+            "nested/source.xml",
+            nestingLevel: 2);
+        var intake = Accept(source) with
+        {
+            Issues =
+            [
+                new SourceIntakeIssue(
+                    "nested-archive-unreadable",
+                    "A nested archive could not be read.",
+                    archivePath,
+                    ArchiveNestingLevel: 2,
+                    EntryPath: "nested/bad.zip")
+            ]
+        };
+        var client = new ControlledProgressSourceIntakeClient(intake);
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        using var viewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(archivePath),
+            new SourceLoadingCoordinator(client, sourceSet, workflow),
+            sourceSet,
+            workflow,
+            new MainWindowViewModel(new ApplicationSession()));
+
+        var load = viewModel.AddArchiveCommand.ExecuteAsync(null);
+        client.ProgressReported.Task.GetAwaiter().GetResult();
+
+        Assert.IsTrue(viewModel.IsBusy);
+        Assert.IsTrue(viewModel.IsProgressIndeterminate);
+        Assert.AreEqual("Archive: inner.zip · Level 2", viewModel.CurrentArchiveText);
+        StringAssert.Contains(viewModel.SourceSummary, "Found 30");
+        StringAssert.Contains(viewModel.SourceSummary, "Loaded 4");
+        StringAssert.Contains(viewModel.SourceSummary, "Issues 1");
+
+        client.Report(new SourceIntakeProgressSnapshot(
+            "inner.zip",
+            CurrentArchiveNestingLevel: 2,
+            EncounteredItemCount: 40,
+            LoadedSourceCount: 5,
+            IssueCount: 1,
+            FailureCount: 0,
+            TotalItemCount: 100));
+
+        Assert.IsFalse(viewModel.IsProgressIndeterminate);
+        Assert.AreEqual(100, viewModel.ProgressMaximum);
+        Assert.AreEqual(40, viewModel.ProgressValue);
+
+        client.Complete();
+        load.GetAwaiter().GetResult();
+
+        Assert.IsFalse(viewModel.IsBusy);
+        Assert.IsFalse(viewModel.IsProgressIndeterminate);
+        Assert.AreEqual("Completed with issues", viewModel.ProgressText);
+        Assert.AreEqual("Archive: progress.zip · Level 2", viewModel.CurrentArchiveText);
+        StringAssert.Contains(viewModel.SourceSummary, "Issues 1");
+        Assert.IsFalse(viewModel.SourceSummary.Contains("Found 40", StringComparison.Ordinal));
+        return Task.CompletedTask;
+    }
+
+    [TestMethod]
+    public Task FailedArchiveLoadClearsLiveContextAndNeverPresentsSuccess()
+    {
+        var archivePath = Path.GetFullPath("failed.zip");
+        var client = new ControlledProgressSourceIntakeClient(
+            new SourceIntakeClientResult(
+                false,
+                Array.Empty<LoadedSourceContract>(),
+                "archive-no-usable-sources",
+                "No usable XML sources were found."));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        using var viewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(archivePath),
+            new SourceLoadingCoordinator(client, sourceSet, workflow),
+            sourceSet,
+            workflow,
+            new MainWindowViewModel(new ApplicationSession()));
+
+        var load = viewModel.AddArchiveCommand.ExecuteAsync(null);
+        client.ProgressReported.Task.GetAwaiter().GetResult();
+        client.Complete();
+        load.GetAwaiter().GetResult();
+
+        Assert.IsFalse(viewModel.IsBusy);
+        Assert.AreEqual("Stopped", viewModel.ProgressText);
+        Assert.AreEqual("Source not added", viewModel.StatusTitle);
+        Assert.AreEqual("Archive: —", viewModel.CurrentArchiveText);
+        StringAssert.Contains(viewModel.SourceSummary, "Failures 1");
+        Assert.HasCount(0, viewModel.Sources);
+        return Task.CompletedTask;
     }
 
     [TestMethod]
@@ -904,6 +1003,63 @@ public sealed class SourceLoadingCoordinatorTests
             CancellationToken cancellationToken = default)
         {
             CallCount++;
+            return Task.FromResult(ToRefreshResult(result, source));
+        }
+    }
+
+    private sealed class ControlledProgressSourceIntakeClient(SourceIntakeClientResult result)
+        : ISourceIntakeClient
+    {
+        private readonly TaskCompletionSource _completion = new();
+        private IProgress<SourceIntakeProgressSnapshot>? _progress;
+
+        public TaskCompletionSource ProgressReported { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<SourceIntakeClientResult> LoadAsync(
+            SourceSelectionKind selectionKind,
+            string path,
+            SourceLoadSettings settings,
+            CancellationToken cancellationToken = default)
+        {
+            return LoadAsync(selectionKind, path, settings, progress: null, cancellationToken);
+        }
+
+        public async Task<SourceIntakeClientResult> LoadAsync(
+            SourceSelectionKind selectionKind,
+            string path,
+            SourceLoadSettings settings,
+            IProgress<SourceIntakeProgressSnapshot>? progress,
+            CancellationToken cancellationToken = default)
+        {
+            _progress = progress;
+            Report(new SourceIntakeProgressSnapshot(
+                "inner.zip",
+                CurrentArchiveNestingLevel: 2,
+                EncounteredItemCount: 30,
+                LoadedSourceCount: 4,
+                IssueCount: 1,
+                FailureCount: 0,
+                TotalItemCount: null));
+            ProgressReported.TrySetResult();
+            await _completion.Task.WaitAsync(cancellationToken);
+            return result;
+        }
+
+        public void Report(SourceIntakeProgressSnapshot progress)
+        {
+            _progress?.Report(progress);
+        }
+
+        public void Complete()
+        {
+            _completion.TrySetResult();
+        }
+
+        public Task<SourceRefreshClientResult> RefreshAsync(
+            LoadedSourceContract source,
+            CancellationToken cancellationToken = default)
+        {
             return Task.FromResult(ToRefreshResult(result, source));
         }
     }

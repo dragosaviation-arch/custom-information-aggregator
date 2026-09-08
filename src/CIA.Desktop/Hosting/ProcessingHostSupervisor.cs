@@ -145,6 +145,22 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         SourceLoadSettings settings,
         CancellationToken cancellationToken = default)
     {
+        return await RequestSourceLoadAsync(
+                selectionKind,
+                path,
+                settings,
+                progress: null,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<LoadSourcesResponse> RequestSourceLoadAsync(
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings,
+        IProgress<SourceIntakeProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
         ThrowIfDisposed();
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -168,17 +184,27 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                     path,
                     settings);
                 await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
-                var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
-
-                if (response is not LoadSourcesResponse sourceResponse
-                    || sourceResponse.CommandMessageId != command.MessageId)
+                while (true)
                 {
+                    var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+
+                    if (response is SourceIntakeProgressEvent progressEvent
+                        && progressEvent.CommandMessageId == command.MessageId)
+                    {
+                        TryReportProgress(progress, progressEvent.Progress);
+                        continue;
+                    }
+
+                    if (response is LoadSourcesResponse sourceResponse
+                        && sourceResponse.CommandMessageId == command.MessageId)
+                    {
+                        return sourceResponse;
+                    }
+
                     throw new IpcProtocolException(
                         IpcProtocolError.InvalidContract,
                         "The Processing Host returned an invalid source-loading response.");
                 }
-
-                return sourceResponse;
             }
             finally
             {
@@ -188,6 +214,20 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         finally
         {
             _lifecycleGate.Release();
+        }
+    }
+
+    private static void TryReportProgress(
+        IProgress<SourceIntakeProgressSnapshot>? progress,
+        SourceIntakeProgressSnapshot snapshot)
+    {
+        try
+        {
+            progress?.Report(snapshot);
+        }
+        catch (Exception)
+        {
+            // Progress observers cannot alter the source-loading outcome.
         }
     }
 

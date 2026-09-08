@@ -65,6 +65,9 @@ public static class IpcContractValidator
             case ProcessingHostAvailabilityEvent availabilityEvent:
                 ValidateProcessingHostAvailabilityEvent(availabilityEvent);
                 break;
+            case SourceIntakeProgressEvent progressEvent:
+                ValidateSourceIntakeProgressEvent(progressEvent);
+                break;
             default:
                 throw InvalidContract($"Unsupported IPC contract type '{message.GetType().FullName}'.");
         }
@@ -616,6 +619,55 @@ public static class IpcContractValidator
         if (!Enum.IsDefined(availabilityEvent.Availability))
         {
             throw InvalidContract("The Processing Host availability event has an unsupported availability value.");
+        }
+    }
+
+    private static void ValidateSourceIntakeProgressEvent(SourceIntakeProgressEvent progressEvent)
+    {
+        ValidateVersionSevenId(progressEvent.CommandMessageId, nameof(progressEvent.CommandMessageId));
+
+        var progress = progressEvent.Progress;
+        if (progress is null)
+        {
+            throw InvalidContract("A source-intake progress event requires a progress snapshot.");
+        }
+
+        if (progress.CurrentArchivePath is null)
+        {
+            if (progress.CurrentArchiveNestingLevel != 0)
+            {
+                throw InvalidContract(
+                    "Source-intake progress without archive context must use nesting level zero.");
+            }
+        }
+        else
+        {
+            if (Path.IsPathFullyQualified(progress.CurrentArchivePath))
+            {
+                ValidatePath(progress.CurrentArchivePath);
+            }
+            else
+            {
+                ValidateRelativeArchivePath(progress.CurrentArchivePath);
+            }
+
+            if (progress.CurrentArchiveNestingLevel < 1)
+            {
+                throw InvalidContract(
+                    "Source-intake archive progress requires a positive nesting level.");
+            }
+        }
+
+        if (progress.EncounteredItemCount < 0
+            || progress.LoadedSourceCount < 0
+            || progress.LoadedSourceCount > progress.EncounteredItemCount
+            || progress.IssueCount < 0
+            || progress.FailureCount < 0
+            || progress.TotalItemCount is < 0
+            || progress.TotalItemCount is { } total
+            && total < progress.EncounteredItemCount)
+        {
+            throw InvalidContract("Source-intake progress counters are inconsistent.");
         }
     }
 

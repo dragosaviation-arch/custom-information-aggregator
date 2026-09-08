@@ -1,6 +1,7 @@
 <UserControl x:Class="CIA.Desktop.Views.LoadWorkspaceView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:sources="clr-namespace:CIA.Contracts.Sources;assembly=CIA.Contracts"
              xmlns:workflow="clr-namespace:CIA.Desktop.Workflow"
              Loaded="OnViewLoaded"
              SizeChanged="OnViewSizeChanged"
@@ -359,8 +360,31 @@
                                                 <Ellipse Width="6"
                                                          Height="6"
                                                          Margin="0,0,5,0"
-                                                         VerticalAlignment="Center"
-                                                         Fill="{StaticResource CiaTextSecondaryBrush}" />
+                                                         VerticalAlignment="Center">
+                                                    <Ellipse.Style>
+                                                        <Style TargetType="Ellipse">
+                                                            <Setter Property="Fill" Value="{StaticResource CiaTextSecondaryBrush}" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Status}"
+                                                                             Value="{x:Static sources:LoadedSourceStatus.Ready}">
+                                                                    <Setter Property="Fill" Value="{StaticResource CiaSuccessBrush}" />
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Status}"
+                                                                             Value="{x:Static sources:LoadedSourceStatus.Unsupported}">
+                                                                    <Setter Property="Fill" Value="{StaticResource CiaWarningBrush}" />
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Status}"
+                                                                             Value="{x:Static sources:LoadedSourceStatus.Unavailable}">
+                                                                    <Setter Property="Fill" Value="{StaticResource CiaDangerBrush}" />
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Status}"
+                                                                             Value="{x:Static sources:LoadedSourceStatus.FailedValidation}">
+                                                                    <Setter Property="Fill" Value="{StaticResource CiaDangerBrush}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Ellipse.Style>
+                                                </Ellipse>
                                                 <TextBlock VerticalAlignment="Center"
                                                            FontSize="10.8"
                                                            FontWeight="Bold"
@@ -434,9 +458,9 @@
                     </Grid>
                     <ProgressBar Height="5"
                                  Margin="0,6,0,0"
-                                 Maximum="100"
-                                 IsIndeterminate="{Binding IsBusy}"
-                                 Value="0"
+                                 Maximum="{Binding ProgressMaximum, Mode=OneWay}"
+                                 IsIndeterminate="{Binding IsProgressIndeterminate, Mode=OneWay}"
+                                 Value="{Binding ProgressValue, Mode=OneWay}"
                                  Background="{StaticResource CiaProgressTrackBrush}"
                                  BorderThickness="0"
                                  Foreground="{StaticResource CiaAccentBrush}" />

@@ -10,6 +10,16 @@ public interface ISourceIntakeClient
         SourceLoadSettings settings,
         CancellationToken cancellationToken = default);
 
+    Task<SourceIntakeClientResult> LoadAsync(
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings,
+        IProgress<SourceIntakeProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
+        return LoadAsync(selectionKind, path, settings, cancellationToken);
+    }
+
     Task<SourceRefreshClientResult> RefreshAsync(
         LoadedSourceContract source,
         CancellationToken cancellationToken = default);

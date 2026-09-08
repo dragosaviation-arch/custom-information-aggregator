@@ -29,6 +29,21 @@ public sealed class SourceLoadingCoordinator(
         SourceLoadSettings settings,
         CancellationToken cancellationToken = default)
     {
+        return await AddAsync(
+            selectionKind,
+            path,
+            settings,
+            progress: null,
+            cancellationToken);
+    }
+
+    public async Task<SourceLoadingResult> AddAsync(
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings,
+        IProgress<SourceIntakeProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(settings);
         await _gate.WaitAsync(cancellationToken);
 
@@ -72,6 +87,7 @@ public sealed class SourceLoadingCoordinator(
                 selectionKind,
                 fullPath,
                 settings,
+                progress,
                 cancellationToken);
 
             if (!intakeResult.Accepted)

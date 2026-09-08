@@ -52,8 +52,11 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private string _statusTitle = "Load workspace ready";
     private string _statusDetail = "No active operation";
     private string _progressText = "Idle";
-    private string _currentArchiveText = "Current archive: —";
+    private string _currentArchiveText = "Archive: —";
+    private SourceIntakeProgressSnapshot? _liveProgress;
     private int _lastIntakeIssueCount;
+    private int _lastIntakeFailureCount;
+    private int _progressGeneration;
     private WorkflowArtifactStatus _discoveryStatus;
     private int _disposed;
 
@@ -142,8 +145,15 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public bool HasSources => Sources.Count > 0;
     public int IncludedCount => Sources.Count(source => source.IsIncluded);
     public string IncludedSummary => $"{IncludedCount} / {Sources.Count} included";
-    public string SourceSummary =>
-        $"Files found {Sources.Count} · Loaded {Sources.Count} · Issues {_lastIntakeIssueCount + Sources.Count(source => source.Status != LoadedSourceStatus.Ready)}";
+    public string SourceSummary => _liveProgress is { } progress
+        ? $"Found {progress.EncounteredItemCount} · Loaded {progress.LoadedSourceCount} · Issues {progress.IssueCount} · Failures {progress.FailureCount}"
+        : $"Files found {Sources.Count} · Loaded {Sources.Count(source => source.Status == LoadedSourceStatus.Ready)} · Issues {_lastIntakeIssueCount + Sources.Count(source => source.Status == LoadedSourceStatus.Unsupported)} · Failures {_lastIntakeFailureCount + Sources.Count(source => source.Status is LoadedSourceStatus.Unavailable or LoadedSourceStatus.FailedValidation)}";
+
+    public bool IsProgressIndeterminate => IsBusy && _liveProgress?.TotalItemCount is null;
+
+    public double ProgressMaximum => Math.Max(1, _liveProgress?.TotalItemCount ?? 1);
+
+    public double ProgressValue => _liveProgress?.EncounteredItemCount ?? 0;
 
     public string FilterText
     {
@@ -237,6 +247,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             AddFolderCommand.NotifyCanExecuteChanged();
             AddArchiveCommand.NotifyCanExecuteChanged();
             NotifySourceCommandsCanExecuteChanged();
+            OnPropertyChanged(nameof(IsProgressIndeterminate));
         }
     }
 
@@ -358,21 +369,31 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         string path,
         bool allowNavigation)
     {
+        var progressGeneration = ++_progressGeneration;
         IsBusy = true;
+        _liveProgress = null;
+        NotifyProgressChanged();
         StatusTitle = "Loading sources";
         StatusDetail = "Validating the selected path in the Processing Host…";
         ProgressText = "Working";
         CurrentArchiveText = selectionKind == SourceSelectionKind.Archive
-            ? $"Current archive: {Path.GetFileName(path)}"
-            : "Current archive: —";
+            ? $"Archive: {Path.GetFileName(path)} · Level 1"
+            : "Archive: —";
 
         try
         {
             var settings = selectionKind == SourceSelectionKind.Folder
                 ? new SourceLoadSettings(IncludeXmlFiles, IncludeArchives, SearchSubfolders)
                 : SourceLoadSettings.Default;
-            var result = await _loadingCoordinator.AddAsync(selectionKind, path, settings);
+            var progress = new InlineProgress<SourceIntakeProgressSnapshot>(snapshot =>
+                DispatchToUi(() => ApplyProgress(snapshot, progressGeneration)));
+            var result = await _loadingCoordinator.AddAsync(
+                selectionKind,
+                path,
+                settings,
+                progress);
             _lastIntakeIssueCount = result.Issues.Count;
+            _lastIntakeFailureCount = result.Accepted ? 0 : 1;
             OnPropertyChanged(nameof(SourceSummary));
 
             if (!result.Accepted)
@@ -380,14 +401,15 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
                 StatusTitle = "Source not added";
                 StatusDetail = result.FailureDescription ?? "The selected source could not be loaded.";
                 ProgressText = "Stopped";
+                CurrentArchiveText = "Archive: —";
                 return false;
             }
 
             SelectedSource = Sources.LastOrDefault();
             ProgressText = result.Issues.Count > 0 ? "Completed with issues" : "Completed";
             CurrentArchiveText = SelectedSource?.ArchiveProvenance is { } provenance
-                ? $"Current archive: {Path.GetFileName(provenance.OriginalArchivePath)} · nesting level {provenance.ArchiveNestingLevel}"
-                : "Current archive: —";
+                ? $"Archive: {Path.GetFileName(provenance.OriginalArchivePath)} · Level {provenance.ArchiveNestingLevel}"
+                : "Archive: —";
             StatusTitle = result.Issues.Count > 0
                 ? "Sources loaded with issues"
                 : result.AddedCount == 1
@@ -411,8 +433,36 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            if (progressGeneration == _progressGeneration)
+            {
+                _liveProgress = null;
+                NotifyProgressChanged();
+            }
+
             IsBusy = false;
         }
+    }
+
+    private void ApplyProgress(SourceIntakeProgressSnapshot progress, int generation)
+    {
+        if (!IsBusy || generation != _progressGeneration)
+        {
+            return;
+        }
+
+        _liveProgress = progress;
+        CurrentArchiveText = progress.CurrentArchivePath is null
+            ? "Archive: —"
+            : $"Archive: {Path.GetFileName(progress.CurrentArchivePath)} · Level {progress.CurrentArchiveNestingLevel}";
+        NotifyProgressChanged();
+    }
+
+    private void NotifyProgressChanged()
+    {
+        OnPropertyChanged(nameof(SourceSummary));
+        OnPropertyChanged(nameof(IsProgressIndeterminate));
+        OnPropertyChanged(nameof(ProgressMaximum));
+        OnPropertyChanged(nameof(ProgressValue));
     }
 
     private bool MatchesFilter(object item)
@@ -753,5 +803,13 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         uiContext.Post(static state => ((Action)state!).Invoke(), update);
+    }
+
+    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value)
+        {
+            report(value);
+        }
     }
 }

@@ -17,6 +17,21 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
         CancellationToken cancellationToken = default,
         SourceId? retainedOriginalArchiveSourceId = null)
     {
+        return Extract(
+            archivePath,
+            settings,
+            progress: null,
+            cancellationToken,
+            retainedOriginalArchiveSourceId);
+    }
+
+    internal ArchiveExtractionResult Extract(
+        string archivePath,
+        SourceLoadSettings settings,
+        SourceIntakeProgressTracker? progress,
+        CancellationToken cancellationToken = default,
+        SourceId? retainedOriginalArchiveSourceId = null)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(archivePath);
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -46,6 +61,9 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
             while (pending.TryPop(out var archive))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                progress?.BeginArchive(
+                    archive.Lineage[^1].Path,
+                    archive.NestingLevel);
                 ProcessArchive(
                     archive,
                     location,
@@ -53,6 +71,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
                     pending,
                     sources,
                     issues,
+                    progress,
                     cancellationToken);
             }
 
@@ -94,6 +113,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
         Stack<ArchiveWorkItem> pending,
         List<LoadedSourceContract> sources,
         List<SourceIntakeIssue> issues,
+        SourceIntakeProgressTracker? progress,
         CancellationToken cancellationToken)
     {
         try
@@ -123,6 +143,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
                     pending,
                     sources,
                     issues,
+                    progress,
                     cancellationToken);
             }
         }
@@ -150,6 +171,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
                 originalArchivePath,
                 archiveItem.NestingLevel,
                 nestedArchiveEntryPath));
+            progress?.RecordIssue();
         }
     }
 
@@ -163,9 +185,11 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
         Stack<ArchiveWorkItem> pending,
         List<LoadedSourceContract> sources,
         List<SourceIntakeIssue> issues,
+        SourceIntakeProgressTracker? progress,
         CancellationToken cancellationToken)
     {
         var entryPath = entry.Key;
+        using var progressItem = progress?.BeginItem();
 
         if (string.IsNullOrWhiteSpace(entryPath))
         {
@@ -175,6 +199,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
                 archiveItem.ArchivePath,
                 archiveItem.NestingLevel,
                 EntryPath: null));
+            progressItem?.RecordIssue();
             return;
         }
 
@@ -186,6 +211,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
                 archiveItem.ArchivePath,
                 archiveItem.NestingLevel,
                 entryPath));
+            progressItem?.RecordIssue();
             return;
         }
 
@@ -197,6 +223,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
                 archiveItem.ArchivePath,
                 archiveItem.NestingLevel,
                 entryPath));
+            progressItem?.RecordIssue();
             return;
         }
 
@@ -212,6 +239,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
                     archiveItem,
                     location,
                     settings));
+                progressItem?.RecordLoadedSource();
                 return;
             }
 
@@ -231,6 +259,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
                     archiveItem.ArchivePath,
                     archiveItem.NestingLevel,
                     entryPath));
+                progressItem?.RecordIssue();
                 return;
             }
 
@@ -244,6 +273,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
                     archiveItem.ArchivePath,
                     archiveItem.NestingLevel,
                     entryPath));
+                progressItem?.RecordIssue();
                 return;
             }
 
@@ -274,6 +304,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
                 archiveItem.ArchivePath,
                 archiveItem.NestingLevel,
                 entryPath));
+            progressItem?.RecordIssue();
         }
     }
 
@@ -538,5 +569,103 @@ public sealed record ArchiveExtractionResult(
             extractionRoot,
             retention,
             new IpcFailure(failureCode, failureDescription));
+    }
+}
+
+internal sealed class SourceIntakeProgressTracker(IProgress<SourceIntakeProgressSnapshot> progress)
+{
+    private const int ReportingInterval = 25;
+    private string? _currentArchivePath;
+    private int _currentArchiveNestingLevel;
+    private int _encounteredItemCount;
+    private int _loadedSourceCount;
+    private int _issueCount;
+    private int _failureCount;
+
+    public void BeginArchive(string archivePath, int nestingLevel)
+    {
+        if (string.Equals(_currentArchivePath, archivePath, StringComparison.Ordinal)
+            && _currentArchiveNestingLevel == nestingLevel)
+        {
+            return;
+        }
+
+        _currentArchivePath = archivePath;
+        _currentArchiveNestingLevel = nestingLevel;
+        Report();
+    }
+
+    public void RecordEncounteredItem(int loadedSourceCount, int issueCount)
+    {
+        _encounteredItemCount++;
+        _loadedSourceCount += loadedSourceCount;
+        _issueCount += issueCount;
+
+        if (_encounteredItemCount % ReportingInterval == 0)
+        {
+            Report();
+        }
+    }
+
+    public ProgressItem BeginItem()
+    {
+        return new ProgressItem(this);
+    }
+
+    public void RecordIssue()
+    {
+        _issueCount++;
+        Report();
+    }
+
+    public void RecordFailure()
+    {
+        _failureCount++;
+        Report();
+    }
+
+    public void Complete()
+    {
+        Report();
+    }
+
+    private void Report()
+    {
+        try
+        {
+            progress.Report(new SourceIntakeProgressSnapshot(
+                _currentArchivePath,
+                _currentArchiveNestingLevel,
+                _encounteredItemCount,
+                _loadedSourceCount,
+                _issueCount,
+                _failureCount,
+                TotalItemCount: null));
+        }
+        catch (Exception)
+        {
+            // Progress is observational and must never change intake semantics.
+        }
+    }
+
+    internal sealed class ProgressItem(SourceIntakeProgressTracker owner) : IDisposable
+    {
+        private int _loadedSourceCount;
+        private int _issueCount;
+
+        public void RecordLoadedSource()
+        {
+            _loadedSourceCount++;
+        }
+
+        public void RecordIssue()
+        {
+            _issueCount++;
+        }
+
+        public void Dispose()
+        {
+            owner.RecordEncounteredItem(_loadedSourceCount, _issueCount);
+        }
     }
 }

@@ -137,6 +137,80 @@ public sealed class ArchiveExtractionServiceTests
     }
 
     [TestMethod]
+    public async Task ProgressTracksNestedContextUsableSourcesAndContainedIssuesWithoutFalseTotal()
+    {
+        using var environment = new ArchiveTestEnvironment();
+        var nested = ArchiveTestEnvironment.CreateArchiveBytes(
+            TextEntry("../unsafe.xml", "<unsafe />"),
+            TextEntry("nested-good.xml", "<nested />"));
+        var archivePath = environment.CreateArchive(
+            "progress.zip",
+            TextEntry("root-good.xml", "<root />"),
+            new ArchiveEntry("nested/inner.zip", nested));
+        var progress = new RecordingProgress<SourceIntakeProgressSnapshot>();
+
+        var result = await environment.Intake.LoadAsync(
+            SourceSelectionKind.Archive,
+            archivePath,
+            SourceLoadSettings.Default,
+            progress);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.HasCount(2, result.Sources);
+        Assert.IsTrue(result.Sources.All(source => source.Status == LoadedSourceStatus.Ready));
+        Assert.HasCount(1, result.Issues);
+        Assert.IsTrue(progress.Values.Any(snapshot =>
+            snapshot.CurrentArchivePath == Path.GetFullPath(archivePath)
+            && snapshot.CurrentArchiveNestingLevel == 1));
+        Assert.IsTrue(progress.Values.Any(snapshot =>
+            snapshot.CurrentArchivePath == "nested/inner.zip"
+            && snapshot.CurrentArchiveNestingLevel == 2));
+        var final = progress.Values[^1];
+        Assert.AreEqual(4, final.EncounteredItemCount);
+        Assert.AreEqual(2, final.LoadedSourceCount);
+        Assert.AreEqual(1, final.IssueCount);
+        Assert.AreEqual(0, final.FailureCount);
+        Assert.IsNull(final.TotalItemCount);
+    }
+
+    [TestMethod]
+    public async Task FailedAndCancelledArchiveLoadsNeverReportSuccessfulRemainingWork()
+    {
+        using var environment = new ArchiveTestEnvironment();
+        var failedArchive = environment.CreateArchive(
+            "failed.zip",
+            TextEntry("notes.txt", "not a supported source"));
+        var failedProgress = new RecordingProgress<SourceIntakeProgressSnapshot>();
+
+        var failed = await environment.Intake.LoadAsync(
+            SourceSelectionKind.Archive,
+            failedArchive,
+            SourceLoadSettings.Default,
+            failedProgress);
+
+        Assert.IsFalse(failed.Accepted);
+        Assert.HasCount(0, failed.Sources);
+        Assert.AreEqual(0, failedProgress.Values[^1].LoadedSourceCount);
+        Assert.AreEqual(1, failedProgress.Values[^1].FailureCount);
+
+        var cancelledArchive = environment.CreateArchive(
+            "cancel-progress.zip",
+            TextEntry("source.xml", "<source />"));
+        using var cancellation = new CancellationTokenSource();
+        var cancelledProgress = new CallbackProgress<SourceIntakeProgressSnapshot>(_ => cancellation.Cancel());
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => environment.Intake.LoadAsync(
+                SourceSelectionKind.Archive,
+                cancelledArchive,
+                SourceLoadSettings.Default,
+                cancelledProgress,
+                cancellation.Token));
+
+        Assert.IsFalse(cancelledProgress.Values.Any(snapshot => snapshot.FailureCount > 0));
+    }
+
+    [TestMethod]
     public async Task DeepConfiguredTraversalUsesBoundedIterativeWorklist()
     {
         using var environment = new ArchiveTestEnvironment();
@@ -353,6 +427,27 @@ public sealed class ArchiveExtractionServiceTests
             + Path.DirectorySeparatorChar;
         var fullPath = Path.GetFullPath(path);
         return fullPath.StartsWith(fullDirectory, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class RecordingProgress<T> : IProgress<T>
+    {
+        public List<T> Values { get; } = [];
+
+        public void Report(T value)
+        {
+            Values.Add(value);
+        }
+    }
+
+    private sealed class CallbackProgress<T>(Action<T> callback) : IProgress<T>
+    {
+        public List<T> Values { get; } = [];
+
+        public void Report(T value)
+        {
+            Values.Add(value);
+            callback(value);
+        }
     }
 
     private sealed class ArchiveTestEnvironment : IDisposable
