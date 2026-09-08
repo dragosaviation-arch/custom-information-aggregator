@@ -66,6 +66,7 @@ public sealed class ApplicationHostTests
         Assert.IsNotNull(host.Services.GetRequiredService<ISourceValueBatchReader>());
         Assert.IsNotNull(host.Services.GetRequiredService<StructuredInformationRepository>());
         Assert.IsNotNull(host.Services.GetRequiredService<DatabaseGenerationService>());
+        Assert.IsNotNull(host.Services.GetRequiredService<DatabaseReviewService>());
         Assert.IsEmpty(host.Services.GetServices<IHostedService>());
     }
 

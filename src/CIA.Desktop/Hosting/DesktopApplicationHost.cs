@@ -55,7 +55,11 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ISourcePathPicker, WindowsSourcePathPicker>();
         builder.Services.AddSingleton<IDiscoveryClient, ProcessingHostDiscoveryClient>();
         builder.Services.AddSingleton<ActiveDiscoveryConfiguration>();
-        builder.Services.AddSingleton<IDatabaseClient, ProcessingHostDatabaseClient>();
+        builder.Services.AddSingleton<ProcessingHostDatabaseClient>();
+        builder.Services.AddSingleton<IDatabaseClient>(
+            services => services.GetRequiredService<ProcessingHostDatabaseClient>());
+        builder.Services.AddSingleton<IDatabaseReviewClient>(
+            services => services.GetRequiredService<ProcessingHostDatabaseClient>());
         builder.Services.AddSingleton<DatabaseBuildCoordinator>();
         builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
         builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();

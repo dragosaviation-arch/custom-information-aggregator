@@ -51,6 +51,9 @@ public static class IpcContractValidator
             case BuildDatabaseCommand command:
                 ValidateBuildDatabaseCommand(command);
                 break;
+            case GetDatabaseReviewPageCommand command:
+                ValidateGetDatabaseReviewPageCommand(command);
+                break;
             case CommandAcknowledgement acknowledgement:
                 ValidateCommandAcknowledgement(acknowledgement);
                 break;
@@ -68,6 +71,9 @@ public static class IpcContractValidator
                 break;
             case BuildDatabaseResponse response:
                 ValidateBuildDatabaseResponse(response);
+                break;
+            case GetDatabaseReviewPageResponse response:
+                ValidateGetDatabaseReviewPageResponse(response);
                 break;
             case ProcessingHostAvailabilityEvent availabilityEvent:
                 ValidateProcessingHostAvailabilityEvent(availabilityEvent);
@@ -343,6 +349,13 @@ public static class IpcContractValidator
         }
     }
 
+    private static void ValidateGetDatabaseReviewPageCommand(
+        GetDatabaseReviewPageCommand command)
+    {
+        ValidateOperationId(command.GenerationId, "Database review requests");
+        ValidateDatabaseReviewRange(command.StartRowOrdinal, command.RowCount);
+    }
+
     private static void ValidateRunDiscoveryResponse(RunDiscoveryResponse response)
     {
         ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
@@ -511,6 +524,106 @@ public static class IpcContractValidator
         }
 
         ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateGetDatabaseReviewPageResponse(
+        GetDatabaseReviewPageResponse response)
+    {
+        ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+        ValidateOperationId(response.GenerationId, "Database review responses");
+
+        if (!Enum.IsDefined(response.Acceptance))
+        {
+            throw InvalidContract(
+                "The Database review response has an unsupported acceptance value.");
+        }
+
+        if (response.Acceptance == CommandAcceptance.Accepted)
+        {
+            if (response.Page is null
+                || response.Failure is not null
+                || response.Page.GenerationId != response.GenerationId)
+            {
+                throw InvalidContract(
+                    "An accepted Database review response requires a matching page and no failure.");
+            }
+
+            ValidateDatabaseReviewPage(response.Page);
+            return;
+        }
+
+        if (response.Page is not null || response.Failure is null)
+        {
+            throw InvalidContract(
+                "A rejected Database review response requires no page and controlled failure information.");
+        }
+
+        ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateDatabaseReviewPage(DatabaseReviewPage page)
+    {
+        ValidateOperationId(page.GenerationId, "Database review pages");
+        ValidateDatabaseReviewRange(page.StartRowOrdinal, page.RequestedRowCount);
+
+        if (page.TotalMappedValueCount < 1
+            || page.Columns is null
+            || page.Columns.Count == 0)
+        {
+            throw InvalidContract(
+                "A Database review page requires published values and dynamic columns.");
+        }
+
+        var databaseTagNames = new HashSet<string>(StringComparer.Ordinal);
+        long totalMappedValueCount = 0;
+        foreach (var column in page.Columns)
+        {
+            if (column is null
+                || string.IsNullOrWhiteSpace(column.DatabaseTagName)
+                || column.TotalValueCount < 0
+                || column.Values is null
+                || column.Values.Count > page.RequestedRowCount
+                || !databaseTagNames.Add(column.DatabaseTagName))
+            {
+                throw InvalidContract("A Database review column is invalid or duplicated.");
+            }
+
+            totalMappedValueCount += column.TotalValueCount;
+            var previousOrdinal = page.StartRowOrdinal - 1;
+            foreach (var value in column.Values)
+            {
+                if (value is null
+                    || value.ColumnOrdinal <= previousOrdinal
+                    || value.ColumnOrdinal > column.TotalValueCount
+                    || value.ColumnOrdinal >= page.StartRowOrdinal + page.RequestedRowCount
+                    || value.Value is null
+                    || string.IsNullOrWhiteSpace(value.SourceInformationType)
+                    || !SourceId.IsValid(value.SourceId.Value))
+                {
+                    throw InvalidContract(
+                        "A Database review value is invalid, unordered, or outside its requested page.");
+                }
+
+                previousOrdinal = value.ColumnOrdinal;
+            }
+        }
+
+        if (totalMappedValueCount != page.TotalMappedValueCount)
+        {
+            throw InvalidContract(
+                "The Database review mapped-value count does not reconcile with its columns.");
+        }
+    }
+
+    private static void ValidateDatabaseReviewRange(int startRowOrdinal, int rowCount)
+    {
+        if (startRowOrdinal < 1
+            || startRowOrdinal > int.MaxValue - DatabaseReviewLimits.MaximumRowsPerPage
+            || rowCount is < 1 or > DatabaseReviewLimits.MaximumRowsPerPage)
+        {
+            throw InvalidContract(
+                "A Database review request is outside the supported bounded page range.");
+        }
     }
 
     private static void ValidateDatabaseGeneration(DatabaseGenerationSummary generation)

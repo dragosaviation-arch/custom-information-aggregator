@@ -45,6 +45,7 @@ public static class ProcessingHostApplicationHost
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();
         builder.Services.AddSingleton<DatabaseGenerationService>();
+        builder.Services.AddSingleton<DatabaseReviewService>();
 
         if (runtimeOptions is not null)
         {

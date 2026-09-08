@@ -485,6 +485,60 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         }
     }
 
+    public async Task<GetDatabaseReviewPageResponse> RequestDatabaseReviewPageAsync(
+        OperationId generationId,
+        int startRowOrdinal,
+        int rowCount,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (!IsCurrentHostReady())
+            {
+                throw new InvalidOperationException(
+                    "The Processing Host is not ready for Database review requests.");
+            }
+
+            var connection = _connection!;
+            await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                var command = new GetDatabaseReviewPageCommand(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    generationId,
+                    startRowOrdinal,
+                    rowCount);
+                await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+                var response = await connection.ReceiveAsync(cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (response is not GetDatabaseReviewPageResponse reviewResponse
+                    || reviewResponse.CommandMessageId != command.MessageId
+                    || reviewResponse.GenerationId != generationId)
+                {
+                    throw new IpcProtocolException(
+                        IpcProtocolError.InvalidContract,
+                        "The Processing Host returned an invalid Database review response.");
+                }
+
+                return reviewResponse;
+            }
+            finally
+            {
+                _requestGate.Release();
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)

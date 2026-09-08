@@ -106,22 +106,42 @@
                         Padding="8,6"
                         BorderBrush="{StaticResource CiaBorderBrush}"
                         BorderThickness="0,0,0,1">
-                    <StackPanel Orientation="Horizontal">
-                        <Button x:Name="ColumnsButton"
-                                AutomationProperties.Name="Configure Database columns"
-                                Click="OnColumnsClick"
-                                Content="▥ Columns"
-                                Style="{StaticResource CiaButtonStyle}" />
-                        <TextBlock Margin="8,0,0,0"
-                                   VerticalAlignment="Center"
-                                   FontWeight="Bold"
-                                   Foreground="{StaticResource CiaTextPrimaryBrush}"
-                                   Text="{Binding RecordCountText}" />
-                        <TextBlock Margin="8,0,0,0"
-                                   VerticalAlignment="Center"
-                                   Style="{StaticResource CiaSecondaryTextStyle}"
-                                   Text="{Binding ColumnCountText}" />
-                    </StackPanel>
+                    <Grid>
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="ColumnsButton"
+                                    AutomationProperties.Name="Configure Database columns"
+                                    Click="OnColumnsClick"
+                                    Content="▥ Columns"
+                                    Style="{StaticResource CiaButtonStyle}" />
+                            <TextBlock Margin="8,0,0,0"
+                                       VerticalAlignment="Center"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource CiaTextPrimaryBrush}"
+                                       Text="{Binding RecordCountText}" />
+                            <TextBlock Margin="8,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="{Binding ColumnCountText}" />
+                        </StackPanel>
+                        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                            <Button x:Name="PreviousDatabasePageButton"
+                                    MinWidth="74"
+                                    AutomationProperties.Name="Previous Database review page"
+                                    Command="{Binding PreviousReviewPageCommand}"
+                                    Content="Previous"
+                                    Style="{StaticResource CiaGhostButtonStyle}" />
+                            <TextBlock Margin="8,0"
+                                       VerticalAlignment="Center"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="{Binding ReviewPageText}" />
+                            <Button x:Name="NextDatabasePageButton"
+                                    MinWidth="58"
+                                    AutomationProperties.Name="Next Database review page"
+                                    Command="{Binding NextReviewPageCommand}"
+                                    Content="Next"
+                                    Style="{StaticResource CiaGhostButtonStyle}" />
+                        </StackPanel>
+                    </Grid>
                 </Border>
 
                 <Popup x:Name="ColumnsPopup"
@@ -230,49 +250,112 @@
                 </Popup>
 
                 <Grid Grid.Row="2" MinHeight="0" Background="{StaticResource CiaPanelBrush}">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="30" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-                    <Border Background="{StaticResource CiaPanelAlternateBrush}"
-                            BorderBrush="{StaticResource CiaBorderBrush}"
-                            BorderThickness="0,0,0,1">
-                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                                      VerticalScrollBarVisibility="Disabled">
-                            <ItemsControl x:Name="DynamicDatabaseHeaders"
-                                          ItemsSource="{Binding VisibleColumns}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <StackPanel Orientation="Horizontal" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Width="{Binding Width}"
-                                                BorderBrush="{StaticResource CiaDividerBrush}"
-                                                BorderThickness="0,0,1,0">
-                                            <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
-                                                       Text="{Binding DatabaseField}" />
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
-                    </Border>
-                    <Grid Grid.Row="1">
-                        <ItemsControl ItemsSource="{Binding Records}" />
-                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                            <TextBlock Style="{StaticResource CiaEmptyStateTitleTextStyle}"
-                                       Text="{Binding EmptyStateTitle}" />
-                            <TextBlock Margin="0,5,0,0"
-                                       MaxWidth="560"
-                                       HorizontalAlignment="Center"
-                                       Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="{Binding EmptyStateDetail}"
-                                       TextAlignment="Center"
-                                       TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Grid>
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled">
+                        <Grid MinWidth="{Binding ElementName=DatabaseGridPanel, Path=ActualWidth}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="30" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Border Background="{StaticResource CiaPanelAlternateBrush}"
+                                    BorderBrush="{StaticResource CiaBorderBrush}"
+                                    BorderThickness="0,0,0,1">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="48"
+                                            BorderBrush="{StaticResource CiaDividerBrush}"
+                                            BorderThickness="0,0,1,0">
+                                        <TextBlock HorizontalAlignment="Center"
+                                                   Style="{StaticResource DatabaseGridHeaderTextStyle}"
+                                                   Text="#" />
+                                    </Border>
+                                    <ItemsControl x:Name="DynamicDatabaseHeaders"
+                                                  ItemsSource="{Binding VisibleColumns}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Orientation="Horizontal" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Width="{Binding Width}"
+                                                        BorderBrush="{StaticResource CiaDividerBrush}"
+                                                        BorderThickness="0,0,1,0">
+                                                    <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
+                                                               Text="{Binding DatabaseField}" />
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                            <ScrollViewer Grid.Row="1"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollBarVisibility="Auto">
+                                <ItemsControl x:Name="DatabaseReviewRows"
+                                              ItemsSource="{Binding Records}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Height="30" Orientation="Horizontal">
+                                                <Border Width="48"
+                                                        BorderBrush="{StaticResource CiaDividerBrush}"
+                                                        BorderThickness="0,0,1,1">
+                                                    <TextBlock HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center"
+                                                               Foreground="{StaticResource CiaTextMutedBrush}"
+                                                               Text="{Binding Ordinal}" />
+                                                </Border>
+                                                <ItemsControl ItemsSource="{Binding Cells}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <StackPanel Orientation="Horizontal" />
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border Width="{Binding Column.Width}"
+                                                                    BorderBrush="{StaticResource CiaDividerBrush}"
+                                                                    BorderThickness="0,0,1,1"
+                                                                    ToolTip="{Binding SourceContext}">
+                                                                <TextBlock Margin="8,0"
+                                                                           VerticalAlignment="Center"
+                                                                           Foreground="{StaticResource CiaTextPrimaryBrush}"
+                                                                           Text="{Binding DisplayValue}"
+                                                                           TextTrimming="CharacterEllipsis" />
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Grid>
+                    </ScrollViewer>
+                    <StackPanel Margin="0,30,0,0"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                IsHitTestVisible="False">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasReviewRows}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <TextBlock Style="{StaticResource CiaEmptyStateTitleTextStyle}"
+                                   Text="{Binding EmptyStateTitle}" />
+                        <TextBlock Margin="0,5,0,0"
+                                   MaxWidth="560"
+                                   HorizontalAlignment="Center"
+                                   Style="{StaticResource CiaSecondaryTextStyle}"
+                                   Text="{Binding EmptyStateDetail}"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
                 </Grid>
             </Grid>
         </Border>

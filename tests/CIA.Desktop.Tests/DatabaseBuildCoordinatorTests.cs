@@ -143,6 +143,212 @@ public sealed class DatabaseBuildCoordinatorTests
         }
     }
 
+    [TestMethod]
+    public async Task PublishedReviewAlignsIndependentColumnsAndExposesPerValueProvenance()
+    {
+        var context = await BuildContext.CreateAsync(
+            informationTypes: ["alpha", "beta", "gamma"]);
+        Assert.IsTrue(context.Configuration.SetDatabaseTagOverride("alpha", "Combined"));
+        Assert.IsTrue(context.Configuration.SetDatabaseTagOverride("beta", "Combined"));
+        Assert.IsTrue(context.Configuration.SetDatabaseTagOverride("gamma", "Gamma override"));
+        var databaseClient = new RecordingDatabaseClient((correlation, _, mapping) =>
+            Success(correlation, mapping, valueCount: 7));
+        var firstSourceId = SourceId.CreateNew();
+        var secondSourceId = SourceId.CreateNew();
+        var reviewClient = new RecordingDatabaseReviewClient((generationId, start, count) =>
+            AcceptedReview(
+                generationId,
+                start,
+                count,
+                totalMappedValueCount: 7,
+                new DatabaseReviewColumn(
+                    "Combined",
+                    totalValueCount: 4,
+                    [
+                        new DatabaseReviewValue(1, "A1", "alpha", firstSourceId),
+                        new DatabaseReviewValue(2, "A2", "alpha", firstSourceId),
+                        new DatabaseReviewValue(3, "B1", "beta", firstSourceId),
+                        new DatabaseReviewValue(4, "B2", "beta", secondSourceId)
+                    ]),
+                new DatabaseReviewColumn(
+                    "Gamma override",
+                    totalValueCount: 3,
+                    [
+                        new DatabaseReviewValue(1, "G1", "gamma", firstSourceId),
+                        new DatabaseReviewValue(2, "G2", "gamma", secondSourceId),
+                        new DatabaseReviewValue(3, "G3", "gamma", secondSourceId)
+                    ])));
+        var coordinator = context.CreateCoordinator(databaseClient);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            coordinator,
+            reviewClient);
+
+        Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
+        await WaitForAsync(() => viewModel.Records.Count == 4);
+
+        CollectionAssert.AreEqual(
+            new[] { "Combined", "Gamma override" },
+            viewModel.VisibleColumns.Select(column => column.DatabaseField).ToArray());
+        Assert.AreEqual("A1", viewModel.Records[0].Cells[0].DisplayValue);
+        Assert.AreEqual("G1", viewModel.Records[0].Cells[1].DisplayValue);
+        Assert.AreEqual("B2", viewModel.Records[3].Cells[0].DisplayValue);
+        Assert.AreEqual(string.Empty, viewModel.Records[3].Cells[1].DisplayValue);
+        StringAssert.Contains(viewModel.Records[0].Cells[0].SourceContext!, "alpha");
+        StringAssert.Contains(
+            viewModel.Records[0].Cells[0].SourceContext!,
+            firstSourceId.ToString());
+        Assert.AreEqual("7 mapped values", viewModel.RecordCountText);
+
+        var combined = viewModel.Columns.Single(column => column.DatabaseField == "Combined");
+        combined.Width = 280;
+        viewModel.MoveColumnDownCommand.Execute(combined);
+        viewModel.Columns.Single(column => column.DatabaseField == "Gamma override").IsVisible =
+            false;
+        Assert.HasCount(1, reviewClient.Requests);
+        Assert.IsTrue(viewModel.Records.All(row => row.Cells.Count == 1));
+        CollectionAssert.AreEqual(
+            new[] { "A1", "A2", "B1", "B2" },
+            viewModel.Records.Select(row => row.Cells[0].DisplayValue).ToArray());
+    }
+
+    [TestMethod]
+    public async Task ReviewUsesBoundedPagesInsteadOfLoadingThePublishedDatabaseAtOnce()
+    {
+        var context = await BuildContext.CreateAsync();
+        var databaseClient = new RecordingDatabaseClient((correlation, _, mapping) =>
+            Success(correlation, mapping, valueCount: 150));
+        var sourceId = SourceId.CreateNew();
+        var reviewClient = new RecordingDatabaseReviewClient((generationId, start, count) =>
+        {
+            var last = Math.Min(150, start + count - 1);
+            var values = Enumerable.Range(start, last - start + 1)
+                .Select(ordinal => new DatabaseReviewValue(
+                    ordinal,
+                    $"Value {ordinal}",
+                    "tag",
+                    sourceId))
+                .ToArray();
+            return AcceptedReview(
+                generationId,
+                start,
+                count,
+                totalMappedValueCount: 150,
+                new DatabaseReviewColumn("DatabaseName", 150, values));
+        });
+        var coordinator = context.CreateCoordinator(databaseClient);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            coordinator,
+            reviewClient);
+
+        Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
+        await WaitForAsync(() => viewModel.Records.Count == 100);
+        Assert.AreEqual(DatabaseReviewLimits.MaximumRowsPerPage, reviewClient.Requests[0].RowCount);
+        Assert.AreEqual(1, viewModel.Records[0].Ordinal);
+        Assert.AreEqual("Page 1 of 2", viewModel.ReviewPageText);
+
+        await viewModel.NextReviewPageCommand.ExecuteAsync(null);
+        await WaitForAsync(() => viewModel.Records.FirstOrDefault()?.Ordinal == 101);
+        Assert.HasCount(50, viewModel.Records);
+        Assert.AreEqual("Value 150", viewModel.Records[^1].Cells[0].DisplayValue);
+        Assert.AreEqual("Page 2 of 2", viewModel.ReviewPageText);
+        Assert.HasCount(2, reviewClient.Requests);
+    }
+
+    [TestMethod]
+    public async Task StaleFailedAndCancelledBuildsRetainReviewUntilSuccessfulReplacement()
+    {
+        var context = await BuildContext.CreateAsync();
+        var outcomes = new Queue<OperationOutcome>(
+        [
+            OperationOutcome.CompletedSuccessfully,
+            OperationOutcome.Failed,
+            OperationOutcome.Cancelled,
+            OperationOutcome.CompletedSuccessfully
+        ]);
+        var databaseClient = new RecordingDatabaseClient((correlation, sources, mapping) =>
+        {
+            var outcome = outcomes.Dequeue();
+            return outcome == OperationOutcome.CompletedSuccessfully
+                ? Success(correlation, mapping, valueCount: 1)
+                : Failure(correlation, sources, outcome);
+        });
+        var sourceId = SourceId.CreateNew();
+        OperationId? firstGenerationId = null;
+        var reviewClient = new RecordingDatabaseReviewClient((generationId, start, count) =>
+        {
+            var replacement = firstGenerationId is not null
+                && generationId != firstGenerationId;
+            var databaseTagName = replacement ? "Replacement" : "DatabaseName";
+            var value = replacement ? "replacement value" : "original value";
+            return AcceptedReview(
+                generationId,
+                start,
+                count,
+                totalMappedValueCount: 1,
+                new DatabaseReviewColumn(
+                    databaseTagName,
+                    1,
+                    [new DatabaseReviewValue(1, value, "tag", sourceId)]));
+        });
+        var coordinator = context.CreateCoordinator(databaseClient);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            coordinator,
+            reviewClient);
+
+        Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
+        await WaitForAsync(() => viewModel.Records.Count == 1);
+        firstGenerationId = coordinator.CurrentGeneration!.OperationId;
+        Assert.AreEqual("original value", viewModel.Records[0].Cells[0].DisplayValue);
+
+        Assert.IsTrue(context.Workflow.RecordDiscoveryConfigurationChanged().Accepted);
+        Assert.IsTrue(context.Configuration.SetDatabaseTagOverride("tag", "Replacement"));
+        Assert.IsFalse((await coordinator.BuildAsync()).Accepted);
+        Assert.AreEqual("original value", viewModel.Records[0].Cells[0].DisplayValue);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, viewModel.DatabaseStatus);
+        Assert.IsFalse((await coordinator.BuildAsync()).Accepted);
+        Assert.AreEqual("original value", viewModel.Records[0].Cells[0].DisplayValue);
+
+        Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
+        await WaitForAsync(() =>
+            viewModel.Records.FirstOrDefault()?.Cells[0].DisplayValue == "replacement value");
+        Assert.AreEqual(WorkflowArtifactStatus.Current, viewModel.DatabaseStatus);
+        Assert.AreEqual("Replacement", viewModel.Columns.Single().DatabaseField);
+    }
+
+    private static DatabaseReviewClientResult AcceptedReview(
+        OperationId generationId,
+        int startRowOrdinal,
+        int requestedRowCount,
+        int totalMappedValueCount,
+        params DatabaseReviewColumn[] columns)
+    {
+        return new DatabaseReviewClientResult(
+            true,
+            new DatabaseReviewPage(
+                generationId,
+                startRowOrdinal,
+                requestedRowCount,
+                totalMappedValueCount,
+                columns),
+            FailureCode: null,
+            FailureDescription: null);
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!condition())
+        {
+            await Task.Delay(10, timeout.Token);
+        }
+    }
+
     private static DatabaseClientResult Success(
         OperationCorrelation correlation,
         DatabaseMappingSnapshot mapping,
@@ -224,6 +430,26 @@ public sealed class DatabaseBuildCoordinatorTests
         }
     }
 
+    private sealed class RecordingDatabaseReviewClient(
+        Func<OperationId, int, int, DatabaseReviewClientResult> readPage)
+        : IDatabaseReviewClient
+    {
+        public List<(OperationId GenerationId, int StartRowOrdinal, int RowCount)> Requests
+        {
+            get;
+        } = [];
+
+        public Task<DatabaseReviewClientResult> ReadPageAsync(
+            OperationId generationId,
+            int startRowOrdinal,
+            int rowCount,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add((generationId, startRowOrdinal, rowCount));
+            return Task.FromResult(readPage(generationId, startRowOrdinal, rowCount));
+        }
+    }
+
     private sealed class BuildContext
     {
         private BuildContext(
@@ -243,12 +469,17 @@ public sealed class DatabaseBuildCoordinatorTests
         public ApplicationWorkflowCoordinator Workflow { get; }
 
         public static async Task<BuildContext> CreateAsync(
-            IProcessingHostSupervisor? supervisor = null)
+            IProcessingHostSupervisor? supervisor = null,
+            IReadOnlyList<string>? informationTypes = null)
         {
+            informationTypes ??= ["tag"];
             var configuration = new ActiveDiscoveryConfiguration();
-            configuration.Synchronize(["tag"]);
-            configuration.SetSelection(["tag"], isSelected: true);
-            configuration.SetDatabaseTagOverride("tag", "DatabaseName");
+            configuration.Synchronize(informationTypes);
+            configuration.SetSelection(informationTypes, isSelected: true);
+            if (informationTypes.SequenceEqual(["tag"], StringComparer.Ordinal))
+            {
+                configuration.SetDatabaseTagOverride("tag", "DatabaseName");
+            }
             var sources = new ActiveLoadedSourceSet();
             var source = new LoadedSourceContract(
                 SourceId.CreateNew(),

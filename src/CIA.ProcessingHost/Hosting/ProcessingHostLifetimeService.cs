@@ -20,6 +20,7 @@ public sealed class ProcessingHostLifetimeService(
     SourceRefreshService sourceRefresh,
     DiscoveryService discovery,
     DatabaseGenerationService databaseGeneration,
+    DatabaseReviewService databaseReview,
     IHostApplicationLifetime applicationLifetime,
     ILogger<ProcessingHostLifetimeService> logger) : BackgroundService
 {
@@ -183,6 +184,28 @@ public sealed class ProcessingHostLifetimeService(
                             "database-build-already-active",
                             "A Database build is already active in the Processing Host.",
                             databaseResponseSendGate,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+
+                case GetDatabaseReviewPageCommand command when established:
+                    var reviewResult = await databaseReview.ReadPageAsync(
+                            command.GenerationId,
+                            command.StartRowOrdinal,
+                            command.RowCount,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    await connection.SendAsync(
+                            new GetDatabaseReviewPageResponse(
+                                Guid.CreateVersion7(),
+                                DateTimeOffset.UtcNow,
+                                command.MessageId,
+                                command.GenerationId,
+                                reviewResult.Accepted
+                                    ? CommandAcceptance.Accepted
+                                    : CommandAcceptance.Rejected,
+                                reviewResult.Page,
+                                reviewResult.Failure),
                             cancellationToken)
                         .ConfigureAwait(false);
                     break;
