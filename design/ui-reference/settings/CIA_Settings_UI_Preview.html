@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CIA Settings UI Preview v0.3</title>
+<style>
+:root{
+ --bg:#f7f8fc;--panel:#fff;--text:#1f2430;--muted:#667085;--accent:#6d69f6;--accent2:#4d8cff;
+ --soft:#f0efff;--border:#dde2ea;--divider:#edf0f4;--ok:#2f8a59;--warn:#986400;--bad:#b24750;
+ --titleH:38px;--navH:60px;--statusH:32px;--pad:8px;--gap:8px
+}
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{font:12px "Segoe UI",Arial,sans-serif;color:var(--text);background:var(--bg);overflow:hidden}
+button,input,select{font:inherit}.app{height:100%;min-width:1000px;min-height:520px;display:grid;grid-template-rows:var(--titleH) var(--navH) minmax(0,1fr) var(--statusH)}
+.title{display:flex;align-items:center;padding:0 15px;background:#fff;border-bottom:1px solid var(--border)}.brand{display:flex;align-items:center;gap:10px}
+.logo{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,var(--accent2),var(--accent));display:grid;place-items:center;color:#fff;font-weight:900}.cia{font-size:18px;font-weight:800}.sep{width:1px;height:18px;background:#cbd2dd}.product{font-size:12.5px}
+.nav{display:flex;gap:5px;padding:0 10px;background:#fff;border-bottom:1px solid var(--border)}.tab{flex:1;border:0;background:#fff;display:grid;grid-template-columns:34px 1fr;align-items:center;text-align:left;padding:5px 9px;position:relative;border-radius:9px 9px 0 0}
+.tab.active{background:linear-gradient(#f2f1ff,#fcfcff)}.tab.active:after{content:"";position:absolute;left:7px;right:7px;bottom:0;height:3px;border-radius:5px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.ico{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-size:17px;color:#727991}.active .ico{background:var(--soft);color:var(--accent)}.t1{font-size:13.5px;font-weight:750}.active .t1{color:#5149e8}.t2{font-size:10.2px;color:var(--muted)}
+.workspace{padding:var(--pad);overflow:hidden;min-height:0}.mobileSwitch{display:none}.layout{height:100%;display:grid;grid-template-columns:minmax(0,1fr) var(--gap) minmax(0,1fr);min-height:0}
+.panel{background:#fff;border:1px solid var(--border);border-radius:9px;min-width:0;min-height:0;overflow:hidden}.header{height:34px;display:flex;align-items:center;gap:7px;padding:0 9px;border-bottom:1px solid var(--border);font-weight:800;font-size:12.6px}
+.grow{flex:1;min-width:0}.tiny{font-size:9.8px;color:var(--muted)}.btn{height:27px;border:1px solid #cbd2dd;background:#fff;border-radius:7px;padding:0 8px;cursor:pointer;font-weight:650;white-space:nowrap}.btn:hover{background:#f8f9fc}.btn.primary{background:linear-gradient(135deg,#756fff,#5e68f4);color:#fff;border-color:#6963f5}.btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}
+.badge{height:20px;padding:0 7px;border-radius:999px;display:inline-flex;align-items:center;font-size:9.7px;font-weight:750}.b-ok{background:#eaf7ef;color:#226c45}.b-warn{background:#fff4dd;color:#8c5c00}.b-bad{background:#fff0f1;color:#94414b}.b-info{background:#eef3ff;color:#4964ad}.b-debug{background:#f2f2f3;color:#5e626b}
+.section{font-size:9.7px;font-weight:850;color:#5753d8;letter-spacing:.035em;margin:0 0 5px}
+
+/* left: unified log */
+.logSide{display:grid;grid-template-rows:minmax(0,2fr) var(--gap) minmax(0,1fr);min-height:0}.logMain{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto}
+.logFilters{display:grid;grid-template-columns:minmax(130px,1.3fr) repeat(5,minmax(84px,.75fr));gap:5px;padding:6px 8px;border-bottom:1px solid var(--border);align-items:center}
+.search,.select{height:27px;border:1px solid #cbd2dd;border-radius:7px;padding:0 7px;min-width:0;width:100%}
+.tablewrap{overflow:auto;min-height:0}.logTable{width:100%;min-width:1060px;border-collapse:separate;border-spacing:0;font-size:10.1px}.logTable th{position:sticky;top:0;z-index:3;text-align:left;background:#fafbfd;color:#5d6675;border-bottom:1px solid var(--border);padding:5px 6px;white-space:nowrap}
+.logTable td{padding:5px 6px;border-bottom:1px solid var(--divider);white-space:nowrap;max-width:250px;overflow:hidden;text-overflow:ellipsis}.logTable tbody tr{cursor:pointer}.logTable tbody tr:hover td{background:#f8f9fc}.logTable tbody tr.selected td{background:#f1f0ff}
+.logfoot{height:27px;padding:0 8px;display:flex;align-items:center;color:var(--muted);font-size:9.8px;border-top:1px solid var(--border)}
+.logBottom{display:grid;grid-template-rows:auto minmax(0,1fr)}.logBottomBody{padding:7px 8px;display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,.75fr);gap:10px;overflow:auto}
+.detailgrid{display:grid;grid-template-columns:78px minmax(0,1fr) 70px minmax(0,1fr);gap:4px 7px;font-size:9.8px}.dk{color:var(--muted)}.dv{font-weight:650;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.detailbox{margin-top:5px;border:1px solid var(--divider);background:#fafbfd;border-radius:7px;padding:5px 6px;line-height:1.35;font-size:9.7px;color:var(--muted)}
+.vieweropts{border-left:1px solid var(--divider);padding-left:9px}.vieweropts label{display:flex;align-items:center;gap:5px;margin:4px 0;color:var(--muted)}.vieweropts input{accent-color:var(--accent)}.actionrow{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+
+/* right settings */
+.settingsSide{display:grid;grid-template-rows:auto minmax(0,1fr)}.settingsInner{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(220px,.92fr);gap:8px;padding:8px;min-height:0;background:#fbfcfe}
+.settingsMain{overflow:auto;min-height:0;padding-right:1px}.persist{display:flex;align-items:center;gap:6px;padding:5px 6px;border:1px solid var(--divider);border-radius:7px;background:#f8fafc;margin-bottom:6px;color:var(--muted);font-size:9.8px}
+.card{border:1px solid var(--border);border-radius:8px;background:#fff;margin-bottom:7px;overflow:hidden}.cardTitle{padding:6px 8px;border-bottom:1px solid var(--border);font-weight:750;font-size:10.7px;display:flex;align-items:center;gap:7px}.cardBody{padding:7px 8px}
+.row{display:grid;grid-template-columns:122px minmax(0,1fr) auto;gap:6px;align-items:center;padding:4px 0}.row label{font-size:9.9px;color:var(--muted)}.row input,.row select{height:26px;min-width:0;width:100%;border:1px solid #cbd2dd;border-radius:6px;padding:0 6px}
+.storageRows{display:grid;gap:3px}.storageRow{display:grid;grid-template-columns:58px minmax(0,1fr) auto;gap:5px;align-items:center}.storageRow b{font-size:9.8px}.storageRow input{height:24px;border:1px solid #d7dce5;border-radius:6px;padding:0 5px;min-width:0;font-family:Consolas,monospace;font-size:9.2px}
+.twocol{display:grid;grid-template-columns:1fr 1fr;gap:7px}.metric{display:flex;justify-content:space-between;gap:6px;padding:3px 0;font-size:9.7px;border-bottom:1px solid var(--divider)}.metric:last-child{border-bottom:0}.metric span{color:var(--muted)}
+.unresolved{display:flex;align-items:center;gap:6px;padding:5px 6px;margin-top:6px;border:1px solid #f1d99c;background:#fffaf0;border-radius:7px;font-size:9.7px}.unresolved strong{color:#805500}
+
+/* about always visible */
+.aboutSide{display:grid;grid-template-rows:auto 112px minmax(0,1fr);gap:7px;min-height:0}.aboutHero{border:1px solid var(--border);border-radius:9px;background:#fff;padding:9px}.aboutBrand{display:flex;align-items:center;gap:9px}.aboutLogo{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--accent2),var(--accent));display:grid;place-items:center;color:#fff;font-weight:900;font-size:18px}.aboutHero h2{margin:0;font-size:18px}.aboutHero .name{font-size:10.7px;margin-top:2px}.author{margin-top:8px;padding-top:7px;border-top:1px solid var(--divider);font-weight:750}.author strong{color:#5149e8;font-size:13px}
+.aboutVisual{border:1px solid var(--border);border-radius:9px;background:linear-gradient(135deg,#f3f1ff,#f9fbff);display:grid;place-items:center;text-align:center}.mark{font-size:32px;font-weight:900;color:#5c58dc}.aboutVisual span{font-size:8.8px;color:var(--muted);letter-spacing:.11em}.help{border:1px solid var(--border);border-radius:9px;background:#fff;padding:7px;overflow:auto}.helpTitle{font-weight:800;font-size:10.7px;margin:0 2px 5px}.helpBtn{width:100%;height:30px;border:0;border-top:1px solid var(--divider);background:#fff;text-align:left;padding:0 5px;cursor:pointer;font-size:9.9px}.helpBtn:first-of-type{border-top:0}.helpBtn:hover{background:#f8f9fc}.copyright{font-size:9.2px;color:var(--muted);margin-top:6px}
+
+.statusbar{display:flex;align-items:center;gap:8px;padding:0 10px;border-top:1px solid var(--border);background:#fff;color:var(--muted);font-size:10.6px;white-space:nowrap}.dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}.statusbar strong{color:var(--text)}.sgrow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.toast{position:fixed;right:16px;bottom:44px;background:#1f2430;color:#fff;padding:8px 10px;border-radius:8px;opacity:0;transform:translateY(7px);pointer-events:none;transition:.17s;z-index:90}.toast.show{opacity:1;transform:none}
+
+/* scalable unresolved-path manager */
+.modalBack{display:none;position:fixed;inset:0;background:rgba(31,36,48,.24);align-items:center;justify-content:center;z-index:80;padding:20px}.modalBack.show{display:flex}.modal{width:min(920px,calc(100vw - 40px));height:min(560px,calc(100vh - 60px));background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 18px 50px rgba(16,24,40,.22);display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;overflow:hidden}.modalHead{height:36px;padding:0 10px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);font-weight:800}.modalTools{display:flex;align-items:center;gap:6px;padding:7px 9px;border-bottom:1px solid var(--border)}.modalTools .search{width:250px}.pathTableWrap{overflow:auto}.pathTable{width:100%;min-width:820px;border-collapse:collapse;font-size:10px}.pathTable th{position:sticky;top:0;background:#fafbfd;padding:6px;text-align:left;color:var(--muted);border-bottom:1px solid var(--border)}.pathTable td{padding:6px;border-bottom:1px solid var(--divider);white-space:nowrap;max-width:310px;overflow:hidden;text-overflow:ellipsis}.pathTable input{accent-color:var(--accent)}.modalFoot{height:38px;padding:0 9px;display:flex;align-items:center;gap:6px;border-top:1px solid var(--border)}
+
+@media(max-width:1180px){
+ .t2{display:none}.mobileSwitch{display:flex;height:34px;margin-bottom:8px;border:1px solid var(--border);border-radius:8px;background:#fff;overflow:hidden}.mobileSwitch button{flex:1;border:0;background:#fff;color:var(--muted);font-weight:750}.mobileSwitch button.active{background:var(--soft);color:#5149e8}
+ .layout{display:block;height:calc(100% - 42px)}.layout>.logSide,.layout>.settingsSide{height:100%;display:none}.layout>.mobileActive{display:grid}
+ .settingsInner{grid-template-columns:minmax(0,1.55fr) minmax(220px,.95fr)}
+ .logFilters{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+</style>
+</head>
+<body>
+<div class="app">
+ <div class="title"><div class="brand"><div class="logo">C</div><div class="cia">CIA</div><div class="sep"></div><div class="product">Custom Information Aggregator</div></div></div>
+ <div class="nav" id="nav"></div>
+
+ <main class="workspace">
+  <div class="mobileSwitch"><button class="active" data-target="logSide">Log & Diagnostics</button><button data-target="settingsSide">Settings</button></div>
+  <div class="layout">
+
+   <section class="logSide mobileActive" id="logSide">
+    <div class="panel logMain">
+     <div class="header">LOG & DIAGNOSTICS <span class="badge b-ok">Live</span><div class="grow"></div><span class="tiny">Activity, issues and raw entries in one viewer</span></div>
+     <div class="logFilters">
+      <input class="search" id="search" placeholder="Search all entries…">
+      <select class="select" id="typeFilter"><option value="">All types</option><option>Activity</option><option>Issue</option><option>Raw Log</option></select>
+      <select class="select" id="severityFilter"><option value="">All severities</option><option>Info</option><option>Warning</option><option>Error</option><option>Debug</option></select>
+      <select class="select" id="areaFilter"><option value="">All areas</option><option>Load</option><option>Discovery</option><option>Database</option><option>Export</option><option>System</option></select>
+      <select class="select" id="outcomeFilter"><option value="">All outcomes</option><option>Completed</option><option>Completed with issues</option><option>Failed</option><option>Cancelled</option><option>Interrupted</option></select>
+      <select class="select" id="streamFilter"><option value="">All streams</option><option>Structured</option><option>Desktop</option><option>Processing Host</option></select>
+     </div>
+     <div class="tablewrap"><table class="logTable"><thead><tr><th>Time</th><th>Type</th><th>Severity</th><th>Area</th><th>Outcome</th><th>Stage / Category</th><th>Stream</th><th>Item / Source</th><th>Message</th></tr></thead><tbody id="rows"></tbody></table></div>
+     <div class="logfoot"><span id="summary">0 visible / 0 total entries</span><div class="grow"></div><span>Latest first</span></div>
+    </div>
+    <div></div>
+    <div class="panel logBottom">
+     <div class="header">SELECTED ENTRY & VIEWER CONTROLS<div class="grow"></div><span class="tiny">One detail surface for all entry types</span></div>
+     <div class="logBottomBody">
+      <div>
+       <div class="detailgrid">
+        <div class="dk">ID</div><div class="dv" id="dId">—</div><div class="dk">Type</div><div class="dv" id="dType">—</div>
+        <div class="dk">Area</div><div class="dv" id="dArea">Select a row</div><div class="dk">Outcome</div><div class="dv" id="dOutcome">—</div>
+        <div class="dk">Stage</div><div class="dv" id="dStage">—</div><div class="dk">Stream</div><div class="dv" id="dStream">—</div>
+        <div class="dk">Item</div><div class="dv" id="dItem">—</div><div class="dk">Severity</div><div class="dv" id="dSeverity">—</div>
+       </div>
+       <div class="detailbox" id="dDetail">User-facing summary and technical detail for the selected Activity, Issue or Raw Log entry appear here.</div>
+      </div>
+      <div class="vieweropts">
+       <div class="section">VIEWER</div>
+       <label><input type="checkbox" checked> Auto-follow newest</label>
+       <label><input type="checkbox" id="wrap"> Wrap long messages</label>
+       <label><input type="checkbox" id="compact" checked> Compact rows</label>
+       <div class="actionrow"><button class="btn" id="openLogs">Open Logs Folder</button><button class="btn" id="exportVisible">Export Visible…</button></div>
+      </div>
+     </div>
+    </div>
+   </section>
+
+   <div></div>
+
+   <section class="panel settingsSide" id="settingsSide">
+    <div class="header">SETTINGS <span class="badge b-ok">Saved automatically</span><div class="grow"></div><span class="tiny">Persistent global configuration and utilities</span></div>
+    <div class="settingsInner">
+     <div class="settingsMain">
+      <div class="persist"><span class="badge b-info">Persistent</span><span>Settings survive restart automatically. Working States below are optional workflow snapshots, not settings saves.</span></div>
+
+      <div class="card">
+       <div class="cardTitle">GENERAL<div class="grow"></div><button class="btn ghost" id="resetDefaults">Reset to Defaults</button></div>
+       <div class="cardBody">
+        <div class="row"><label>Archive nesting depth</label><input type="number" min="1" value="3"><span class="tiny">Default 3</span></div>
+        <div class="row"><label>Default blacklist</label><select><option>Default Blacklist</option><option>AMM Exclusions</option><option>None</option></select><span class="tiny">New Discovery sessions</span></div>
+       </div>
+      </div>
+
+      <div class="card">
+       <div class="cardTitle">MANAGED STORAGE<div class="grow"></div><button class="btn ghost">Open App Data</button></div>
+       <div class="cardBody storageRows">
+        <div class="storageRow"><b>Temp</b><input value="%LOCALAPPDATA%\CIA\Temp"><button class="btn">Open</button></div>
+        <div class="storageRow"><b>Working</b><input value="%LOCALAPPDATA%\CIA\Working"><button class="btn">Open</button></div>
+        <div class="storageRow"><b>Database</b><input value="%LOCALAPPDATA%\CIA\Database"><button class="btn">Open</button></div>
+        <div class="storageRow"><b>Logs</b><input value="%LOCALAPPDATA%\CIA\Logs"><button class="btn">Open</button></div>
+        <div class="storageRow"><b>Profiles</b><input value="%LOCALAPPDATA%\CIA\Profiles"><button class="btn">Open</button></div>
+        <div class="storageRow"><b>Settings</b><input value="%LOCALAPPDATA%\CIA\Settings"><button class="btn">Open</button></div>
+       </div>
+      </div>
+
+      <div class="twocol">
+       <div class="card">
+        <div class="cardTitle">WORKING STATE & RECOVERY</div>
+        <div class="cardBody">
+         <div class="tiny">Optional .cia snapshots preserve a recoverable workflow state independently from automatic Settings persistence.</div>
+         <div class="actionrow"><button class="btn" id="saveState">Save State…</button><button class="btn" id="openState">Open State…</button><button class="btn ghost" id="manageStates">Manage…</button></div>
+         <div class="unresolved"><strong>5,004 unresolved paths</strong><div class="grow"></div><button class="btn" id="managePaths">Manage Paths…</button></div>
+        </div>
+       </div>
+       <div class="card">
+        <div class="cardTitle">MAINTENANCE & CLEANUP</div>
+        <div class="cardBody">
+         <div class="metric"><b>Temporary</b><span>1.24 GB · 1.08 GB reclaimable</span></div>
+         <div class="metric"><b>Session data</b><span>214 MB · 92 MB reclaimable</span></div>
+         <div class="metric"><b>Protected</b><span>Database / recovery / diagnostics</span></div>
+         <div class="actionrow"><button class="btn" id="cleanTemp">Clean Temp</button><button class="btn" id="cleanSession">Clean Session</button></div>
+        </div>
+       </div>
+      </div>
+     </div>
+
+     <aside class="aboutSide">
+      <div class="aboutHero">
+       <div class="aboutBrand"><div class="aboutLogo">C</div><div><h2>CIA</h2><div class="name">Custom Information Aggregator</div></div></div>
+       <div style="margin-top:7px"><span class="badge b-info">Development build</span></div>
+       <div class="author">Created by <strong>Dragos</strong></div>
+       <div class="copyright">© 2026 Dragos · Local Windows application · source data remains local to the configured filesystem workflow.</div>
+      </div>
+      <div class="aboutVisual"><div><div class="mark">CIA</div><span>FOCUS · EXTRACT · REVIEW</span></div></div>
+      <div class="help">
+       <div class="helpTitle">HELP & ABOUT</div>
+       <button class="helpBtn">▣ User Manual</button>
+       <button class="helpBtn">▣ Installation Guide</button>
+       <button class="helpBtn">▣ Documentation</button>
+       <button class="helpBtn">▣ Release Notes / What's New</button>
+       <button class="helpBtn">▣ Support</button>
+      </div>
+     </aside>
+    </div>
+   </section>
+
+  </div>
+ </main>
+ <footer class="statusbar"><span class="dot"></span><strong>Host</strong><span>Connected</span><span style="margin-left:8px"><strong>Operation</strong></span><span class="sgrow">Idle</span><strong>12 / 12 included</strong></footer>
+</div>
+
+<div class="modalBack" id="pathModal">
+ <div class="modal">
+  <div class="modalHead">MANAGE UNRESOLVED PATHS <span class="badge b-warn">5,004 unresolved</span><div class="grow"></div><button class="btn ghost" id="closePaths">×</button></div>
+  <div class="modalTools">
+   <input class="search" id="pathSearch" placeholder="Search paths or saved states…">
+   <button class="btn" id="selectVisible">Select visible</button>
+   <button class="btn" id="replaceRoot">Replace Path Root…</button>
+   <div class="grow"></div><span class="tiny">1–6 of 5,004</span>
+  </div>
+  <div class="pathTableWrap">
+   <table class="pathTable"><thead><tr><th></th><th>Unavailable Path</th><th>Referenced By</th><th>Kind</th><th>Status</th><th></th></tr></thead><tbody id="pathRows"></tbody></table>
+  </div>
+  <div class="modalFoot"><span class="tiny">Unresolved references remain retained until you relink or explicitly remove them.</span><div class="grow"></div><button class="btn" id="relinkSelected">Relink Selected…</button><button class="btn" id="removeSelected">Remove Selected References</button></div>
+ </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+const navData=[["Load","▣","Add and manage sources"],["Discovery","◎","Discover and select information"],["Database","◫","Review and export"],["Settings","⚙","Configuration, history and support"]];
+const nav=document.getElementById("nav");
+navData.forEach(([n,i,s])=>{const b=document.createElement("button");b.className="tab"+(n==="Settings"?" active":"");b.innerHTML=`<div class="ico">${i}</div><div><div class="t1">${n}</div><div class="t2">${s}</div></div>`;nav.appendChild(b)});
+
+const entries=[
+ {time:"14:36:01.117",type:"Activity",severity:"Info",area:"Export",outcome:"Completed",stage:"Excel generation",stream:"Structured",item:"CIA_Export_2026-09-08_1436.xlsx",message:"Workbook generated successfully",id:"01993a65-0311-7a13-a09f-1c06b8f0412a",detail:"Generated file: C:\\Users\\User\\Documents\\CIA\\Exports\\CIA_Export_2026-09-08_1436.xlsx"},
+ {time:"14:36:01.118",type:"Raw Log",severity:"Info",area:"Export",outcome:"",stage:"Export",stream:"Desktop",item:"CIA_Export_2026-09-08_1436.xlsx",message:"Excel export completed",id:"LOG-D-9441",detail:"Desktop CLEF entry · Excel export completed successfully."},
+ {time:"14:35:42.665",type:"Activity",severity:"Info",area:"Database",outcome:"Completed",stage:"Build",stream:"Structured",item:"Published Database",message:"128,934 records published",id:"01993a64-c02f-72b0-a477-86ad70a7d091",detail:"Replacement Database published successfully."},
+ {time:"14:35:42.611",type:"Raw Log",severity:"Info",area:"Database",outcome:"",stage:"Database",stream:"Processing Host",item:"Published Database",message:"Records inserted: 128934",id:"LOG-H-8827",detail:"Processing Host CLEF entry · database insertion count."},
+ {time:"13:55:03.522",type:"Issue",severity:"Warning",area:"Load",outcome:"Completed with issues",stage:"Archive processing",stream:"Structured",item:"archive_17.zip",message:"2 archive members could not be read",id:"DIAG-7f2c",detail:"Processing continued. Two unreadable archive members were preserved with archive/member context."},
+ {time:"13:55:03.524",type:"Raw Log",severity:"Warning",area:"Load",outcome:"",stage:"Archive",stream:"Processing Host",item:"archive_17.zip",message:"Unreadable archive member retained as issue context",id:"LOG-H-7749",detail:"Technical raw log entry from the Processing Host."},
+ {time:"13:41:18.002",type:"Issue",severity:"Warning",area:"Discovery",outcome:"Cancelled",stage:"Re-run",stream:"Structured",item:"Current source set",message:"Cancelled by user; previous result retained",id:"DIAG-6a10",detail:"Previous current Discovery result was retained. No partial replacement was published."},
+ {time:"12:18:55.009",type:"Issue",severity:"Error",area:"Database",outcome:"Failed",stage:"Replacement build",stream:"Structured",item:"Published Database",message:"Replacement build failed",id:"DIAG-1b72",detail:"Last published Database remains authoritative. Technical category: DatabaseReplacementFailure."},
+ {time:"12:18:55.011",type:"Raw Log",severity:"Error",area:"Database",outcome:"",stage:"Database",stream:"Desktop",item:"Published Database",message:"Replacement build failed; previous snapshot retained",id:"LOG-D-6150",detail:"Desktop raw-log evidence corresponding to the structured failure."},
+ {time:"11:52:30.000",type:"Activity",severity:"Info",area:"System",outcome:"Completed",stage:"Startup",stream:"Structured",item:"Desktop + Processing Host",message:"Session initialized",id:"019939d1-0cb2-7721-899b-e0100de65c0f",detail:"Desktop initialized and Processing Host connection became available."},
+ {time:"11:52:30.117",type:"Raw Log",severity:"Debug",area:"System",outcome:"",stage:"IPC",stream:"Desktop",item:"Processing Host",message:"Named-pipe health check completed",id:"LOG-D-5901",detail:"Debug-level Desktop entry."}
+];
+
+const paths=[
+ {path:"D:\\Old_XML\\MPD_Rev45.xml",state:"MPD Access Build",kind:"Source",status:"Missing"},
+ {path:"D:\\Old_XML\\AMM_27.zip",state:"AMM Tooling Review",kind:"Archive",status:"Missing"},
+ {path:"E:\\Legacy\\TEM_Rev29.xml",state:"Tooling Set 2026-08",kind:"Source",status:"Missing"},
+ {path:"D:\\Old_XML\\nested\\case_104.zip",state:"Case Evidence",kind:"Archive",status:"Missing"},
+ {path:"Z:\\Mapped\\AMM\\chapter20.xml",state:"AMM Chapter 20",kind:"Source",status:"Unavailable"},
+ {path:"Z:\\Mapped\\MPD\\rev44.xml",state:"MPD Legacy",kind:"Source",status:"Unavailable"}
+];
+let selectedEntry=null;
+const $=id=>document.getElementById(id);
+
+function badgeClass(severity,outcome){
+ if(severity==="Error"||outcome==="Failed")return"b-bad";
+ if(severity==="Warning"||outcome==="Cancelled"||outcome==="Interrupted"||outcome==="Completed with issues")return"b-warn";
+ if(severity==="Debug")return"b-debug";
+ return"b-ok";
+}
+function renderEntries(){
+ const q=$("search").value.trim().toLowerCase(),type=$("typeFilter").value,sev=$("severityFilter").value,area=$("areaFilter").value,out=$("outcomeFilter").value,stream=$("streamFilter").value;
+ let rows=entries.filter(r=>{
+  if(q&&!Object.values(r).join(" ").toLowerCase().includes(q))return false;
+  if(type&&r.type!==type)return false;if(sev&&r.severity!==sev)return false;if(area&&r.area!==area)return false;if(out&&r.outcome!==out)return false;if(stream&&r.stream!==stream)return false;
+  return true;
+ });
+ $("rows").innerHTML=rows.map((r,i)=>`<tr data-i="${i}"><td>${r.time}</td><td><span class="badge b-info">${r.type}</span></td><td><span class="badge ${badgeClass(r.severity,r.outcome)}">${r.severity}</span></td><td>${r.area}</td><td>${r.outcome||"—"}</td><td>${r.stage}</td><td>${r.stream}</td><td title="${r.item}">${r.item}</td><td title="${r.message}">${r.message}</td></tr>`).join("");
+ document.querySelectorAll("#rows tr").forEach(tr=>tr.onclick=()=>{document.querySelectorAll("#rows tr").forEach(x=>x.classList.remove("selected"));tr.classList.add("selected");selectedEntry=rows[+tr.dataset.i];showEntry()});
+ $("summary").textContent=`${rows.length} visible / ${entries.length} total entries`;
+}
+function showEntry(){
+ if(!selectedEntry)return;
+ $("dId").textContent=selectedEntry.id;$("dType").textContent=selectedEntry.type;$("dArea").textContent=selectedEntry.area;$("dOutcome").textContent=selectedEntry.outcome||"—";$("dStage").textContent=selectedEntry.stage;$("dStream").textContent=selectedEntry.stream;$("dItem").textContent=selectedEntry.item;$("dSeverity").textContent=selectedEntry.severity;$("dDetail").textContent=selectedEntry.detail;
+}
+["search","typeFilter","severityFilter","areaFilter","outcomeFilter","streamFilter"].forEach(id=>$(id).addEventListener(id==="search"?"input":"change",renderEntries));
+
+function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");clearTimeout(t.x);t.x=setTimeout(()=>t.classList.remove("show"),1250)}
+$("openLogs").onclick=()=>toast("Open Logs Folder · prototype");$("exportVisible").onclick=()=>toast("Export visible log · prototype");
+["resetDefaults","saveState","openState","manageStates","cleanTemp","cleanSession"].forEach(id=>$(id).onclick=()=>toast($(id).textContent+" · prototype"));
+document.querySelectorAll(".storageRow .btn,.helpBtn,.cardTitle .btn").forEach(b=>{if(!b.onclick)b.onclick=()=>toast(b.textContent+" · prototype")});
+
+$("compact").onchange=e=>document.querySelector(".logTable").style.fontSize=e.target.checked?"10.1px":"10.8px";
+$("wrap").onchange=e=>document.querySelectorAll(".logTable td").forEach(td=>{td.style.whiteSpace=e.target.checked?"normal":"nowrap";td.style.maxWidth=e.target.checked?"280px":"250px"});
+
+function renderPaths(){
+ const q=$("pathSearch").value.trim().toLowerCase();
+ const visible=paths.filter(p=>!q||Object.values(p).join(" ").toLowerCase().includes(q));
+ $("pathRows").innerHTML=visible.map((p,i)=>`<tr><td><input type="checkbox" class="pathCheck"></td><td title="${p.path}">${p.path}</td><td>${p.state}</td><td>${p.kind}</td><td><span class="badge b-warn">${p.status}</span></td><td><button class="btn" data-relink="${i}">Relink…</button></td></tr>`).join("");
+ document.querySelectorAll("[data-relink]").forEach(b=>b.onclick=()=>toast("Relink path · prototype"));
+}
+$("managePaths").onclick=()=>{$("pathModal").classList.add("show");renderPaths()};
+$("closePaths").onclick=()=> $("pathModal").classList.remove("show");
+$("pathSearch").oninput=renderPaths;
+$("selectVisible").onclick=()=>document.querySelectorAll(".pathCheck").forEach(x=>x.checked=true);
+$("replaceRoot").onclick=()=>toast("Preview common path-root replacement · prototype");
+$("relinkSelected").onclick=()=>toast("Relink selected paths · prototype");
+$("removeSelected").onclick=()=>toast("Remove selected unresolved references · confirmation required");
+
+document.querySelectorAll(".mobileSwitch button").forEach(b=>b.onclick=()=>{document.querySelectorAll(".mobileSwitch button").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.querySelectorAll("#logSide,#settingsSide").forEach(x=>x.classList.remove("mobileActive"));$(b.dataset.target).classList.add("mobileActive")});
+
+renderEntries();
+</script>
+</body>
+</html>

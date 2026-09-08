@@ -1,6 +1,7 @@
 using System.IO;
 using CIA.Core;
 using CIA.Core.Diagnostics;
+using CIA.Core.Runtime;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
@@ -28,6 +29,8 @@ public static class DesktopApplicationHost
                 ApplicationName = typeof(DesktopApplicationHost).Assembly.GetName().Name,
                 ContentRootPath = AppContext.BaseDirectory
             });
+        var logDirectory = ApplicationLogPaths.ResolveDirectory(
+            builder.Configuration[ApplicationLogPaths.DirectoryConfigurationKey]);
 
         builder.Services.AddSingleton<ApplicationSession>();
         builder.Services.AddSingleton<GlobalStatusViewModel>();
@@ -54,21 +57,20 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
         builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();
         builder.Services.AddSingleton<IProcessingHistoryReader>(
-            _ => new ClefProcessingHistoryReader(
-                ApplicationLogPaths.ResolveDirectory(
-                    builder.Configuration[ApplicationLogPaths.DirectoryConfigurationKey])));
+            _ => new ClefProcessingHistoryReader(logDirectory));
+        builder.Services.AddSingleton(
+            new SettingsWorkspaceRuntimePaths(ApplicationPaths.ForCurrentUser(), logDirectory));
         builder.Services.AddSingleton<SettingsWorkspaceViewModel>();
 
-        ConfigureLogging(builder);
+        ConfigureLogging(builder, logDirectory);
         return builder.Build();
     }
 
-    private static void ConfigureLogging(HostApplicationBuilder builder)
+    private static void ConfigureLogging(
+        HostApplicationBuilder builder,
+        string logDirectory)
     {
         builder.Logging.ClearProviders();
-
-        var logDirectory = ApplicationLogPaths.ResolveDirectory(
-            builder.Configuration[ApplicationLogPaths.DirectoryConfigurationKey]);
         Directory.CreateDirectory(logDirectory);
 
         var serilogLogger = new LoggerConfiguration()
