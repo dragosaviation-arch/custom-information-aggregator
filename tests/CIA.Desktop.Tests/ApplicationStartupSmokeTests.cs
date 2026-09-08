@@ -44,6 +44,7 @@ public sealed class ApplicationStartupSmokeTests
             var loadWorkspace = host.Services.GetRequiredService<LoadWorkspaceViewModel>();
             var discoveryWorkspace = host.Services.GetRequiredService<DiscoveryWorkspaceViewModel>();
             var databaseWorkspace = host.Services.GetRequiredService<DatabaseWorkspaceViewModel>();
+            var settingsWorkspace = host.Services.GetRequiredService<SettingsWorkspaceViewModel>();
             Application.Current.MainWindow = window;
 
             Assert.IsTrue(lifetime.ApplicationStarted.IsCancellationRequested);
@@ -53,12 +54,14 @@ public sealed class ApplicationStartupSmokeTests
             Assert.AreSame(loadWorkspace, window.LoadWorkspace);
             Assert.AreSame(discoveryWorkspace, window.DiscoveryWorkspace);
             Assert.AreSame(databaseWorkspace, window.DatabaseWorkspace);
+            Assert.AreSame(settingsWorkspace, window.SettingsWorkspace);
             Assert.HasCount(4, viewModel.Workspaces);
             Assert.AreEqual(WorkspaceArea.Load, viewModel.SelectedWorkspace.Area);
 
             var databaseView = (DatabaseWorkspaceView)window.FindName("DatabaseWorkspaceView");
             var placeholder = (System.Windows.Controls.Grid)window.FindName(
                 "WorkspacePlaceholder");
+            var settingsView = (SettingsWorkspaceView)window.FindName("SettingsWorkspaceView");
             viewModel.SelectedWorkspace = viewModel.Workspaces.Single(
                 workspace => workspace.Area == WorkspaceArea.Database);
             window.UpdateLayout();
@@ -69,7 +72,8 @@ public sealed class ApplicationStartupSmokeTests
                 workspace => workspace.Area == WorkspaceArea.Settings);
             window.UpdateLayout();
             Assert.AreEqual(Visibility.Collapsed, databaseView.Visibility);
-            Assert.AreEqual(Visibility.Visible, placeholder.Visibility);
+            Assert.AreEqual(Visibility.Visible, settingsView.Visibility);
+            Assert.AreEqual(Visibility.Collapsed, placeholder.Visibility);
         }
         catch (Exception exception)
         {
