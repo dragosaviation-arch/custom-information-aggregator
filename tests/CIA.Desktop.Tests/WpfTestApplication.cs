@@ -12,17 +12,45 @@ internal static class WpfTestApplication
     public static Task RunAsync(Action action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        return Host.Value.Dispatcher.InvokeAsync(
-            action,
-            DispatcherPriority.Normal).Task;
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Host.Value.Dispatcher.BeginInvoke(
+            () =>
+            {
+                try
+                {
+                    action();
+                    completion.SetResult();
+                }
+                catch (Exception exception)
+                {
+                    completion.SetException(exception);
+                }
+            },
+            DispatcherPriority.Normal);
+        return completion.Task;
     }
 
     public static Task RunAsync(Func<Task> action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        return Host.Value.Dispatcher.InvokeAsync(
-            action,
-            DispatcherPriority.Normal).Task.Unwrap();
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Host.Value.Dispatcher.BeginInvoke(
+            async () =>
+            {
+                try
+                {
+                    await action();
+                    completion.SetResult();
+                }
+                catch (Exception exception)
+                {
+                    completion.SetException(exception);
+                }
+            },
+            DispatcherPriority.Normal);
+        return completion.Task;
     }
 
     public static void Shutdown()
@@ -37,7 +65,7 @@ internal static class WpfTestApplication
     {
         private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(20);
         private readonly Thread _thread;
-        private App? _application;
+        private Application? _application;
         private Exception? _startupFailure;
         private int _disposed;
 
@@ -94,12 +122,19 @@ internal static class WpfTestApplication
         {
             try
             {
-                _application = new App();
-                _application.InitializeComponent();
-                _application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                _application = new Application
+                {
+                    ShutdownMode = ShutdownMode.OnExplicitShutdown
+                };
+                _application.Resources.MergedDictionaries.Add(new ResourceDictionary
+                {
+                    Source = new Uri(
+                        "/CIA;component/Themes/CiaTheme.xaml",
+                        UriKind.Relative)
+                });
                 Dispatcher = Dispatcher.CurrentDispatcher;
                 ready.Set();
-                Dispatcher.Run();
+                _application.Run();
             }
             catch (Exception exception)
             {

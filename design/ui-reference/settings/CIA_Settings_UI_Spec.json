@@ -1,0 +1,231 @@
+{
+  "meta": {
+    "name": "CIA Settings UI Preview",
+    "version": "0.3",
+    "status": "Reworked combined Settings workspace after full feature/ownership review",
+    "basedOn": "v0.2 visual direction"
+  },
+  "implementationStatus": {
+    "alreadyImplementedBackend": [
+      "Structured processing-history and diagnostic records (SPR-99)",
+      "Shared operation outcomes / partial completion semantics (SPR-102)",
+      "Cooperative cancellation history support (SPR-101)",
+      "Per-user writable-data path model for Settings, Profiles, Working, Database, Logs and Temp (SPR-109)"
+    ],
+    "implementedOperationalUiElsewhere": [
+      "Load source/folder/archive options and source management",
+      "Discovery run/selection/overrides/current-stale signaling",
+      "Database UI reference and presentation/export configuration shell"
+    ],
+    "plannedForLaterImplementationButRequiredInThisDesign": [
+      "Processing history / recorded-issues review UI (SPR-98)",
+      "Working state persistence / restore / delete (SPR-93/94)",
+      "Unavailable-path relink/remove workflow (SPR-95)",
+      "Persistent application settings UI/service (SPR-96)",
+      "Safe Reset to Defaults (SPR-97)",
+      "Safe temporary/session cleanup (SPR-105/106)"
+    ]
+  },
+  "shell": {
+    "topLevelTabs": [
+      "Load",
+      "Discovery",
+      "Database",
+      "Settings"
+    ],
+    "activeTab": "Settings",
+    "normalWindow": {
+      "width": 1400,
+      "height": 760
+    },
+    "minimumWindow": {
+      "width": 1000,
+      "height": 520
+    },
+    "responsiveBreakpointPx": 1180,
+    "pageLevelVerticalScroll": false,
+    "sameBehaviorAs": [
+      "Load",
+      "Discovery",
+      "Database"
+    ]
+  },
+  "layout": {
+    "desktop": {
+      "LogAndDiagnostics": "50%",
+      "Settings": "50%",
+      "gapPx": 8
+    },
+    "leftHalf": {
+      "unifiedLogViewer": "2/3 height",
+      "selectedEntryAndViewerControls": "1/3 height"
+    },
+    "rightHalf": {
+      "settingsAndUtilities": "about 64%",
+      "alwaysVisibleAboutHelp": "about 36%"
+    },
+    "responsive": {
+      "below1180": "Within the single top-level Settings workspace, show Log & Diagnostics / Settings internal switch.",
+      "aboutHelp": "Remains permanently visible whenever the Settings internal view is active."
+    }
+  },
+  "logDiagnostics": {
+    "singleUnifiedViewer": true,
+    "entryTypes": [
+      "Activity",
+      "Issue",
+      "Raw Log"
+    ],
+    "meaning": {
+      "Activity": "Structured processing/operation history including successful processed items and generated-file records.",
+      "Issue": "Structured warning/error/cancel/interruption diagnostic records.",
+      "Raw Log": "Individual technical Desktop or Processing Host log entries, merged into the same viewer rather than a separate mechanic."
+    },
+    "tableColumns": [
+      "Time",
+      "Type",
+      "Severity",
+      "Area",
+      "Outcome",
+      "Stage / Category",
+      "Stream",
+      "Item / Source",
+      "Message"
+    ],
+    "filters": [
+      "Search",
+      "Entry Type",
+      "Severity",
+      "Area / Operation",
+      "Outcome",
+      "Stream"
+    ],
+    "viewerControls": [
+      "Auto-follow newest",
+      "Wrap long messages",
+      "Compact rows",
+      "Open Logs Folder",
+      "Export visible log"
+    ],
+    "selectedEntry": [
+      "Operation / Diagnostic ID where available",
+      "Type",
+      "Severity",
+      "Area / Operation",
+      "Outcome",
+      "Stage / Category",
+      "Stream",
+      "Item / Source",
+      "User-facing summary",
+      "Technical detail"
+    ]
+  },
+  "settingsPersistence": {
+    "automatic": true,
+    "saveButton": false,
+    "survivesRestart": true,
+    "transientInteractionStateExcluded": true
+  },
+  "settings": {
+    "General": [
+      {
+        "name": "Maximum archive nesting depth",
+        "default": 3,
+        "type": "number",
+        "note": "Global persistent limit; recursive traversal and archive-retention controls stay in Load."
+      },
+      {
+        "name": "Default blacklist profile",
+        "type": "profile selector",
+        "note": "Global default loaded automatically for new Discovery sessions."
+      },
+      {
+        "name": "Reset to Defaults",
+        "type": "action",
+        "note": "Resets settings only; does not delete user data."
+      }
+    ],
+    "ManagedStorage": [
+      "Temporary",
+      "Working",
+      "Database",
+      "Logs",
+      "Profiles",
+      "Settings"
+    ],
+    "WorkingStateAndRecovery": [
+      "Save optional .cia workflow snapshot",
+      "Open / restore working state",
+      "Manage saved working states",
+      "Manage unresolved path references",
+      "Relink an unavailable path",
+      "Remove obsolete unresolved reference"
+    ],
+    "UnresolvedPathsScalability": {
+      "reason": "A restored/active state can reference paths that no longer exist.",
+      "singlePath": "Can be relinked or explicitly removed.",
+      "manyPaths": "Use a virtualized/searchable management table rather than one card per path.",
+      "bulkConveniences": [
+        "Select visible",
+        "Relink selected",
+        "Remove selected references",
+        "Replace common path root with preview/confirmation"
+      ],
+      "note": "Bulk convenience is UI scaling around the documented relink/remove semantics."
+    },
+    "MaintenanceAndCleanup": [
+      "Managed-storage usage",
+      "Reclaimable temporary/session data",
+      "Clean Temporary Data",
+      "Clean Eligible Session Data",
+      "Protect active/in-use/recovery-required/diagnostic data"
+    ],
+    "AlwaysVisibleAboutHelp": [
+      "CIA / Custom Information Aggregator",
+      "Version/build",
+      "Created by Dragos",
+      "Copyright notice",
+      "Local-processing boundary",
+      "User Manual",
+      "Installation Guide",
+      "Documentation",
+      "Release Notes / What's New",
+      "Support"
+    ]
+  },
+  "notDuplicatedBecauseOwnedElsewhere": {
+    "Load": [
+      "Recursive subfolder traversal",
+      "Folder include-XML/include-archive defaults",
+      "Persistent archive extraction",
+      "Persistent extraction destination",
+      "Source-removal warning preference"
+    ],
+    "Discovery": [
+      "Selection and blacklist working controls",
+      "Selection profile save/update/load/delete",
+      "Blacklist profile save/update/load/clone/delete/set-default working controls"
+    ],
+    "Database": [
+      "Output folder",
+      "Always ask where to export",
+      "Auto-fit Columns",
+      "Freeze Header Row",
+      "Post-export behavior",
+      "Export field/order controls",
+      "Excel header overrides",
+      "Database column presentation"
+    ]
+  },
+  "explicitlyExcluded": [
+    "Language",
+    "Start with Windows",
+    "Automatic update checking",
+    "Updates category",
+    "Appearance/theme controls",
+    "Advanced bucket",
+    "Global confirmation toggle",
+    "Auto-save session as a setting",
+    "Keep last session on startup"
+  ]
+}

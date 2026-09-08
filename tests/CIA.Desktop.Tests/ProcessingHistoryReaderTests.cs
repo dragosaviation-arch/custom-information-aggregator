@@ -2,6 +2,7 @@ using System.Text.Json;
 using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Operations;
 using CIA.Core.Diagnostics;
+using CIA.Core.Runtime;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using Microsoft.Extensions.DependencyInjection;
@@ -175,7 +176,11 @@ public sealed class ProcessingHistoryReaderTests
     {
         using var logs = new TemporaryHistoryDirectory();
         var reader = new ClefProcessingHistoryReader(logs.Path);
-        var viewModel = new SettingsWorkspaceViewModel(reader);
+        var viewModel = new SettingsWorkspaceViewModel(
+            reader,
+            new SettingsWorkspaceRuntimePaths(
+                ApplicationPaths.FromLocalApplicationData(logs.Path),
+                logs.Path));
         Assert.IsFalse(viewModel.HasHistory);
         Assert.IsFalse(viewModel.HasIssues);
         Assert.AreEqual(
@@ -215,12 +220,11 @@ public sealed class ProcessingHistoryReaderTests
         Assert.AreEqual("XmlException at line 42.", viewModel.SelectedIssue.TechnicalDetail);
         Assert.AreNotEqual(viewModel.SelectedIssue.Description, viewModel.SelectedIssue.TechnicalDetail);
         Assert.IsTrue(viewModel.SelectedIssue.HasTechnicalDetails);
-
-        Assert.IsTrue(viewModel.IsHistorySelected);
-        viewModel.ShowIssuesCommand.Execute(null);
-        Assert.IsTrue(viewModel.IsIssuesSelected);
-        viewModel.ShowHistoryCommand.Execute(null);
-        Assert.IsTrue(viewModel.IsHistorySelected);
+        Assert.HasCount(2, viewModel.Entries);
+        Assert.IsTrue(viewModel.Entries.Any(
+            entry => entry.EntryType == SettingsLogEntryPresentation.ActivityType));
+        Assert.IsTrue(viewModel.Entries.Any(
+            entry => entry.EntryType == SettingsLogEntryPresentation.IssueType));
     }
 
     [TestMethod]
