@@ -63,6 +63,62 @@ public sealed class DatabaseWorkspaceViewModelTests
     }
 
     [TestMethod]
+    public async Task SharedEffectiveNamePublishesOneColumnForAllStableSourceTags()
+    {
+        var configuration = CreateConfiguration(
+            ["alpha", "beta", "gamma"],
+            ["alpha", "beta", "gamma"]);
+        Assert.IsTrue(configuration.SetDatabaseTagOverride("alpha", "Shared"));
+        Assert.IsTrue(configuration.SetDatabaseTagOverride("beta", "Shared"));
+        using var workflow = CreateWorkflowCoordinator();
+        using var viewModel = new DatabaseWorkspaceViewModel(configuration, workflow);
+        await MakeDiscoveryCurrentAsync(workflow);
+
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.DatabaseBuild);
+
+        Assert.HasCount(2, viewModel.Columns);
+        var shared = viewModel.Columns.Single(column => column.DatabaseField == "Shared");
+        CollectionAssert.AreEqual(
+            new[] { "alpha", "beta" },
+            shared.SourceInformationTypes.ToArray());
+        Assert.AreEqual("alpha", shared.InformationType);
+        var gamma = viewModel.Columns.Single(column => column.DatabaseField == "gamma");
+        CollectionAssert.AreEqual(
+            new[] { "gamma" },
+            gamma.SourceInformationTypes.ToArray());
+    }
+
+    [TestMethod]
+    public async Task StalePublishedColumnsDoNotMergeUntilAReplacementBuildSucceeds()
+    {
+        var configuration = CreateConfiguration(
+            ["alpha", "beta"],
+            ["alpha", "beta"]);
+        using var workflow = CreateWorkflowCoordinator();
+        using var viewModel = new DatabaseWorkspaceViewModel(configuration, workflow);
+        await MakeDiscoveryCurrentAsync(workflow);
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.DatabaseBuild);
+
+        Assert.IsTrue(workflow.RecordDiscoveryConfigurationChanged().Accepted);
+        Assert.IsTrue(configuration.SetDatabaseTagOverride("beta", "alpha"));
+
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, viewModel.DatabaseStatus);
+        Assert.HasCount(2, viewModel.Columns);
+        CollectionAssert.AreEqual(
+            new[] { "alpha", "beta" },
+            viewModel.Columns.Select(column => column.DatabaseField).ToArray());
+
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.DatabaseBuild);
+
+        Assert.AreEqual(WorkflowArtifactStatus.Current, viewModel.DatabaseStatus);
+        Assert.HasCount(1, viewModel.Columns);
+        Assert.AreEqual("alpha", viewModel.Columns[0].DatabaseField);
+        CollectionAssert.AreEqual(
+            new[] { "alpha", "beta" },
+            viewModel.Columns[0].SourceInformationTypes.ToArray());
+    }
+
+    [TestMethod]
     public async Task FailedAndCancelledReplacementKeepPriorPublishedSchema()
     {
         var configuration = CreateConfiguration(["alpha", "beta"], ["alpha"]);
