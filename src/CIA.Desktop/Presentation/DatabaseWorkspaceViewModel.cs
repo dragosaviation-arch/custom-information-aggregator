@@ -1,7 +1,10 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Text;
+using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Core.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Workflow;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -226,38 +229,36 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private IReadOnlyList<PublishedColumnDefinition> CapturePublishedColumns()
+    private IReadOnlyList<DatabaseColumnMapping> CapturePublishedColumns()
     {
-        var selectedConfiguration = GetSelectedConfiguration();
-        var overrides = _discoveryConfiguration.DatabaseTagOverrides;
-
-        return selectedConfiguration
-            .Select(item => new PublishedColumnDefinition(
-                item.InformationType,
-                GetEffectiveDatabaseField(item.InformationType, overrides)))
-            .ToArray();
+        return DatabaseTagMapper.CreateMapping(
+                _discoveryConfiguration.Current,
+                _discoveryConfiguration.DatabaseTagOverrides)
+            .Columns;
     }
 
     private void PublishDatabaseGeneration(
-        IReadOnlyList<PublishedColumnDefinition> publishedColumns)
+        IReadOnlyList<DatabaseColumnMapping> publishedColumns)
     {
         var publishedIds = publishedColumns
-            .Select(column => column.InformationType)
+            .Select(column => CreateColumnIdentity(column.SourceInformationTypes))
             .ToHashSet(StringComparer.Ordinal);
 
         foreach (var publishedColumn in publishedColumns)
         {
-            if (!_columnCache.TryGetValue(publishedColumn.InformationType, out var column))
+            var columnIdentity = CreateColumnIdentity(
+                publishedColumn.SourceInformationTypes);
+            if (!_columnCache.TryGetValue(columnIdentity, out var column))
             {
                 column = new DatabaseColumnPresentation(
-                    publishedColumn.InformationType,
-                    publishedColumn.DatabaseField);
+                    columnIdentity,
+                    publishedColumn);
                 column.PropertyChanged += OnColumnPropertyChanged;
-                _columnCache.Add(publishedColumn.InformationType, column);
+                _columnCache.Add(columnIdentity, column);
             }
             else
             {
-                column.UpdateDatabaseField(publishedColumn.DatabaseField);
+                column.UpdateMapping(publishedColumn);
             }
         }
 
@@ -270,35 +271,29 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         var retainedPresentationOrder = _columns
-            .Where(column => publishedIds.Contains(column.InformationType))
-            .Select(column => column.InformationType)
+            .Where(column => publishedIds.Contains(column.MappingIdentity))
+            .Select(column => column.MappingIdentity)
             .ToList();
         retainedPresentationOrder.AddRange(publishedColumns
-            .Select(column => column.InformationType)
+            .Select(column => CreateColumnIdentity(column.SourceInformationTypes))
             .Where(identity => !retainedPresentationOrder.Contains(
                 identity,
                 StringComparer.Ordinal)));
 
         _publishedColumnOrder.Clear();
         _publishedColumnOrder.AddRange(
-            publishedColumns.Select(column => column.InformationType));
+            publishedColumns.Select(column => CreateColumnIdentity(
+                column.SourceInformationTypes)));
         ReorderColumns(retainedPresentationOrder);
         UpdatePositionsAndPresentation();
     }
 
-    private IReadOnlyList<DiscoveryConfigurationItem> GetSelectedConfiguration()
-    {
-        return _discoveryConfiguration.Current.Items
-            .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected)
-            .ToArray();
-    }
-
-    private void ReorderColumns(IEnumerable<string> orderedInformationTypes)
+    private void ReorderColumns(IEnumerable<string> orderedColumnIdentities)
     {
         _columns.Clear();
-        foreach (var informationType in orderedInformationTypes)
+        foreach (var columnIdentity in orderedColumnIdentities)
         {
-            if (_columnCache.TryGetValue(informationType, out var column))
+            if (_columnCache.TryGetValue(columnIdentity, out var column))
             {
                 _columns.Add(column);
             }
@@ -381,11 +376,18 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         uiContext.Post(_ => update(), null);
     }
 
-    private static string GetEffectiveDatabaseField(
-        string informationType,
-        IReadOnlyDictionary<string, string> overrides)
+    private static string CreateColumnIdentity(
+        IReadOnlyList<string> sourceInformationTypes)
     {
-        return overrides.GetValueOrDefault(informationType) ?? informationType;
+        var identity = new StringBuilder();
+        foreach (var informationType in sourceInformationTypes)
+        {
+            identity.Append(informationType.Length);
+            identity.Append(':');
+            identity.Append(informationType);
+        }
+
+        return identity.ToString();
     }
 
     private static bool IsSuccessfulDatabasePublication(WorkflowStateSnapshot state)
@@ -399,10 +401,6 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     or WorkflowOperationState.CompletedWithIssues
             };
     }
-
-    private sealed record PublishedColumnDefinition(
-        string InformationType,
-        string DatabaseField);
 }
 
 public sealed class DatabaseColumnPresentation : ObservableObject
@@ -417,17 +415,24 @@ public sealed class DatabaseColumnPresentation : ObservableObject
     private int _position;
     private bool _isExported = true;
 
-    public DatabaseColumnPresentation(string informationType, string databaseField)
+    internal DatabaseColumnPresentation(
+        string mappingIdentity,
+        DatabaseColumnMapping mapping)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
-        ArgumentException.ThrowIfNullOrWhiteSpace(databaseField);
+        ArgumentException.ThrowIfNullOrWhiteSpace(mappingIdentity);
+        ArgumentNullException.ThrowIfNull(mapping);
 
-        InformationType = informationType;
-        _databaseField = databaseField;
-        _excelHeader = databaseField;
+        MappingIdentity = mappingIdentity;
+        SourceInformationTypes = mapping.SourceInformationTypes;
+        _databaseField = mapping.DatabaseTagName;
+        _excelHeader = mapping.DatabaseTagName;
     }
 
-    public string InformationType { get; }
+    internal string MappingIdentity { get; }
+
+    public string InformationType => SourceInformationTypes[0];
+
+    public IReadOnlyList<string> SourceInformationTypes { get; }
 
     public string DatabaseField
     {
@@ -479,14 +484,23 @@ public sealed class DatabaseColumnPresentation : ObservableObject
         set => SetProperty(ref _isExported, value);
     }
 
-    internal void UpdateDatabaseField(string databaseField)
+    internal void UpdateMapping(DatabaseColumnMapping mapping)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(databaseField);
+        ArgumentNullException.ThrowIfNull(mapping);
+
+        if (!SourceInformationTypes.SequenceEqual(
+                mapping.SourceInformationTypes,
+                StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "A published Database column cannot change its source information identities.");
+        }
+
         var followsDatabaseField = !HasExcelHeaderOverride;
-        DatabaseField = databaseField;
+        DatabaseField = mapping.DatabaseTagName;
         if (followsDatabaseField)
         {
-            ExcelHeader = databaseField;
+            ExcelHeader = mapping.DatabaseTagName;
         }
         else
         {
