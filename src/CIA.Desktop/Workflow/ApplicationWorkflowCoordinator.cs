@@ -179,6 +179,7 @@ public sealed class ApplicationWorkflowCoordinator :
         CancellationToken cancellationToken = default)
     {
         ActiveWorkflowOperation activeOperation;
+        WorkflowStateSnapshot cancellingState;
 
         lock (_stateGate)
         {
@@ -190,7 +191,31 @@ public sealed class ApplicationWorkflowCoordinator :
             }
 
             activeOperation = _current.ActiveOperation;
+
+            if (_current.LatestOperation is
+                {
+                    State: WorkflowOperationState.Cancelling
+                } cancellingOperation
+                && cancellingOperation.Correlation.OperationId
+                    == activeOperation.Correlation.OperationId)
+            {
+                return WorkflowCommandResult.Reject(
+                    WorkflowRejectionCode.CancellationRejected,
+                    "Cancellation is already in progress for the active operation.");
+            }
+
+            _current = _current with
+            {
+                LatestOperation = new WorkflowOperationStatus(
+                    activeOperation.Kind,
+                    activeOperation.Correlation,
+                    WorkflowOperationState.Cancelling,
+                    "Cancellation requested.")
+            };
+            cancellingState = _current;
         }
+
+        PublishStateChanged(cancellingState);
 
         bool accepted;
 
@@ -204,6 +229,7 @@ public sealed class ApplicationWorkflowCoordinator :
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            RestoreActiveStateAfterRejectedCancellation(activeOperation);
             throw;
         }
         catch (Exception)
@@ -213,6 +239,7 @@ public sealed class ApplicationWorkflowCoordinator :
 
         if (!accepted)
         {
+            RestoreActiveStateAfterRejectedCancellation(activeOperation);
             return WorkflowCommandResult.Reject(
                 WorkflowRejectionCode.CancellationRejected,
                 "The active operation could not accept cancellation.");
@@ -230,6 +257,39 @@ public sealed class ApplicationWorkflowCoordinator :
         }
 
         return WorkflowCommandResult.Accept(activeOperation.Correlation);
+    }
+
+    private void RestoreActiveStateAfterRejectedCancellation(
+        ActiveWorkflowOperation requestedOperation)
+    {
+        WorkflowStateSnapshot? changedState = null;
+
+        lock (_stateGate)
+        {
+            if (_current.ActiveOperation?.Correlation.OperationId
+                    != requestedOperation.Correlation.OperationId
+                || _current.LatestOperation is not
+                {
+                    State: WorkflowOperationState.Cancelling
+                } latestOperation
+                || latestOperation.Correlation.OperationId
+                    != requestedOperation.Correlation.OperationId)
+            {
+                return;
+            }
+
+            _current = _current with
+            {
+                LatestOperation = new WorkflowOperationStatus(
+                    requestedOperation.Kind,
+                    requestedOperation.Correlation,
+                    WorkflowOperationState.Active,
+                    Detail: null)
+            };
+            changedState = _current;
+        }
+
+        PublishStateChanged(changedState);
     }
 
     public WorkflowCommandResult CompleteOperation(

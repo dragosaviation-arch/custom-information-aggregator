@@ -304,7 +304,9 @@ public sealed class ApplicationWorkflowCoordinatorTests
         Assert.IsTrue(cancellation.Accepted);
         Assert.AreEqual(1, supervisor.CancellationRequestCount);
         Assert.AreEqual(begin.Operation!.OperationId, supervisor.LastCancellationOperationId);
-        Assert.AreEqual(WorkflowOperationState.Active, coordinator.Current.LatestOperation?.State);
+        Assert.AreEqual(
+            WorkflowOperationState.Cancelling,
+            coordinator.Current.LatestOperation?.State);
         Assert.AreEqual(
             WorkflowRejectionCode.ConflictingOperation,
             conflictingOperation.Rejection?.Code);
@@ -326,6 +328,55 @@ public sealed class ApplicationWorkflowCoordinatorTests
         Assert.HasCount(1, history.Attempts);
         Assert.AreEqual(OperationOutcome.Cancelled, history.Attempts[0].TerminalOutcome);
         Assert.AreSame(completion, history.Attempts[0].Completion);
+    }
+
+    [TestMethod]
+    public async Task RepeatedCancellationDoesNotSendAnotherRequestForTheActiveOperation()
+    {
+        var supervisor = new StubProcessingHostSupervisor();
+        var coordinator = CreateCoordinator(supervisor);
+        coordinator.RecordSourceSelectionChanged(true);
+        var begin = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        var first = await coordinator.RequestCancellationAsync();
+        var repeated = await coordinator.RequestCancellationAsync();
+
+        Assert.IsTrue(first.Accepted);
+        Assert.IsFalse(repeated.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.CancellationRejected, repeated.Rejection?.Code);
+        Assert.AreEqual(1, supervisor.CancellationRequestCount);
+        Assert.AreEqual(begin.Operation!.OperationId, supervisor.LastCancellationOperationId);
+        Assert.AreEqual(
+            WorkflowOperationState.Cancelling,
+            coordinator.Current.LatestOperation?.State);
+    }
+
+    [TestMethod]
+    public async Task LateCancellationAcknowledgementCannotTargetAReplacementOperation()
+    {
+        var cancellationResponse = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var supervisor = new StubProcessingHostSupervisor
+        {
+            CancellationResponse = cancellationResponse.Task
+        };
+        var coordinator = CreateCoordinator(supervisor);
+        coordinator.RecordSourceSelectionChanged(true);
+        var original = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        var cancellation = coordinator.RequestCancellationAsync();
+        coordinator.CompleteOperation(
+            original.Operation!.OperationId,
+            OperationOutcome.Cancelled);
+        var replacement = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+        cancellationResponse.SetResult(true);
+        var cancellationResult = await cancellation;
+
+        Assert.IsFalse(cancellationResult.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.OperationMismatch, cancellationResult.Rejection?.Code);
+        Assert.AreEqual(original.Operation.OperationId, supervisor.LastCancellationOperationId);
+        Assert.AreEqual(replacement.Operation, coordinator.Current.ActiveOperation?.Correlation);
+        Assert.AreEqual(WorkflowOperationState.Active, coordinator.Current.LatestOperation?.State);
     }
 
     [TestMethod]
@@ -411,6 +462,8 @@ public sealed class ApplicationWorkflowCoordinatorTests
 
         public bool CancellationAccepted { get; init; } = true;
 
+        public Task<bool>? CancellationResponse { get; init; }
+
         public Exception? AvailabilityException { get; init; }
 
         public event EventHandler<ProcessingHostLifecycleSnapshot>? StateChanged
@@ -451,7 +504,7 @@ public sealed class ApplicationWorkflowCoordinatorTests
             cancellationToken.ThrowIfCancellationRequested();
             CancellationRequestCount++;
             LastCancellationOperationId = operationId;
-            return Task.FromResult(CancellationAccepted);
+            return CancellationResponse ?? Task.FromResult(CancellationAccepted);
         }
     }
 }

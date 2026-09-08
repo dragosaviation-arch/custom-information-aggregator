@@ -57,6 +57,36 @@ public sealed class GlobalStatusViewModelTests
     }
 
     [TestMethod]
+    public async Task CancellationProgressAndTerminalStateAreCommunicatedExplicitly()
+    {
+        var supervisor = new StubProcessingHostSupervisor(
+            ProcessingHostLifecycleState.Ready,
+            cancellationAccepted: true);
+        using var coordinator = CreateCoordinator(supervisor);
+        using var status = new GlobalStatusViewModel(supervisor, coordinator);
+        coordinator.RecordSourceSelectionChanged(true);
+        var operation = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        var cancellation = await coordinator.RequestCancellationAsync();
+
+        Assert.IsTrue(cancellation.Accepted);
+        Assert.AreEqual(
+            "Discovery — Cancelling. Cancellation requested.",
+            status.OperationStatusText);
+
+        coordinator.CompleteOperation(
+            operation.Operation!.OperationId,
+            OperationOutcome.Cancelled);
+
+        Assert.AreEqual(
+            "Discovery — Cancelled. The operation was cancelled.",
+            status.OperationStatusText);
+        Assert.IsFalse(status.OperationStatusText.Contains("Failed", StringComparison.Ordinal));
+        Assert.IsFalse(status.OperationStatusText.Contains("success", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(status.OperationStatusText.Contains("issues", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [TestMethod]
     public async Task GlobalStatusPersistsAcrossEveryPrincipalWorkspace()
     {
         var supervisor = new StubProcessingHostSupervisor(ProcessingHostLifecycleState.Ready);
@@ -175,9 +205,14 @@ public sealed class GlobalStatusViewModelTests
 
     private sealed class StubProcessingHostSupervisor : IProcessingHostSupervisor
     {
-        public StubProcessingHostSupervisor(ProcessingHostLifecycleState initialState)
+        private readonly bool _cancellationAccepted;
+
+        public StubProcessingHostSupervisor(
+            ProcessingHostLifecycleState initialState,
+            bool cancellationAccepted = false)
         {
             Current = CreateSnapshot(initialState);
+            _cancellationAccepted = cancellationAccepted;
         }
 
         public ProcessingHostLifecycleSnapshot Current { get; private set; }
@@ -215,7 +250,7 @@ public sealed class GlobalStatusViewModelTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(false);
+            return Task.FromResult(_cancellationAccepted);
         }
 
         public void Publish(ProcessingHostLifecycleState state)

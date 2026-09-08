@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 using CIA.Desktop.Presentation;
 
 namespace CIA.Desktop;
@@ -51,5 +52,22 @@ public partial class MainWindow : Window
         WorkspaceTabs.Resources["CiaNavigationSubtitleVisibility"] = ActualWidth < CompactNavigationBreakpoint
             ? Visibility.Collapsed
             : Visibility.Visible;
+    }
+
+    private void OnWindowKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Handled || e.Key != Key.Escape)
+        {
+            return;
+        }
+
+        var cancellationCommand = GlobalStatus.CancelActiveOperationCommand;
+        if (!cancellationCommand.CanExecute(null))
+        {
+            return;
+        }
+
+        e.Handled = true;
+        cancellationCommand.Execute(null);
     }
 }
