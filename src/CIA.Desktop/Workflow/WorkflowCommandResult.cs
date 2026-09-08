@@ -14,7 +14,8 @@ public enum WorkflowRejectionCode
     OperationMismatch = 8,
     InvalidOutcome = 9,
     NoActiveOperation = 10,
-    CancellationRejected = 11
+    CancellationRejected = 11,
+    OperationFailed = 12
 }
 
 public sealed record WorkflowRejection(

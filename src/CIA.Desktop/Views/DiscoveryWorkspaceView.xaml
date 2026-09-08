@@ -686,15 +686,15 @@
                             <Border Margin="0,0,6,0" Style="{StaticResource CiaNeutralStateBadgeStyle}">
                                 <TextBlock VerticalAlignment="Center"
                                            Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="Database not created" />
+                                           Text="{Binding DatabaseStateText}" />
                             </Border>
                             <TextBlock Margin="0,0,6,0"
                                        VerticalAlignment="Center"
                                        Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Database creation/update is outside SPR-69." />
-                            <Button IsEnabled="False"
+                                       Text="Build from the current selected Discovery mapping." />
+                            <Button Command="{Binding BuildDatabaseCommand}"
                                     Style="{StaticResource CiaPrimaryButtonStyle}"
-                                    Content="Create Database" />
+                                    Content="{Binding DatabaseBuildButtonText}" />
                         </WrapPanel>
                     </Border>
                 </Grid>

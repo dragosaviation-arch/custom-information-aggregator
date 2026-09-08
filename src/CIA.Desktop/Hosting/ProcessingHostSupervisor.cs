@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
@@ -17,6 +18,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
     private readonly ILogger<ProcessingHostSupervisor> _logger;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly SemaphoreSlim _requestGate = new(1, 1);
+    private readonly SemaphoreSlim _databaseCancellationSendGate = new(1, 1);
     private readonly object _stateGate = new();
     private readonly Guid _clientInstanceId = Guid.CreateVersion7();
 
@@ -34,6 +36,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
     private bool _stopping;
     private bool _automaticRecreationAttempted;
     private int _disposed;
+    private OperationId? _activeDatabaseOperationId;
 
     public ProcessingHostSupervisor(
         ProcessingHostSupervisorOptions options,
@@ -100,6 +103,17 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+
+        var activeDatabaseConnection = GetActiveDatabaseConnection(operationId);
+        if (activeDatabaseConnection is not null)
+        {
+            return await SendActiveDatabaseCancellationAsync(
+                    activeDatabaseConnection,
+                    operationId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
@@ -392,6 +406,85 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         }
     }
 
+    public async Task<BuildDatabaseResponse> RequestDatabaseBuildAsync(
+        OperationCorrelation correlation,
+        IReadOnlyList<LoadedSourceContract> sources,
+        DatabaseMappingSnapshot mapping,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(correlation);
+        ArgumentNullException.ThrowIfNull(sources);
+        ArgumentNullException.ThrowIfNull(mapping);
+        ThrowIfDisposed();
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (!IsCurrentHostReady())
+            {
+                throw new InvalidOperationException(
+                    "The Processing Host is not ready for Database build requests.");
+            }
+
+            var connection = _connection!;
+            await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                var command = new BuildDatabaseCommand(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    correlation,
+                    sources,
+                    mapping);
+                await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+                lock (_stateGate)
+                {
+                    _activeDatabaseOperationId = correlation.OperationId;
+                }
+
+                while (true)
+                {
+                    var response = await connection.ReceiveAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (response is BuildDatabaseResponse databaseResponse
+                        && databaseResponse.CommandMessageId == command.MessageId
+                        && databaseResponse.Completion.Correlation == correlation)
+                    {
+                        return databaseResponse;
+                    }
+
+                    if (response is CommandAcknowledgement)
+                    {
+                        // Cooperative-cancellation acknowledgements share this connection while
+                        // the long-running Database response remains the sole awaited result.
+                        continue;
+                    }
+
+                    throw new IpcProtocolException(
+                        IpcProtocolError.InvalidContract,
+                        "The Processing Host returned an invalid Database build response.");
+                }
+            }
+            finally
+            {
+                lock (_stateGate)
+                {
+                    if (_activeDatabaseOperationId == correlation.OperationId)
+                    {
+                        _activeDatabaseOperationId = null;
+                    }
+                }
+
+                _requestGate.Release();
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -401,6 +494,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
 
         StopCoreAsync(CancellationToken.None).GetAwaiter().GetResult();
         _requestGate.Dispose();
+        _databaseCancellationSendGate.Dispose();
         _lifecycleGate.Dispose();
     }
 
@@ -413,7 +507,48 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
 
         await StopCoreAsync(CancellationToken.None).ConfigureAwait(false);
         _requestGate.Dispose();
+        _databaseCancellationSendGate.Dispose();
         _lifecycleGate.Dispose();
+    }
+
+    private NamedPipeIpcConnection? GetActiveDatabaseConnection(OperationId operationId)
+    {
+        lock (_stateGate)
+        {
+            return _activeDatabaseOperationId == operationId
+                && _current.State == ProcessingHostLifecycleState.Ready
+                ? _connection
+                : null;
+        }
+    }
+
+    private async Task<bool> SendActiveDatabaseCancellationAsync(
+        NamedPipeIpcConnection connection,
+        OperationId operationId,
+        CancellationToken cancellationToken)
+    {
+        await _databaseCancellationSendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var command = new CancelOperationCommand(
+                Guid.CreateVersion7(),
+                DateTimeOffset.UtcNow,
+                operationId);
+            await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or IpcProtocolException)
+        {
+            _logger.LogWarning(
+                exception,
+                "Database operation {OperationId} could not receive its cooperative cancellation request",
+                operationId);
+            return false;
+        }
+        finally
+        {
+            _databaseCancellationSendGate.Release();
+        }
     }
 
     private async Task<ProcessingHostLifecycleSnapshot> StartHostAsync(

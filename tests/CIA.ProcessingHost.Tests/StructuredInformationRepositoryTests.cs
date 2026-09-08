@@ -1,4 +1,7 @@
 using System.Globalization;
+using CIA.Contracts.Database;
+using CIA.Contracts.Discovery;
+using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Runtime;
 using CIA.ProcessingHost.Repository;
@@ -9,6 +12,121 @@ namespace CIA.ProcessingHost.Tests;
 [TestClass]
 public sealed class StructuredInformationRepositoryTests
 {
+    [TestMethod]
+    public async Task CandidateRemainsNonAuthoritativeUntilValidatedPublication()
+    {
+        using var workspace = new RepositoryWorkspace();
+        var repository = workspace.CreateRepository();
+        var sourceId = SourceId.CreateNew();
+        var mapping = CreateMapping("Original", "Published");
+        var candidate = await repository.CreateDatabaseCandidateAsync(
+            OperationCorrelation.CreateNew(),
+            mapping,
+            [sourceId]);
+
+        await WriteCandidateValuesAsync(
+            repository,
+            candidate,
+            sourceId,
+            [new MappedDatabaseValue("Published", "Original", " exact value ", sourceId)]);
+
+        Assert.IsNull(await repository.ReadPublishedDatabaseGenerationAsync());
+        Assert.IsEmpty(await repository.QueryPublishedDatabaseValuesAsync());
+
+        var published = await repository.ValidateAndPublishDatabaseCandidateAsync(candidate);
+        var values = await repository.QueryPublishedDatabaseValuesAsync();
+
+        Assert.AreEqual(candidate.Correlation.OperationId, published.OperationId);
+        Assert.AreEqual(1, published.ValueCount);
+        Assert.HasCount(1, values);
+        Assert.AreEqual("Published", values[0].DatabaseTagName);
+        Assert.AreEqual("Original", values[0].SourceInformationType);
+        Assert.AreEqual(" exact value ", values[0].Value);
+        Assert.AreEqual(sourceId, values[0].SourceId);
+    }
+
+    [TestMethod]
+    public async Task InvalidOrDiscardedReplacementCannotChangePublishedGeneration()
+    {
+        using var workspace = new RepositoryWorkspace();
+        var repository = workspace.CreateRepository();
+        var sourceId = SourceId.CreateNew();
+        var original = await CreateAndPublishAsync(
+            repository,
+            sourceId,
+            CreateMapping("tag", "tag"),
+            "first");
+        var replacement = await repository.CreateDatabaseCandidateAsync(
+            OperationCorrelation.CreateNew(),
+            CreateMapping("tag", "Renamed"),
+            [sourceId]);
+
+        await Assert.ThrowsExactlyAsync<StructuredInformationRepositoryException>(
+            () => repository.WriteDatabaseCandidateSourceAsync(
+                replacement,
+                sourceId,
+                async (writer, cancellationToken) =>
+                {
+                    await writer.AddBatchAsync(
+                        [new MappedDatabaseValue("Wrong", "tag", "second", sourceId)],
+                        cancellationToken);
+                    return true;
+                }));
+        await Assert.ThrowsExactlyAsync<StructuredInformationRepositoryException>(
+            () => repository.ValidateAndPublishDatabaseCandidateAsync(replacement));
+        await repository.DiscardDatabaseCandidateAsync(replacement);
+
+        var retained = await repository.ReadPublishedDatabaseGenerationAsync();
+        var values = await repository.QueryPublishedDatabaseValuesAsync();
+        Assert.AreEqual(original.OperationId, retained?.OperationId);
+        Assert.HasCount(1, values);
+        Assert.AreEqual("first", values[0].Value);
+        Assert.AreEqual("tag", values[0].DatabaseTagName);
+    }
+
+    [TestMethod]
+    public async Task SuccessfulReplacementIsAtomicAndDeterministic()
+    {
+        using var workspace = new RepositoryWorkspace();
+        var repository = workspace.CreateRepository();
+        var firstSource = SourceId.CreateNew();
+        var secondSource = SourceId.CreateNew();
+        var mapping = new DatabaseMappingSnapshot(
+        [
+            new DatabaseColumnMapping("Shared", ["beta", "alpha"])
+        ]);
+        await CreateAndPublishAsync(repository, firstSource, mapping, "one", "alpha");
+        var replacement = await repository.CreateDatabaseCandidateAsync(
+            OperationCorrelation.CreateNew(),
+            mapping,
+            [firstSource, secondSource]);
+        await WriteCandidateValuesAsync(
+            repository,
+            replacement,
+            firstSource,
+            [new MappedDatabaseValue("Shared", "alpha", "one", firstSource)]);
+        await WriteCandidateValuesAsync(
+            repository,
+            replacement,
+            secondSource,
+            [new MappedDatabaseValue("Shared", "beta", "two", secondSource)]);
+
+        var beforePublication = await repository.QueryPublishedDatabaseValuesAsync();
+        Assert.HasCount(1, beforePublication);
+        Assert.AreEqual("one", beforePublication[0].Value);
+
+        await repository.ValidateAndPublishDatabaseCandidateAsync(replacement);
+        var published = await repository.ReadPublishedDatabaseGenerationAsync();
+        var afterPublication = await repository.QueryPublishedDatabaseValuesAsync();
+        CollectionAssert.AreEqual(
+            new[] { "beta", "alpha" },
+            published!.Mapping.Columns.Single().SourceInformationTypes.ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "alpha:one", "beta:two" },
+            afterPublication.Select(value =>
+                $"{value.SourceInformationType}:{value.Value}").ToArray());
+    }
+
     [TestMethod]
     public async Task NewRepositoryCreatesVersionedWalSchemaInManagedDatabaseDirectory()
     {
@@ -261,6 +379,52 @@ public sealed class StructuredInformationRepositoryTests
         command.Transaction = transaction;
         command.CommandText = "SELECT COUNT(*) FROM indexed_occurrences;";
         return Convert.ToInt32(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture);
+    }
+
+    private static DatabaseMappingSnapshot CreateMapping(
+        string informationType,
+        string databaseTagName)
+    {
+        return new DatabaseMappingSnapshot(
+        [
+            new DatabaseColumnMapping(databaseTagName, [informationType])
+        ]);
+    }
+
+    private static async Task<DatabaseGenerationSummary> CreateAndPublishAsync(
+        StructuredInformationRepository repository,
+        SourceId sourceId,
+        DatabaseMappingSnapshot mapping,
+        string value,
+        string informationType = "tag")
+    {
+        var candidate = await repository.CreateDatabaseCandidateAsync(
+            OperationCorrelation.CreateNew(),
+            mapping,
+            [sourceId]);
+        var databaseTagName = mapping.Columns.Single().DatabaseTagName;
+        await WriteCandidateValuesAsync(
+            repository,
+            candidate,
+            sourceId,
+            [new MappedDatabaseValue(databaseTagName, informationType, value, sourceId)]);
+        return await repository.ValidateAndPublishDatabaseCandidateAsync(candidate);
+    }
+
+    private static async Task WriteCandidateValuesAsync(
+        StructuredInformationRepository repository,
+        DatabaseCandidate candidate,
+        SourceId sourceId,
+        IReadOnlyList<MappedDatabaseValue> values)
+    {
+        Assert.IsTrue(await repository.WriteDatabaseCandidateSourceAsync(
+            candidate,
+            sourceId,
+            async (writer, cancellationToken) =>
+            {
+                await writer.AddBatchAsync(values, cancellationToken);
+                return true;
+            }));
     }
 
     private sealed class RepositoryWorkspace : IDisposable

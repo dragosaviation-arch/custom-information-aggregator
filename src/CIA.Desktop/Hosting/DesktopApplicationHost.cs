@@ -2,6 +2,7 @@ using System.IO;
 using CIA.Core;
 using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
+using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
@@ -54,6 +55,8 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ISourcePathPicker, WindowsSourcePathPicker>();
         builder.Services.AddSingleton<IDiscoveryClient, ProcessingHostDiscoveryClient>();
         builder.Services.AddSingleton<ActiveDiscoveryConfiguration>();
+        builder.Services.AddSingleton<IDatabaseClient, ProcessingHostDatabaseClient>();
+        builder.Services.AddSingleton<DatabaseBuildCoordinator>();
         builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
         builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();
         builder.Services.AddSingleton<IProcessingHistoryReader>(

@@ -42,6 +42,16 @@ public interface ISourceOccurrenceAdapter
         CancellationToken cancellationToken = default);
 }
 
+public interface ISourceValueBatchAdapter
+{
+    ValueTask<int> ReadSelectedValuesAsync(
+        SourceId originatingSourceId,
+        XmlReader reader,
+        IReadOnlySet<string> selectedInformationTypes,
+        Func<IReadOnlyList<InterpretedSourceValue>, ValueTask> onBatch,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record SourceOccurrenceRead(
     string? Value,
     int OccurrenceCount);

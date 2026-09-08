@@ -7,6 +7,9 @@ using CIA.Desktop;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Workflow;
+using CIA.Desktop.Database;
+using CIA.ProcessingHost.Database;
+using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.Hosting;
 using CIA.ProcessingHost.SourceInterpretation;
 using Microsoft.Extensions.Configuration;
@@ -42,6 +45,8 @@ public sealed class ApplicationHostTests
         Assert.AreSame(firstSession, secondSession);
         Assert.AreSame(firstSession, viewModel.Session);
         Assert.IsInstanceOfType<ApplicationWorkflowCoordinator>(workflowCoordinator);
+        Assert.IsNotNull(host.Services.GetRequiredService<IDatabaseClient>());
+        Assert.IsNotNull(host.Services.GetRequiredService<DatabaseBuildCoordinator>());
         Assert.AreEqual("Stopped", globalStatus.HostStatusText);
         Assert.AreEqual("No operation", globalStatus.OperationStatusText);
         Assert.IsTrue(serviceProbe.IsService(typeof(MainWindow)));
@@ -58,6 +63,9 @@ public sealed class ApplicationHostTests
         Assert.IsNotNull(host.Services.GetRequiredService<IHostApplicationLifetime>());
         Assert.IsNotNull(host.Services.GetRequiredService<ILogger<Program>>());
         Assert.IsNotNull(host.Services.GetRequiredService<ISourceInterpreter>());
+        Assert.IsNotNull(host.Services.GetRequiredService<ISourceValueBatchReader>());
+        Assert.IsNotNull(host.Services.GetRequiredService<StructuredInformationRepository>());
+        Assert.IsNotNull(host.Services.GetRequiredService<DatabaseGenerationService>());
         Assert.IsEmpty(host.Services.GetServices<IHostedService>());
     }
 

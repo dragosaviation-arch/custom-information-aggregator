@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -15,12 +16,14 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RefreshSourceCommand), "refreshSourceCommand")]
 [JsonDerivedType(typeof(RunDiscoveryCommand), "runDiscoveryCommand")]
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceCommand), "getDiscoveryOccurrenceCommand")]
+[JsonDerivedType(typeof(BuildDatabaseCommand), "buildDatabaseCommand")]
 [JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
 [JsonDerivedType(typeof(LoadSourcesResponse), "loadSourcesResponse")]
 [JsonDerivedType(typeof(RefreshSourceResponse), "refreshSourceResponse")]
 [JsonDerivedType(typeof(RunDiscoveryResponse), "runDiscoveryResponse")]
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceResponse), "getDiscoveryOccurrenceResponse")]
+[JsonDerivedType(typeof(BuildDatabaseResponse), "buildDatabaseResponse")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 [JsonDerivedType(typeof(SourceIntakeProgressEvent), "sourceIntakeProgressEvent")]
 public abstract record IpcMessage(Guid MessageId, DateTimeOffset TimestampUtc);
@@ -79,6 +82,14 @@ public sealed record GetDiscoveryOccurrenceCommand(
     DiscoveryOccurrenceLookup Lookup)
     : IpcCommand(MessageId, TimestampUtc);
 
+public sealed record BuildDatabaseCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    OperationCorrelation Correlation,
+    IReadOnlyList<LoadedSourceContract> Sources,
+    DatabaseMappingSnapshot Mapping)
+    : IpcCommand(MessageId, TimestampUtc);
+
 public sealed record StopProcessingHostCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc)
@@ -131,6 +142,16 @@ public sealed record GetDiscoveryOccurrenceResponse(
     OperationId DiscoveryOperationId,
     CommandAcceptance Acceptance,
     DiscoveredOccurrence? Occurrence,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record BuildDatabaseResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    CommandAcceptance Acceptance,
+    OperationCompletion Completion,
+    DatabaseGenerationSummary? PublishedGeneration,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 

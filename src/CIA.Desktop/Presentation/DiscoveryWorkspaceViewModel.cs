@@ -5,6 +5,7 @@ using System.Globalization;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
@@ -19,6 +20,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly ActiveDiscoveryConfiguration _activeConfiguration;
     private readonly ActiveLoadedSourceSet _sourceSet;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
+    private readonly DatabaseBuildCoordinator? _databaseBuildCoordinator;
     private readonly ObservableCollection<DiscoveredInformationItemViewModel> _visibleInformation = [];
     private readonly ReadOnlyObservableCollection<DiscoveredInformationItemViewModel> _readOnlyInformation;
     private readonly RelayCommand _previousPageCommand;
@@ -70,7 +72,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         IDiscoveryClient discoveryClient,
         ActiveDiscoveryConfiguration activeConfiguration,
         ActiveLoadedSourceSet sourceSet,
-        IApplicationWorkflowCoordinator workflowCoordinator)
+        IApplicationWorkflowCoordinator workflowCoordinator,
+        DatabaseBuildCoordinator? databaseBuildCoordinator = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryClient);
         ArgumentNullException.ThrowIfNull(activeConfiguration);
@@ -81,12 +84,16 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _activeConfiguration = activeConfiguration;
         _sourceSet = sourceSet;
         _workflowCoordinator = workflowCoordinator;
+        _databaseBuildCoordinator = databaseBuildCoordinator;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
         _uiSynchronizationContext = SynchronizationContext.Current;
         _readOnlyInformation = new ReadOnlyObservableCollection<DiscoveredInformationItemViewModel>(
             _visibleInformation);
 
         RunDiscoveryCommand = new AsyncRelayCommand(RunDiscoveryAsync, CanRunDiscovery);
+        BuildDatabaseCommand = new AsyncRelayCommand(
+            BuildDatabaseAsync,
+            CanBuildDatabase);
         SortCommand = new RelayCommand<string>(SortBy, column => column is not null);
         _previousPageCommand = new RelayCommand(
             () => CurrentPage--,
@@ -135,6 +142,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         ((INotifyCollectionChanged)_sourceSet.Items).CollectionChanged += OnSourcesChanged;
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
+        if (_databaseBuildCoordinator is not null)
+        {
+            _databaseBuildCoordinator.PublishedGenerationChanged +=
+                OnPublishedDatabaseGenerationChanged;
+        }
         RefreshPresentation();
     }
 
@@ -144,6 +156,20 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public IReadOnlyList<int> PageSizes { get; } = [25, 50, 100, 250];
 
     public IAsyncRelayCommand RunDiscoveryCommand { get; }
+
+    public IAsyncRelayCommand BuildDatabaseCommand { get; }
+
+    public string DatabaseBuildButtonText =>
+        _databaseBuildCoordinator?.CurrentGeneration is null
+            ? "Create Database"
+            : "Update Database";
+
+    public string DatabaseStateText => _workflowCoordinator.Current.Database switch
+    {
+        WorkflowArtifactStatus.Current => "Database current",
+        WorkflowArtifactStatus.Stale => "Database out of date",
+        _ => "Database not created"
+    };
 
     public IRelayCommand<string> SortCommand { get; }
 
@@ -274,6 +300,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(DiscoveryStateText));
                 OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
                 RunDiscoveryCommand.NotifyCanExecuteChanged();
+                BuildDatabaseCommand.NotifyCanExecuteChanged();
                 NotifyConfigurationCommandsChanged();
                 NotifyOccurrenceCommandsChanged();
             }
@@ -496,6 +523,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         ((INotifyCollectionChanged)_sourceSet.Items).CollectionChanged -= OnSourcesChanged;
         _workflowCoordinator.StateChanged -= OnWorkflowStateChanged;
+        if (_databaseBuildCoordinator is not null)
+        {
+            _databaseBuildCoordinator.PublishedGenerationChanged -=
+                OnPublishedDatabaseGenerationChanged;
+        }
 
         foreach (var source in _sourceSet.Items)
         {
@@ -510,6 +542,19 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         return !IsBusy
             && _workflowCoordinator.Current.ActiveOperation is null
             && _sourceSet.CreateIncludedReadySnapshot().Count > 0;
+    }
+
+    private bool CanBuildDatabase()
+    {
+        return !IsBusy && _databaseBuildCoordinator?.CanBuild() == true;
+    }
+
+    private async Task BuildDatabaseAsync()
+    {
+        if (_databaseBuildCoordinator is not null)
+        {
+            await _databaseBuildCoordinator.BuildAsync();
+        }
     }
 
     private async Task RunDiscoveryAsync()
@@ -1198,8 +1243,23 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             {
                 SynchronizeDiscoveryStatus();
                 RunDiscoveryCommand.NotifyCanExecuteChanged();
+                BuildDatabaseCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(DatabaseStateText));
+                OnPropertyChanged(nameof(DatabaseBuildButtonText));
                 NotifyConfigurationCommandsChanged();
             });
+    }
+
+    private void OnPublishedDatabaseGenerationChanged(
+        object? sender,
+        CIA.Contracts.Database.DatabaseGenerationSummary generation)
+    {
+        DispatchToUi(() =>
+        {
+            OnPropertyChanged(nameof(DatabaseStateText));
+            OnPropertyChanged(nameof(DatabaseBuildButtonText));
+            BuildDatabaseCommand.NotifyCanExecuteChanged();
+        });
     }
 
     private void SynchronizeDiscoveryStatus()
