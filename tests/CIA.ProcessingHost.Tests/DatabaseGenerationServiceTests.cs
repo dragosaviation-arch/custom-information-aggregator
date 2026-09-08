@@ -70,6 +70,99 @@ public sealed class DatabaseGenerationServiceTests
     }
 
     [TestMethod]
+    public async Task PublishedReviewPageKeepsIndependentColumnsOrderedWithValueProvenance()
+    {
+        using var workspace = new DatabaseGenerationWorkspace();
+        var firstSource = workspace.CreateSource(
+            "same.xml",
+            "<root><alpha>A1</alpha><alpha>A2</alpha><beta>B1</beta><gamma>G1</gamma></root>");
+        var secondSource = workspace.CreateSource(
+            "second/same.xml",
+            "<root><beta>B2</beta><gamma>G2</gamma><gamma>G3</gamma></root>");
+        var mapping = new DatabaseMappingSnapshot(
+        [
+            new DatabaseColumnMapping("Combined", ["alpha", "beta"]),
+            new DatabaseColumnMapping("Gamma override", ["gamma"])
+        ]);
+        var result = await workspace.CreateService().BuildAsync(
+            OperationCorrelation.CreateNew(),
+            [firstSource, secondSource],
+            mapping);
+
+        var page = await workspace.Repository.ReadPublishedDatabasePageAsync(
+            result.PublishedGeneration!.OperationId,
+            startRowOrdinal: 1,
+            rowCount: DatabaseReviewLimits.MaximumRowsPerPage);
+
+        Assert.IsNotNull(page);
+        Assert.AreEqual(7, page.TotalMappedValueCount);
+        Assert.AreEqual(4, page.TotalPresentationRowCount);
+        CollectionAssert.AreEqual(
+            new[] { "Combined", "Gamma override" },
+            page.Columns.Select(column => column.DatabaseTagName).ToArray());
+        var combined = page.Columns[0];
+        Assert.AreEqual(4, combined.TotalValueCount);
+        CollectionAssert.AreEqual(
+            new[] { "A1", "A2", "B1", "B2" },
+            combined.Values.Select(value => value.Value).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "alpha", "alpha", "beta", "beta" },
+            combined.Values.Select(value => value.SourceInformationType).ToArray());
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                firstSource.SourceId,
+                firstSource.SourceId,
+                firstSource.SourceId,
+                secondSource.SourceId
+            },
+            combined.Values.Select(value => value.SourceId).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "G1", "G2", "G3" },
+            page.Columns[1].Values.Select(value => value.Value).ToArray());
+    }
+
+    [TestMethod]
+    public async Task PublishedReviewIsBoundedAndRejectsReplacedGeneration()
+    {
+        using var workspace = new DatabaseGenerationWorkspace();
+        var xml = "<root>" + string.Concat(
+            Enumerable.Range(1, 105).Select(index => $"<tag>V{index}</tag>")) + "</root>";
+        var source = workspace.CreateSource("many.xml", xml);
+        var service = workspace.CreateService();
+        var first = await service.BuildAsync(
+            OperationCorrelation.CreateNew(),
+            [source],
+            CreateMapping("tag"));
+
+        var firstPage = await workspace.Repository.ReadPublishedDatabasePageAsync(
+            first.PublishedGeneration!.OperationId,
+            1,
+            DatabaseReviewLimits.MaximumRowsPerPage);
+        var secondPage = await workspace.Repository.ReadPublishedDatabasePageAsync(
+            first.PublishedGeneration.OperationId,
+            101,
+            DatabaseReviewLimits.MaximumRowsPerPage);
+
+        Assert.HasCount(DatabaseReviewLimits.MaximumRowsPerPage, firstPage!.Columns[0].Values);
+        Assert.HasCount(5, secondPage!.Columns[0].Values);
+        Assert.AreEqual(101, secondPage.Columns[0].Values[0].ColumnOrdinal);
+        Assert.AreEqual("V101", secondPage.Columns[0].Values[0].Value);
+
+        var replacement = await service.BuildAsync(
+            OperationCorrelation.CreateNew(),
+            [source],
+            CreateMapping("tag"));
+        Assert.AreNotEqual(
+            first.PublishedGeneration.OperationId,
+            replacement.PublishedGeneration!.OperationId);
+        Assert.IsNull(await workspace.Repository.ReadPublishedDatabasePageAsync(
+            first.PublishedGeneration.OperationId,
+            1,
+            DatabaseReviewLimits.MaximumRowsPerPage));
+    }
+
+    [TestMethod]
     public async Task IndependentSourceFailurePublishesValidCandidateWithTruthfulIssues()
     {
         using var workspace = new DatabaseGenerationWorkspace();
@@ -241,6 +334,7 @@ public sealed class DatabaseGenerationServiceTests
         public LoadedSourceContract CreateSource(string fileName, string xml)
         {
             var path = Path.Combine(_root, fileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, xml);
             return new LoadedSourceContract(
                 SourceId.CreateNew(),

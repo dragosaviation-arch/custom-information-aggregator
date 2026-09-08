@@ -172,6 +172,7 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();
         builder.Services.AddSingleton<DatabaseGenerationService>();
+        builder.Services.AddSingleton<DatabaseReviewService>();
         builder.Services.AddHostedService<ProcessingHostLifetimeService>();
         using var host = builder.Build();
 
@@ -268,6 +269,7 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();
         builder.Services.AddSingleton<DatabaseGenerationService>();
+        builder.Services.AddSingleton<DatabaseReviewService>();
         builder.Services.AddHostedService<ProcessingHostLifetimeService>();
         using var host = builder.Build();
 
@@ -298,6 +300,25 @@ public sealed class ProcessingHostLifecycleTests
             new[] { " exact first ", "second" },
             publishedValues.Select(value => value.Value).ToArray());
         Assert.IsTrue(publishedValues.All(value => value.SourceId == source.SourceId));
+
+        var reviewCommand = new GetDatabaseReviewPageCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            correlation.OperationId,
+            StartRowOrdinal: 1,
+            RowCount: DatabaseReviewLimits.MaximumRowsPerPage);
+        await connection.SendAsync(reviewCommand, timeout.Token);
+        var reviewMessage = await connection.ReceiveAsync(timeout.Token);
+        Assert.IsInstanceOfType<GetDatabaseReviewPageResponse>(reviewMessage);
+        var reviewResponse = (GetDatabaseReviewPageResponse)reviewMessage;
+        Assert.AreEqual(CommandAcceptance.Accepted, reviewResponse.Acceptance);
+        Assert.AreEqual(2, reviewResponse.Page?.TotalMappedValueCount);
+        CollectionAssert.AreEqual(
+            new[] { " exact first ", "second" },
+            reviewResponse.Page!.Columns.Single().Values
+                .Select(value => value.Value).ToArray());
+        Assert.IsTrue(reviewResponse.Page.Columns.Single().Values.All(
+            value => value.SourceId == source.SourceId));
 
         var stop = new StopProcessingHostCommand(Guid.CreateVersion7(), DateTimeOffset.UtcNow);
         await connection.SendAsync(stop, timeout.Token);

@@ -387,6 +387,171 @@ public sealed partial class StructuredInformationRepository
         return values;
     }
 
+    public async Task<DatabaseReviewPage?> ReadPublishedDatabasePageAsync(
+        OperationId generationId,
+        int startRowOrdinal,
+        int rowCount,
+        CancellationToken cancellationToken = default)
+    {
+        if (generationId.Value == Guid.Empty || generationId.Value.Version != 7)
+        {
+            throw new ArgumentException(
+                "A Database review request requires a UUIDv7 generation ID.",
+                nameof(generationId));
+        }
+
+        if (startRowOrdinal < 1
+            || startRowOrdinal > int.MaxValue - DatabaseReviewLimits.MaximumRowsPerPage)
+        {
+            throw new ArgumentOutOfRangeException(nameof(startRowOrdinal));
+        }
+
+        if (rowCount is < 1 or > DatabaseReviewLimits.MaximumRowsPerPage)
+        {
+            throw new ArgumentOutOfRangeException(nameof(rowCount));
+        }
+
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            await using var connection = await OpenGenerationConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            await using var transaction = connection.BeginTransaction(deferred: true);
+            var publishedGenerationId = await ReadPublishedGenerationIdAsync(
+                    connection,
+                    transaction,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (!string.Equals(
+                    publishedGenerationId,
+                    generationId.ToString(),
+                    StringComparison.Ordinal))
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return null;
+            }
+
+            var orderedColumnNames = new List<string>();
+            var totalCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            var valuesByColumn = new Dictionary<string, List<DatabaseReviewValue>>(
+                StringComparer.Ordinal);
+            await using (var columnCommand = connection.CreateCommand())
+            {
+                columnCommand.Transaction = transaction;
+                columnCommand.CommandText = """
+                    SELECT
+                        columns.database_tag_name,
+                        COUNT(values_table.value_ordinal)
+                    FROM database_columns AS columns
+                    LEFT JOIN database_values AS values_table
+                        ON values_table.generation_id = columns.generation_id
+                        AND values_table.database_tag_name = columns.database_tag_name
+                    WHERE columns.generation_id = $generationId
+                    GROUP BY columns.column_ordinal, columns.database_tag_name
+                    ORDER BY columns.column_ordinal;
+                    """;
+                columnCommand.Parameters.AddWithValue(
+                    "$generationId",
+                    generationId.ToString());
+                await using var reader = await columnCommand
+                    .ExecuteReaderAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    var databaseTagName = reader.GetString(0);
+                    var totalCount = checked((int)reader.GetInt64(1));
+                    orderedColumnNames.Add(databaseTagName);
+                    totalCounts.Add(databaseTagName, totalCount);
+                    valuesByColumn.Add(databaseTagName, []);
+                }
+            }
+
+            await using (var valueCommand = connection.CreateCommand())
+            {
+                valueCommand.Transaction = transaction;
+                valueCommand.CommandText = """
+                    WITH ordered_values AS (
+                        SELECT
+                            columns.column_ordinal,
+                            values_table.database_tag_name,
+                            values_table.source_information_type,
+                            values_table.value,
+                            values_table.source_id,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY values_table.database_tag_name
+                                ORDER BY values_table.value_ordinal) AS column_value_ordinal
+                        FROM database_columns AS columns
+                        JOIN database_values AS values_table
+                            ON values_table.generation_id = columns.generation_id
+                            AND values_table.database_tag_name = columns.database_tag_name
+                        WHERE columns.generation_id = $generationId
+                    )
+                    SELECT
+                        database_tag_name,
+                        source_information_type,
+                        value,
+                        source_id,
+                        column_value_ordinal
+                    FROM ordered_values
+                    WHERE column_value_ordinal >= $startRowOrdinal
+                        AND column_value_ordinal < $endRowOrdinal
+                    ORDER BY column_ordinal, column_value_ordinal;
+                    """;
+                valueCommand.Parameters.AddWithValue(
+                    "$generationId",
+                    generationId.ToString());
+                valueCommand.Parameters.AddWithValue("$startRowOrdinal", startRowOrdinal);
+                valueCommand.Parameters.AddWithValue(
+                    "$endRowOrdinal",
+                    startRowOrdinal + rowCount);
+                await using var reader = await valueCommand
+                    .ExecuteReaderAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    var databaseTagName = reader.GetString(0);
+                    if (!Guid.TryParseExact(reader.GetString(3), "D", out var sourceId))
+                    {
+                        throw new StructuredInformationRepositoryException(
+                            "The published Database contains an invalid Source ID.");
+                    }
+
+                    valuesByColumn[databaseTagName].Add(new DatabaseReviewValue(
+                        checked((int)reader.GetInt64(4)),
+                        reader.GetString(2),
+                        reader.GetString(1),
+                        SourceId.From(sourceId)));
+                }
+            }
+
+            var columns = orderedColumnNames.Select(databaseTagName =>
+                new DatabaseReviewColumn(
+                    databaseTagName,
+                    totalCounts[databaseTagName],
+                    valuesByColumn[databaseTagName])).ToArray();
+            var totalMappedValueCount = checked(totalCounts.Values.Sum());
+            var page = new DatabaseReviewPage(
+                generationId,
+                startRowOrdinal,
+                rowCount,
+                totalMappedValueCount,
+                columns);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return page;
+        }
+        catch (StructuredInformationRepositoryException)
+        {
+            throw;
+        }
+        catch (SqliteException exception)
+        {
+            throw new StructuredInformationRepositoryException(
+                "The published Database review page could not be read.",
+                exception);
+        }
+    }
+
     private static async Task ExecuteGenerationInsertAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,

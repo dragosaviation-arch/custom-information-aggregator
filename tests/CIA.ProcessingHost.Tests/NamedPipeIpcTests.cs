@@ -44,16 +44,47 @@ public sealed class NamedPipeIpcTests
             completion,
             new DatabaseGenerationSummary(correlation.OperationId, mapping, 1),
             Failure: null);
+        var reviewCommand = new GetDatabaseReviewPageCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            correlation.OperationId,
+            StartRowOrdinal: 1,
+            RowCount: DatabaseReviewLimits.MaximumRowsPerPage);
+        var reviewPage = new DatabaseReviewPage(
+            correlation.OperationId,
+            startRowOrdinal: 1,
+            requestedRowCount: DatabaseReviewLimits.MaximumRowsPerPage,
+            totalMappedValueCount: 1,
+            [
+                new DatabaseReviewColumn(
+                    "DatabaseName",
+                    totalValueCount: 1,
+                    [new DatabaseReviewValue(1, "exact", "sourceTag", source.SourceId)])
+            ]);
+        var reviewResponse = new GetDatabaseReviewPageResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            reviewCommand.MessageId,
+            correlation.OperationId,
+            CommandAcceptance.Accepted,
+            reviewPage,
+            Failure: null);
         await using var stream = new MemoryStream();
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, reviewCommand);
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, reviewResponse);
         stream.Position = 0;
 
         var commandResult = (BuildDatabaseCommand)await LengthPrefixedJsonMessageFramer
             .ReadAsync(stream);
         var responseResult = (BuildDatabaseResponse)await LengthPrefixedJsonMessageFramer
             .ReadAsync(stream);
+        var reviewCommandResult = (GetDatabaseReviewPageCommand)await
+            LengthPrefixedJsonMessageFramer.ReadAsync(stream);
+        var reviewResponseResult = (GetDatabaseReviewPageResponse)await
+            LengthPrefixedJsonMessageFramer.ReadAsync(stream);
         Assert.AreEqual(correlation, commandResult.Correlation);
         Assert.AreEqual(source, commandResult.Sources.Single());
         Assert.AreEqual("DatabaseName", commandResult.Mapping.Columns.Single().DatabaseTagName);
@@ -61,6 +92,10 @@ public sealed class NamedPipeIpcTests
         Assert.AreEqual(correlation, responseResult.Completion.Correlation);
         Assert.AreEqual(correlation.OperationId, responseResult.PublishedGeneration?.OperationId);
         Assert.AreEqual(1, responseResult.PublishedGeneration?.ValueCount);
+        Assert.AreEqual(correlation.OperationId, reviewCommandResult.GenerationId);
+        Assert.AreEqual(DatabaseReviewLimits.MaximumRowsPerPage, reviewCommandResult.RowCount);
+        Assert.AreEqual("exact", reviewResponseResult.Page?.Columns[0].Values[0].Value);
+        Assert.AreEqual(source.SourceId, reviewResponseResult.Page?.Columns[0].Values[0].SourceId);
     }
 
     [TestMethod]

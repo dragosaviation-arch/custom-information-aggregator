@@ -17,6 +17,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RunDiscoveryCommand), "runDiscoveryCommand")]
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceCommand), "getDiscoveryOccurrenceCommand")]
 [JsonDerivedType(typeof(BuildDatabaseCommand), "buildDatabaseCommand")]
+[JsonDerivedType(typeof(GetDatabaseReviewPageCommand), "getDatabaseReviewPageCommand")]
 [JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
 [JsonDerivedType(typeof(LoadSourcesResponse), "loadSourcesResponse")]
@@ -24,6 +25,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RunDiscoveryResponse), "runDiscoveryResponse")]
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceResponse), "getDiscoveryOccurrenceResponse")]
 [JsonDerivedType(typeof(BuildDatabaseResponse), "buildDatabaseResponse")]
+[JsonDerivedType(typeof(GetDatabaseReviewPageResponse), "getDatabaseReviewPageResponse")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 [JsonDerivedType(typeof(SourceIntakeProgressEvent), "sourceIntakeProgressEvent")]
 public abstract record IpcMessage(Guid MessageId, DateTimeOffset TimestampUtc);
@@ -90,6 +92,14 @@ public sealed record BuildDatabaseCommand(
     DatabaseMappingSnapshot Mapping)
     : IpcCommand(MessageId, TimestampUtc);
 
+public sealed record GetDatabaseReviewPageCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    OperationId GenerationId,
+    int StartRowOrdinal,
+    int RowCount)
+    : IpcCommand(MessageId, TimestampUtc);
+
 public sealed record StopProcessingHostCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc)
@@ -152,6 +162,16 @@ public sealed record BuildDatabaseResponse(
     CommandAcceptance Acceptance,
     OperationCompletion Completion,
     DatabaseGenerationSummary? PublishedGeneration,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record GetDatabaseReviewPageResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    OperationId GenerationId,
+    CommandAcceptance Acceptance,
+    DatabaseReviewPage? Page,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 

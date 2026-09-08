@@ -1,12 +1,17 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using CIA.Contracts.Database;
 using CIA.Contracts.Operations;
+using CIA.Contracts.Sources;
+using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
+using CIA.Desktop.Sources;
 using CIA.Desktop.Views;
 using CIA.Desktop.Workflow;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.Desktop.Tests;
 
@@ -30,10 +35,34 @@ public sealed class DatabaseWorkspaceViewInteractionTests
         using var workflow = new ApplicationWorkflowCoordinator(
             new ReadyProcessingHostSupervisor(),
             new RecordingProcessingHistoryRecorder());
-        using var viewModel = new DatabaseWorkspaceViewModel(configuration, workflow);
-        Assert.IsTrue(workflow.RecordSourceSelectionChanged(true).Accepted);
+        var sourceId = SourceId.CreateNew();
+        var source = new LoadedSourceContract(
+            sourceId,
+            Path.GetFullPath("database-review.xml"),
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
+        var sourceSet = new ActiveLoadedSourceSet();
+        var loading = new SourceLoadingCoordinator(
+            new StaticSourceIntakeClient(source),
+            sourceSet,
+            workflow);
+        Assert.IsTrue((await loading.AddAsync(
+            SourceSelectionKind.XmlFile,
+            source.Path)).Accepted);
         await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.Discovery);
-        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.DatabaseBuild);
+        var databaseCoordinator = new DatabaseBuildCoordinator(
+            configuration,
+            sourceSet,
+            workflow,
+            new SuccessfulDatabaseClient(),
+            NullLogger<DatabaseBuildCoordinator>.Instance);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            configuration,
+            workflow,
+            databaseCoordinator,
+            new StaticDatabaseReviewClient(sourceId));
+        Assert.IsTrue((await databaseCoordinator.BuildAsync()).Accepted);
         var view = new DatabaseWorkspaceView
         {
             DataContext = viewModel
@@ -53,12 +82,20 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
 
             var dynamicHeaders = (ItemsControl)view.FindName("DynamicDatabaseHeaders");
+            var reviewRows = (ItemsControl)view.FindName("DatabaseReviewRows");
             var lowerTabs = (Grid)view.FindName("LowerTabs");
             var exportFields = (Border)view.FindName("ExportFieldsPanel");
             var excelExport = (Border)view.FindName("ExcelExportPanel");
             var exportButton = (Button)view.FindName("ExportToExcelButton");
 
             Assert.AreEqual(2, dynamicHeaders.Items.Count);
+            Assert.AreEqual(2, reviewRows.Items.Count);
+            var firstRow = (DatabaseReviewRowPresentation)reviewRows.Items[0];
+            Assert.AreEqual("A1", firstRow.Cells[0].DisplayValue);
+            StringAssert.Contains(firstRow.Cells[0].SourceContext!, sourceId.ToString());
+            Assert.AreEqual("B1", firstRow.Cells[1].DisplayValue);
+            Assert.AreEqual(string.Empty, ((DatabaseReviewRowPresentation)reviewRows.Items[1])
+                .Cells[1].DisplayValue);
             Assert.AreEqual(Visibility.Collapsed, lowerTabs.Visibility);
             Assert.AreEqual(Visibility.Visible, exportFields.Visibility);
             Assert.AreEqual(Visibility.Visible, excelExport.Visibility);
@@ -127,6 +164,86 @@ public sealed class DatabaseWorkspaceViewInteractionTests
         public Task StopAsync(CancellationToken cancellationToken = default)
         {
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class StaticSourceIntakeClient(LoadedSourceContract source)
+        : ISourceIntakeClient
+    {
+        public Task<SourceIntakeClientResult> LoadAsync(
+            SourceSelectionKind selectionKind,
+            string path,
+            SourceLoadSettings settings,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new SourceIntakeClientResult(
+                true,
+                [source],
+                FailureCode: null,
+                FailureDescription: null));
+        }
+
+        public Task<SourceRefreshClientResult> RefreshAsync(
+            LoadedSourceContract refreshedSource,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new SourceRefreshClientResult(
+                true,
+                refreshedSource,
+                FailureCode: null,
+                FailureDescription: null));
+        }
+    }
+
+    private sealed class SuccessfulDatabaseClient : IDatabaseClient
+    {
+        public Task<DatabaseClientResult> BuildAsync(
+            OperationCorrelation correlation,
+            IReadOnlyList<LoadedSourceContract> sources,
+            DatabaseMappingSnapshot mapping,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new DatabaseClientResult(
+                true,
+                OperationCompletion.FromCompletedItems(
+                    correlation,
+                    [OperationItemStatus.ProcessedSuccessfully(sources[0].SourceId.ToString())]),
+                new DatabaseGenerationSummary(correlation.OperationId, mapping, 3),
+                FailureCode: null,
+                FailureDescription: null));
+        }
+    }
+
+    private sealed class StaticDatabaseReviewClient(SourceId sourceId) : IDatabaseReviewClient
+    {
+        public Task<DatabaseReviewClientResult> ReadPageAsync(
+            OperationId generationId,
+            int startRowOrdinal,
+            int rowCount,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new DatabaseReviewClientResult(
+                true,
+                new DatabaseReviewPage(
+                    generationId,
+                    startRowOrdinal,
+                    rowCount,
+                    totalMappedValueCount: 3,
+                    [
+                        new DatabaseReviewColumn(
+                            "Tag_A",
+                            2,
+                            [
+                                new DatabaseReviewValue(1, "A1", "Tag_A", sourceId),
+                                new DatabaseReviewValue(2, "A2", "Tag_A", sourceId)
+                            ]),
+                        new DatabaseReviewColumn(
+                            "Tag_B",
+                            1,
+                            [new DatabaseReviewValue(1, "B1", "Tag_B", sourceId)])
+                    ]),
+                FailureCode: null,
+                FailureDescription: null));
         }
     }
 }
