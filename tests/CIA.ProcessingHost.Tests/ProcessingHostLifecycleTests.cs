@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO.Compression;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -11,6 +12,7 @@ using CIA.Core.Runtime;
 using CIA.Desktop.Hosting;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
+using CIA.ProcessingHost.Extraction;
 using CIA.ProcessingHost.Hosting;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
@@ -173,6 +175,7 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<StructuredInformationRepository>();
         builder.Services.AddSingleton<DatabaseGenerationService>();
         builder.Services.AddSingleton<DatabaseReviewService>();
+        builder.Services.AddSingleton<DatabaseExtractionService>();
         builder.Services.AddHostedService<ProcessingHostLifetimeService>();
         using var host = builder.Build();
 
@@ -231,7 +234,7 @@ public sealed class ProcessingHostLifecycleTests
     }
 
     [TestMethod]
-    public async Task ProcessingHostBuildsAndPublishesDatabaseOverTypedIpc()
+    public async Task ProcessingHostBuildsDatabaseAndExtractsItOverTypedIpc()
     {
         using var workspace = new TemporaryLifecycleLogDirectory();
         using var timeout = new CancellationTokenSource(TestTimeout);
@@ -270,6 +273,7 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<StructuredInformationRepository>();
         builder.Services.AddSingleton<DatabaseGenerationService>();
         builder.Services.AddSingleton<DatabaseReviewService>();
+        builder.Services.AddSingleton<DatabaseExtractionService>();
         builder.Services.AddHostedService<ProcessingHostLifetimeService>();
         using var host = builder.Build();
 
@@ -300,6 +304,40 @@ public sealed class ProcessingHostLifecycleTests
             new[] { " exact first ", "second" },
             publishedValues.Select(value => value.Value).ToArray());
         Assert.IsTrue(publishedValues.All(value => value.SourceId == source.SourceId));
+
+        File.Delete(sourcePath);
+        var extractionCorrelation = OperationCorrelation.CreateNew();
+        var extractionCommand = new RunExtractionCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            extractionCorrelation,
+            databaseResponse.PublishedGeneration!);
+        await connection.SendAsync(extractionCommand, timeout.Token);
+        var extractionMessage = await connection.ReceiveAsync(timeout.Token);
+        Assert.IsInstanceOfType<RunExtractionResponse>(extractionMessage);
+        var extractionResponse = (RunExtractionResponse)extractionMessage;
+        Assert.AreEqual(CommandAcceptance.Accepted, extractionResponse.Acceptance);
+        Assert.AreEqual(
+            OperationOutcome.CompletedSuccessfully,
+            extractionResponse.Completion.Outcome);
+        Assert.AreEqual(
+            correlation.OperationId,
+            extractionResponse.PublishedResult?.DatabaseGeneration.OperationId);
+        Assert.AreEqual(2, extractionResponse.PublishedResult?.ValueCount);
+        var extractedValues = new List<ExtractionResultValue>();
+        await foreach (var value in host.Services
+                           .GetRequiredService<StructuredInformationRepository>()
+                           .StreamPublishedExtractionValuesAsync(
+                               extractionResponse.PublishedResult!.OperationId,
+                               timeout.Token))
+        {
+            extractedValues.Add(value);
+        }
+
+        CollectionAssert.AreEqual(
+            new[] { " exact first ", "second" },
+            extractedValues.Select(value => value.Value).ToArray());
+        Assert.IsTrue(extractedValues.All(value => value.SourceId == source.SourceId));
 
         var reviewCommand = new GetDatabaseReviewPageCommand(
             Guid.CreateVersion7(),
