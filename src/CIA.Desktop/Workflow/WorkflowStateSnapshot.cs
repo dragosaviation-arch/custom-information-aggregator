@@ -24,7 +24,8 @@ public enum WorkflowOperationState
     CompletedWithIssues = 3,
     Failed = 4,
     Cancelled = 5,
-    InterruptedIncomplete = 6
+    InterruptedIncomplete = 6,
+    Cancelling = 7
 }
 
 public sealed record ActiveWorkflowOperation(

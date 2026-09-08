@@ -1,6 +1,7 @@
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Workflow;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 
 namespace CIA.Desktop.Presentation;
 
@@ -11,6 +12,7 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private string _hostStatusText;
     private string _operationStatusText;
+    private readonly AsyncRelayCommand _cancelActiveOperationCommand;
     private int _disposed;
 
     public GlobalStatusViewModel(
@@ -25,6 +27,9 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
         _uiSynchronizationContext = SynchronizationContext.Current;
         _hostStatusText = FormatHostStatus(_processingHostSupervisor.Current);
         _operationStatusText = FormatOperationStatus(_workflowCoordinator.Current.LatestOperation);
+        _cancelActiveOperationCommand = new AsyncRelayCommand(
+            RequestCancellationAsync,
+            CanRequestCancellation);
 
         _processingHostSupervisor.StateChanged += OnProcessingHostStateChanged;
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
@@ -41,6 +46,8 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
         get => _operationStatusText;
         private set => SetProperty(ref _operationStatusText, value);
     }
+
+    public IAsyncRelayCommand CancelActiveOperationCommand => _cancelActiveOperationCommand;
 
     public void Dispose()
     {
@@ -62,7 +69,29 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
 
     private void OnWorkflowStateChanged(object? sender, WorkflowStateSnapshot state)
     {
-        DispatchToUi(() => OperationStatusText = FormatOperationStatus(state.LatestOperation));
+        DispatchToUi(
+            () =>
+            {
+                OperationStatusText = FormatOperationStatus(state.LatestOperation);
+                _cancelActiveOperationCommand.NotifyCanExecuteChanged();
+            });
+    }
+
+    private bool CanRequestCancellation()
+    {
+        var current = _workflowCoordinator.Current;
+        return current.ActiveOperation is not null
+            && current.LatestOperation is
+            {
+                State: WorkflowOperationState.Active
+            } latestOperation
+            && latestOperation.Correlation.OperationId
+                == current.ActiveOperation.Correlation.OperationId;
+    }
+
+    private async Task RequestCancellationAsync()
+    {
+        await _workflowCoordinator.RequestCancellationAsync().ConfigureAwait(true);
     }
 
     private void DispatchToUi(Action update)
@@ -109,6 +138,7 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
         var state = operation.State switch
         {
             WorkflowOperationState.Active => "Active",
+            WorkflowOperationState.Cancelling => "Cancelling",
             WorkflowOperationState.CompletedSuccessfully => "Completed successfully",
             WorkflowOperationState.CompletedWithIssues => "Completed with issues",
             WorkflowOperationState.Failed => "Failed",

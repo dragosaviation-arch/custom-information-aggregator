@@ -9,6 +9,7 @@
         Height="760"
         MinWidth="1000"
         MinHeight="520"
+        KeyDown="OnWindowKeyDown"
         SizeChanged="OnWindowSizeChanged"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource CiaBackgroundBrush}"
