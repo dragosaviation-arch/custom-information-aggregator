@@ -112,6 +112,21 @@
                 </views:DatabaseWorkspaceView.Style>
             </views:DatabaseWorkspaceView>
 
+            <views:SettingsWorkspaceView x:Name="SettingsWorkspaceView"
+                                         DataContext="{Binding SettingsWorkspace, ElementName=WindowRoot}">
+                <views:SettingsWorkspaceView.Style>
+                    <Style TargetType="views:SettingsWorkspaceView">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding DataContext.SelectedWorkspace.Area, ElementName=WindowRoot}"
+                                         Value="{x:Static presentation:WorkspaceArea.Settings}">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </views:SettingsWorkspaceView.Style>
+            </views:SettingsWorkspaceView>
+
             <Grid x:Name="WorkspacePlaceholder"
                   Margin="{StaticResource CiaWorkspaceMargin}">
                 <Grid.Style>
@@ -128,6 +143,10 @@
                             </DataTrigger>
                             <DataTrigger Binding="{Binding DataContext.SelectedWorkspace.Area, ElementName=WindowRoot}"
                                          Value="{x:Static presentation:WorkspaceArea.Database}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding DataContext.SelectedWorkspace.Area, ElementName=WindowRoot}"
+                                         Value="{x:Static presentation:WorkspaceArea.Settings}">
                                 <Setter Property="Visibility" Value="Collapsed" />
                             </DataTrigger>
                         </Style.Triggers>

@@ -53,6 +53,11 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ActiveDiscoveryConfiguration>();
         builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
         builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();
+        builder.Services.AddSingleton<IProcessingHistoryReader>(
+            _ => new ClefProcessingHistoryReader(
+                ApplicationLogPaths.ResolveDirectory(
+                    builder.Configuration[ApplicationLogPaths.DirectoryConfigurationKey])));
+        builder.Services.AddSingleton<SettingsWorkspaceViewModel>();
 
         ConfigureLogging(builder);
         return builder.Build();
