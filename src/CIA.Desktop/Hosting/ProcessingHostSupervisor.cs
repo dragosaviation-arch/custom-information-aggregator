@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -18,7 +19,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
     private readonly ILogger<ProcessingHostSupervisor> _logger;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
     private readonly SemaphoreSlim _requestGate = new(1, 1);
-    private readonly SemaphoreSlim _databaseCancellationSendGate = new(1, 1);
+    private readonly SemaphoreSlim _processingCancellationSendGate = new(1, 1);
     private readonly object _stateGate = new();
     private readonly Guid _clientInstanceId = Guid.CreateVersion7();
 
@@ -36,7 +37,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
     private bool _stopping;
     private bool _automaticRecreationAttempted;
     private int _disposed;
-    private OperationId? _activeDatabaseOperationId;
+    private OperationId? _activeProcessingOperationId;
 
     public ProcessingHostSupervisor(
         ProcessingHostSupervisorOptions options,
@@ -104,11 +105,11 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
     {
         ThrowIfDisposed();
 
-        var activeDatabaseConnection = GetActiveDatabaseConnection(operationId);
-        if (activeDatabaseConnection is not null)
+        var activeProcessingConnection = GetActiveProcessingConnection(operationId);
+        if (activeProcessingConnection is not null)
         {
-            return await SendActiveDatabaseCancellationAsync(
-                    activeDatabaseConnection,
+            return await SendActiveProcessingCancellationAsync(
+                    activeProcessingConnection,
                     operationId,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -440,7 +441,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                 await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
                 lock (_stateGate)
                 {
-                    _activeDatabaseOperationId = correlation.OperationId;
+                    _activeProcessingOperationId = correlation.OperationId;
                 }
 
                 while (true)
@@ -470,9 +471,9 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
             {
                 lock (_stateGate)
                 {
-                    if (_activeDatabaseOperationId == correlation.OperationId)
+                    if (_activeProcessingOperationId == correlation.OperationId)
                     {
-                        _activeDatabaseOperationId = null;
+                        _activeProcessingOperationId = null;
                     }
                 }
 
@@ -539,6 +540,80 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         }
     }
 
+    public async Task<RunExtractionResponse> RequestExtractionAsync(
+        OperationCorrelation correlation,
+        DatabaseGenerationSummary databaseGeneration,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(correlation);
+        ArgumentNullException.ThrowIfNull(databaseGeneration);
+        ThrowIfDisposed();
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (!IsCurrentHostReady())
+            {
+                throw new InvalidOperationException(
+                    "The Processing Host is not ready for Extraction requests.");
+            }
+
+            var connection = _connection!;
+            await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                var command = new RunExtractionCommand(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    correlation,
+                    databaseGeneration);
+                await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+                lock (_stateGate)
+                {
+                    _activeProcessingOperationId = correlation.OperationId;
+                }
+
+                while (true)
+                {
+                    var response = await connection.ReceiveAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (response is RunExtractionResponse extractionResponse
+                        && extractionResponse.CommandMessageId == command.MessageId
+                        && extractionResponse.Completion.Correlation == correlation)
+                    {
+                        return extractionResponse;
+                    }
+
+                    if (response is CommandAcknowledgement)
+                    {
+                        continue;
+                    }
+
+                    throw new IpcProtocolException(
+                        IpcProtocolError.InvalidContract,
+                        "The Processing Host returned an invalid Extraction response.");
+                }
+            }
+            finally
+            {
+                lock (_stateGate)
+                {
+                    if (_activeProcessingOperationId == correlation.OperationId)
+                    {
+                        _activeProcessingOperationId = null;
+                    }
+                }
+
+                _requestGate.Release();
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -548,7 +623,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
 
         StopCoreAsync(CancellationToken.None).GetAwaiter().GetResult();
         _requestGate.Dispose();
-        _databaseCancellationSendGate.Dispose();
+        _processingCancellationSendGate.Dispose();
         _lifecycleGate.Dispose();
     }
 
@@ -561,27 +636,27 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
 
         await StopCoreAsync(CancellationToken.None).ConfigureAwait(false);
         _requestGate.Dispose();
-        _databaseCancellationSendGate.Dispose();
+        _processingCancellationSendGate.Dispose();
         _lifecycleGate.Dispose();
     }
 
-    private NamedPipeIpcConnection? GetActiveDatabaseConnection(OperationId operationId)
+    private NamedPipeIpcConnection? GetActiveProcessingConnection(OperationId operationId)
     {
         lock (_stateGate)
         {
-            return _activeDatabaseOperationId == operationId
+            return _activeProcessingOperationId == operationId
                 && _current.State == ProcessingHostLifecycleState.Ready
                 ? _connection
                 : null;
         }
     }
 
-    private async Task<bool> SendActiveDatabaseCancellationAsync(
+    private async Task<bool> SendActiveProcessingCancellationAsync(
         NamedPipeIpcConnection connection,
         OperationId operationId,
         CancellationToken cancellationToken)
     {
-        await _databaseCancellationSendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _processingCancellationSendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var command = new CancelOperationCommand(
@@ -595,13 +670,13 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         {
             _logger.LogWarning(
                 exception,
-                "Database operation {OperationId} could not receive its cooperative cancellation request",
+                "Processing operation {OperationId} could not receive its cooperative cancellation request",
                 operationId);
             return false;
         }
         finally
         {
-            _databaseCancellationSendGate.Release();
+            _processingCancellationSendGate.Release();
         }
     }
 

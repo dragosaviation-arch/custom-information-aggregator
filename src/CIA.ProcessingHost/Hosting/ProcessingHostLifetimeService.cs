@@ -5,6 +5,7 @@ using CIA.Contracts.Ipc;
 using CIA.Contracts.Sources;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
+using CIA.ProcessingHost.Extraction;
 using CIA.ProcessingHost.Ipc;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.SourceIntake;
@@ -21,6 +22,7 @@ public sealed class ProcessingHostLifetimeService(
     DiscoveryService discovery,
     DatabaseGenerationService databaseGeneration,
     DatabaseReviewService databaseReview,
+    DatabaseExtractionService databaseExtraction,
     IHostApplicationLifetime applicationLifetime,
     ILogger<ProcessingHostLifetimeService> logger) : BackgroundService
 {
@@ -103,18 +105,23 @@ public sealed class ProcessingHostLifetimeService(
         CancellationToken cancellationToken)
     {
         var established = false;
-        Task? activeDatabaseRequest = null;
-        using var databaseResponseSendGate = new SemaphoreSlim(1, 1);
+        Task? activeProcessingRequest = null;
+        using var processingResponseSendGate = new SemaphoreSlim(1, 1);
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            if (activeDatabaseRequest?.IsCompleted == true)
+            if (activeProcessingRequest?.IsCompleted == true)
             {
-                await ObserveDatabaseRequestAsync(activeDatabaseRequest).ConfigureAwait(false);
-                activeDatabaseRequest = null;
+                await ObserveProcessingRequestAsync(activeProcessingRequest).ConfigureAwait(false);
+                activeProcessingRequest = null;
             }
 
             var message = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+            if (activeProcessingRequest?.IsCompleted == true)
+            {
+                await ObserveProcessingRequestAsync(activeProcessingRequest).ConfigureAwait(false);
+                activeProcessingRequest = null;
+            }
 
             switch (message)
             {
@@ -147,7 +154,7 @@ public sealed class ProcessingHostLifetimeService(
                         await SendAcceptedSerializedAsync(
                                 connection,
                                 command.MessageId,
-                                databaseResponseSendGate,
+                                processingResponseSendGate,
                                 cancellationToken)
                             .ConfigureAwait(false);
                         logger.LogInformation(
@@ -161,7 +168,7 @@ public sealed class ProcessingHostLifetimeService(
                                 command.MessageId,
                                 "operation-not-active",
                                 "The requested operation is not active in the Processing Host.",
-                                databaseResponseSendGate,
+                                processingResponseSendGate,
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
@@ -169,11 +176,11 @@ public sealed class ProcessingHostLifetimeService(
                     break;
 
                 case BuildDatabaseCommand command
-                    when established && activeDatabaseRequest is null:
-                    activeDatabaseRequest = ProcessDatabaseBuildAsync(
+                    when established && activeProcessingRequest is null:
+                    activeProcessingRequest = ProcessDatabaseBuildAsync(
                         connection,
                         command,
-                        databaseResponseSendGate,
+                        processingResponseSendGate,
                         cancellationToken);
                     break;
 
@@ -183,7 +190,27 @@ public sealed class ProcessingHostLifetimeService(
                             command.MessageId,
                             "database-build-already-active",
                             "A Database build is already active in the Processing Host.",
-                            databaseResponseSendGate,
+                            processingResponseSendGate,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+
+                case RunExtractionCommand command
+                    when established && activeProcessingRequest is null:
+                    activeProcessingRequest = ProcessExtractionAsync(
+                        connection,
+                        command,
+                        processingResponseSendGate,
+                        cancellationToken);
+                    break;
+
+                case RunExtractionCommand command when established:
+                    await SendRejectedSerializedAsync(
+                            connection,
+                            command.MessageId,
+                            "extraction-already-active",
+                            "A processing operation is already active in the Processing Host.",
+                            processingResponseSendGate,
                             cancellationToken)
                         .ConfigureAwait(false);
                     break;
@@ -320,9 +347,9 @@ public sealed class ProcessingHostLifetimeService(
             }
         }
 
-        if (activeDatabaseRequest is not null)
+        if (activeProcessingRequest is not null)
         {
-            await ObserveDatabaseRequestAsync(activeDatabaseRequest).ConfigureAwait(false);
+            await ObserveProcessingRequestAsync(activeProcessingRequest).ConfigureAwait(false);
         }
     }
 
@@ -361,18 +388,52 @@ public sealed class ProcessingHostLifetimeService(
         }
     }
 
-    private async Task ObserveDatabaseRequestAsync(Task databaseRequest)
+    private async Task ProcessExtractionAsync(
+        NamedPipeIpcConnection connection,
+        RunExtractionCommand command,
+        SemaphoreSlim sendGate,
+        CancellationToken cancellationToken)
+    {
+        var result = await databaseExtraction
+            .ExtractAsync(
+                command.Correlation,
+                command.DatabaseGeneration,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var response = new RunExtractionResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            command.MessageId,
+            result.Accepted
+                ? CommandAcceptance.Accepted
+                : CommandAcceptance.Rejected,
+            result.Completion,
+            result.PublishedResult,
+            result.Failure);
+
+        await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await connection.SendAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            sendGate.Release();
+        }
+    }
+
+    private async Task ObserveProcessingRequestAsync(Task processingRequest)
     {
         try
         {
-            await databaseRequest.ConfigureAwait(false);
+            await processingRequest.ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "The active Database build request failed unexpectedly");
+            logger.LogError(exception, "The active processing request failed unexpectedly");
         }
     }
 

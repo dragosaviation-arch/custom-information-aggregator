@@ -153,7 +153,9 @@ public sealed class StructuredInformationRepositoryTests
             {
                 "ix_indexed_occurrences_tag",
                 "ix_indexed_occurrences_source_id",
-                "ix_indexed_occurrences_tag_value"
+                "ix_indexed_occurrences_tag_value",
+                "ix_extraction_values_database_field",
+                "ix_extraction_values_source"
             },
             indexes);
     }
@@ -280,6 +282,47 @@ public sealed class StructuredInformationRepositoryTests
     }
 
     [TestMethod]
+    public async Task VersionTwoRepositoryAddsExtractionSchemaWithoutChangingExistingData()
+    {
+        using var workspace = new RepositoryWorkspace();
+        var sourceId = SourceId.CreateNew();
+        var originalRepository = workspace.CreateRepository();
+        await originalRepository.AddBatchAsync(
+            [new IndexedOccurrence("Tag", "retained", sourceId)]);
+
+        await using (var connection = await OpenConnectionAsync(originalRepository.DatabasePath))
+        {
+            await ExecuteAsync(
+                connection,
+                """
+                DROP TABLE extraction_publication;
+                DROP TABLE extraction_values;
+                DROP TABLE extraction_column_sources;
+                DROP TABLE extraction_columns;
+                DROP TABLE extraction_results;
+                PRAGMA user_version = 2;
+                """);
+        }
+
+        var migratedRepository = workspace.CreateRepository();
+        await migratedRepository.InitializeAsync();
+        var retained = await migratedRepository.QueryBySourceIdAsync(sourceId);
+
+        Assert.HasCount(1, retained);
+        Assert.AreEqual("retained", retained[0].Value);
+        await using var migratedConnection = await OpenConnectionAsync(
+            migratedRepository.DatabasePath);
+        Assert.AreEqual(
+            StructuredInformationRepository.CurrentSchemaVersion,
+            await ScalarIntAsync(migratedConnection, "PRAGMA user_version;"));
+        Assert.AreEqual(
+            1,
+            await ScalarIntAsync(
+                migratedConnection,
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'extraction_results');"));
+    }
+
+    [TestMethod]
     public async Task FutureAndInvalidCurrentSchemasAreRejectedWithoutReplacement()
     {
         using var futureWorkspace = new RepositoryWorkspace();
@@ -360,12 +403,17 @@ public sealed class StructuredInformationRepositoryTests
     private static async Task<string[]> ReadIndexNamesAsync(SqliteConnection connection)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "PRAGMA index_list(indexed_occurrences);";
+        command.CommandText = """
+            SELECT name
+            FROM sqlite_schema
+            WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
+            ORDER BY name;
+            """;
         var names = new List<string>();
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
-            names.Add(reader.GetString(1));
+            names.Add(reader.GetString(0));
         }
 
         return names.ToArray();

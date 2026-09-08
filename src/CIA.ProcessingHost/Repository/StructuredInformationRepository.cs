@@ -7,7 +7,7 @@ namespace CIA.ProcessingHost.Repository;
 
 public sealed partial class StructuredInformationRepository
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
     public const string DatabaseFileName = "cia.sqlite3";
 
     private const string OccurrencesTableName = "indexed_occurrences";
@@ -66,6 +66,10 @@ public sealed partial class StructuredInformationRepository
                         "The unversioned repository is not empty and cannot be initialized safely.");
                 }
 
+            }
+
+            if (version < CurrentSchemaVersion)
+            {
                 version = await ApplyPendingMigrationsAsync(
                     connection,
                     version,
@@ -262,6 +266,7 @@ public sealed partial class StructuredInformationRepository
             {
                 0 => await ApplyVersionOneAsync(connection, cancellationToken).ConfigureAwait(false),
                 1 => await ApplyVersionTwoAsync(connection, cancellationToken).ConfigureAwait(false),
+                2 => await ApplyVersionThreeAsync(connection, cancellationToken).ConfigureAwait(false),
                 _ => throw new StructuredInformationRepositoryException(
                     $"No repository migration is available from schema version {version}.")
             };
@@ -394,6 +399,84 @@ public sealed partial class StructuredInformationRepository
         }
     }
 
+    private static async Task<int> ApplyVersionThreeAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                CREATE TABLE extraction_results (
+                    extraction_id TEXT PRIMARY KEY CHECK (length(extraction_id) = 36),
+                    database_generation_id TEXT NOT NULL CHECK (length(database_generation_id) = 36),
+                    created_utc TEXT NOT NULL
+                );
+                CREATE TABLE extraction_columns (
+                    extraction_id TEXT NOT NULL,
+                    column_ordinal INTEGER NOT NULL CHECK (column_ordinal >= 0),
+                    database_field_name TEXT NOT NULL CHECK (length(database_field_name) > 0),
+                    PRIMARY KEY (extraction_id, column_ordinal),
+                    UNIQUE (extraction_id, database_field_name),
+                    FOREIGN KEY (extraction_id)
+                        REFERENCES extraction_results (extraction_id) ON DELETE CASCADE
+                );
+                CREATE TABLE extraction_column_sources (
+                    extraction_id TEXT NOT NULL,
+                    database_field_name TEXT NOT NULL,
+                    source_information_ordinal INTEGER NOT NULL CHECK (source_information_ordinal >= 0),
+                    source_information_type TEXT NOT NULL CHECK (length(source_information_type) > 0),
+                    PRIMARY KEY (extraction_id, source_information_type),
+                    UNIQUE (extraction_id, database_field_name, source_information_ordinal),
+                    UNIQUE (extraction_id, source_information_type, database_field_name),
+                    FOREIGN KEY (extraction_id, database_field_name)
+                        REFERENCES extraction_columns (extraction_id, database_field_name)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE extraction_values (
+                    extraction_id TEXT NOT NULL,
+                    value_ordinal INTEGER NOT NULL CHECK (value_ordinal >= 0),
+                    database_field_name TEXT NOT NULL,
+                    source_information_type TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    source_id TEXT NOT NULL CHECK (length(source_id) = 36),
+                    PRIMARY KEY (extraction_id, value_ordinal),
+                    FOREIGN KEY (
+                        extraction_id,
+                        source_information_type,
+                        database_field_name)
+                        REFERENCES extraction_column_sources (
+                            extraction_id,
+                            source_information_type,
+                            database_field_name)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX ix_extraction_values_database_field
+                    ON extraction_values (extraction_id, database_field_name, value_ordinal);
+                CREATE INDEX ix_extraction_values_source
+                    ON extraction_values (extraction_id, source_id, value_ordinal);
+                CREATE TABLE extraction_publication (
+                    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                    extraction_id TEXT NOT NULL UNIQUE,
+                    FOREIGN KEY (extraction_id)
+                        REFERENCES extraction_results (extraction_id)
+                );
+                PRAGMA user_version = 3;
+                """;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return 3;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
     private static async Task ValidateCurrentSchemaAsync(
         SqliteConnection connection,
         CancellationToken cancellationToken)
@@ -438,6 +521,8 @@ public sealed partial class StructuredInformationRepository
 
         await ValidateDatabaseGenerationSchemaAsync(connection, cancellationToken)
             .ConfigureAwait(false);
+        await ValidateExtractionSchemaAsync(connection, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static async Task ValidateDatabaseGenerationSchemaAsync(
@@ -468,6 +553,60 @@ public sealed partial class StructuredInformationRepository
                 throw new StructuredInformationRepositoryException(
                     "The Database generation schema is incomplete or invalid.",
                     exception);
+            }
+        }
+    }
+
+    private static async Task ValidateExtractionSchemaAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        string[] validationQueries =
+        [
+            "SELECT extraction_id, database_generation_id, created_utc FROM extraction_results LIMIT 0;",
+            "SELECT extraction_id, column_ordinal, database_field_name FROM extraction_columns LIMIT 0;",
+            "SELECT extraction_id, database_field_name, source_information_ordinal, source_information_type FROM extraction_column_sources LIMIT 0;",
+            "SELECT extraction_id, value_ordinal, database_field_name, source_information_type, value, source_id FROM extraction_values LIMIT 0;",
+            "SELECT singleton_id, extraction_id FROM extraction_publication LIMIT 0;"
+        ];
+
+        foreach (var query in validationQueries)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = query;
+            try
+            {
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (SqliteException exception)
+            {
+                throw new StructuredInformationRepositoryException(
+                    "The Extraction Result schema is incomplete or invalid.",
+                    exception);
+            }
+        }
+
+        string[] requiredIndexes =
+        [
+            "ix_extraction_values_database_field",
+            "ix_extraction_values_source"
+        ];
+        foreach (var indexName in requiredIndexes)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT EXISTS(
+                    SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = $name);
+                """;
+            command.Parameters.AddWithValue("$name", indexName);
+            var exists = Convert.ToInt32(
+                await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+                CultureInfo.InvariantCulture) != 0;
+            if (!exists)
+            {
+                throw new StructuredInformationRepositoryException(
+                    $"The Extraction Result schema is missing the required index '{indexName}'.");
             }
         }
     }

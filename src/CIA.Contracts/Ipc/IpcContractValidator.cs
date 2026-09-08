@@ -2,6 +2,7 @@ namespace CIA.Contracts.Ipc;
 
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 
@@ -51,6 +52,9 @@ public static class IpcContractValidator
             case BuildDatabaseCommand command:
                 ValidateBuildDatabaseCommand(command);
                 break;
+            case RunExtractionCommand command:
+                ValidateRunExtractionCommand(command);
+                break;
             case GetDatabaseReviewPageCommand command:
                 ValidateGetDatabaseReviewPageCommand(command);
                 break;
@@ -71,6 +75,9 @@ public static class IpcContractValidator
                 break;
             case BuildDatabaseResponse response:
                 ValidateBuildDatabaseResponse(response);
+                break;
+            case RunExtractionResponse response:
+                ValidateRunExtractionResponse(response);
                 break;
             case GetDatabaseReviewPageResponse response:
                 ValidateGetDatabaseReviewPageResponse(response);
@@ -356,6 +363,18 @@ public static class IpcContractValidator
         ValidateDatabaseReviewRange(command.StartRowOrdinal, command.RowCount);
     }
 
+    private static void ValidateRunExtractionCommand(RunExtractionCommand command)
+    {
+        ValidateOperationCorrelation(command.Correlation);
+        ValidateDatabaseGeneration(command.DatabaseGeneration);
+
+        if (command.DatabaseGeneration.OperationId == command.Correlation.OperationId)
+        {
+            throw InvalidContract(
+                "Extraction and Database generation operations require distinct identities.");
+        }
+    }
+
     private static void ValidateRunDiscoveryResponse(RunDiscoveryResponse response)
     {
         ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
@@ -561,6 +580,49 @@ public static class IpcContractValidator
         ValidateFailure(response.Failure);
     }
 
+    private static void ValidateRunExtractionResponse(RunExtractionResponse response)
+    {
+        ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+
+        if (!Enum.IsDefined(response.Acceptance) || response.Completion is null)
+        {
+            throw InvalidContract("The Extraction response is incomplete or unsupported.");
+        }
+
+        ValidateOperationCorrelation(response.Completion.Correlation);
+
+        if (response.Acceptance == CommandAcceptance.Accepted)
+        {
+            if (response.Failure is not null
+                || response.PublishedResult is null
+                || response.PublishedResult.OperationId
+                    != response.Completion.Correlation.OperationId
+                || response.Completion.Outcome is not (
+                    OperationOutcome.CompletedSuccessfully
+                    or OperationOutcome.CompletedWithIssues))
+            {
+                throw InvalidContract(
+                    "An accepted Extraction response requires a matching published result and completed outcome.");
+            }
+
+            ValidateExtractionResult(response.PublishedResult);
+            return;
+        }
+
+        if (response.PublishedResult is not null
+            || response.Failure is null
+            || response.Completion.Outcome is not (
+                OperationOutcome.Failed
+                or OperationOutcome.Cancelled
+                or OperationOutcome.InterruptedIncomplete))
+        {
+            throw InvalidContract(
+                "An unsuccessful Extraction response requires no published result and controlled failure context.");
+        }
+
+        ValidateFailure(response.Failure);
+    }
+
     private static void ValidateDatabaseReviewPage(DatabaseReviewPage page)
     {
         ValidateOperationId(page.GenerationId, "Database review pages");
@@ -635,6 +697,19 @@ public static class IpcContractValidator
         {
             throw InvalidContract(
                 "A published Database generation requires at least one mapped value.");
+        }
+    }
+
+    private static void ValidateExtractionResult(ExtractionResultSummary result)
+    {
+        ValidateOperationId(result.OperationId, "Extraction Results");
+        ValidateDatabaseGeneration(result.DatabaseGeneration);
+
+        if (result.OperationId == result.DatabaseGeneration.OperationId
+            || result.ValueCount != result.DatabaseGeneration.ValueCount)
+        {
+            throw InvalidContract(
+                "An Extraction Result requires a distinct identity and matching Database basis.");
         }
     }
 

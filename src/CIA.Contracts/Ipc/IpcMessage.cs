@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 
@@ -17,6 +18,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RunDiscoveryCommand), "runDiscoveryCommand")]
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceCommand), "getDiscoveryOccurrenceCommand")]
 [JsonDerivedType(typeof(BuildDatabaseCommand), "buildDatabaseCommand")]
+[JsonDerivedType(typeof(RunExtractionCommand), "runExtractionCommand")]
 [JsonDerivedType(typeof(GetDatabaseReviewPageCommand), "getDatabaseReviewPageCommand")]
 [JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
@@ -25,6 +27,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RunDiscoveryResponse), "runDiscoveryResponse")]
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceResponse), "getDiscoveryOccurrenceResponse")]
 [JsonDerivedType(typeof(BuildDatabaseResponse), "buildDatabaseResponse")]
+[JsonDerivedType(typeof(RunExtractionResponse), "runExtractionResponse")]
 [JsonDerivedType(typeof(GetDatabaseReviewPageResponse), "getDatabaseReviewPageResponse")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 [JsonDerivedType(typeof(SourceIntakeProgressEvent), "sourceIntakeProgressEvent")]
@@ -90,6 +93,13 @@ public sealed record BuildDatabaseCommand(
     OperationCorrelation Correlation,
     IReadOnlyList<LoadedSourceContract> Sources,
     DatabaseMappingSnapshot Mapping)
+    : IpcCommand(MessageId, TimestampUtc);
+
+public sealed record RunExtractionCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    OperationCorrelation Correlation,
+    DatabaseGenerationSummary DatabaseGeneration)
     : IpcCommand(MessageId, TimestampUtc);
 
 public sealed record GetDatabaseReviewPageCommand(
@@ -162,6 +172,16 @@ public sealed record BuildDatabaseResponse(
     CommandAcceptance Acceptance,
     OperationCompletion Completion,
     DatabaseGenerationSummary? PublishedGeneration,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record RunExtractionResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    CommandAcceptance Acceptance,
+    OperationCompletion Completion,
+    ExtractionResultSummary? PublishedResult,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 
