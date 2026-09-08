@@ -1,5 +1,6 @@
 namespace CIA.Contracts.Ipc;
 
+using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -47,6 +48,9 @@ public static class IpcContractValidator
             case GetDiscoveryOccurrenceCommand command:
                 ValidateGetDiscoveryOccurrenceCommand(command);
                 break;
+            case BuildDatabaseCommand command:
+                ValidateBuildDatabaseCommand(command);
+                break;
             case CommandAcknowledgement acknowledgement:
                 ValidateCommandAcknowledgement(acknowledgement);
                 break;
@@ -61,6 +65,9 @@ public static class IpcContractValidator
                 break;
             case GetDiscoveryOccurrenceResponse response:
                 ValidateGetDiscoveryOccurrenceResponse(response);
+                break;
+            case BuildDatabaseResponse response:
+                ValidateBuildDatabaseResponse(response);
                 break;
             case ProcessingHostAvailabilityEvent availabilityEvent:
                 ValidateProcessingHostAvailabilityEvent(availabilityEvent);
@@ -306,6 +313,36 @@ public static class IpcContractValidator
         }
     }
 
+    private static void ValidateBuildDatabaseCommand(BuildDatabaseCommand command)
+    {
+        ValidateOperationCorrelation(command.Correlation);
+        ValidateDatabaseMapping(command.Mapping);
+
+        if (command.Sources is null || command.Sources.Count == 0)
+        {
+            throw InvalidContract("A Database build command requires an active source set.");
+        }
+
+        var sourceIds = new HashSet<SourceId>();
+        foreach (var source in command.Sources)
+        {
+            if (source is null)
+            {
+                throw InvalidContract("A Database build command cannot contain null sources.");
+            }
+
+            ValidateLoadedSource(source);
+            if (!source.IsIncluded
+                || source.Status != LoadedSourceStatus.Ready
+                || source.Kind != LoadedSourceKind.XmlFile
+                || !sourceIds.Add(source.SourceId))
+            {
+                throw InvalidContract(
+                    "Database build sources must be unique, included, ready XML sources.");
+            }
+        }
+    }
+
     private static void ValidateRunDiscoveryResponse(RunDiscoveryResponse response)
     {
         ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
@@ -431,6 +468,94 @@ public static class IpcContractValidator
         }
 
         ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateBuildDatabaseResponse(BuildDatabaseResponse response)
+    {
+        ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+
+        if (!Enum.IsDefined(response.Acceptance) || response.Completion is null)
+        {
+            throw InvalidContract("The Database build response is incomplete or unsupported.");
+        }
+
+        ValidateOperationCorrelation(response.Completion.Correlation);
+
+        if (response.Acceptance == CommandAcceptance.Accepted)
+        {
+            if (response.Failure is not null
+                || response.PublishedGeneration is null
+                || response.PublishedGeneration.OperationId
+                    != response.Completion.Correlation.OperationId
+                || response.Completion.Outcome is not (
+                    OperationOutcome.CompletedSuccessfully
+                    or OperationOutcome.CompletedWithIssues))
+            {
+                throw InvalidContract(
+                    "An accepted Database build response requires a matching published generation and completed outcome.");
+            }
+
+            ValidateDatabaseGeneration(response.PublishedGeneration);
+            return;
+        }
+
+        if (response.PublishedGeneration is not null
+            || response.Failure is null
+            || response.Completion.Outcome is not (
+                OperationOutcome.Failed
+                or OperationOutcome.Cancelled
+                or OperationOutcome.InterruptedIncomplete))
+        {
+            throw InvalidContract(
+                "An unsuccessful Database build response requires no published generation and controlled failure context.");
+        }
+
+        ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateDatabaseGeneration(DatabaseGenerationSummary generation)
+    {
+        ValidateOperationId(generation.OperationId, "Database generations");
+        ValidateDatabaseMapping(generation.Mapping);
+
+        if (generation.ValueCount < 1)
+        {
+            throw InvalidContract(
+                "A published Database generation requires at least one mapped value.");
+        }
+    }
+
+    private static void ValidateDatabaseMapping(DatabaseMappingSnapshot mapping)
+    {
+        if (mapping is null || mapping.Columns is null || mapping.Columns.Count == 0)
+        {
+            throw InvalidContract("A Database mapping requires at least one column.");
+        }
+
+        var databaseTagNames = new HashSet<string>(StringComparer.Ordinal);
+        var sourceInformationTypes = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var column in mapping.Columns)
+        {
+            if (column is null
+                || string.IsNullOrWhiteSpace(column.DatabaseTagName)
+                || column.SourceInformationTypes is null
+                || column.SourceInformationTypes.Count == 0
+                || !databaseTagNames.Add(column.DatabaseTagName))
+            {
+                throw InvalidContract("A Database column mapping is invalid or duplicated.");
+            }
+
+            foreach (var informationType in column.SourceInformationTypes)
+            {
+                if (string.IsNullOrWhiteSpace(informationType)
+                    || !sourceInformationTypes.Add(informationType))
+                {
+                    throw InvalidContract(
+                        "Database source information identities must be valid and map once.");
+                }
+            }
+        }
     }
 
     private static void ValidateDiscoveredOccurrence(DiscoveredOccurrence occurrence)

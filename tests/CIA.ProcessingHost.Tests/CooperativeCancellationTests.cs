@@ -134,6 +134,31 @@ public sealed class CooperativeCancellationTests
         Assert.AreEqual(OperationOutcome.Cancelled, (await accepted.Completion!).Outcome);
     }
 
+    [TestMethod]
+    public void AtomicCommitBoundaryCannotReportCancellationAsAccepted()
+    {
+        var cancellation = new CooperativeOperationCancellation(
+            new RecordingHistoryRecorder());
+        var correlation = OperationCorrelation.CreateNew();
+        var operation = cancellation.BeginOperation(
+            correlation,
+            "DatabaseBuild",
+            "Database publication",
+            [new ProcessingItemPlan("publication")]);
+        Assert.IsTrue(operation.TryStartItem("publication", out var publication));
+
+        Assert.IsTrue(operation.TryEnterNonCancellableCommitBoundary());
+        var request = cancellation.RequestCancellation(correlation.OperationId);
+
+        Assert.IsFalse(request.Accepted);
+        Assert.AreEqual(
+            OperationCancellationRequestStatus.CommitBoundaryReached,
+            request.Status);
+        publication!.CommitCompletedResult();
+        var completion = operation.Complete();
+        Assert.AreEqual(OperationOutcome.CompletedSuccessfully, completion.Outcome);
+    }
+
     private sealed class RecordingHistoryRecorder : IProcessingHistoryRecorder
     {
         public List<ProcessingAttemptRecord> Attempts { get; } = [];

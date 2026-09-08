@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
+using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
@@ -8,9 +9,11 @@ using CIA.Contracts.Sources;
 using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
 using CIA.Desktop.Hosting;
+using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Hosting;
 using CIA.ProcessingHost.Operations;
+using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceIntake;
 using CIA.ProcessingHost.SourceInterpretation;
 using Microsoft.Extensions.DependencyInjection;
@@ -161,10 +164,14 @@ public sealed class ProcessingHostLifecycleTests
             ApplicationPaths.FromLocalApplicationData(Path.Combine(workspace.Path, "LocalAppData")));
         builder.Services.AddSingleton<ArchiveExtractionService>();
         builder.Services.AddSingleton<SourceIntakeService>();
+        builder.Services.AddSingleton<IGenericXmlSourceAdapter, GenericXmlElementValueSourceAdapter>();
         builder.Services.AddSingleton<ISourceInterpreter, SourceInterpreter>();
         builder.Services.AddSingleton<ISourceOccurrenceReader, SourceOccurrenceReader>();
+        builder.Services.AddSingleton<ISourceValueBatchReader, SourceValueBatchReader>();
         builder.Services.AddSingleton<SourceRefreshService>();
         builder.Services.AddSingleton<DiscoveryService>();
+        builder.Services.AddSingleton<StructuredInformationRepository>();
+        builder.Services.AddSingleton<DatabaseGenerationService>();
         builder.Services.AddHostedService<ProcessingHostLifetimeService>();
         using var host = builder.Build();
 
@@ -220,6 +227,87 @@ public sealed class ProcessingHostLifecycleTests
             CommandAcceptance.Accepted,
             timeout.Token);
         await host.StopAsync(timeout.Token);
+    }
+
+    [TestMethod]
+    public async Task ProcessingHostBuildsAndPublishesDatabaseOverTypedIpc()
+    {
+        using var workspace = new TemporaryLifecycleLogDirectory();
+        using var timeout = new CancellationTokenSource(TestTimeout);
+        var sourcePath = Path.Combine(workspace.Path, "database-source.xml");
+        await File.WriteAllTextAsync(
+            sourcePath,
+            "<root><identifier> exact first </identifier><ignored>value</ignored>" +
+            "<identifier>second</identifier></root>");
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            sourcePath,
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
+        var mapping = new DatabaseMappingSnapshot(
+        [
+            new DatabaseColumnMapping("Database Identifier", ["identifier"])
+        ]);
+        var correlation = OperationCorrelation.CreateNew();
+        var pipeName = $"CIA.Tests.SPR79.{Guid.NewGuid():N}";
+        var builder = Host.CreateApplicationBuilder();
+        builder.Logging.ClearProviders();
+        builder.Services.AddSingleton(new ProcessingHostRuntimeOptions(pipeName, Environment.ProcessId));
+        builder.Services.AddSingleton<IProcessingHistoryRecorder, ClefProcessingHistoryRecorder>();
+        builder.Services.AddSingleton<CooperativeOperationCancellation>();
+        builder.Services.AddSingleton(
+            ApplicationPaths.FromLocalApplicationData(Path.Combine(workspace.Path, "LocalAppData")));
+        builder.Services.AddSingleton<ArchiveExtractionService>();
+        builder.Services.AddSingleton<SourceIntakeService>();
+        builder.Services.AddSingleton<IGenericXmlSourceAdapter, GenericXmlElementValueSourceAdapter>();
+        builder.Services.AddSingleton<ISourceInterpreter, SourceInterpreter>();
+        builder.Services.AddSingleton<ISourceOccurrenceReader, SourceOccurrenceReader>();
+        builder.Services.AddSingleton<ISourceValueBatchReader, SourceValueBatchReader>();
+        builder.Services.AddSingleton<SourceRefreshService>();
+        builder.Services.AddSingleton<DiscoveryService>();
+        builder.Services.AddSingleton<StructuredInformationRepository>();
+        builder.Services.AddSingleton<DatabaseGenerationService>();
+        builder.Services.AddHostedService<ProcessingHostLifetimeService>();
+        using var host = builder.Build();
+
+        await host.StartAsync(timeout.Token);
+        await using var connection = await CIA.Desktop.Ipc.ProcessingHostIpcClient
+            .ConnectAsync(pipeName, timeout.Token);
+        await CompleteReadinessHandshakeAsync(connection, timeout.Token);
+        var command = new BuildDatabaseCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            correlation,
+            [source],
+            mapping);
+
+        await connection.SendAsync(command, timeout.Token);
+        var response = await connection.ReceiveAsync(timeout.Token);
+
+        Assert.IsInstanceOfType<BuildDatabaseResponse>(response);
+        var databaseResponse = (BuildDatabaseResponse)response;
+        Assert.AreEqual(CommandAcceptance.Accepted, databaseResponse.Acceptance);
+        Assert.AreEqual(OperationOutcome.CompletedSuccessfully, databaseResponse.Completion.Outcome);
+        Assert.AreEqual(correlation.OperationId, databaseResponse.PublishedGeneration?.OperationId);
+        Assert.AreEqual(2, databaseResponse.PublishedGeneration?.ValueCount);
+        var publishedValues = await host.Services
+            .GetRequiredService<StructuredInformationRepository>()
+            .QueryPublishedDatabaseValuesAsync(timeout.Token);
+        CollectionAssert.AreEqual(
+            new[] { " exact first ", "second" },
+            publishedValues.Select(value => value.Value).ToArray());
+        Assert.IsTrue(publishedValues.All(value => value.SourceId == source.SourceId));
+
+        var stop = new StopProcessingHostCommand(Guid.CreateVersion7(), DateTimeOffset.UtcNow);
+        await connection.SendAsync(stop, timeout.Token);
+        await ReceiveAcknowledgementAsync(
+            connection,
+            stop.MessageId,
+            CommandAcceptance.Accepted,
+            timeout.Token);
+        await host.StopAsync(timeout.Token);
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
     }
 
     [TestMethod]

@@ -6,7 +6,7 @@ using CIA.Core.Sources;
 namespace CIA.ProcessingHost.SourceInterpretation;
 
 public sealed class XmlElementValueSourceAdapter(SourceStructureDeclaration declaration)
-    : ISourceAdapter, ISourceOccurrenceAdapter
+    : ISourceAdapter, ISourceOccurrenceAdapter, ISourceValueBatchAdapter
 {
     public SourceStructureDeclaration Declaration { get; } =
         declaration ?? throw new ArgumentNullException(nameof(declaration));
@@ -74,6 +74,32 @@ public sealed class XmlElementValueSourceAdapter(SourceStructureDeclaration decl
             .ConfigureAwait(false);
     }
 
+    public ValueTask<int> ReadSelectedValuesAsync(
+        SourceId originatingSourceId,
+        XmlReader reader,
+        IReadOnlySet<string> selectedInformationTypes,
+        Func<IReadOnlyList<InterpretedSourceValue>, ValueTask> onBatch,
+        CancellationToken cancellationToken = default)
+    {
+        if (originatingSourceId == default)
+        {
+            throw new ArgumentException(
+                "A source adapter requires an originating Source ID.",
+                nameof(originatingSourceId));
+        }
+
+        ArgumentNullException.ThrowIfNull(reader);
+        ArgumentNullException.ThrowIfNull(selectedInformationTypes);
+        ArgumentNullException.ThrowIfNull(onBatch);
+        ValidateDocumentRoot(reader);
+
+        return XmlElementValueReader.ReadSelectedValuesAsync(
+            reader,
+            selectedInformationTypes,
+            onBatch,
+            cancellationToken);
+    }
+
     private void ValidateDocumentRoot(XmlReader reader)
     {
         if (reader.NodeType != XmlNodeType.Element
@@ -86,7 +112,8 @@ public sealed class XmlElementValueSourceAdapter(SourceStructureDeclaration decl
     }
 }
 
-public sealed class GenericXmlElementValueSourceAdapter : IGenericXmlSourceAdapter
+public sealed class GenericXmlElementValueSourceAdapter
+    : IGenericXmlSourceAdapter, ISourceValueBatchAdapter
 {
     public const string GenericStructureId = "cia.xml.generic.v1";
 
@@ -130,6 +157,24 @@ public sealed class GenericXmlElementValueSourceAdapter : IGenericXmlSourceAdapt
             cancellationToken);
     }
 
+    public ValueTask<int> ReadSelectedValuesAsync(
+        SourceId originatingSourceId,
+        XmlReader reader,
+        IReadOnlySet<string> selectedInformationTypes,
+        Func<IReadOnlyList<InterpretedSourceValue>, ValueTask> onBatch,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateArguments(originatingSourceId, reader);
+        ArgumentNullException.ThrowIfNull(selectedInformationTypes);
+        ArgumentNullException.ThrowIfNull(onBatch);
+
+        return XmlElementValueReader.ReadSelectedValuesAsync(
+            reader,
+            selectedInformationTypes,
+            onBatch,
+            cancellationToken);
+    }
+
     private static void ValidateArguments(SourceId originatingSourceId, XmlReader reader)
     {
         if (originatingSourceId == default)
@@ -160,8 +205,11 @@ internal static class XmlElementValueReader
 
         await ReadAsync(
             reader,
-            (informationType, value) => values.Add(
-                new InterpretedSourceValue(informationType, value)),
+            (informationType, value) =>
+            {
+                values.Add(new InterpretedSourceValue(informationType, value));
+                return ValueTask.CompletedTask;
+            },
             cancellationToken).ConfigureAwait(false);
 
         return values;
@@ -185,7 +233,7 @@ internal static class XmlElementValueReader
                         informationType,
                         StringComparison.Ordinal))
                 {
-                    return;
+                    return ValueTask.CompletedTask;
                 }
 
                 occurrenceCount++;
@@ -193,15 +241,54 @@ internal static class XmlElementValueReader
                 {
                     requestedValue = value;
                 }
+
+                return ValueTask.CompletedTask;
             },
             cancellationToken).ConfigureAwait(false);
 
         return new SourceOccurrenceRead(requestedValue, occurrenceCount);
     }
 
+    public static async ValueTask<int> ReadSelectedValuesAsync(
+        XmlReader reader,
+        IReadOnlySet<string> selectedInformationTypes,
+        Func<IReadOnlyList<InterpretedSourceValue>, ValueTask> onBatch,
+        CancellationToken cancellationToken)
+    {
+        const int batchSize = 256;
+        var batch = new List<InterpretedSourceValue>(batchSize);
+        var valueCount = 0;
+
+        await ReadAsync(
+            reader,
+            async (informationType, value) =>
+            {
+                if (!selectedInformationTypes.Contains(informationType))
+                {
+                    return;
+                }
+
+                batch.Add(new InterpretedSourceValue(informationType, value));
+                valueCount++;
+                if (batch.Count == batchSize)
+                {
+                    await onBatch(batch.ToArray()).ConfigureAwait(false);
+                    batch.Clear();
+                }
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        if (batch.Count > 0)
+        {
+            await onBatch(batch.ToArray()).ConfigureAwait(false);
+        }
+
+        return valueCount;
+    }
+
     private static async ValueTask ReadAsync(
         XmlReader reader,
-        Action<string, string> onValue,
+        Func<string, string, ValueTask> onValue,
         CancellationToken cancellationToken)
     {
         var containingElements = new Stack<string>();
@@ -221,7 +308,7 @@ internal static class XmlElementValueReader
                     if (containingElements.TryPeek(out var informationType)
                         && !string.IsNullOrWhiteSpace(reader.Value))
                     {
-                        onValue(informationType, reader.Value);
+                        await onValue(informationType, reader.Value).ConfigureAwait(false);
                     }
 
                     break;

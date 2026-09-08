@@ -5,9 +5,9 @@ using Microsoft.Data.Sqlite;
 
 namespace CIA.ProcessingHost.Repository;
 
-public sealed class StructuredInformationRepository
+public sealed partial class StructuredInformationRepository
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     public const string DatabaseFileName = "cia.sqlite3";
 
     private const string OccurrencesTableName = "indexed_occurrences";
@@ -261,6 +261,7 @@ public sealed class StructuredInformationRepository
             version = version switch
             {
                 0 => await ApplyVersionOneAsync(connection, cancellationToken).ConfigureAwait(false),
+                1 => await ApplyVersionTwoAsync(connection, cancellationToken).ConfigureAwait(false),
                 _ => throw new StructuredInformationRepositoryException(
                     $"No repository migration is available from schema version {version}.")
             };
@@ -297,6 +298,94 @@ public sealed class StructuredInformationRepository
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return 1;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task<int> ApplyVersionTwoAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                CREATE TABLE database_generations (
+                    generation_id TEXT PRIMARY KEY CHECK (length(generation_id) = 36),
+                    operation_id TEXT NOT NULL UNIQUE CHECK (length(operation_id) = 36),
+                    created_utc TEXT NOT NULL,
+                    generation_state INTEGER NOT NULL CHECK (generation_state IN (1, 2))
+                );
+                CREATE TABLE database_generation_sources (
+                    generation_id TEXT NOT NULL,
+                    source_ordinal INTEGER NOT NULL CHECK (source_ordinal >= 0),
+                    source_id TEXT NOT NULL CHECK (length(source_id) = 36),
+                    PRIMARY KEY (generation_id, source_id),
+                    UNIQUE (generation_id, source_ordinal),
+                    FOREIGN KEY (generation_id)
+                        REFERENCES database_generations (generation_id) ON DELETE CASCADE
+                );
+                CREATE TABLE database_columns (
+                    generation_id TEXT NOT NULL,
+                    column_ordinal INTEGER NOT NULL CHECK (column_ordinal >= 0),
+                    database_tag_name TEXT NOT NULL CHECK (length(database_tag_name) > 0),
+                    PRIMARY KEY (generation_id, column_ordinal),
+                    UNIQUE (generation_id, database_tag_name),
+                    FOREIGN KEY (generation_id)
+                        REFERENCES database_generations (generation_id) ON DELETE CASCADE
+                );
+                CREATE TABLE database_column_sources (
+                    generation_id TEXT NOT NULL,
+                    database_tag_name TEXT NOT NULL,
+                    source_information_ordinal INTEGER NOT NULL CHECK (source_information_ordinal >= 0),
+                    source_information_type TEXT NOT NULL CHECK (length(source_information_type) > 0),
+                    PRIMARY KEY (generation_id, source_information_type),
+                    UNIQUE (generation_id, database_tag_name, source_information_ordinal),
+                    UNIQUE (generation_id, source_information_type, database_tag_name),
+                    FOREIGN KEY (generation_id, database_tag_name)
+                        REFERENCES database_columns (generation_id, database_tag_name)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE database_values (
+                    generation_id TEXT NOT NULL,
+                    value_ordinal INTEGER NOT NULL CHECK (value_ordinal >= 0),
+                    database_tag_name TEXT NOT NULL,
+                    source_information_type TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    source_id TEXT NOT NULL CHECK (length(source_id) = 36),
+                    PRIMARY KEY (generation_id, value_ordinal),
+                    FOREIGN KEY (generation_id, source_information_type, database_tag_name)
+                        REFERENCES database_column_sources (
+                            generation_id,
+                            source_information_type,
+                            database_tag_name)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (generation_id, source_id)
+                        REFERENCES database_generation_sources (generation_id, source_id)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX ix_database_values_database_tag
+                    ON database_values (generation_id, database_tag_name, value_ordinal);
+                CREATE INDEX ix_database_values_source
+                    ON database_values (generation_id, source_id, value_ordinal);
+                CREATE TABLE database_publication (
+                    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                    generation_id TEXT NOT NULL UNIQUE,
+                    FOREIGN KEY (generation_id)
+                        REFERENCES database_generations (generation_id)
+                );
+                PRAGMA user_version = 2;
+                """;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return 2;
         }
         catch
         {
@@ -344,6 +433,41 @@ public sealed class StructuredInformationRepository
             {
                 throw new StructuredInformationRepositoryException(
                     $"The repository schema is missing the required index '{indexName}'.");
+            }
+        }
+
+        await ValidateDatabaseGenerationSchemaAsync(connection, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task ValidateDatabaseGenerationSchemaAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        string[] validationQueries =
+        [
+            "SELECT generation_id, operation_id, created_utc, generation_state FROM database_generations LIMIT 0;",
+            "SELECT generation_id, source_ordinal, source_id FROM database_generation_sources LIMIT 0;",
+            "SELECT generation_id, column_ordinal, database_tag_name FROM database_columns LIMIT 0;",
+            "SELECT generation_id, database_tag_name, source_information_ordinal, source_information_type FROM database_column_sources LIMIT 0;",
+            "SELECT generation_id, value_ordinal, database_tag_name, source_information_type, value, source_id FROM database_values LIMIT 0;",
+            "SELECT singleton_id, generation_id FROM database_publication LIMIT 0;"
+        ];
+
+        foreach (var query in validationQueries)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = query;
+            try
+            {
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (SqliteException exception)
+            {
+                throw new StructuredInformationRepositoryException(
+                    "The Database generation schema is incomplete or invalid.",
+                    exception);
             }
         }
     }

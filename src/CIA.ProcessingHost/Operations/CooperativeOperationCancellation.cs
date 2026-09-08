@@ -53,7 +53,8 @@ public enum OperationCancellationRequestStatus
     Accepted = 1,
     AlreadyAccepted = 2,
     NoActiveOperation = 3,
-    OperationMismatch = 4
+    OperationMismatch = 4,
+    CommitBoundaryReached = 5
 }
 
 public sealed record OperationCancellationRequest(
@@ -206,6 +207,7 @@ public sealed class CooperativeProcessingOperation
     private readonly TaskCompletionSource<OperationCompletion> _completion = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _cancellationAccepted;
+    private bool _cancellationClosed;
     private bool _terminal;
     private int _inFlightCount;
 
@@ -231,6 +233,8 @@ public sealed class CooperativeProcessingOperation
     public OperationCorrelation Correlation { get; }
 
     public CancellationToken CancellationToken => _cancellation.Token;
+
+    public Task<OperationCompletion> Completion => _completion.Task;
 
     public bool IsCancellationAccepted
     {
@@ -278,10 +282,95 @@ public sealed class CooperativeProcessingOperation
         }
     }
 
+    public OperationCompletion Complete()
+    {
+        return CompleteCore(terminalOutcome: null);
+    }
+
+    public OperationCompletion CompleteTerminal(OperationOutcome outcome)
+    {
+        if (outcome is OperationOutcome.CompletedSuccessfully
+            or OperationOutcome.CompletedWithIssues
+            or OperationOutcome.Cancelled)
+        {
+            throw new ArgumentException(
+                "This completion path requires a failed or interrupted terminal outcome.",
+                nameof(outcome));
+        }
+
+        return CompleteCore(outcome);
+    }
+
+    public bool TryEnterNonCancellableCommitBoundary()
+    {
+        lock (_stateGate)
+        {
+            if (_cancellationAccepted || _terminal)
+            {
+                return false;
+            }
+
+            _cancellationClosed = true;
+            return true;
+        }
+    }
+
+    private OperationCompletion CompleteCore(OperationOutcome? terminalOutcome)
+    {
+        OperationCompletion completion;
+
+        lock (_stateGate)
+        {
+            if (_cancellationAccepted)
+            {
+                throw new InvalidOperationException(
+                    "A cancelled operation must complete through its cooperative cancellation path.");
+            }
+
+            if (_terminal)
+            {
+                throw new InvalidOperationException("The operation is already complete.");
+            }
+
+            if (_inFlightCount != 0
+                || _items.Values.Any(item => item.State == TrackedItemState.Pending))
+            {
+                throw new InvalidOperationException(
+                    "Every operation item must reach a safe boundary before completion.");
+            }
+
+            _terminal = true;
+            var itemStatuses = _items.Values.Select(CreateItemStatus).ToArray();
+            completion = terminalOutcome is null
+                ? OperationCompletion.FromCompletedItems(Correlation, itemStatuses)
+                : OperationCompletion.FromTerminalOutcome(
+                    Correlation,
+                    terminalOutcome.Value,
+                    itemStatuses);
+        }
+
+        _historyRecorder.RecordAttempt(
+            ProcessingAttemptRecord.FromCompletion(
+                _operationName,
+                _processingStage,
+                DateTimeOffset.UtcNow,
+                completion));
+        _onCompleted(this);
+        _completion.TrySetResult(completion);
+        return completion;
+    }
+
     internal OperationCancellationRequest RequestCancellation()
     {
         lock (_stateGate)
         {
+            if (_cancellationClosed)
+            {
+                return new OperationCancellationRequest(
+                    OperationCancellationRequestStatus.CommitBoundaryReached,
+                    _completion.Task);
+            }
+
             if (_cancellationAccepted)
             {
                 return new OperationCancellationRequest(

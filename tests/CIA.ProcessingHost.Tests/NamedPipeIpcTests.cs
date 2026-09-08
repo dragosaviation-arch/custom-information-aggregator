@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
@@ -12,6 +13,56 @@ namespace CIA.ProcessingHost.Tests;
 [TestClass]
 public sealed class NamedPipeIpcTests
 {
+    [TestMethod]
+    public async Task DatabaseBuildCommandAndPublicationResponseRoundTripAsTypedContracts()
+    {
+        var correlation = OperationCorrelation.CreateNew();
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            Path.GetFullPath("source.xml"),
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
+        var mapping = new DatabaseMappingSnapshot(
+        [
+            new DatabaseColumnMapping("DatabaseName", ["sourceTag"])
+        ]);
+        var command = new BuildDatabaseCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            correlation,
+            [source],
+            mapping);
+        var completion = OperationCompletion.FromCompletedItems(
+            correlation,
+            [OperationItemStatus.ProcessedSuccessfully(source.SourceId.ToString())]);
+        var response = new BuildDatabaseResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            command.MessageId,
+            CommandAcceptance.Accepted,
+            completion,
+            new DatabaseGenerationSummary(correlation.OperationId, mapping, 1),
+            Failure: null);
+        await using var stream = new MemoryStream();
+
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
+        stream.Position = 0;
+
+        var commandResult = (BuildDatabaseCommand)await LengthPrefixedJsonMessageFramer
+            .ReadAsync(stream);
+        var responseResult = (BuildDatabaseResponse)await LengthPrefixedJsonMessageFramer
+            .ReadAsync(stream);
+        Assert.AreEqual(correlation, commandResult.Correlation);
+        Assert.AreEqual(source, commandResult.Sources.Single());
+        Assert.AreEqual("DatabaseName", commandResult.Mapping.Columns.Single().DatabaseTagName);
+        Assert.AreEqual(CommandAcceptance.Accepted, responseResult.Acceptance);
+        Assert.AreEqual(correlation, responseResult.Completion.Correlation);
+        Assert.AreEqual(correlation.OperationId, responseResult.PublishedGeneration?.OperationId);
+        Assert.AreEqual(1, responseResult.PublishedGeneration?.ValueCount);
+    }
+
     [TestMethod]
     public async Task DesktopAndProcessingHostExchangeTypedContractsOverNamedPipe()
     {

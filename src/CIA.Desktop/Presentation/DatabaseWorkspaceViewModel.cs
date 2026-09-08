@@ -5,6 +5,7 @@ using System.Text;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Core.Database;
+using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Workflow;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -16,6 +17,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 {
     private readonly ActiveDiscoveryConfiguration _discoveryConfiguration;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
+    private readonly DatabaseBuildCoordinator? _databaseBuildCoordinator;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly Dictionary<string, DatabaseColumnPresentation> _columnCache = new(
         StringComparer.Ordinal);
@@ -23,17 +25,20 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private readonly ObservableCollection<DatabaseColumnPresentation> _columns = [];
     private readonly ObservableCollection<DatabaseColumnPresentation> _visibleColumns = [];
     private WorkflowArtifactStatus _databaseStatus;
+    private int _publishedValueCount;
     private int _disposed;
 
     public DatabaseWorkspaceViewModel(
         ActiveDiscoveryConfiguration discoveryConfiguration,
-        IApplicationWorkflowCoordinator workflowCoordinator)
+        IApplicationWorkflowCoordinator workflowCoordinator,
+        DatabaseBuildCoordinator? databaseBuildCoordinator = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryConfiguration);
         ArgumentNullException.ThrowIfNull(workflowCoordinator);
 
         _discoveryConfiguration = discoveryConfiguration;
         _workflowCoordinator = workflowCoordinator;
+        _databaseBuildCoordinator = databaseBuildCoordinator;
         _uiSynchronizationContext = SynchronizationContext.Current;
         Columns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(_columns);
         VisibleColumns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(
@@ -50,6 +55,17 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
         _databaseStatus = workflowCoordinator.Current.Database;
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
+        if (_databaseBuildCoordinator is not null)
+        {
+            _databaseBuildCoordinator.PublishedGenerationChanged +=
+                OnPublishedGenerationChanged;
+
+            if (_databaseBuildCoordinator.CurrentGeneration is { } generation)
+            {
+                PublishDatabaseGeneration(generation.Mapping.Columns);
+                _publishedValueCount = generation.ValueCount;
+            }
+        }
     }
 
     public ReadOnlyObservableCollection<DatabaseColumnPresentation> Columns { get; }
@@ -103,7 +119,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     public string EmptyStateTitle => DatabaseStatus switch
     {
         WorkflowArtifactStatus.Stale => "Database is out of date",
-        WorkflowArtifactStatus.Current => "No Database records available",
+        WorkflowArtifactStatus.Current => "Database content ready",
         _ => "Database not available"
     };
 
@@ -112,11 +128,11 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         WorkflowArtifactStatus.Stale =>
             "The retained Database requires a later creation/update workflow before review.",
         WorkflowArtifactStatus.Current =>
-            "No structured Database records are available to review.",
+            "Mapped values are safely published; structured row presentation is not available yet.",
         _ => "Database records will appear after a later Database creation/update workflow."
     };
 
-    public string RecordCountText => "0 / 0 records";
+    public string RecordCountText => $"{_publishedValueCount:N0} mapped values";
 
     public string ColumnCountText => $"{VisibleColumns.Count} / {Columns.Count} columns";
 
@@ -149,6 +165,11 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         _workflowCoordinator.StateChanged -= OnWorkflowStateChanged;
+        if (_databaseBuildCoordinator is not null)
+        {
+            _databaseBuildCoordinator.PublishedGenerationChanged -=
+                OnPublishedGenerationChanged;
+        }
         foreach (var column in _columnCache.Values)
         {
             column.PropertyChanged -= OnColumnPropertyChanged;
@@ -350,7 +371,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private void OnWorkflowStateChanged(object? sender, WorkflowStateSnapshot e)
     {
-        var publishedColumns = IsSuccessfulDatabasePublication(e)
+        var publishedColumns = _databaseBuildCoordinator is null
+            && IsSuccessfulDatabasePublication(e)
             ? CapturePublishedColumns()
             : null;
         DispatchToUi(() =>
@@ -361,6 +383,20 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             }
 
             DatabaseStatus = e.Database;
+        });
+    }
+
+    private void OnPublishedGenerationChanged(
+        object? sender,
+        DatabaseGenerationSummary generation)
+    {
+        DispatchToUi(() =>
+        {
+            PublishDatabaseGeneration(generation.Mapping.Columns);
+            _publishedValueCount = generation.ValueCount;
+            OnPropertyChanged(nameof(RecordCountText));
+            OnPropertyChanged(nameof(EmptyStateTitle));
+            OnPropertyChanged(nameof(EmptyStateDetail));
         });
     }
 

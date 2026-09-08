@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.IO;
+using CIA.Contracts.Database;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Sources;
+using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Ipc;
 using CIA.ProcessingHost.Operations;
@@ -17,6 +19,7 @@ public sealed class ProcessingHostLifetimeService(
     SourceIntakeService sourceIntake,
     SourceRefreshService sourceRefresh,
     DiscoveryService discovery,
+    DatabaseGenerationService databaseGeneration,
     IHostApplicationLifetime applicationLifetime,
     ILogger<ProcessingHostLifetimeService> logger) : BackgroundService
 {
@@ -99,9 +102,17 @@ public sealed class ProcessingHostLifetimeService(
         CancellationToken cancellationToken)
     {
         var established = false;
+        Task? activeDatabaseRequest = null;
+        using var databaseResponseSendGate = new SemaphoreSlim(1, 1);
 
         while (!cancellationToken.IsCancellationRequested)
         {
+            if (activeDatabaseRequest?.IsCompleted == true)
+            {
+                await ObserveDatabaseRequestAsync(activeDatabaseRequest).ConfigureAwait(false);
+                activeDatabaseRequest = null;
+            }
+
             var message = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
 
             switch (message)
@@ -132,7 +143,11 @@ public sealed class ProcessingHostLifetimeService(
 
                     if (cancellation.Accepted)
                     {
-                        await SendAcceptedAsync(connection, command.MessageId, cancellationToken)
+                        await SendAcceptedSerializedAsync(
+                                connection,
+                                command.MessageId,
+                                databaseResponseSendGate,
+                                cancellationToken)
                             .ConfigureAwait(false);
                         logger.LogInformation(
                             "Processing Host accepted cooperative cancellation for operation {OperationId}",
@@ -140,15 +155,36 @@ public sealed class ProcessingHostLifetimeService(
                     }
                     else
                     {
-                        await SendRejectedAsync(
+                        await SendRejectedSerializedAsync(
                                 connection,
                                 command.MessageId,
                                 "operation-not-active",
                                 "The requested operation is not active in the Processing Host.",
+                                databaseResponseSendGate,
                                 cancellationToken)
                             .ConfigureAwait(false);
                     }
 
+                    break;
+
+                case BuildDatabaseCommand command
+                    when established && activeDatabaseRequest is null:
+                    activeDatabaseRequest = ProcessDatabaseBuildAsync(
+                        connection,
+                        command,
+                        databaseResponseSendGate,
+                        cancellationToken);
+                    break;
+
+                case BuildDatabaseCommand command when established:
+                    await SendRejectedSerializedAsync(
+                            connection,
+                            command.MessageId,
+                            "database-build-already-active",
+                            "A Database build is already active in the Processing Host.",
+                            databaseResponseSendGate,
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     break;
 
                 case LoadSourcesCommand command when established:
@@ -260,6 +296,61 @@ public sealed class ProcessingHostLifetimeService(
                     break;
             }
         }
+
+        if (activeDatabaseRequest is not null)
+        {
+            await ObserveDatabaseRequestAsync(activeDatabaseRequest).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ProcessDatabaseBuildAsync(
+        NamedPipeIpcConnection connection,
+        BuildDatabaseCommand command,
+        SemaphoreSlim sendGate,
+        CancellationToken cancellationToken)
+    {
+        var result = await databaseGeneration
+            .BuildAsync(
+                command.Correlation,
+                command.Sources,
+                command.Mapping,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var response = new BuildDatabaseResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            command.MessageId,
+            result.Accepted
+                ? CommandAcceptance.Accepted
+                : CommandAcceptance.Rejected,
+            result.Completion,
+            result.PublishedGeneration,
+            result.Failure);
+
+        await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await connection.SendAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            sendGate.Release();
+        }
+    }
+
+    private async Task ObserveDatabaseRequestAsync(Task databaseRequest)
+    {
+        try
+        {
+            await databaseRequest.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "The active Database build request failed unexpectedly");
+        }
     }
 
     private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
@@ -306,6 +397,49 @@ public sealed class ProcessingHostLifetimeService(
                 CommandAcceptance.Accepted,
                 Failure: null),
             cancellationToken);
+    }
+
+    private static async ValueTask SendAcceptedSerializedAsync(
+        NamedPipeIpcConnection connection,
+        Guid commandMessageId,
+        SemaphoreSlim sendGate,
+        CancellationToken cancellationToken)
+    {
+        await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await SendAcceptedAsync(connection, commandMessageId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            sendGate.Release();
+        }
+    }
+
+    private static async ValueTask SendRejectedSerializedAsync(
+        NamedPipeIpcConnection connection,
+        Guid commandMessageId,
+        string failureCode,
+        string failureDescription,
+        SemaphoreSlim sendGate,
+        CancellationToken cancellationToken)
+    {
+        await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await SendRejectedAsync(
+                    connection,
+                    commandMessageId,
+                    failureCode,
+                    failureDescription,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            sendGate.Release();
+        }
     }
 
     private static ValueTask SendRejectedAsync(

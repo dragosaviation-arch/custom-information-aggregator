@@ -1,5 +1,6 @@
 using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
+using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
@@ -39,9 +40,11 @@ public static class ProcessingHostApplicationHost
         builder.Services.AddSingleton<IGenericXmlSourceAdapter, GenericXmlElementValueSourceAdapter>();
         builder.Services.AddSingleton<ISourceInterpreter, SourceInterpreter>();
         builder.Services.AddSingleton<ISourceOccurrenceReader, SourceOccurrenceReader>();
+        builder.Services.AddSingleton<ISourceValueBatchReader, SourceValueBatchReader>();
         builder.Services.AddSingleton<SourceRefreshService>();
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();
+        builder.Services.AddSingleton<DatabaseGenerationService>();
 
         if (runtimeOptions is not null)
         {
