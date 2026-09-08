@@ -390,6 +390,23 @@
                                             <Expander Margin="0,4,0,0"
                                                       Header="Technical details">
                                                 <StackPanel Margin="0,4,0,0">
+                                                    <TextBlock x:Name="SelectedFailureCode"
+                                                               FontFamily="Consolas"
+                                                               FontSize="10"
+                                                               Foreground="{StaticResource CiaTextMutedBrush}"
+                                                               Text="{Binding SelectedEntry.FailureCodeDisplay}"
+                                                               TextWrapping="Wrap">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding SelectedEntry.FailureCode}" Value="{x:Null}">
+                                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
                                                     <TextBlock FontFamily="Consolas"
                                                                FontSize="10"
                                                                Foreground="{StaticResource CiaTextMutedBrush}"

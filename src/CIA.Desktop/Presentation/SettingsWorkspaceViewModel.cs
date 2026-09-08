@@ -470,6 +470,7 @@ public sealed class SettingsLogEntryPresentation
         string primaryId,
         string operationId,
         string? itemState,
+        string? failureCode,
         string? technicalDetail,
         ProcessingAttemptPresentation? attempt,
         ProcessingIssuePresentation? issue)
@@ -488,6 +489,7 @@ public sealed class SettingsLogEntryPresentation
         PrimaryId = primaryId;
         OperationId = operationId;
         ItemState = itemState;
+        FailureCode = failureCode;
         TechnicalDetail = technicalDetail;
         Attempt = attempt;
         Issue = issue;
@@ -521,6 +523,12 @@ public sealed class SettingsLogEntryPresentation
 
     public string? ItemState { get; }
 
+    public string? FailureCode { get; }
+
+    public string? FailureCodeDisplay => FailureCode is null
+        ? null
+        : $"Failure code: {FailureCode}";
+
     public string? TechnicalDetail { get; }
 
     public ProcessingAttemptPresentation? Attempt { get; }
@@ -550,7 +558,7 @@ public sealed class SettingsLogEntryPresentation
             attempt.IdentityKey,
             attempt.RecordedAtUtc,
             ActivityType,
-            "Info",
+            SeverityForOutcome(attempt.TerminalOutcome),
             attempt.OperationName,
             attempt.Outcome,
             attempt.Stage,
@@ -559,6 +567,7 @@ public sealed class SettingsLogEntryPresentation
             attempt.OperationId,
             attempt.OperationId,
             itemState: null,
+            failureCode: null,
             technicalDetail: null,
             attempt,
             issue: null);
@@ -580,6 +589,7 @@ public sealed class SettingsLogEntryPresentation
             issue.DiagnosticId,
             issue.OperationId,
             issue.ItemState,
+            issue.FailureCode,
             issue.TechnicalDetail,
             attempt: null,
             issue);
@@ -612,6 +622,24 @@ public sealed class SettingsLogEntryPresentation
         {
             yield return TechnicalDetail;
         }
+
+        if (FailureCode is not null)
+        {
+            yield return FailureCode;
+        }
+    }
+
+    private static string SeverityForOutcome(OperationOutcome outcome)
+    {
+        return outcome switch
+        {
+            OperationOutcome.CompletedSuccessfully => "Info",
+            OperationOutcome.CompletedWithIssues => "Warning",
+            OperationOutcome.Failed => "Error",
+            OperationOutcome.Cancelled => "Warning",
+            OperationOutcome.InterruptedIncomplete => "Warning",
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null)
+        };
     }
 }
 
@@ -624,6 +652,7 @@ public sealed class ProcessingAttemptPresentation
         RecordedAtUtc = record.RecordedAtUtc;
         RecordedAtLocal = record.RecordedAtUtc.ToLocalTime();
         OperationName = record.OperationName;
+        TerminalOutcome = record.TerminalOutcome;
         Outcome = HistoryPresentationText.ForOutcome(record.TerminalOutcome);
         Stage = record.FinalStage ?? "Not recorded";
         SuccessfulItems = CreateItems(record.Items, OperationItemState.ProcessedSuccessfully);
@@ -641,6 +670,8 @@ public sealed class ProcessingAttemptPresentation
     public DateTimeOffset RecordedAtLocal { get; }
 
     public string OperationName { get; }
+
+    public OperationOutcome TerminalOutcome { get; }
 
     public string Outcome { get; }
 

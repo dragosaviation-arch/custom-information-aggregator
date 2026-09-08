@@ -43,8 +43,9 @@ public sealed class SettingsWorkspaceV03Tests
 
         viewModel.SelectedEntryType = SettingsWorkspaceViewModel.AllEntryTypes;
         viewModel.SelectedSeverity = "Warning";
-        Assert.HasCount(1, viewModel.VisibleEntries);
-        Assert.AreEqual(SettingsLogEntryPresentation.IssueType, viewModel.VisibleEntries[0].EntryType);
+        Assert.HasCount(2, viewModel.VisibleEntries);
+        Assert.IsTrue(viewModel.VisibleEntries.Any(entry => entry.IsActivity));
+        Assert.IsTrue(viewModel.VisibleEntries.Any(entry => entry.IsIssue));
 
         viewModel.SelectedSeverity = SettingsWorkspaceViewModel.AllSeverities;
         viewModel.SelectedArea = "Discovery";
@@ -67,6 +68,58 @@ public sealed class SettingsWorkspaceV03Tests
     }
 
     [TestMethod]
+    public void ActivitySeverityReflectsTerminalOutcomeAndFiltersActivityRows()
+    {
+        var outcomes = new[]
+        {
+            OperationOutcome.CompletedSuccessfully,
+            OperationOutcome.CompletedWithIssues,
+            OperationOutcome.Failed,
+            OperationOutcome.Cancelled,
+            OperationOutcome.InterruptedIncomplete
+        };
+        var attempts = outcomes
+            .Select((outcome, index) => CreateAttempt(outcome, index))
+            .ToArray();
+        var viewModel = CreateViewModel(
+            new ProcessingHistorySnapshot(attempts, [], ReadProblem: null));
+        var severityByOutcome = viewModel.Entries
+            .Where(entry => entry.IsActivity)
+            .ToDictionary(entry => entry.Attempt!.TerminalOutcome, entry => entry.Severity);
+
+        Assert.AreEqual("Info", severityByOutcome[OperationOutcome.CompletedSuccessfully]);
+        Assert.AreEqual("Warning", severityByOutcome[OperationOutcome.CompletedWithIssues]);
+        Assert.AreEqual("Error", severityByOutcome[OperationOutcome.Failed]);
+        Assert.AreEqual("Warning", severityByOutcome[OperationOutcome.Cancelled]);
+        Assert.AreEqual("Warning", severityByOutcome[OperationOutcome.InterruptedIncomplete]);
+        Assert.IsTrue(
+            viewModel.Entries
+                .Where(entry => entry.IsActivity)
+                .All(entry => entry.FailureCode is null && entry.FailureCodeDisplay is null));
+
+        viewModel.SelectedEntryType = SettingsLogEntryPresentation.ActivityType;
+        viewModel.SelectedSeverity = "Warning";
+        CollectionAssert.AreEquivalent(
+            new[]
+            {
+                OperationOutcome.CompletedWithIssues,
+                OperationOutcome.Cancelled,
+                OperationOutcome.InterruptedIncomplete
+            },
+            viewModel.VisibleEntries.Select(entry => entry.Attempt!.TerminalOutcome).ToArray());
+
+        viewModel.SelectedSeverity = "Error";
+        Assert.HasCount(1, viewModel.VisibleEntries);
+        Assert.AreEqual(OperationOutcome.Failed, viewModel.VisibleEntries[0].Attempt!.TerminalOutcome);
+
+        viewModel.SelectedSeverity = "Info";
+        Assert.HasCount(1, viewModel.VisibleEntries);
+        Assert.AreEqual(
+            OperationOutcome.CompletedSuccessfully,
+            viewModel.VisibleEntries[0].Attempt!.TerminalOutcome);
+    }
+
+    [TestMethod]
     public void SelectedEntryPreservesActivityItemsAndSecondaryIssueDetail()
     {
         var viewModel = CreateViewModel();
@@ -83,6 +136,8 @@ public sealed class SettingsWorkspaceV03Tests
         viewModel.SelectedEntry = issue;
         Assert.IsNotNull(viewModel.SelectedIssue);
         Assert.AreEqual("One source item could not be processed.", issue.Message);
+        Assert.AreEqual("parse-failed", issue.FailureCode);
+        Assert.AreEqual("Failure code: parse-failed", issue.FailureCodeDisplay);
         Assert.AreEqual("XmlException at line 42.", issue.TechnicalDetail);
         Assert.AreEqual("member.xml", issue.ItemOrSource);
         Assert.AreNotEqual(issue.Message, issue.TechnicalDetail);
@@ -130,6 +185,42 @@ public sealed class SettingsWorkspaceV03Tests
         return new SettingsWorkspaceViewModel(
             CreateReader(),
             new SettingsWorkspaceRuntimePaths(paths, paths.LogsDirectory));
+    }
+
+    private static SettingsWorkspaceViewModel CreateViewModel(
+        ProcessingHistorySnapshot snapshot)
+    {
+        var localAppData = Path.Combine(Path.GetTempPath(), "CIA.Settings.V03", "LocalAppData");
+        var paths = ApplicationPaths.FromLocalApplicationData(localAppData);
+        return new SettingsWorkspaceViewModel(
+            new StaticHistoryReader(snapshot),
+            new SettingsWorkspaceRuntimePaths(paths, paths.LogsDirectory));
+    }
+
+    private static ProcessingAttemptRecord CreateAttempt(
+        OperationOutcome outcome,
+        int index)
+    {
+        var correlation = OperationCorrelation.CreateNew(
+            new DateTimeOffset(2026, 9, 8, 11, index, 0, TimeSpan.Zero));
+        var item = outcome switch
+        {
+            OperationOutcome.CompletedSuccessfully => OperationItemStatus.ProcessedSuccessfully(
+                $"item-{index}"),
+            OperationOutcome.CompletedWithIssues or OperationOutcome.Failed => OperationItemStatus.Failed(
+                $"item-{index}",
+                "test-failure"),
+            _ => OperationItemStatus.Unprocessed($"item-{index}", "not-completed")
+        };
+        var completion = outcome is OperationOutcome.CompletedSuccessfully
+            or OperationOutcome.CompletedWithIssues
+            ? OperationCompletion.FromCompletedItems(correlation, [item])
+            : OperationCompletion.FromTerminalOutcome(correlation, outcome, [item]);
+        return ProcessingAttemptRecord.FromCompletion(
+            "Test operation",
+            "Test stage",
+            correlation.InitiatedAtUtc.AddSeconds(1),
+            completion);
     }
 
     private static IProcessingHistoryReader CreateReader()
@@ -221,6 +312,7 @@ public sealed class SettingsWorkspaceV03InteractionTests
             var reset = (Button)view.FindName("ResetDefaultsButton");
             var saveState = (Button)view.FindName("SaveStateButton");
             var cleanTemporary = (Button)view.FindName("CleanTemporaryDataButton");
+            var selectedFailureCode = (TextBlock)view.FindName("SelectedFailureCode");
 
             Assert.AreEqual(Visibility.Collapsed, internalSwitch.Visibility);
             Assert.AreEqual(Visibility.Visible, logSide.Visibility);
@@ -231,6 +323,8 @@ public sealed class SettingsWorkspaceV03InteractionTests
             Assert.IsFalse(reset.IsEnabled);
             Assert.IsFalse(saveState.IsEnabled);
             Assert.IsFalse(cleanTemporary.IsEnabled);
+            Assert.AreEqual("Failure code: parse-failed", selectedFailureCode.Text);
+            Assert.AreEqual(Visibility.Visible, selectedFailureCode.Visibility);
 
             window.Width = 1100;
             window.UpdateLayout();
