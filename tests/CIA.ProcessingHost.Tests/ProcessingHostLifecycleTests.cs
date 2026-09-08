@@ -180,7 +180,18 @@ public sealed class ProcessingHostLifecycleTests
             SourceLoadSettings.Default);
 
         await connection.SendAsync(command, timeout.Token);
-        var response = await connection.ReceiveAsync(timeout.Token);
+        var progress = new List<SourceIntakeProgressSnapshot>();
+        IpcMessage response;
+        do
+        {
+            response = await connection.ReceiveAsync(timeout.Token);
+            if (response is SourceIntakeProgressEvent progressEvent)
+            {
+                Assert.AreEqual(command.MessageId, progressEvent.CommandMessageId);
+                progress.Add(progressEvent.Progress);
+            }
+        }
+        while (response is SourceIntakeProgressEvent);
 
         Assert.IsInstanceOfType<LoadSourcesResponse>(response);
         var typedResponse = (LoadSourcesResponse)response;
@@ -196,6 +207,10 @@ public sealed class ProcessingHostLifecycleTests
         Assert.AreEqual("nested/source.xml", provenance.ArchiveMemberPath);
         Assert.AreEqual(1, provenance.ArchiveNestingLevel);
         Assert.IsTrue(File.Exists(source.Path));
+        Assert.IsNotEmpty(progress);
+        Assert.AreEqual(1, progress[^1].EncounteredItemCount);
+        Assert.AreEqual(1, progress[^1].LoadedSourceCount);
+        Assert.IsNull(progress[^1].TotalItemCount);
 
         var stop = new StopProcessingHostCommand(Guid.CreateVersion7(), DateTimeOffset.UtcNow);
         await connection.SendAsync(stop, timeout.Token);

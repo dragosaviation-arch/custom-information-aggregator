@@ -178,9 +178,22 @@ public sealed class NamedPipeIpcTests
                     EntryPath: "../bad/item.xml")
             ]
         };
+        var progress = new SourceIntakeProgressEvent(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            command.MessageId,
+            new SourceIntakeProgressSnapshot(
+                archivePath,
+                CurrentArchiveNestingLevel: 1,
+                EncounteredItemCount: 3,
+                LoadedSourceCount: 1,
+                IssueCount: 1,
+                FailureCount: 0,
+                TotalItemCount: null));
         await using var stream = new MemoryStream();
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, progress);
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
         stream.Position = 0;
 
@@ -189,6 +202,8 @@ public sealed class NamedPipeIpcTests
         Assert.AreEqual(
             5,
             ((LoadSourcesCommand)roundTrippedCommand).Settings.MaximumArchiveNestingDepth.Value);
+        var roundTrippedProgress = await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
+        Assert.AreEqual(progress, roundTrippedProgress);
         var roundTrippedResponse = await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
         Assert.IsInstanceOfType<LoadSourcesResponse>(roundTrippedResponse);
         Assert.AreEqual(response.CommandMessageId, ((LoadSourcesResponse)roundTrippedResponse).CommandMessageId);
@@ -226,6 +241,30 @@ public sealed class NamedPipeIpcTests
 
         Assert.AreEqual(IpcProtocolError.InvalidContract, exception.Error);
         StringAssert.Contains(exception.Message, "maximum archive nesting depth");
+    }
+
+    [TestMethod]
+    public async Task SourceProgressRejectsInconsistentDeterminateCounters()
+    {
+        var progress = new SourceIntakeProgressEvent(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            Guid.CreateVersion7(),
+            new SourceIntakeProgressSnapshot(
+                Path.GetFullPath("source.zip"),
+                CurrentArchiveNestingLevel: 1,
+                EncounteredItemCount: 8,
+                LoadedSourceCount: 2,
+                IssueCount: 0,
+                FailureCount: 0,
+                TotalItemCount: 5));
+        await using var stream = new MemoryStream();
+
+        var exception = await Assert.ThrowsExactlyAsync<IpcProtocolException>(
+            () => LengthPrefixedJsonMessageFramer.WriteAsync(stream, progress).AsTask());
+
+        Assert.AreEqual(IpcProtocolError.InvalidContract, exception.Error);
+        StringAssert.Contains(exception.Message, "counters");
     }
 
     [TestMethod]

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using CIA.Contracts.Ipc;
+using CIA.Contracts.Sources;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Ipc;
 using CIA.ProcessingHost.Operations;
@@ -151,10 +152,22 @@ public sealed class ProcessingHostLifetimeService(
                     break;
 
                 case LoadSourcesCommand command when established:
+                    var progress = new InlineProgress<SourceIntakeProgressSnapshot>(snapshot =>
+                        connection.SendAsync(
+                                new SourceIntakeProgressEvent(
+                                    Guid.CreateVersion7(),
+                                    DateTimeOffset.UtcNow,
+                                    command.MessageId,
+                                    snapshot),
+                                cancellationToken)
+                            .AsTask()
+                            .GetAwaiter()
+                            .GetResult());
                     var result = await sourceIntake.LoadAsync(
                             command.SelectionKind,
                             command.Path,
                             command.Settings,
+                            progress,
                             cancellationToken)
                         .ConfigureAwait(false);
                     await connection.SendAsync(
@@ -246,6 +259,14 @@ public sealed class ProcessingHostLifetimeService(
                         .ConfigureAwait(false);
                     break;
             }
+        }
+    }
+
+    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value)
+        {
+            report(value);
         }
     }
 

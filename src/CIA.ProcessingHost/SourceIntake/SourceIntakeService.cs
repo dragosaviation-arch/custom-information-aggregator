@@ -13,10 +13,28 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         SourceLoadSettings settings,
         CancellationToken cancellationToken = default)
     {
+        return LoadAsync(
+            selectionKind,
+            path,
+            settings,
+            progress: null,
+            cancellationToken);
+    }
+
+    public Task<SourceIntakeResult> LoadAsync(
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings,
+        IProgress<SourceIntakeProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(settings);
 
+        var progressTracker = progress is null || selectionKind == SourceSelectionKind.XmlFile
+            ? null
+            : new SourceIntakeProgressTracker(progress);
         return Task.Run(
-            () => Load(selectionKind, path, settings, cancellationToken),
+            () => Load(selectionKind, path, settings, progressTracker, cancellationToken),
             cancellationToken);
     }
 
@@ -37,8 +55,9 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
             () => LoadArchive(
                 provenance.OriginalArchivePath,
                 settings,
-                cancellationToken,
-                provenance.OriginalArchiveSourceId),
+                progress: null,
+                cancellationToken: cancellationToken,
+                retainedOriginalArchiveSourceId: provenance.OriginalArchiveSourceId),
             cancellationToken);
     }
 
@@ -46,6 +65,7 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         SourceSelectionKind selectionKind,
         string path,
         SourceLoadSettings settings,
+        SourceIntakeProgressTracker? progress,
         CancellationToken cancellationToken)
     {
         if (settings.MaximumArchiveNestingDepth.Value < 1
@@ -62,14 +82,34 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         {
             cancellationToken.ThrowIfCancellationRequested();
             var fullPath = Path.GetFullPath(path);
+            if (selectionKind == SourceSelectionKind.Archive)
+            {
+                progress?.BeginArchive(fullPath, nestingLevel: 1);
+            }
 
-            return selectionKind switch
+            var result = selectionKind switch
             {
                 SourceSelectionKind.XmlFile => LoadXmlFile(fullPath),
-                SourceSelectionKind.Archive => LoadArchive(fullPath, settings, cancellationToken),
-                SourceSelectionKind.Folder => LoadFolder(fullPath, settings, cancellationToken),
+                SourceSelectionKind.Archive => LoadArchive(
+                    fullPath,
+                    settings,
+                    progress,
+                    cancellationToken),
+                SourceSelectionKind.Folder => LoadFolder(
+                    fullPath,
+                    settings,
+                    progress,
+                    cancellationToken),
                 _ => Reject("unsupported-selection", "The requested source-selection kind is not supported.")
             };
+
+            if (!result.Accepted)
+            {
+                progress?.RecordFailure();
+            }
+
+            progress?.Complete();
+            return result;
         }
         catch (OperationCanceledException)
         {
@@ -77,6 +117,8 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         }
         catch (Exception exception) when (IsControlledPathFailure(exception))
         {
+            progress?.RecordFailure();
+            progress?.Complete();
             return Reject("source-unreadable", "The selected source path could not be read.");
         }
     }
@@ -100,6 +142,7 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
     private SourceIntakeResult LoadArchive(
         string path,
         SourceLoadSettings settings,
+        SourceIntakeProgressTracker? progress,
         CancellationToken cancellationToken,
         SourceId? retainedOriginalArchiveSourceId = null)
     {
@@ -116,6 +159,7 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         var extraction = archiveExtraction.Extract(
             path,
             settings,
+            progress,
             cancellationToken,
             retainedOriginalArchiveSourceId);
         return new SourceIntakeResult(
@@ -130,6 +174,7 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
     private SourceIntakeResult LoadFolder(
         string path,
         SourceLoadSettings settings,
+        SourceIntakeProgressTracker? progress,
         CancellationToken cancellationToken)
     {
         if (!Directory.Exists(path))
@@ -147,6 +192,8 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         {
             cancellationToken.ThrowIfCancellationRequested();
             var fullPath = Path.GetFullPath(filePath);
+            var loadedSourceCount = 0;
+            var issueCount = 0;
 
             if (settings.IncludeXmlFiles
                 && string.Equals(Path.GetExtension(fullPath), ".xml", StringComparison.OrdinalIgnoreCase))
@@ -155,6 +202,7 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
                 {
                     VerifyReadableFile(fullPath);
                     sources.Add(CreateSource(fullPath, LoadedSourceKind.XmlFile));
+                    loadedSourceCount = 1;
                 }
                 catch (Exception exception) when (IsControlledPathFailure(exception))
                 {
@@ -164,13 +212,16 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
                         fullPath,
                         ArchiveNestingLevel: 1,
                         EntryPath: null));
+                    issueCount = 1;
                 }
 
+                progress?.RecordEncounteredItem(loadedSourceCount, issueCount);
                 continue;
             }
 
             if (!settings.IncludeArchiveFiles)
             {
+                progress?.RecordEncounteredItem(loadedSourceCount, issueCount);
                 continue;
             }
 
@@ -178,10 +229,11 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
             {
                 if (!IsSupportedArchive(fullPath))
                 {
+                    progress?.RecordEncounteredItem(loadedSourceCount, issueCount);
                     continue;
                 }
 
-                var archiveResult = LoadArchive(fullPath, settings, cancellationToken);
+                var archiveResult = LoadArchive(fullPath, settings, progress, cancellationToken);
                 if (archiveResult.Accepted)
                 {
                     sources.AddRange(archiveResult.Sources);
@@ -197,6 +249,7 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
                         fullPath,
                         ArchiveNestingLevel: 1,
                         EntryPath: null));
+                    progress?.RecordIssue();
                 }
             }
             catch (Exception exception) when (IsControlledPathFailure(exception))
@@ -207,7 +260,10 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
                     fullPath,
                     ArchiveNestingLevel: 1,
                     EntryPath: null));
+                progress?.RecordIssue();
             }
+
+            progress?.RecordEncounteredItem(loadedSourceCount, issueCount);
         }
 
         var distinctSources = sources

@@ -77,3 +77,12 @@ public sealed record SourceIntakeIssue(
     string ArchivePath,
     int ArchiveNestingLevel,
     string? EntryPath);
+
+public sealed record SourceIntakeProgressSnapshot(
+    string? CurrentArchivePath,
+    int CurrentArchiveNestingLevel,
+    int EncounteredItemCount,
+    int LoadedSourceCount,
+    int IssueCount,
+    int FailureCount,
+    int? TotalItemCount);
