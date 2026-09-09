@@ -3,6 +3,7 @@ using CIA.Core.Runtime;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Extraction;
+using CIA.ProcessingHost.Export;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceIntake;
@@ -48,6 +49,7 @@ public static class ProcessingHostApplicationHost
         builder.Services.AddSingleton<DatabaseGenerationService>();
         builder.Services.AddSingleton<DatabaseReviewService>();
         builder.Services.AddSingleton<DatabaseExtractionService>();
+        builder.Services.AddSingleton<ExcelWorkbookExportService>();
 
         if (runtimeOptions is not null)
         {

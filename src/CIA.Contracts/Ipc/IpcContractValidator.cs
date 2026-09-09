@@ -2,6 +2,7 @@ namespace CIA.Contracts.Ipc;
 
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Export;
 using CIA.Contracts.Extraction;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -55,6 +56,9 @@ public static class IpcContractValidator
             case RunExtractionCommand command:
                 ValidateRunExtractionCommand(command);
                 break;
+            case RunWorkbookExportCommand command:
+                ValidateRunWorkbookExportCommand(command);
+                break;
             case GetDatabaseReviewPageCommand command:
                 ValidateGetDatabaseReviewPageCommand(command);
                 break;
@@ -78,6 +82,9 @@ public static class IpcContractValidator
                 break;
             case RunExtractionResponse response:
                 ValidateRunExtractionResponse(response);
+                break;
+            case RunWorkbookExportResponse response:
+                ValidateRunWorkbookExportResponse(response);
                 break;
             case GetDatabaseReviewPageResponse response:
                 ValidateGetDatabaseReviewPageResponse(response);
@@ -375,6 +382,30 @@ public static class IpcContractValidator
         }
     }
 
+    private static void ValidateRunWorkbookExportCommand(RunWorkbookExportCommand command)
+    {
+        if (command.ExtractionResult is null || command.Configuration is null)
+        {
+            throw InvalidContract(
+                "A workbook export requires an Extraction Result and export configuration.");
+        }
+
+        ValidateOperationCorrelation(command.Correlation);
+        ValidateExtractionResult(command.ExtractionResult);
+        ValidateExportConfiguration(command.Configuration, command.ExtractionResult);
+        ValidatePath(command.TargetPath);
+
+        if (!string.Equals(
+                Path.GetExtension(command.TargetPath),
+                ".xlsx",
+                StringComparison.OrdinalIgnoreCase)
+            || command.Correlation.OperationId == command.ExtractionResult.OperationId)
+        {
+            throw InvalidContract(
+                "A workbook export requires a distinct operation and a fully qualified .xlsx target.");
+        }
+    }
+
     private static void ValidateRunDiscoveryResponse(RunDiscoveryResponse response)
     {
         ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
@@ -621,6 +652,104 @@ public static class IpcContractValidator
         }
 
         ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateRunWorkbookExportResponse(RunWorkbookExportResponse response)
+    {
+        ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+
+        if (!Enum.IsDefined(response.Acceptance) || response.Completion is null)
+        {
+            throw InvalidContract("The workbook export response is incomplete or unsupported.");
+        }
+
+        ValidateOperationCorrelation(response.Completion.Correlation);
+
+        if (response.Acceptance == CommandAcceptance.Accepted)
+        {
+            if (response.Failure is not null
+                || response.Workbook is null
+                || response.Workbook.OperationId
+                    != response.Completion.Correlation.OperationId
+                || response.Completion.Outcome is not (
+                    OperationOutcome.CompletedSuccessfully
+                    or OperationOutcome.CompletedWithIssues))
+            {
+                throw InvalidContract(
+                    "An accepted workbook export response requires a matching workbook and completed outcome.");
+            }
+
+            ValidateWorkbookExportSummary(response.Workbook);
+            return;
+        }
+
+        if (response.Workbook is not null
+            || response.Failure is null
+            || response.Completion.Outcome is not (
+                OperationOutcome.Failed
+                or OperationOutcome.Cancelled
+                or OperationOutcome.InterruptedIncomplete))
+        {
+            throw InvalidContract(
+                "An unsuccessful workbook export response requires no workbook and controlled failure context.");
+        }
+
+        ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateExportConfiguration(
+        ExportConfigurationSnapshot configuration,
+        ExtractionResultSummary extractionResult)
+    {
+        if (configuration is null
+            || configuration.Fields is null
+            || configuration.Fields.Count == 0)
+        {
+            throw InvalidContract("A workbook export requires an export configuration.");
+        }
+
+        var configuredFields = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var field in configuration.Fields)
+        {
+            if (field is null
+                || string.IsNullOrWhiteSpace(field.DatabaseFieldIdentity)
+                || string.IsNullOrWhiteSpace(field.ExcelHeader)
+                || field.ExcelHeader.Length > ExcelWorkbookLimits.MaximumCellTextLength
+                || field.IsSourceIdCompanionIncluded && !field.IsValueIncluded
+                || !configuredFields.Add(field.DatabaseFieldIdentity))
+            {
+                throw InvalidContract("A workbook export field is invalid or duplicated.");
+            }
+        }
+
+        var extractionFields = extractionResult.DatabaseGeneration.Mapping.Columns
+            .Select(column => column.DatabaseTagName)
+            .ToHashSet(StringComparer.Ordinal);
+        var outputColumns = configuration.CreateIncludedOutputColumns();
+        if (!configuredFields.SetEquals(extractionFields)
+            || outputColumns.Count is < 1 or > ExcelWorkbookLimits.MaximumColumns)
+        {
+            throw InvalidContract(
+                "The export configuration must match the Extraction Result and Excel column limits.");
+        }
+    }
+
+    private static void ValidateWorkbookExportSummary(WorkbookExportSummary workbook)
+    {
+        ValidateOperationId(workbook.OperationId, "Workbook exports");
+        ValidateOperationId(workbook.ExtractionResultId, "Workbook exports");
+        ValidatePath(workbook.TargetPath);
+
+        if (workbook.OperationId == workbook.ExtractionResultId
+            || !string.Equals(
+                Path.GetExtension(workbook.TargetPath),
+                ".xlsx",
+                StringComparison.OrdinalIgnoreCase)
+            || workbook.ColumnCount is < 1 or > ExcelWorkbookLimits.MaximumColumns
+            || workbook.DataRowCount is < 0 or > ExcelWorkbookLimits.MaximumDataRows)
+        {
+            throw InvalidContract("A workbook export summary is invalid.");
+        }
     }
 
     private static void ValidateDatabaseReviewPage(DatabaseReviewPage page)

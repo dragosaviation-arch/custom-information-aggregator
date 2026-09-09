@@ -6,6 +6,7 @@ using CIA.Contracts.Sources;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Extraction;
+using CIA.ProcessingHost.Export;
 using CIA.ProcessingHost.Ipc;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.SourceIntake;
@@ -23,6 +24,7 @@ public sealed class ProcessingHostLifetimeService(
     DatabaseGenerationService databaseGeneration,
     DatabaseReviewService databaseReview,
     DatabaseExtractionService databaseExtraction,
+    ExcelWorkbookExportService workbookExport,
     IHostApplicationLifetime applicationLifetime,
     ILogger<ProcessingHostLifetimeService> logger) : BackgroundService
 {
@@ -209,6 +211,26 @@ public sealed class ProcessingHostLifetimeService(
                             connection,
                             command.MessageId,
                             "extraction-already-active",
+                            "A processing operation is already active in the Processing Host.",
+                            processingResponseSendGate,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+
+                case RunWorkbookExportCommand command
+                    when established && activeProcessingRequest is null:
+                    activeProcessingRequest = ProcessWorkbookExportAsync(
+                        connection,
+                        command,
+                        processingResponseSendGate,
+                        cancellationToken);
+                    break;
+
+                case RunWorkbookExportCommand command when established:
+                    await SendRejectedSerializedAsync(
+                            connection,
+                            command.MessageId,
+                            "export-already-active",
                             "A processing operation is already active in the Processing Host.",
                             processingResponseSendGate,
                             cancellationToken)
@@ -409,6 +431,42 @@ public sealed class ProcessingHostLifetimeService(
                 : CommandAcceptance.Rejected,
             result.Completion,
             result.PublishedResult,
+            result.Failure);
+
+        await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await connection.SendAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            sendGate.Release();
+        }
+    }
+
+    private async Task ProcessWorkbookExportAsync(
+        NamedPipeIpcConnection connection,
+        RunWorkbookExportCommand command,
+        SemaphoreSlim sendGate,
+        CancellationToken cancellationToken)
+    {
+        var result = await workbookExport
+            .ExportAsync(
+                command.Correlation,
+                command.ExtractionResult,
+                command.Configuration,
+                command.TargetPath,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var response = new RunWorkbookExportResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            command.MessageId,
+            result.Accepted
+                ? CommandAcceptance.Accepted
+                : CommandAcceptance.Rejected,
+            result.Completion,
+            result.Workbook,
             result.Failure);
 
         await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);

@@ -5,10 +5,12 @@ using CIA.Core;
 using CIA.Core.Diagnostics;
 using CIA.Desktop;
 using CIA.Desktop.Hosting;
+using CIA.Desktop.Export;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Workflow;
 using CIA.Desktop.Database;
 using CIA.ProcessingHost.Database;
+using CIA.ProcessingHost.Export;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.Hosting;
 using CIA.ProcessingHost.SourceInterpretation;
@@ -47,6 +49,8 @@ public sealed class ApplicationHostTests
         Assert.IsInstanceOfType<ApplicationWorkflowCoordinator>(workflowCoordinator);
         Assert.IsNotNull(host.Services.GetRequiredService<IDatabaseClient>());
         Assert.IsNotNull(host.Services.GetRequiredService<DatabaseBuildCoordinator>());
+        Assert.IsNotNull(host.Services.GetRequiredService<IWorkbookExportClient>());
+        Assert.IsNotNull(host.Services.GetRequiredService<WorkbookExportCoordinator>());
         Assert.AreEqual("Stopped", globalStatus.HostStatusText);
         Assert.AreEqual("No operation", globalStatus.OperationStatusText);
         Assert.IsTrue(serviceProbe.IsService(typeof(MainWindow)));
@@ -67,6 +71,7 @@ public sealed class ApplicationHostTests
         Assert.IsNotNull(host.Services.GetRequiredService<StructuredInformationRepository>());
         Assert.IsNotNull(host.Services.GetRequiredService<DatabaseGenerationService>());
         Assert.IsNotNull(host.Services.GetRequiredService<DatabaseReviewService>());
+        Assert.IsNotNull(host.Services.GetRequiredService<ExcelWorkbookExportService>());
         Assert.IsEmpty(host.Services.GetServices<IHostedService>());
     }
 

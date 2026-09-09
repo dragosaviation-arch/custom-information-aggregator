@@ -5,6 +5,7 @@ using CIA.Core.Runtime;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Extraction;
+using CIA.Desktop.Export;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
@@ -64,6 +65,8 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<DatabaseBuildCoordinator>();
         builder.Services.AddSingleton<IExtractionClient, ProcessingHostExtractionClient>();
         builder.Services.AddSingleton<ExtractionCoordinator>();
+        builder.Services.AddSingleton<IWorkbookExportClient, ProcessingHostWorkbookExportClient>();
+        builder.Services.AddSingleton<WorkbookExportCoordinator>();
         builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
         builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();
         builder.Services.AddSingleton<IProcessingHistoryReader>(
