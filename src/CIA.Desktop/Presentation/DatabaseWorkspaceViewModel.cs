@@ -8,6 +8,7 @@ using CIA.Contracts.Operations;
 using CIA.Core.Database;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
+using CIA.Desktop.Extraction;
 using CIA.Desktop.Workflow;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -20,6 +21,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly DatabaseBuildCoordinator? _databaseBuildCoordinator;
     private readonly IDatabaseReviewClient? _databaseReviewClient;
+    private readonly ExtractionCoordinator? _extractionCoordinator;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly Dictionary<string, DatabaseColumnPresentation> _columnCache = new(
         StringComparer.Ordinal);
@@ -34,13 +36,16 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private bool _isReviewLoading;
     private string? _reviewFailureDescription;
     private int _publishedValueCount;
+    private WorkflowArtifactStatus _extractionStatus;
+    private WorkflowOperationStatus? _latestExtractionAttempt;
     private int _disposed;
 
     public DatabaseWorkspaceViewModel(
         ActiveDiscoveryConfiguration discoveryConfiguration,
         IApplicationWorkflowCoordinator workflowCoordinator,
         DatabaseBuildCoordinator? databaseBuildCoordinator = null,
-        IDatabaseReviewClient? databaseReviewClient = null)
+        IDatabaseReviewClient? databaseReviewClient = null,
+        ExtractionCoordinator? extractionCoordinator = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryConfiguration);
         ArgumentNullException.ThrowIfNull(workflowCoordinator);
@@ -49,6 +54,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _workflowCoordinator = workflowCoordinator;
         _databaseBuildCoordinator = databaseBuildCoordinator;
         _databaseReviewClient = databaseReviewClient;
+        _extractionCoordinator = extractionCoordinator;
         _uiSynchronizationContext = SynchronizationContext.Current;
         Columns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(_columns);
         VisibleColumns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(
@@ -69,8 +75,13 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         NextReviewPageCommand = new AsyncRelayCommand(
             NextReviewPageAsync,
             CanMoveToNextReviewPage);
+        PrepareForExportCommand = new AsyncRelayCommand(
+            PrepareForExportAsync,
+            CanPrepareForExport);
 
         _databaseStatus = workflowCoordinator.Current.Database;
+        _extractionStatus = workflowCoordinator.Current.Extraction;
+        CaptureLatestExtractionAttempt(workflowCoordinator.Current);
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
         if (_databaseBuildCoordinator is not null)
         {
@@ -81,6 +92,11 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             {
                 ApplyPublishedGeneration(generation);
             }
+        }
+
+        if (_extractionCoordinator is not null)
+        {
+            _extractionCoordinator.PublishedResultChanged += OnPublishedExtractionChanged;
         }
     }
 
@@ -103,6 +119,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     public IAsyncRelayCommand PreviousReviewPageCommand { get; }
 
     public IAsyncRelayCommand NextReviewPageCommand { get; }
+
+    public IAsyncRelayCommand PrepareForExportCommand { get; }
 
     public WorkflowArtifactStatus DatabaseStatus
     {
@@ -203,6 +221,114 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     public bool IsExportAvailable => false;
 
+    public ExtractionReviewState ExtractionReviewState
+    {
+        get
+        {
+            var workflow = _workflowCoordinator.Current;
+            if (workflow.ActiveOperation?.Kind == WorkflowOperationKind.Extraction)
+            {
+                return ExtractionReviewState.Preparing;
+            }
+
+            var result = _extractionCoordinator?.CurrentResult;
+            var latestAttempt = _latestExtractionAttempt;
+            if (result is not null
+                && (_extractionStatus == WorkflowArtifactStatus.Stale
+                    || !ExtractionBasisMatchesReviewedDatabase))
+            {
+                return ExtractionReviewState.OutOfDate;
+            }
+
+            if (latestAttempt is not null
+                && result?.OperationId != latestAttempt.Correlation.OperationId)
+            {
+                var unsuccessfulState = ToUnsuccessfulReviewState(latestAttempt.State);
+                if (unsuccessfulState is not null)
+                {
+                    return unsuccessfulState.Value;
+                }
+            }
+
+            if (_extractionStatus == WorkflowArtifactStatus.Current
+                && result is not null
+                && ExtractionBasisMatchesReviewedDatabase)
+            {
+                return _extractionCoordinator?.CurrentCompletion?.Outcome
+                    == OperationOutcome.CompletedWithIssues
+                    ? ExtractionReviewState.ReadyWithIssues
+                    : ExtractionReviewState.Ready;
+            }
+
+            if (latestAttempt is not null)
+            {
+                var unsuccessfulState = ToUnsuccessfulReviewState(latestAttempt.State);
+                if (unsuccessfulState is not null)
+                {
+                    return unsuccessfulState.Value;
+                }
+            }
+
+            return ExtractionReviewState.NotPrepared;
+        }
+    }
+
+    public string ExtractionReviewStateText => ExtractionReviewState switch
+    {
+        ExtractionReviewState.NotPrepared => "Not prepared",
+        ExtractionReviewState.Preparing => "Preparing",
+        ExtractionReviewState.Ready => "Ready",
+        ExtractionReviewState.ReadyWithIssues => "Ready with issues",
+        ExtractionReviewState.OutOfDate => "Out of date",
+        ExtractionReviewState.Failed => "Failed",
+        ExtractionReviewState.Cancelled => "Cancelled",
+        ExtractionReviewState.Interrupted => "Interrupted",
+        _ => throw new InvalidOperationException("Unknown Extraction review state.")
+    };
+
+    public string ExtractionReviewContext
+    {
+        get
+        {
+            var result = _extractionCoordinator?.CurrentResult;
+            return ExtractionReviewState switch
+            {
+                ExtractionReviewState.NotPrepared =>
+                    "Prepare the current Database before a later Excel export.",
+                ExtractionReviewState.Preparing when
+                    _workflowCoordinator.Current.LatestOperation?.State
+                        == WorkflowOperationState.Cancelling =>
+                    "Cancellation requested; no incomplete Extraction Result will be published.",
+                ExtractionReviewState.Preparing when result is not null =>
+                    "Preparing a replacement; the previous valid result remains retained.",
+                ExtractionReviewState.Preparing =>
+                    "Preparing an atomic Extraction Result from the current Database.",
+                ExtractionReviewState.Ready =>
+                    $"Prepared from the currently reviewed Database generation · {result?.DatabaseGeneration.ValueCount ?? 0:N0} values.",
+                ExtractionReviewState.ReadyWithIssues => CreateCompletionContext(
+                    _extractionCoordinator?.CurrentCompletion,
+                    result?.DatabaseGeneration.ValueCount),
+                ExtractionReviewState.OutOfDate =>
+                    "The retained Extraction Result does not match the current Database generation.",
+                ExtractionReviewState.Failed => CreateUnsuccessfulContext(
+                    "The latest preparation failed",
+                    result),
+                ExtractionReviewState.Cancelled => CreateUnsuccessfulContext(
+                    "The latest preparation was cancelled",
+                    result),
+                ExtractionReviewState.Interrupted => CreateUnsuccessfulContext(
+                    "The latest preparation was interrupted",
+                    result),
+                _ => throw new InvalidOperationException("Unknown Extraction review state.")
+            };
+        }
+    }
+
+    public bool ExtractionBasisMatchesReviewedDatabase =>
+        _publishedGenerationId is { } publishedGenerationId
+        && _extractionCoordinator?.CurrentResult?.DatabaseGeneration.OperationId
+            == publishedGenerationId;
+
     public string OutputFolder { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
         "CIA",
@@ -228,6 +354,11 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         {
             _databaseBuildCoordinator.PublishedGenerationChanged -=
                 OnPublishedGenerationChanged;
+        }
+
+        if (_extractionCoordinator is not null)
+        {
+            _extractionCoordinator.PublishedResultChanged -= OnPublishedExtractionChanged;
         }
 
         var reviewCancellation = Interlocked.Exchange(ref _reviewCancellation, null);
@@ -446,6 +577,9 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             }
 
             DatabaseStatus = e.Database;
+            _extractionStatus = e.Extraction;
+            CaptureLatestExtractionAttempt(e);
+            NotifyExtractionReviewChanged();
         });
     }
 
@@ -456,7 +590,15 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         DispatchToUi(() =>
         {
             ApplyPublishedGeneration(generation);
+            NotifyExtractionReviewChanged();
         });
+    }
+
+    private void OnPublishedExtractionChanged(
+        object? sender,
+        CIA.Contracts.Extraction.ExtractionResultSummary result)
+    {
+        DispatchToUi(NotifyExtractionReviewChanged);
     }
 
     private void ApplyPublishedGeneration(DatabaseGenerationSummary generation)
@@ -498,6 +640,19 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         var startRowOrdinal = checked(
             _reviewPage.StartRowOrdinal + DatabaseReviewLimits.MaximumRowsPerPage);
         await LoadReviewPageAsync(generationId, startRowOrdinal).ConfigureAwait(false);
+    }
+
+    private bool CanPrepareForExport()
+    {
+        return _extractionCoordinator?.CanExtract() == true;
+    }
+
+    private async Task PrepareForExportAsync()
+    {
+        if (_extractionCoordinator is not null)
+        {
+            await _extractionCoordinator.ExtractAsync().ConfigureAwait(false);
+        }
     }
 
     private bool CanMoveToPreviousReviewPage()
@@ -639,6 +794,23 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         NextReviewPageCommand.NotifyCanExecuteChanged();
     }
 
+    private void NotifyExtractionReviewChanged()
+    {
+        OnPropertyChanged(nameof(ExtractionReviewState));
+        OnPropertyChanged(nameof(ExtractionReviewStateText));
+        OnPropertyChanged(nameof(ExtractionReviewContext));
+        OnPropertyChanged(nameof(ExtractionBasisMatchesReviewedDatabase));
+        PrepareForExportCommand.NotifyCanExecuteChanged();
+    }
+
+    private void CaptureLatestExtractionAttempt(WorkflowStateSnapshot state)
+    {
+        if (state.LatestOperation?.Kind == WorkflowOperationKind.Extraction)
+        {
+            _latestExtractionAttempt = state.LatestOperation;
+        }
+    }
+
     private void DispatchToUi(Action update)
     {
         var uiContext = _uiSynchronizationContext;
@@ -676,6 +848,56 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     or WorkflowOperationState.CompletedWithIssues
             };
     }
+
+    private static ExtractionReviewState? ToUnsuccessfulReviewState(
+        WorkflowOperationState state)
+    {
+        return state switch
+        {
+            WorkflowOperationState.Failed => ExtractionReviewState.Failed,
+            WorkflowOperationState.Cancelled => ExtractionReviewState.Cancelled,
+            WorkflowOperationState.InterruptedIncomplete => ExtractionReviewState.Interrupted,
+            _ => null
+        };
+    }
+
+    private static string CreateCompletionContext(
+        OperationCompletion? completion,
+        int? valueCount)
+    {
+        if (completion is null)
+        {
+            return "A valid Extraction Result was prepared with recorded item issues.";
+        }
+
+        var completed = completion.Items.Count(
+            item => item.State == OperationItemState.ProcessedSuccessfully);
+        var failed = completion.Items.Count(item => item.State == OperationItemState.Failed);
+        var unprocessed = completion.Items.Count(
+            item => item.State == OperationItemState.Unprocessed);
+        return $"Prepared from the currently reviewed Database generation · {valueCount ?? 0:N0} values · {completed:N0} completed, {failed:N0} failed, {unprocessed:N0} unprocessed.";
+    }
+
+    private static string CreateUnsuccessfulContext(
+        string latestAttemptDescription,
+        CIA.Contracts.Extraction.ExtractionResultSummary? retainedResult)
+    {
+        return retainedResult is null
+            ? $"{latestAttemptDescription}; no Extraction Result was published."
+            : $"{latestAttemptDescription}; the previous valid Extraction Result remains retained.";
+    }
+}
+
+public enum ExtractionReviewState
+{
+    NotPrepared = 0,
+    Preparing = 1,
+    Ready = 2,
+    ReadyWithIssues = 3,
+    OutOfDate = 4,
+    Failed = 5,
+    Cancelled = 6,
+    Interrupted = 7
 }
 
 public sealed record DatabaseReviewRowPresentation(

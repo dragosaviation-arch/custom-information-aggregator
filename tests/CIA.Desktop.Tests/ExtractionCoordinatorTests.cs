@@ -8,6 +8,7 @@ using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Extraction;
 using CIA.Desktop.Hosting;
+using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -33,12 +34,179 @@ public sealed class ExtractionCoordinatorTests
         Assert.AreEqual(database, client.DatabaseGeneration);
         Assert.AreEqual(database, coordinator.CurrentResult?.DatabaseGeneration);
         Assert.AreEqual(client.Correlation?.OperationId, coordinator.CurrentResult?.OperationId);
+        Assert.AreEqual(
+            OperationOutcome.CompletedSuccessfully,
+            coordinator.CurrentCompletion?.Outcome);
         Assert.IsFalse(typeof(ExtractionResultSummary).GetProperties().Any(property =>
             property.Name.Contains("Visible", StringComparison.OrdinalIgnoreCase)
             || property.Name.Contains("Width", StringComparison.OrdinalIgnoreCase)
             || property.Name.Contains("Order", StringComparison.OrdinalIgnoreCase)
             || property.Name.Contains("Filter", StringComparison.OrdinalIgnoreCase)
             || property.Name.Contains("Row", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [TestMethod]
+    public async Task DatabaseWorkspacePrepareActionRequiresCurrentDatabaseAndBecomesReady()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        var client = new RecordingExtractionClient((correlation, basis) =>
+            Success(correlation, basis));
+        var extraction = context.CreateExtractionCoordinator(client);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            databaseReviewClient: null,
+            extraction);
+
+        Assert.IsFalse(viewModel.PrepareForExportCommand.CanExecute(null));
+        Assert.AreEqual(ExtractionReviewState.NotPrepared, viewModel.ExtractionReviewState);
+
+        var database = await context.BuildCurrentDatabaseAsync(valueCount: 3);
+        Assert.IsTrue(viewModel.PrepareForExportCommand.CanExecute(null));
+
+        await viewModel.PrepareForExportCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, client.CallCount);
+        Assert.AreEqual(ExtractionReviewState.Ready, viewModel.ExtractionReviewState);
+        Assert.AreEqual("Ready", viewModel.ExtractionReviewStateText);
+        Assert.IsTrue(viewModel.ExtractionBasisMatchesReviewedDatabase);
+        Assert.AreEqual(database.OperationId, extraction.CurrentResult?.DatabaseGeneration.OperationId);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
+        Assert.IsFalse(viewModel.IsExportAvailable);
+    }
+
+    [TestMethod]
+    public async Task DatabaseWorkspaceShowsPreparingBeforeAtomicPublication()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var response = new TaskCompletionSource<ExtractionClientResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = new RecordingExtractionClient(async (_, _) => await response.Task);
+        var extraction = context.CreateExtractionCoordinator(client);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            databaseReviewClient: null,
+            extraction);
+
+        var preparation = viewModel.PrepareForExportCommand.ExecuteAsync(null);
+        await client.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.AreEqual(ExtractionReviewState.Preparing, viewModel.ExtractionReviewState);
+        Assert.IsFalse(viewModel.PrepareForExportCommand.CanExecute(null));
+
+        response.SetResult(Success(client.Correlation!, client.DatabaseGeneration!));
+        await preparation;
+        Assert.AreEqual(ExtractionReviewState.Ready, viewModel.ExtractionReviewState);
+    }
+
+    [TestMethod]
+    public async Task CompletedWithIssuesPublishesValidResultAndShowsRealItemCounts()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync(valueCount: 2);
+        var client = new RecordingExtractionClient((correlation, basis) =>
+            SuccessWithIssues(correlation, basis));
+        var extraction = context.CreateExtractionCoordinator(client);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            databaseReviewClient: null,
+            extraction);
+
+        await viewModel.PrepareForExportCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(
+            ExtractionReviewState.ReadyWithIssues,
+            viewModel.ExtractionReviewState);
+        Assert.AreEqual("Ready with issues", viewModel.ExtractionReviewStateText);
+        StringAssert.Contains(viewModel.ExtractionReviewContext, "1 completed");
+        StringAssert.Contains(viewModel.ExtractionReviewContext, "1 failed");
+        StringAssert.Contains(viewModel.ExtractionReviewContext, "1 unprocessed");
+        Assert.AreEqual(
+            OperationOutcome.CompletedWithIssues,
+            extraction.CurrentCompletion?.Outcome);
+        Assert.IsNotNull(extraction.CurrentResult);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
+    }
+
+    [TestMethod]
+    [DataRow(OperationOutcome.Failed, ExtractionReviewState.Failed)]
+    [DataRow(OperationOutcome.Cancelled, ExtractionReviewState.Cancelled)]
+    [DataRow(OperationOutcome.InterruptedIncomplete, ExtractionReviewState.Interrupted)]
+    public async Task UnsuccessfulReplacementIsTruthfulAndPreservesPriorValidResult(
+        OperationOutcome outcome,
+        ExtractionReviewState expectedState)
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var attempts = new Queue<OperationOutcome>(
+        [
+            OperationOutcome.CompletedSuccessfully,
+            outcome
+        ]);
+        var client = new RecordingExtractionClient((correlation, basis) =>
+        {
+            var attempt = attempts.Dequeue();
+            return attempt == OperationOutcome.CompletedSuccessfully
+                ? Success(correlation, basis)
+                : Failure(correlation, attempt);
+        });
+        var extraction = context.CreateExtractionCoordinator(client);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            databaseReviewClient: null,
+            extraction);
+
+        await viewModel.PrepareForExportCommand.ExecuteAsync(null);
+        var retained = extraction.CurrentResult;
+        await viewModel.PrepareForExportCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(expectedState, viewModel.ExtractionReviewState);
+        Assert.AreSame(retained, extraction.CurrentResult);
+        StringAssert.Contains(viewModel.ExtractionReviewContext, "remains retained");
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
+        Assert.IsFalse(viewModel.IsExportAvailable);
+    }
+
+    [TestMethod]
+    public async Task DatabaseChangeMakesPreparationOutOfDateWithoutAutomaticExtraction()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var client = new RecordingExtractionClient((correlation, basis) =>
+            Success(correlation, basis));
+        var extraction = context.CreateExtractionCoordinator(client);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            databaseReviewClient: null,
+            extraction);
+        await viewModel.PrepareForExportCommand.ExecuteAsync(null);
+        var retained = extraction.CurrentResult;
+
+        Assert.IsTrue(context.Workflow.RecordDiscoveryConfigurationChanged().Accepted);
+
+        Assert.AreEqual(ExtractionReviewState.OutOfDate, viewModel.ExtractionReviewState);
+        Assert.AreSame(retained, extraction.CurrentResult);
+        Assert.AreEqual(1, client.CallCount);
+
+        var replacementDatabase = await context.BuildCurrentDatabaseAsync(valueCount: 4);
+
+        Assert.AreEqual(ExtractionReviewState.OutOfDate, viewModel.ExtractionReviewState);
+        Assert.IsFalse(viewModel.ExtractionBasisMatchesReviewedDatabase);
+        Assert.AreNotEqual(
+            replacementDatabase.OperationId,
+            retained?.DatabaseGeneration.OperationId);
+        Assert.AreEqual(1, client.CallCount);
+        Assert.IsTrue(viewModel.PrepareForExportCommand.CanExecute(null));
     }
 
     [TestMethod]
@@ -153,6 +321,24 @@ public sealed class ExtractionCoordinatorTests
             "No Extraction Result was published.");
     }
 
+    private static ExtractionClientResult SuccessWithIssues(
+        OperationCorrelation correlation,
+        DatabaseGenerationSummary databaseGeneration)
+    {
+        return new ExtractionClientResult(
+            true,
+            OperationCompletion.FromCompletedItems(
+                correlation,
+                [
+                    OperationItemStatus.ProcessedSuccessfully("published-result"),
+                    OperationItemStatus.Failed("failed-item", "item-failed"),
+                    OperationItemStatus.Unprocessed("unprocessed-item", "not-processed")
+                ]),
+            new ExtractionResultSummary(correlation.OperationId, databaseGeneration),
+            FailureCode: null,
+            FailureDescription: null);
+    }
+
     private sealed class RecordingExtractionClient : IExtractionClient
     {
         private readonly Func<
@@ -179,11 +365,14 @@ public sealed class ExtractionCoordinatorTests
 
         public DatabaseGenerationSummary? DatabaseGeneration { get; private set; }
 
+        public int CallCount { get; private set; }
+
         public Task<ExtractionClientResult> ExtractAsync(
             OperationCorrelation correlation,
             DatabaseGenerationSummary databaseGeneration,
             CancellationToken cancellationToken = default)
         {
+            CallCount++;
             Correlation = correlation;
             DatabaseGeneration = databaseGeneration;
             Started.TrySetResult();
