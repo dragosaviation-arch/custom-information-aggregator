@@ -6,6 +6,7 @@ using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
+using CIA.Desktop.Extraction;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
@@ -57,11 +58,17 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             workflow,
             new SuccessfulDatabaseClient(),
             NullLogger<DatabaseBuildCoordinator>.Instance);
+        var extractionCoordinator = new ExtractionCoordinator(
+            databaseCoordinator,
+            workflow,
+            new SuccessfulExtractionClient(),
+            NullLogger<ExtractionCoordinator>.Instance);
         using var viewModel = new DatabaseWorkspaceViewModel(
             configuration,
             workflow,
             databaseCoordinator,
-            new StaticDatabaseReviewClient(sourceId));
+            new StaticDatabaseReviewClient(sourceId),
+            extractionCoordinator);
         Assert.IsTrue((await databaseCoordinator.BuildAsync()).Accepted);
         var view = new DatabaseWorkspaceView
         {
@@ -87,6 +94,8 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var exportFields = (Border)view.FindName("ExportFieldsPanel");
             var excelExport = (Border)view.FindName("ExcelExportPanel");
             var exportButton = (Button)view.FindName("ExportToExcelButton");
+            var prepareButton = (Button)view.FindName("PrepareForExportButton");
+            var extractionState = (TextBlock)view.FindName("ExtractionReviewStateText");
 
             Assert.AreEqual(2, dynamicHeaders.Items.Count);
             Assert.AreEqual(2, reviewRows.Items.Count);
@@ -100,7 +109,21 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.AreEqual(Visibility.Visible, exportFields.Visibility);
             Assert.AreEqual(Visibility.Visible, excelExport.Visibility);
             Assert.IsFalse(exportButton.IsEnabled);
+            Assert.IsTrue(prepareButton.IsEnabled);
+            Assert.AreEqual("Not prepared", extractionState.Text);
             Assert.IsNull(view.FindName("DatabaseFiltersButton"));
+            Assert.IsNull(view.FindName("ExtractionReviewRows"));
+
+            Assert.IsNotNull(prepareButton.Command);
+            prepareButton.Command.Execute(prepareButton.CommandParameter);
+            var preparation = viewModel.PrepareForExportCommand.ExecutionTask;
+            Assert.IsNotNull(preparation);
+            await preparation;
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+
+            Assert.AreEqual("Ready", extractionState.Text);
+            Assert.AreEqual(2, reviewRows.Items.Count);
+            Assert.IsFalse(exportButton.IsEnabled);
 
             window.Width = 1100;
             window.UpdateLayout();
@@ -242,6 +265,26 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                             1,
                             [new DatabaseReviewValue(1, "B1", "Tag_B", sourceId)])
                     ]),
+                FailureCode: null,
+                FailureDescription: null));
+        }
+    }
+
+    private sealed class SuccessfulExtractionClient : IExtractionClient
+    {
+        public Task<ExtractionClientResult> ExtractAsync(
+            OperationCorrelation correlation,
+            DatabaseGenerationSummary databaseGeneration,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new ExtractionClientResult(
+                true,
+                OperationCompletion.FromCompletedItems(
+                    correlation,
+                    [OperationItemStatus.ProcessedSuccessfully("extraction-publication")]),
+                new CIA.Contracts.Extraction.ExtractionResultSummary(
+                    correlation.OperationId,
+                    databaseGeneration),
                 FailureCode: null,
                 FailureDescription: null));
         }

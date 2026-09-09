@@ -15,6 +15,7 @@ public sealed class ExtractionCoordinator(
 {
     private readonly object _stateGate = new();
     private ExtractionResultSummary? _currentResult;
+    private OperationCompletion? _currentCompletion;
 
     public ExtractionResultSummary? CurrentResult
     {
@@ -23,6 +24,17 @@ public sealed class ExtractionCoordinator(
             lock (_stateGate)
             {
                 return _currentResult;
+            }
+        }
+    }
+
+    public OperationCompletion? CurrentCompletion
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _currentCompletion;
             }
         }
     }
@@ -91,6 +103,7 @@ public sealed class ExtractionCoordinator(
             lock (_stateGate)
             {
                 _currentResult = result.PublishedResult;
+                _currentCompletion = result.Completion;
             }
 
             PublishedResultChanged?.Invoke(this, result.PublishedResult);
