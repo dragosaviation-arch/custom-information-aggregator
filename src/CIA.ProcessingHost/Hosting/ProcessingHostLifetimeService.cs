@@ -278,6 +278,9 @@ public sealed class ProcessingHostLifetimeService(
                             progress,
                             cancellationToken)
                         .ConfigureAwait(false);
+                    var sources = result.Sources
+                        .Select(source => source with { SourceSetId = command.SourceSetId })
+                        .ToArray();
                     await connection.SendAsync(
                             new LoadSourcesResponse(
                                 Guid.CreateVersion7(),
@@ -286,7 +289,7 @@ public sealed class ProcessingHostLifetimeService(
                                 result.Accepted
                                     ? CommandAcceptance.Accepted
                                     : CommandAcceptance.Rejected,
-                                result.Sources,
+                                sources,
                                 result.Failure)
                             {
                                 Issues = result.Issues

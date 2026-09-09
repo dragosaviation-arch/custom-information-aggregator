@@ -32,6 +32,23 @@ public sealed class ProcessingHostSourceIntakeClient(
         IProgress<SourceIntakeProgressSnapshot>? progress,
         CancellationToken cancellationToken = default)
     {
+        return await LoadAsync(
+            selectionKind,
+            path,
+            settings,
+            SourceSetId.CreateNew(),
+            progress,
+            cancellationToken);
+    }
+
+    public async Task<SourceIntakeClientResult> LoadAsync(
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings,
+        SourceSetId sourceSetId,
+        IProgress<SourceIntakeProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
         try
         {
             var state = await hostSupervisor.EnsureAvailableAsync(cancellationToken);
@@ -47,6 +64,7 @@ public sealed class ProcessingHostSourceIntakeClient(
                 selectionKind,
                 path,
                 settings,
+                sourceSetId,
                 progress,
                 cancellationToken);
             return new SourceIntakeClientResult(

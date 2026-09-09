@@ -165,6 +165,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                 selectionKind,
                 path,
                 settings,
+                SourceSetId.CreateNew(),
                 progress: null,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -174,6 +175,24 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         SourceSelectionKind selectionKind,
         string path,
         SourceLoadSettings settings,
+        IProgress<SourceIntakeProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
+        return await RequestSourceLoadAsync(
+                selectionKind,
+                path,
+                settings,
+                SourceSetId.CreateNew(),
+                progress,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<LoadSourcesResponse> RequestSourceLoadAsync(
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings,
+        SourceSetId sourceSetId,
         IProgress<SourceIntakeProgressSnapshot>? progress,
         CancellationToken cancellationToken = default)
     {
@@ -196,6 +215,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                 var command = new LoadSourcesCommand(
                     Guid.CreateVersion7(),
                     DateTimeOffset.UtcNow,
+                    sourceSetId,
                     selectionKind,
                     path,
                     settings);

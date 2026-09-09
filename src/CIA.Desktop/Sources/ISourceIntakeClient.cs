@@ -20,6 +20,28 @@ public interface ISourceIntakeClient
         return LoadAsync(selectionKind, path, settings, cancellationToken);
     }
 
+    async Task<SourceIntakeClientResult> LoadAsync(
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings,
+        SourceSetId sourceSetId,
+        IProgress<SourceIntakeProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await LoadAsync(
+            selectionKind,
+            path,
+            settings,
+            progress,
+            cancellationToken);
+        return result with
+        {
+            Sources = result.Sources
+                .Select(source => source with { SourceSetId = sourceSetId })
+                .ToArray()
+        };
+    }
+
     Task<SourceRefreshClientResult> RefreshAsync(
         LoadedSourceContract source,
         CancellationToken cancellationToken = default);

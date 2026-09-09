@@ -10,13 +10,21 @@ public sealed class ActiveLoadedSourceSet
 {
     private readonly ObservableCollection<LoadedSourceItem> _items = [];
     private readonly ReadOnlyObservableCollection<LoadedSourceItem> _readOnlyItems;
+    private readonly ObservableCollection<SourceSetDefinition> _sourceSets = [];
+    private readonly ReadOnlyObservableCollection<SourceSetDefinition> _readOnlySourceSets;
+    private int _nextDefaultSetNumber = 1;
 
     public ActiveLoadedSourceSet()
     {
         _readOnlyItems = new ReadOnlyObservableCollection<LoadedSourceItem>(_items);
+        _readOnlySourceSets = new ReadOnlyObservableCollection<SourceSetDefinition>(_sourceSets);
     }
 
     public ReadOnlyObservableCollection<LoadedSourceItem> Items => _readOnlyItems;
+
+    public ReadOnlyObservableCollection<SourceSetDefinition> SourceSets => _readOnlySourceSets;
+
+    public SourceSetDefinition? ActiveSourceSet { get; private set; }
 
     public IReadOnlyList<LoadedSourceContract> CreateIncludedReadySnapshot()
     {
@@ -24,6 +32,7 @@ public sealed class ActiveLoadedSourceSet
             .Where(source => source.IsIncluded && source.Status == LoadedSourceStatus.Ready)
             .Select(source => new LoadedSourceContract(
                 source.SourceId,
+                source.SourceSetId,
                 source.Path,
                 source.IsIncluded,
                 source.Status,
@@ -55,11 +64,112 @@ public sealed class ActiveLoadedSourceSet
         return _items.Contains(source);
     }
 
+    internal bool Contains(SourceSetId sourceSetId)
+    {
+        return _sourceSets.Any(sourceSet => sourceSet.SourceSetId == sourceSetId);
+    }
+
+    internal SourceSetDefinition CreateSourceSet(SourceSetId sourceSetId, string name)
+    {
+        if (sourceSetId.Value == Guid.Empty)
+        {
+            throw new ArgumentException("A Source Set requires a non-empty identity.", nameof(sourceSetId));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        if (Contains(sourceSetId))
+        {
+            throw new ArgumentException("The Source Set identity is already active.", nameof(sourceSetId));
+        }
+
+        var sourceSet = new SourceSetDefinition(sourceSetId, name.Trim());
+        _sourceSets.Add(sourceSet);
+        if (string.Equals(
+                sourceSet.Name,
+                $"Set {_nextDefaultSetNumber}",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _nextDefaultSetNumber++;
+        }
+
+        ActiveSourceSet = sourceSet;
+        return sourceSet;
+    }
+
+    internal string GetNextDefaultSourceSetName()
+    {
+        var candidateNumber = _nextDefaultSetNumber;
+        while (_sourceSets.Any(sourceSet =>
+            string.Equals(
+                sourceSet.Name,
+                $"Set {candidateNumber}",
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            candidateNumber++;
+        }
+
+        return $"Set {candidateNumber}";
+    }
+
+    internal bool Activate(SourceSetId sourceSetId)
+    {
+        var sourceSet = _sourceSets.FirstOrDefault(candidate =>
+            candidate.SourceSetId == sourceSetId);
+        if (sourceSet is null || ReferenceEquals(sourceSet, ActiveSourceSet))
+        {
+            return sourceSet is not null;
+        }
+
+        ActiveSourceSet = sourceSet;
+        return true;
+    }
+
+    internal bool Rename(SourceSetId sourceSetId, string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        var sourceSet = _sourceSets.FirstOrDefault(candidate =>
+            candidate.SourceSetId == sourceSetId);
+        if (sourceSet is null)
+        {
+            return false;
+        }
+
+        var normalizedName = name.Trim();
+        sourceSet.Rename(normalizedName);
+        foreach (var item in _items.Where(item => item.SourceSetId == sourceSetId))
+        {
+            item.SetSourceSet(sourceSetId, normalizedName);
+        }
+
+        return true;
+    }
+
     internal void AddRange(IEnumerable<LoadedSourceContract> sources)
     {
         foreach (var source in sources)
         {
-            _items.Add(new LoadedSourceItem(source));
+            var sourceSet = _sourceSets.FirstOrDefault(candidate =>
+                candidate.SourceSetId == source.SourceSetId)
+                ?? throw new InvalidOperationException(
+                    "A loaded source must belong to an active Source Set.");
+            _items.Add(new LoadedSourceItem(source, sourceSet.Name));
+        }
+    }
+
+    internal void Reassign(IEnumerable<LoadedSourceItem> sources, SourceSetDefinition sourceSet)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+        ArgumentNullException.ThrowIfNull(sourceSet);
+
+        if (!Contains(sourceSet.SourceSetId))
+        {
+            throw new ArgumentException("The destination Source Set is not active.", nameof(sourceSet));
+        }
+
+        foreach (var source in sources.Distinct())
+        {
+            source.SetSourceSet(sourceSet.SourceSetId, sourceSet.Name);
         }
     }
 
@@ -69,6 +179,30 @@ public sealed class ActiveLoadedSourceSet
         {
             _items.Remove(source);
         }
+    }
+}
+
+public sealed class SourceSetDefinition : ObservableObject
+{
+    private string _name;
+
+    internal SourceSetDefinition(SourceSetId sourceSetId, string name)
+    {
+        SourceSetId = sourceSetId;
+        _name = name;
+    }
+
+    public SourceSetId SourceSetId { get; }
+
+    public string Name
+    {
+        get => _name;
+        private set => SetProperty(ref _name, value);
+    }
+
+    internal void Rename(string name)
+    {
+        Name = name;
     }
 }
 
@@ -83,11 +217,17 @@ public sealed class LoadedSourceItem : ObservableObject
     private string _modifiedText = "—";
     private string _createdText = "—";
 
-    public LoadedSourceItem(LoadedSourceContract source)
+    private SourceSetId _sourceSetId;
+    private string _sourceSetName;
+
+    internal LoadedSourceItem(LoadedSourceContract source, string sourceSetName)
     {
         ArgumentNullException.ThrowIfNull(source);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceSetName);
 
         SourceId = source.SourceId;
+        _sourceSetId = source.SourceSetId;
+        _sourceSetName = sourceSetName;
         _path = source.Path;
         _isIncluded = source.IsIncluded;
         _status = source.Status;
@@ -97,6 +237,18 @@ public sealed class LoadedSourceItem : ObservableObject
     }
 
     public SourceId SourceId { get; }
+
+    public SourceSetId SourceSetId
+    {
+        get => _sourceSetId;
+        private set => SetProperty(ref _sourceSetId, value);
+    }
+
+    public string SourceSetName
+    {
+        get => _sourceSetName;
+        private set => SetProperty(ref _sourceSetName, value);
+    }
 
     public string Path
     {
@@ -210,7 +362,9 @@ public sealed class LoadedSourceItem : ObservableObject
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        if (source.SourceId != SourceId || source.Kind != Kind)
+        if (source.SourceId != SourceId
+            || source.SourceSetId != SourceSetId
+            || source.Kind != Kind)
         {
             throw new ArgumentException(
                 "A source refresh must retain the loaded source identity and kind.",
@@ -223,6 +377,13 @@ public sealed class LoadedSourceItem : ObservableObject
         StatusDetail = null;
         NotifyArchiveContextChanged();
         RefreshMetadata();
+    }
+
+    internal void SetSourceSet(SourceSetId sourceSetId, string sourceSetName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceSetName);
+        SourceSetId = sourceSetId;
+        SourceSetName = sourceSetName;
     }
 
     internal void ApplyRefreshFailure(

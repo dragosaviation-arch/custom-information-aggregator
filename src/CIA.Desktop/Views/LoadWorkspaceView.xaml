@@ -41,18 +41,72 @@
             </Grid.RowDefinitions>
 
             <StackPanel Orientation="Horizontal">
-                <Button Margin="0,0,6,0"
-                        Command="{Binding AddXmlFileCommand}"
-                        Style="{StaticResource CiaPrimaryButtonStyle}"
-                        Content="＋ Add Files" />
-                <Button Margin="0,0,6,0"
-                        Command="{Binding AddFolderCommand}"
-                        Style="{StaticResource CiaButtonStyle}"
-                        Content="＋ Add Folder" />
-                <Button Margin="0,0,6,0"
-                        Command="{Binding AddArchiveCommand}"
-                        Style="{StaticResource CiaButtonStyle}"
-                        Content="＋ Add Archive" />
+                <StackPanel Margin="0,0,6,0" Orientation="Horizontal">
+                    <Button Command="{Binding AddXmlFileCommand}"
+                            Style="{StaticResource CiaPrimaryButtonStyle}"
+                            Content="＋ Add Files" />
+                    <Button x:Name="AddFilesSetMenuButton"
+                            Margin="2,0,0,0"
+                            Padding="7,4"
+                            Click="OnAddFilesSetMenuClick"
+                            Content="▾"
+                            ToolTip="Choose a Source Set for the added files">
+                        <Button.Style>
+                            <Style BasedOn="{StaticResource CiaPrimaryButtonStyle}" TargetType="Button">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasSourceSets}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
+                <StackPanel Margin="0,0,6,0" Orientation="Horizontal">
+                    <Button Command="{Binding AddFolderCommand}"
+                            Style="{StaticResource CiaButtonStyle}"
+                            Content="＋ Add Folder" />
+                    <Button x:Name="AddFolderSetMenuButton"
+                            Margin="2,0,0,0"
+                            Padding="7,4"
+                            Click="OnAddFolderSetMenuClick"
+                            Content="▾"
+                            ToolTip="Choose a Source Set for the added folder">
+                        <Button.Style>
+                            <Style BasedOn="{StaticResource CiaButtonStyle}" TargetType="Button">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasSourceSets}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
+                <StackPanel Margin="0,0,6,0" Orientation="Horizontal">
+                    <Button Command="{Binding AddArchiveCommand}"
+                            Style="{StaticResource CiaButtonStyle}"
+                            Content="＋ Add Archive" />
+                    <Button x:Name="AddArchiveSetMenuButton"
+                            Margin="2,0,0,0"
+                            Padding="7,4"
+                            Click="OnAddArchiveSetMenuClick"
+                            Content="▾"
+                            ToolTip="Choose a Source Set for the added archive">
+                        <Button.Style>
+                            <Style BasedOn="{StaticResource CiaButtonStyle}" TargetType="Button">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasSourceSets}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </StackPanel>
                 <Button Command="{Binding RemoveCheckedCommand}"
                         Style="{StaticResource CiaDangerButtonStyle}"
                         Content="− Remove"
@@ -170,6 +224,13 @@
                         Style="{StaticResource CiaGhostButtonStyle}"
                         Content="Refresh selected"
                         ToolTip="Refresh highlighted source rows." />
+                <Button x:Name="ReassignSetMenuButton"
+                        Margin="0,0,6,0"
+                        Click="OnReassignSetMenuClick"
+                        IsEnabled="{Binding HasHighlightedSources}"
+                        Style="{StaticResource CiaGhostButtonStyle}"
+                        Content="Move selected ▾"
+                        ToolTip="Move highlighted rows to another Source Set." />
                 <TextBlock VerticalAlignment="Center"
                            FontWeight="Bold"
                            Foreground="{StaticResource CiaTextPrimaryBrush}"
@@ -197,8 +258,9 @@
                         <Grid Margin="6,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="34" />
-                                <ColumnDefinition Width="1.55*" MinWidth="135" />
-                                <ColumnDefinition Width="2.1*" MinWidth="165" />
+                                <ColumnDefinition Width="1.45*" MinWidth="110" />
+                                <ColumnDefinition Width="1.9*" MinWidth="135" />
+                                <ColumnDefinition Width="64" />
                                 <ColumnDefinition Width="42" />
                                 <ColumnDefinition Width="72" />
                                 <ColumnDefinition Width="100" />
@@ -211,14 +273,17 @@
                                        Style="{StaticResource CiaSourceHeaderTextStyle}"
                                        Text="Path" />
                             <TextBlock Grid.Column="3"
+                                       Style="{StaticResource CiaSourceHeaderTextStyle}"
+                                       Text="Set" />
+                            <TextBlock Grid.Column="4"
                                        HorizontalAlignment="Center"
                                        Style="{StaticResource CiaSourceHeaderTextStyle}"
                                        Text="Lvl"
                                        ToolTip="Archive nesting depth" />
-                            <TextBlock Grid.Column="4"
+                            <TextBlock Grid.Column="5"
                                        Style="{StaticResource CiaSourceHeaderTextStyle}"
                                        Text="Size" />
-                            <TextBlock Grid.Column="5"
+                            <TextBlock Grid.Column="6"
                                        Style="{StaticResource CiaSourceHeaderTextStyle}"
                                        Text="Status" />
                         </Grid>
@@ -305,8 +370,9 @@
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="34" />
-                                                <ColumnDefinition Width="1.55*" MinWidth="135" />
-                                                <ColumnDefinition Width="2.1*" MinWidth="165" />
+                                                <ColumnDefinition Width="1.45*" MinWidth="110" />
+                                                <ColumnDefinition Width="1.9*" MinWidth="135" />
+                                                <ColumnDefinition Width="64" />
                                                 <ColumnDefinition Width="42" />
                                                 <ColumnDefinition Width="72" />
                                                 <ColumnDefinition Width="100" />
@@ -345,15 +411,21 @@
                                                        TextTrimming="CharacterEllipsis"
                                                        ToolTip="{Binding Path}" />
                                             <TextBlock Grid.Column="3"
+                                                       VerticalAlignment="Center"
+                                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                                       Text="{Binding SourceSetName}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding SourceSetName}" />
+                                            <TextBlock Grid.Column="4"
                                                        HorizontalAlignment="Center"
                                                        VerticalAlignment="Center"
                                                        Style="{StaticResource CiaSecondaryTextStyle}"
                                                        Text="{Binding LevelText}" />
-                                            <TextBlock Grid.Column="4"
+                                            <TextBlock Grid.Column="5"
                                                        VerticalAlignment="Center"
                                                        Style="{StaticResource CiaSecondaryTextStyle}"
                                                        Text="{Binding SizeText}" />
-                                            <StackPanel Grid.Column="5"
+                                            <StackPanel Grid.Column="6"
                                                         VerticalAlignment="Center"
                                                         Orientation="Horizontal"
                                                         ToolTip="{Binding StatusDetail}">
@@ -391,7 +463,7 @@
                                                            Foreground="{StaticResource CiaTextSecondaryBrush}"
                                                            Text="{Binding StatusText}" />
                                             </StackPanel>
-                                            <Button Grid.Column="6"
+                                            <Button Grid.Column="7"
                                                     Width="28"
                                                     Height="28"
                                                     Command="{Binding DataContext.RefreshSourceCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
@@ -727,6 +799,29 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <StackPanel>
+                                <TextBlock Margin="0,3,0,3"
+                                           FontSize="10.5"
+                                           FontWeight="ExtraBold"
+                                           Foreground="{StaticResource CiaAccentBrush}"
+                                           Text="SOURCE SET" />
+                                <ComboBox Height="29"
+                                          DisplayMemberPath="Name"
+                                          ItemsSource="{Binding SourceSets}"
+                                          SelectedItem="{Binding ActiveSourceSet, Mode=TwoWay}" />
+                                <TextBox Margin="0,5,0,0"
+                                         MaxLength="100"
+                                         Style="{StaticResource CiaTextInputStyle}"
+                                         Text="{Binding ActiveSourceSetName, UpdateSourceTrigger=PropertyChanged}" />
+                                <StackPanel Margin="0,5,0,8" Orientation="Horizontal">
+                                    <Button Margin="0,0,5,0"
+                                            Command="{Binding CreateSourceSetCommand}"
+                                            Style="{StaticResource CiaButtonStyle}"
+                                            Content="Create Set" />
+                                    <Button Command="{Binding RenameActiveSourceSetCommand}"
+                                            Style="{StaticResource CiaGhostButtonStyle}"
+                                            Content="Rename" />
+                                </StackPanel>
+                                <Border Style="{StaticResource CiaDividerStyle}" />
                                 <TextBlock Margin="0,3,0,3"
                                            FontSize="10.5"
                                            FontWeight="ExtraBold"

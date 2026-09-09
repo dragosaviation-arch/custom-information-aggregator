@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using CIA.Contracts.Sources;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 
@@ -123,6 +124,88 @@ public partial class LoadWorkspaceView : UserControl
             viewModel.SetHighlightedSources(
                 SourceRowsList.SelectedItems.Cast<LoadedSourceItem>());
         }
+    }
+
+    private void OnAddFilesSetMenuClick(object sender, RoutedEventArgs e)
+    {
+        ShowAddSourceSetMenu((Button)sender, SourceSelectionKind.XmlFile);
+    }
+
+    private void OnAddFolderSetMenuClick(object sender, RoutedEventArgs e)
+    {
+        ShowAddSourceSetMenu((Button)sender, SourceSelectionKind.Folder);
+    }
+
+    private void OnAddArchiveSetMenuClick(object sender, RoutedEventArgs e)
+    {
+        ShowAddSourceSetMenu((Button)sender, SourceSelectionKind.Archive);
+    }
+
+    private void ShowAddSourceSetMenu(Button button, SourceSelectionKind selectionKind)
+    {
+        if (DataContext is not LoadWorkspaceViewModel viewModel)
+        {
+            return;
+        }
+
+        var menu = CreateSourceSetMenu(
+            viewModel,
+            async sourceSet => await viewModel.AddUsingSourceSetAsync(selectionKind, sourceSet),
+            "Add to ",
+            "Create new Set");
+        OpenMenu(button, menu);
+    }
+
+    private void OnReassignSetMenuClick(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not LoadWorkspaceViewModel viewModel)
+        {
+            return;
+        }
+
+        var menu = CreateSourceSetMenu(
+            viewModel,
+            sourceSet =>
+            {
+                viewModel.ReassignHighlightedSources(sourceSet);
+                return Task.CompletedTask;
+            },
+            "Move to ",
+            "Move to new Set");
+        OpenMenu((Button)sender, menu);
+    }
+
+    private static ContextMenu CreateSourceSetMenu(
+        LoadWorkspaceViewModel viewModel,
+        Func<SourceSetDefinition?, Task> action,
+        string existingSetPrefix,
+        string createNewLabel)
+    {
+        var menu = new ContextMenu();
+        foreach (var sourceSet in viewModel.SourceSets)
+        {
+            var item = new MenuItem { Header = existingSetPrefix + sourceSet.Name };
+            item.Click += async (_, _) => await action(sourceSet);
+            menu.Items.Add(item);
+        }
+
+        if (menu.Items.Count > 0)
+        {
+            menu.Items.Add(new Separator());
+        }
+
+        var createNew = new MenuItem { Header = createNewLabel };
+        createNew.Click += async (_, _) => await action(null);
+        menu.Items.Add(createNew);
+        return menu;
+    }
+
+    private static void OpenMenu(Button button, ContextMenu menu)
+    {
+        button.ContextMenu = menu;
+        menu.PlacementTarget = button;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
     }
 
     private void UpdateDropOverlayVisibility()

@@ -83,17 +83,21 @@ public sealed class ProcessingHostLifecycleTests
         var sourcePath = Path.Combine(fixture.WorkDirectory, "source.xml");
         await File.WriteAllTextAsync(sourcePath, "<root />");
         await fixture.Supervisor.EnsureAvailableAsync();
+        var sourceSetId = SourceSetId.CreateNew();
 
         var response = await fixture.Supervisor.RequestSourceLoadAsync(
             SourceSelectionKind.XmlFile,
             sourcePath,
-            SourceLoadSettings.Default);
+            SourceLoadSettings.Default,
+            sourceSetId,
+            progress: null);
 
         Assert.AreEqual(CommandAcceptance.Accepted, response.Acceptance);
         Assert.IsNull(response.Failure);
         Assert.HasCount(1, response.Sources);
         Assert.AreEqual(Path.GetFullPath(sourcePath), response.Sources[0].Path);
         Assert.AreEqual(LoadedSourceKind.XmlFile, response.Sources[0].Kind);
+        Assert.AreEqual(sourceSetId, response.Sources[0].SourceSetId);
     }
 
     [TestMethod]

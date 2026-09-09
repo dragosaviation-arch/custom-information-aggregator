@@ -63,13 +63,32 @@ public sealed record CancelOperationCommand(
     OperationId OperationId)
     : IpcCommand(MessageId, TimestampUtc);
 
+[method: JsonConstructor]
 public sealed record LoadSourcesCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc,
+    SourceSetId SourceSetId,
     SourceSelectionKind SelectionKind,
     string Path,
     SourceLoadSettings Settings)
-    : IpcCommand(MessageId, TimestampUtc);
+    : IpcCommand(MessageId, TimestampUtc)
+{
+    public LoadSourcesCommand(
+        Guid messageId,
+        DateTimeOffset timestampUtc,
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings)
+        : this(
+            messageId,
+            timestampUtc,
+            SourceSetId.CreateNew(),
+            selectionKind,
+            path,
+            settings)
+    {
+    }
+}
 
 public sealed record RefreshSourceCommand(
     Guid MessageId,
