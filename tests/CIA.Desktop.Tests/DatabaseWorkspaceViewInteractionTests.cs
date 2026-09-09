@@ -92,6 +92,7 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var reviewRows = (ItemsControl)view.FindName("DatabaseReviewRows");
             var lowerTabs = (Grid)view.FindName("LowerTabs");
             var exportFields = (Border)view.FindName("ExportFieldsPanel");
+            var exportRows = (ItemsControl)view.FindName("ExportColumnRows");
             var excelExport = (Border)view.FindName("ExcelExportPanel");
             var exportButton = (Button)view.FindName("ExportToExcelButton");
             var prepareButton = (Button)view.FindName("PrepareForExportButton");
@@ -107,12 +108,15 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                 .Cells[1].DisplayValue);
             Assert.AreEqual(Visibility.Collapsed, lowerTabs.Visibility);
             Assert.AreEqual(Visibility.Visible, exportFields.Visibility);
+            Assert.AreEqual(2, exportRows.Items.Count);
+            Assert.AreSame(viewModel.ExportColumns, exportRows.ItemsSource);
             Assert.AreEqual(Visibility.Visible, excelExport.Visibility);
             Assert.IsFalse(exportButton.IsEnabled);
             Assert.IsTrue(prepareButton.IsEnabled);
             Assert.AreEqual("Not prepared", extractionState.Text);
             Assert.IsNull(view.FindName("DatabaseFiltersButton"));
             Assert.IsNull(view.FindName("ExtractionReviewRows"));
+            Assert.IsNull(view.FindName("GlobalSourceIdExportField"));
 
             Assert.IsNotNull(prepareButton.Command);
             prepareButton.Command.Execute(prepareButton.CommandParameter);
