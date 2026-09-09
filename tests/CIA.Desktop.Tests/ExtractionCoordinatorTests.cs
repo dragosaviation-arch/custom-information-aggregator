@@ -1,12 +1,14 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Extraction;
+using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Diagnostics;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Extraction;
+using CIA.Desktop.Export;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
@@ -292,6 +294,93 @@ public sealed class ExtractionCoordinatorTests
         Assert.AreEqual(WorkflowOperationState.Cancelled, context.Workflow.Current.LatestOperation?.State);
     }
 
+    [TestMethod]
+    public async Task WorkbookExportCapturesCurrentExtractionAndConfiguration()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync(valueCount: 2);
+        var extractionClient = new RecordingExtractionClient((correlation, basis) =>
+            Success(correlation, basis));
+        var extraction = context.CreateExtractionCoordinator(extractionClient);
+        Assert.IsTrue((await extraction.ExtractAsync()).Accepted);
+        var configuration = new ExportConfigurationSnapshot(
+        [
+            new ExportFieldConfiguration("Database Field", true, "Header", true)
+        ]);
+        var targetPath = Path.GetFullPath("captured-export.xlsx");
+        var exportClient = new RecordingWorkbookExportClient(
+            (correlation, result, snapshot, target) => new WorkbookExportClientResult(
+                true,
+                OperationCompletion.FromCompletedItems(
+                    correlation,
+                    [OperationItemStatus.ProcessedSuccessfully("workbook-publication")]),
+                new WorkbookExportSummary(
+                    correlation.OperationId,
+                    result.OperationId,
+                    target,
+                    snapshot.CreateIncludedOutputColumns().Count,
+                    dataRowCount: 2),
+                FailureCode: null,
+                FailureDescription: null));
+        var coordinator = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+
+        var result = await coordinator.ExportAsync(targetPath, configuration);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreSame(extraction.CurrentResult, exportClient.ExtractionResult);
+        Assert.AreSame(configuration, exportClient.Configuration);
+        Assert.AreEqual(targetPath, exportClient.TargetPath);
+        Assert.AreEqual(extraction.CurrentResult?.OperationId, coordinator.LastWorkbook?.ExtractionResultId);
+        Assert.AreEqual(WorkflowOperationKind.Export, context.Workflow.Current.LatestOperation?.Kind);
+        Assert.AreEqual(
+            WorkflowOperationState.CompletedSuccessfully,
+            context.Workflow.Current.LatestOperation?.State);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
+    }
+
+    [TestMethod]
+    public async Task WorkbookExportRejectsUnavailableOrStaleExtraction()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        var extractionClient = new RecordingExtractionClient((correlation, basis) =>
+            Success(correlation, basis));
+        var extraction = context.CreateExtractionCoordinator(extractionClient);
+        var exportClient = new RecordingWorkbookExportClient((_, _, _, _) =>
+            throw new AssertFailedException("A rejected export must not reach the client."));
+        var coordinator = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        var configuration = new ExportConfigurationSnapshot(
+        [
+            new ExportFieldConfiguration("Database Field", true, "Header", false)
+        ]);
+
+        var unavailable = await coordinator.ExportAsync(
+            Path.GetFullPath("unavailable.xlsx"),
+            configuration);
+
+        Assert.IsFalse(unavailable.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.ExtractionNotCurrent, unavailable.Rejection?.Code);
+
+        await context.BuildCurrentDatabaseAsync();
+        Assert.IsTrue((await extraction.ExtractAsync()).Accepted);
+        Assert.IsTrue(context.Workflow.RecordDiscoveryConfigurationChanged().Accepted);
+
+        var stale = await coordinator.ExportAsync(
+            Path.GetFullPath("stale.xlsx"),
+            configuration);
+
+        Assert.IsFalse(stale.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.ExtractionNotCurrent, stale.Rejection?.Code);
+        Assert.AreEqual(0, exportClient.CallCount);
+    }
+
     private static ExtractionClientResult Success(
         OperationCorrelation correlation,
         DatabaseGenerationSummary databaseGeneration)
@@ -377,6 +466,53 @@ public sealed class ExtractionCoordinatorTests
             DatabaseGeneration = databaseGeneration;
             Started.TrySetResult();
             return _extract(correlation, databaseGeneration);
+        }
+    }
+
+    private sealed class RecordingWorkbookExportClient : IWorkbookExportClient
+    {
+        private readonly Func<
+            OperationCorrelation,
+            ExtractionResultSummary,
+            ExportConfigurationSnapshot,
+            string,
+            WorkbookExportClientResult> _export;
+
+        public RecordingWorkbookExportClient(
+            Func<
+                OperationCorrelation,
+                ExtractionResultSummary,
+                ExportConfigurationSnapshot,
+                string,
+                WorkbookExportClientResult> export)
+        {
+            _export = export;
+        }
+
+        public ExtractionResultSummary? ExtractionResult { get; private set; }
+
+        public ExportConfigurationSnapshot? Configuration { get; private set; }
+
+        public string? TargetPath { get; private set; }
+
+        public int CallCount { get; private set; }
+
+        public Task<WorkbookExportClientResult> ExportAsync(
+            OperationCorrelation correlation,
+            ExtractionResultSummary extractionResult,
+            ExportConfigurationSnapshot configuration,
+            string targetPath,
+            CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            ExtractionResult = extractionResult;
+            Configuration = configuration;
+            TargetPath = targetPath;
+            return Task.FromResult(_export(
+                correlation,
+                extractionResult,
+                configuration,
+                targetPath));
         }
     }
 

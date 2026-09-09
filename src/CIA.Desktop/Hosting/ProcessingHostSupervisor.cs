@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Export;
 using CIA.Contracts.Extraction;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
@@ -593,6 +594,86 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                     throw new IpcProtocolException(
                         IpcProtocolError.InvalidContract,
                         "The Processing Host returned an invalid Extraction response.");
+                }
+            }
+            finally
+            {
+                lock (_stateGate)
+                {
+                    if (_activeProcessingOperationId == correlation.OperationId)
+                    {
+                        _activeProcessingOperationId = null;
+                    }
+                }
+
+                _requestGate.Release();
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    public async Task<RunWorkbookExportResponse> RequestWorkbookExportAsync(
+        OperationCorrelation correlation,
+        ExtractionResultSummary extractionResult,
+        ExportConfigurationSnapshot configuration,
+        string targetPath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(correlation);
+        ArgumentNullException.ThrowIfNull(extractionResult);
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
+        ThrowIfDisposed();
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (!IsCurrentHostReady())
+            {
+                throw new InvalidOperationException(
+                    "The Processing Host is not ready for workbook export requests.");
+            }
+
+            var connection = _connection!;
+            await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                var command = new RunWorkbookExportCommand(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    correlation,
+                    extractionResult,
+                    configuration,
+                    targetPath);
+                await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+                lock (_stateGate)
+                {
+                    _activeProcessingOperationId = correlation.OperationId;
+                }
+
+                while (true)
+                {
+                    var response = await connection.ReceiveAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (response is RunWorkbookExportResponse exportResponse
+                        && exportResponse.CommandMessageId == command.MessageId
+                        && exportResponse.Completion.Correlation == correlation)
+                    {
+                        return exportResponse;
+                    }
+
+                    if (response is CommandAcknowledgement)
+                    {
+                        continue;
+                    }
+
+                    throw new IpcProtocolException(
+                        IpcProtocolError.InvalidContract,
+                        "The Processing Host returned an invalid workbook export response.");
                 }
             }
             finally

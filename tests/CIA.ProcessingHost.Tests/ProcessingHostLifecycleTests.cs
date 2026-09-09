@@ -13,6 +13,7 @@ using CIA.Desktop.Hosting;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Extraction;
+using CIA.ProcessingHost.Export;
 using CIA.ProcessingHost.Hosting;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
@@ -176,6 +177,7 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<DatabaseGenerationService>();
         builder.Services.AddSingleton<DatabaseReviewService>();
         builder.Services.AddSingleton<DatabaseExtractionService>();
+        builder.Services.AddSingleton<ExcelWorkbookExportService>();
         builder.Services.AddHostedService<ProcessingHostLifetimeService>();
         using var host = builder.Build();
 
@@ -274,6 +276,7 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<DatabaseGenerationService>();
         builder.Services.AddSingleton<DatabaseReviewService>();
         builder.Services.AddSingleton<DatabaseExtractionService>();
+        builder.Services.AddSingleton<ExcelWorkbookExportService>();
         builder.Services.AddHostedService<ProcessingHostLifetimeService>();
         using var host = builder.Build();
 

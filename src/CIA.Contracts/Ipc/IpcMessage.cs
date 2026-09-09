@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Export;
 using CIA.Contracts.Extraction;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -19,6 +20,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceCommand), "getDiscoveryOccurrenceCommand")]
 [JsonDerivedType(typeof(BuildDatabaseCommand), "buildDatabaseCommand")]
 [JsonDerivedType(typeof(RunExtractionCommand), "runExtractionCommand")]
+[JsonDerivedType(typeof(RunWorkbookExportCommand), "runWorkbookExportCommand")]
 [JsonDerivedType(typeof(GetDatabaseReviewPageCommand), "getDatabaseReviewPageCommand")]
 [JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
@@ -28,6 +30,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceResponse), "getDiscoveryOccurrenceResponse")]
 [JsonDerivedType(typeof(BuildDatabaseResponse), "buildDatabaseResponse")]
 [JsonDerivedType(typeof(RunExtractionResponse), "runExtractionResponse")]
+[JsonDerivedType(typeof(RunWorkbookExportResponse), "runWorkbookExportResponse")]
 [JsonDerivedType(typeof(GetDatabaseReviewPageResponse), "getDatabaseReviewPageResponse")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 [JsonDerivedType(typeof(SourceIntakeProgressEvent), "sourceIntakeProgressEvent")]
@@ -100,6 +103,15 @@ public sealed record RunExtractionCommand(
     DateTimeOffset TimestampUtc,
     OperationCorrelation Correlation,
     DatabaseGenerationSummary DatabaseGeneration)
+    : IpcCommand(MessageId, TimestampUtc);
+
+public sealed record RunWorkbookExportCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    OperationCorrelation Correlation,
+    ExtractionResultSummary ExtractionResult,
+    ExportConfigurationSnapshot Configuration,
+    string TargetPath)
     : IpcCommand(MessageId, TimestampUtc);
 
 public sealed record GetDatabaseReviewPageCommand(
@@ -182,6 +194,16 @@ public sealed record RunExtractionResponse(
     CommandAcceptance Acceptance,
     OperationCompletion Completion,
     ExtractionResultSummary? PublishedResult,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record RunWorkbookExportResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    CommandAcceptance Acceptance,
+    OperationCompletion Completion,
+    WorkbookExportSummary? Workbook,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 

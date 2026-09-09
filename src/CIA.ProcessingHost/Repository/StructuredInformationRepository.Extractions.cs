@@ -8,6 +8,13 @@ using Microsoft.Data.Sqlite;
 
 namespace CIA.ProcessingHost.Repository;
 
+public sealed record ExtractionResultExportValue(
+    int FieldValueOrdinal,
+    string DatabaseFieldName,
+    string SourceInformationType,
+    string Value,
+    SourceId SourceId);
+
 public sealed partial class StructuredInformationRepository
 {
     public async Task<ExtractionResultSummary> ExtractPublishedDatabaseAsync(
@@ -238,6 +245,82 @@ public sealed partial class StructuredInformationRepository
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.GetString(2),
+                SourceId.From(sourceId));
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async IAsyncEnumerable<ExtractionResultExportValue>
+        StreamPublishedExtractionValuesForExportAsync(
+            OperationId extractionId,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        if (extractionId.Value == Guid.Empty || extractionId.Value.Version != 7)
+        {
+            throw new ArgumentException(
+                "An Extraction Result export requires a UUIDv7 Operation ID.",
+                nameof(extractionId));
+        }
+
+        await InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await using var connection = await OpenGenerationConnectionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await using var transaction = connection.BeginTransaction(deferred: true);
+        var publishedExtractionId = await ReadPublishedExtractionIdAsync(
+                connection,
+                transaction,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (!string.Equals(
+                publishedExtractionId,
+                extractionId.ToString(),
+                StringComparison.Ordinal))
+        {
+            throw new StructuredInformationRepositoryException(
+                "The captured Extraction Result is no longer the current published result.");
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            WITH ordered_values AS (
+                SELECT
+                    ROW_NUMBER() OVER (
+                        PARTITION BY database_field_name
+                        ORDER BY value_ordinal) AS field_value_ordinal,
+                    database_field_name,
+                    source_information_type,
+                    value,
+                    source_id
+                FROM extraction_values
+                WHERE extraction_id = $extractionId
+            )
+            SELECT
+                field_value_ordinal,
+                database_field_name,
+                source_information_type,
+                value,
+                source_id
+            FROM ordered_values
+            ORDER BY field_value_ordinal, database_field_name COLLATE BINARY;
+            """;
+        command.Parameters.AddWithValue("$extractionId", extractionId.ToString());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken)
+            .ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (!Guid.TryParseExact(reader.GetString(4), "D", out var sourceId))
+            {
+                throw new StructuredInformationRepositoryException(
+                    "The Extraction Result contains invalid source provenance.");
+            }
+
+            yield return new ExtractionResultExportValue(
+                reader.GetInt32(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
                 SourceId.From(sourceId));
         }
 
