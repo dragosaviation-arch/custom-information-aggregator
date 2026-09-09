@@ -28,6 +28,7 @@ public interface IGenericXmlSourceAdapter
         SourceId originatingSourceId,
         XmlReader reader,
         string informationType,
+        string structuralPath,
         int localOrdinal,
         CancellationToken cancellationToken = default);
 }
@@ -38,6 +39,7 @@ public interface ISourceOccurrenceAdapter
         SourceId originatingSourceId,
         XmlReader reader,
         string informationType,
+        string structuralPath,
         int localOrdinal,
         CancellationToken cancellationToken = default);
 }

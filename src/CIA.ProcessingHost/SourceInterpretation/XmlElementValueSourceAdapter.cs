@@ -47,6 +47,7 @@ public sealed class XmlElementValueSourceAdapter(SourceStructureDeclaration decl
         SourceId originatingSourceId,
         XmlReader reader,
         string informationType,
+        string structuralPath,
         int localOrdinal,
         CancellationToken cancellationToken = default)
     {
@@ -59,6 +60,7 @@ public sealed class XmlElementValueSourceAdapter(SourceStructureDeclaration decl
 
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(structuralPath);
 
         if (localOrdinal < 1)
         {
@@ -74,6 +76,7 @@ public sealed class XmlElementValueSourceAdapter(SourceStructureDeclaration decl
                 originatingSourceId,
                 reader,
                 informationType,
+                structuralPath,
                 localOrdinal,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -143,11 +146,13 @@ public sealed class GenericXmlElementValueSourceAdapter
         SourceId originatingSourceId,
         XmlReader reader,
         string informationType,
+        string structuralPath,
         int localOrdinal,
         CancellationToken cancellationToken = default)
     {
         ValidateArguments(originatingSourceId, reader);
         ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(structuralPath);
 
         if (localOrdinal < 1)
         {
@@ -160,6 +165,7 @@ public sealed class GenericXmlElementValueSourceAdapter
             originatingSourceId,
             reader,
             informationType,
+            structuralPath,
             localOrdinal,
             cancellationToken);
     }
@@ -229,6 +235,7 @@ internal static class XmlElementValueReader
         SourceId originatingSourceId,
         XmlReader reader,
         string informationType,
+        string structuralPath,
         int localOrdinal,
         CancellationToken cancellationToken)
     {
@@ -243,6 +250,10 @@ internal static class XmlElementValueReader
                 if (!string.Equals(
                         value.InformationType,
                         informationType,
+                        StringComparison.Ordinal)
+                    || !string.Equals(
+                        value.Lineage?.StructuralPath ?? $"/{value.InformationType}",
+                        structuralPath,
                         StringComparison.Ordinal))
                 {
                     return ValueTask.CompletedTask;

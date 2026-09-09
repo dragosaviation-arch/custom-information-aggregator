@@ -322,8 +322,9 @@ public static class IpcContractValidator
 
         ValidateOperationId(lookup.DiscoveryOperationId, "Discovery occurrence requests");
         ValidateLoadedSource(lookup.Source);
+        ValidateDiscoveryInformationIdentity(lookup.Identity);
 
-        if (string.IsNullOrWhiteSpace(lookup.InformationType)
+        if (lookup.Identity.SourceSetId != lookup.Source.SourceSetId
             || lookup.GlobalOrdinal < 1
             || lookup.TotalOccurrenceCount < lookup.GlobalOrdinal
             || lookup.LocalOrdinal < 1
@@ -425,11 +426,10 @@ public static class IpcContractValidator
 
         ValidateOperationCorrelation(response.Completion.Correlation);
 
-        var informationTypes = new HashSet<string>(StringComparer.Ordinal);
+        var informationIdentities = new HashSet<DiscoveryInformationIdentity>();
         foreach (var information in response.Information)
         {
             if (information is null
-                || string.IsNullOrWhiteSpace(information.InformationType)
                 || information.SampleValue is null
                 || information.TotalOccurrenceCount < 1
                 || information.ContributingSources is null
@@ -438,7 +438,8 @@ public static class IpcContractValidator
                 throw InvalidContract("A discovered information item is invalid.");
             }
 
-            if (!informationTypes.Add(information.InformationType))
+            ValidateDiscoveryInformationIdentity(information.Identity);
+            if (!informationIdentities.Add(information.Identity))
             {
                 throw InvalidContract("Discovered information identities must be unique.");
             }
@@ -882,13 +883,25 @@ public static class IpcContractValidator
 
     private static void ValidateDiscoveredOccurrence(DiscoveredOccurrence occurrence)
     {
-        if (string.IsNullOrWhiteSpace(occurrence.InformationType)
-            || occurrence.Ordinal < 1
+        ValidateDiscoveryInformationIdentity(occurrence.Identity);
+        if (occurrence.Ordinal < 1
             || occurrence.TotalOccurrenceCount < occurrence.Ordinal
             || !SourceId.IsValid(occurrence.SourceId.Value)
             || occurrence.Value is null)
         {
             throw InvalidContract("A discovered occurrence is invalid.");
+        }
+    }
+
+    private static void ValidateDiscoveryInformationIdentity(
+        DiscoveryInformationIdentity identity)
+    {
+        if (identity is null
+            || !SourceSetId.IsValid(identity.SourceSetId.Value)
+            || string.IsNullOrWhiteSpace(identity.StructuralPath)
+            || string.IsNullOrWhiteSpace(identity.InformationType))
+        {
+            throw InvalidContract("A Discovery information identity is invalid.");
         }
     }
 

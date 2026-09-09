@@ -23,6 +23,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly DatabaseBuildCoordinator? _databaseBuildCoordinator;
     private readonly ObservableCollection<DiscoveredInformationItemViewModel> _visibleInformation = [];
     private readonly ReadOnlyObservableCollection<DiscoveredInformationItemViewModel> _readOnlyInformation;
+    private readonly ObservableCollection<SourceSetLayoutItemViewModel> _sourceSetLayouts = [];
+    private readonly ReadOnlyObservableCollection<SourceSetLayoutItemViewModel>
+        _readOnlySourceSetLayouts;
     private readonly RelayCommand _previousPageCommand;
     private readonly RelayCommand _nextPageCommand;
     private readonly AsyncRelayCommand<DiscoveredInformationItemViewModel?> _selectInformationCommand;
@@ -89,6 +92,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _uiSynchronizationContext = SynchronizationContext.Current;
         _readOnlyInformation = new ReadOnlyObservableCollection<DiscoveredInformationItemViewModel>(
             _visibleInformation);
+        _readOnlySourceSetLayouts = new ReadOnlyObservableCollection<SourceSetLayoutItemViewModel>(
+            _sourceSetLayouts);
 
         RunDiscoveryCommand = new AsyncRelayCommand(RunDiscoveryAsync, CanRunDiscovery);
         BuildDatabaseCommand = new AsyncRelayCommand(
@@ -140,7 +145,16 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             source.PropertyChanged += OnSourcePropertyChanged;
         }
 
+        foreach (var sourceSetDefinition in _sourceSet.SourceSets)
+        {
+            sourceSetDefinition.PropertyChanged += OnSourceSetPropertyChanged;
+        }
+
         ((INotifyCollectionChanged)_sourceSet.Items).CollectionChanged += OnSourcesChanged;
+        ((INotifyCollectionChanged)_sourceSet.SourceSets).CollectionChanged += OnSourceSetsChanged;
+        _activeConfiguration.SynchronizeSourceSets(
+            _sourceSet.SourceSets.Select(sourceSet => sourceSet.SourceSetId));
+        RefreshSourceSetLayouts();
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
         if (_databaseBuildCoordinator is not null)
         {
@@ -152,6 +166,17 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public ReadOnlyObservableCollection<DiscoveredInformationItemViewModel> Information =>
         _readOnlyInformation;
+
+    public ReadOnlyObservableCollection<SourceSetLayoutItemViewModel> SourceSetLayouts =>
+        _readOnlySourceSetLayouts;
+
+    public IReadOnlyList<RepeatedDataLayoutOption> RepeatedDataLayoutOptions { get; } =
+    [
+        new(RepeatedDataLayout.AlignRepeatedGroupsByPosition, "Align repeated groups by position"),
+        new(RepeatedDataLayout.StructuralRows, "Structural rows"),
+        new(RepeatedDataLayout.AllCombinations, "All combinations"),
+        new(RepeatedDataLayout.NumberRepeatedValuesIntoColumns, "Number repeated values into columns")
+    ];
 
     public IReadOnlyList<int> PageSizes { get; } = [25, 50, 100, 250];
 
@@ -299,6 +324,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(RunButtonText));
                 OnPropertyChanged(nameof(DiscoveryStateText));
                 OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
+                OnPropertyChanged(nameof(CanConfigureRepeatedDataLayout));
                 RunDiscoveryCommand.NotifyCanExecuteChanged();
                 BuildDatabaseCommand.NotifyCanExecuteChanged();
                 NotifyConfigurationCommandsChanged();
@@ -322,6 +348,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             {
                 OnPropertyChanged(nameof(DiscoveryStateText));
                 OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
+                OnPropertyChanged(nameof(CanConfigureRepeatedDataLayout));
             }
         }
     }
@@ -370,6 +397,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public string PageSummary => $"{CurrentPage} / {PageCount}";
 
     public string TagHeaderText => HeaderText("Tag", "Tag");
+
+    public string SourceSetHeaderText => HeaderText("SourceSet", "Source Set");
+
+    public string ContextHeaderText => HeaderText("Context", "Context");
 
     public string DatabaseTagHeaderText => HeaderText("DatabaseTag", "Database Tag");
 
@@ -430,6 +461,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public bool CanEditDatabaseTagOverride =>
         SelectedInformation is not null && CanChangeConfiguration();
+
+    public bool CanConfigureRepeatedDataLayout => CanChangeConfiguration();
 
     public string DatabaseTagOverrideActionText =>
         SelectedInformation?.HasDatabaseTagOverride == true ? "Revert" : "Default";
@@ -522,6 +555,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         ((INotifyCollectionChanged)_sourceSet.Items).CollectionChanged -= OnSourcesChanged;
+        ((INotifyCollectionChanged)_sourceSet.SourceSets).CollectionChanged -= OnSourceSetsChanged;
         _workflowCoordinator.StateChanged -= OnWorkflowStateChanged;
         if (_databaseBuildCoordinator is not null)
         {
@@ -532,6 +566,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         foreach (var source in _sourceSet.Items)
         {
             source.PropertyChanged -= OnSourcePropertyChanged;
+        }
+
+        foreach (var sourceSet in _sourceSet.SourceSets)
+        {
+            sourceSet.PropertyChanged -= OnSourceSetPropertyChanged;
         }
 
         Interlocked.Increment(ref _previewRequestVersion);
@@ -602,18 +641,22 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             }
 
             _activeConfiguration.Synchronize(
-                result.Information.Select(information => information.InformationType));
+                result.Information.Select(information => information.Identity));
+            _activeConfiguration.SynchronizeSourceSets(
+                _sourceSet.SourceSets.Select(sourceSet => sourceSet.SourceSetId)
+                    .Concat(result.Information.Select(information => information.SourceSetId)));
             var dispositions = _activeConfiguration.Current.Items.ToDictionary(
-                item => item.InformationType,
-                item => item.Disposition,
-                StringComparer.Ordinal);
-            var databaseTagOverrides = _activeConfiguration.DatabaseTagOverrides;
+                item => item.Identity,
+                item => item.Disposition);
+            var databaseTagOverrides = _activeConfiguration.DatabaseTagOverridesByIdentity;
             _allInformation = result.Information
                 .Select(information => new DiscoveredInformationItemViewModel(
                     information,
-                    dispositions[information.InformationType],
-                    databaseTagOverrides.GetValueOrDefault(information.InformationType)))
+                    ResolveSourceSetName(information.SourceSetId),
+                    dispositions[information.Identity],
+                    databaseTagOverrides.GetValueOrDefault(information.Identity)))
                 .ToArray();
+            RefreshSourceSetLayouts();
             _publishedDiscoveryOperationId = result.Completion.Correlation.OperationId;
             _publishedDiscoverySources = CreatePublishedSourceSnapshot(
                 sources,
@@ -792,10 +835,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             var occurrence = result.Occurrence;
             if (!result.Accepted
                 || occurrence is null
-                || !string.Equals(
-                    occurrence.InformationType,
-                    information.InformationType,
-                    StringComparison.Ordinal)
+                || occurrence.Identity != information.Identity
                 || occurrence.Ordinal != ordinal
                 || occurrence.TotalOccurrenceCount != information.TotalOccurrenceCount
                 || occurrence.SourceId != lookup.Source.SourceId)
@@ -868,7 +908,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             {
                 lookup = new DiscoveryOccurrenceLookup(
                     discoveryOperationId,
-                    information.InformationType,
+                    information.Identity,
                     globalOrdinal,
                     information.TotalOccurrenceCount,
                     source,
@@ -995,7 +1035,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         ApplyConfigurationChange(
             () => _activeConfiguration.SetSelection(
-                [information.InformationType],
+                [information.Identity],
                 !information.IsSelected));
     }
 
@@ -1008,7 +1048,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         ApplyConfigurationChange(
             () => _activeConfiguration.SetBlacklisted(
-                    information.InformationType,
+                    information.Identity,
                     !information.IsBlacklisted)
                 ? 1
                 : 0);
@@ -1052,7 +1092,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         var workflowResult = _workflowCoordinator.RecordDiscoveryConfigurationChanged();
         if (!workflowResult.Accepted
             || !_activeConfiguration.SetDatabaseTagOverride(
-                information.InformationType,
+                information.Identity,
                 next))
         {
             OnPropertyChanged(nameof(SelectedDatabaseTag));
@@ -1072,7 +1112,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             .Where(information => isSelected
                 ? !information.IsSelected && !information.IsBlacklisted
                 : information.IsSelected)
-            .Select(information => information.InformationType)
+            .Select(information => information.Identity)
             .ToArray();
         if (targets.Length == 0)
         {
@@ -1102,21 +1142,65 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private void ApplyActiveConfiguration()
     {
         var dispositions = _activeConfiguration.Current.Items.ToDictionary(
-            item => item.InformationType,
-            item => item.Disposition,
-            StringComparer.Ordinal);
-        var databaseTagOverrides = _activeConfiguration.DatabaseTagOverrides;
+            item => item.Identity,
+            item => item.Disposition);
+        var databaseTagOverrides = _activeConfiguration.DatabaseTagOverridesByIdentity;
         foreach (var information in _allInformation)
         {
-            information.ApplyDisposition(dispositions[information.InformationType]);
+            information.ApplyDisposition(dispositions[information.Identity]);
             information.ApplyDatabaseTagOverride(
-                databaseTagOverrides.GetValueOrDefault(information.InformationType));
+                databaseTagOverrides.GetValueOrDefault(information.Identity));
         }
 
         OnPropertyChanged(nameof(SelectedDatabaseTag));
         OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
         _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
         RefreshPresentation();
+    }
+
+    private bool ChangeRepeatedDataLayout(SourceSetId sourceSetId, RepeatedDataLayout layout)
+    {
+        if (!CanConfigureRepeatedDataLayout
+            || !_activeConfiguration.RepeatedDataLayouts.TryGetValue(sourceSetId, out var current)
+            || current == layout)
+        {
+            return false;
+        }
+
+        var workflowResult = _workflowCoordinator.RecordDiscoveryConfigurationChanged();
+        if (!workflowResult.Accepted
+            || !_activeConfiguration.SetRepeatedDataLayout(sourceSetId, layout))
+        {
+            return false;
+        }
+
+        OnPropertyChanged(nameof(DatabaseStateText));
+        return true;
+    }
+
+    private void RefreshSourceSetLayouts()
+    {
+        _activeConfiguration.SynchronizeSourceSets(
+            _sourceSet.SourceSets.Select(sourceSet => sourceSet.SourceSetId)
+                .Concat(_allInformation.Select(information => information.SourceSetId)));
+        var layouts = _activeConfiguration.RepeatedDataLayouts;
+        _sourceSetLayouts.Clear();
+        foreach (var sourceSet in _sourceSet.SourceSets)
+        {
+            _sourceSetLayouts.Add(new SourceSetLayoutItemViewModel(
+                sourceSet.SourceSetId,
+                sourceSet.Name,
+                layouts[sourceSet.SourceSetId],
+                RepeatedDataLayoutOptions,
+                ChangeRepeatedDataLayout));
+        }
+    }
+
+    private string ResolveSourceSetName(SourceSetId sourceSetId)
+    {
+        return _sourceSet.SourceSets
+            .FirstOrDefault(sourceSet => sourceSet.SourceSetId == sourceSetId)?.Name
+            ?? "Unknown Source Set";
     }
 
     private void RefreshPresentation()
@@ -1127,6 +1211,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             query = query.Where(information =>
                 information.InformationType.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
+                || information.SourceSetName.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
+                || information.StructuralPath.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
                 || information.DatabaseTag.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
                 || information.SampleValue.Contains(SearchText, StringComparison.OrdinalIgnoreCase));
         }
@@ -1183,6 +1269,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     {
         Func<DiscoveredInformationItemViewModel, object> keySelector = _sortColumn switch
         {
+            "SourceSet" => item => item.SourceSetName,
+            "Context" => item => item.StructuralPath,
             "DatabaseTag" => item => item.DatabaseTag,
             "Occurrences" => item => item.TotalOccurrenceCount,
             "Sources" => item => item.SourceCount,
@@ -1225,6 +1313,47 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         NotifySourceStateChanged();
+    }
+
+    private void OnSourceSetsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+        {
+            foreach (SourceSetDefinition sourceSet in e.OldItems)
+            {
+                sourceSet.PropertyChanged -= OnSourceSetPropertyChanged;
+            }
+        }
+
+        if (e.NewItems is not null)
+        {
+            foreach (SourceSetDefinition sourceSet in e.NewItems)
+            {
+                sourceSet.PropertyChanged += OnSourceSetPropertyChanged;
+            }
+        }
+
+        RefreshSourceSetLayouts();
+        RefreshSourceSetNames();
+    }
+
+    private void OnSourceSetPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SourceSetDefinition.Name))
+        {
+            RefreshSourceSetLayouts();
+            RefreshSourceSetNames();
+        }
+    }
+
+    private void RefreshSourceSetNames()
+    {
+        foreach (var information in _allInformation)
+        {
+            information.ApplySourceSetName(ResolveSourceSetName(information.SourceSetId));
+        }
+
+        RefreshPresentation();
     }
 
     private void OnSourcePropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -1281,6 +1410,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     private void NotifyHeaderTextChanged()
     {
+        OnPropertyChanged(nameof(SourceSetHeaderText));
+        OnPropertyChanged(nameof(ContextHeaderText));
         OnPropertyChanged(nameof(TagHeaderText));
         OnPropertyChanged(nameof(DatabaseTagHeaderText));
         OnPropertyChanged(nameof(OccurrencesHeaderText));
@@ -1343,19 +1474,23 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
 {
     private DiscoveryInformationDisposition _disposition;
     private string? _databaseTagOverride;
+    private string _sourceSetName;
 
     public DiscoveredInformationItemViewModel(
         DiscoveredInformation information,
+        string sourceSetName,
         DiscoveryInformationDisposition disposition,
         string? databaseTagOverride = null)
     {
         ArgumentNullException.ThrowIfNull(information);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceSetName);
         if (!Enum.IsDefined(disposition))
         {
             throw new ArgumentOutOfRangeException(nameof(disposition), disposition, null);
         }
 
-        InformationType = information.InformationType;
+        Identity = information.Identity;
+        _sourceSetName = sourceSetName;
         var candidate = databaseTagOverride?.Trim();
         _databaseTagOverride = string.IsNullOrWhiteSpace(candidate)
             || string.Equals(
@@ -1372,7 +1507,15 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         _disposition = disposition;
     }
 
-    public string InformationType { get; }
+    public DiscoveryInformationIdentity Identity { get; }
+
+    public SourceSetId SourceSetId => Identity.SourceSetId;
+
+    public string SourceSetName => _sourceSetName;
+
+    public string StructuralPath => Identity.StructuralPath;
+
+    public string InformationType => Identity.InformationType;
 
     public string DatabaseTag => DatabaseTagOverride ?? InformationType;
 
@@ -1441,6 +1584,55 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         OnPropertyChanged(nameof(DatabaseTagOverride));
         OnPropertyChanged(nameof(DatabaseTag));
         OnPropertyChanged(nameof(HasDatabaseTagOverride));
+    }
+
+    internal void ApplySourceSetName(string sourceSetName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceSetName);
+        SetProperty(ref _sourceSetName, sourceSetName, nameof(SourceSetName));
+    }
+}
+
+public sealed record RepeatedDataLayoutOption(RepeatedDataLayout Mode, string DisplayName);
+
+public sealed class SourceSetLayoutItemViewModel : ObservableObject
+{
+    private readonly Func<SourceSetId, RepeatedDataLayout, bool> _changeLayout;
+    private RepeatedDataLayout _selectedLayout;
+
+    public SourceSetLayoutItemViewModel(
+        SourceSetId sourceSetId,
+        string sourceSetName,
+        RepeatedDataLayout selectedLayout,
+        IReadOnlyList<RepeatedDataLayoutOption> options,
+        Func<SourceSetId, RepeatedDataLayout, bool> changeLayout)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceSetName);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(changeLayout);
+        SourceSetId = sourceSetId;
+        SourceSetName = sourceSetName;
+        _selectedLayout = selectedLayout;
+        Options = options;
+        _changeLayout = changeLayout;
+    }
+
+    public SourceSetId SourceSetId { get; }
+
+    public string SourceSetName { get; }
+
+    public IReadOnlyList<RepeatedDataLayoutOption> Options { get; }
+
+    public RepeatedDataLayout SelectedLayout
+    {
+        get => _selectedLayout;
+        set
+        {
+            if (_selectedLayout != value && _changeLayout(SourceSetId, value))
+            {
+                SetProperty(ref _selectedLayout, value);
+            }
+        }
     }
 }
 
