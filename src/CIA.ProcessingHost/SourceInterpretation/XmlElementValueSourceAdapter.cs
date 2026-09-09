@@ -34,7 +34,7 @@ public sealed class XmlElementValueSourceAdapter(SourceStructureDeclaration decl
         }
 
         var values = await XmlElementValueReader
-            .ReadValuesAsync(reader, cancellationToken)
+            .ReadValuesAsync(originatingSourceId, reader, cancellationToken)
             .ConfigureAwait(false);
 
         return new InterpretedSourceDocument(
@@ -70,7 +70,12 @@ public sealed class XmlElementValueSourceAdapter(SourceStructureDeclaration decl
         ValidateDocumentRoot(reader);
 
         return await XmlElementValueReader
-            .ReadOccurrenceAsync(reader, informationType, localOrdinal, cancellationToken)
+            .ReadOccurrenceAsync(
+                originatingSourceId,
+                reader,
+                informationType,
+                localOrdinal,
+                cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -94,6 +99,7 @@ public sealed class XmlElementValueSourceAdapter(SourceStructureDeclaration decl
         ValidateDocumentRoot(reader);
 
         return XmlElementValueReader.ReadSelectedValuesAsync(
+            originatingSourceId,
             reader,
             selectedInformationTypes,
             onBatch,
@@ -127,7 +133,7 @@ public sealed class GenericXmlElementValueSourceAdapter
         ValidateArguments(originatingSourceId, reader);
 
         var values = await XmlElementValueReader
-            .ReadValuesAsync(reader, cancellationToken)
+            .ReadValuesAsync(originatingSourceId, reader, cancellationToken)
             .ConfigureAwait(false);
 
         return new InterpretedSourceDocument(originatingSourceId, StructureId, values);
@@ -151,6 +157,7 @@ public sealed class GenericXmlElementValueSourceAdapter
         }
 
         return XmlElementValueReader.ReadOccurrenceAsync(
+            originatingSourceId,
             reader,
             informationType,
             localOrdinal,
@@ -169,6 +176,7 @@ public sealed class GenericXmlElementValueSourceAdapter
         ArgumentNullException.ThrowIfNull(onBatch);
 
         return XmlElementValueReader.ReadSelectedValuesAsync(
+            originatingSourceId,
             reader,
             selectedInformationTypes,
             onBatch,
@@ -198,16 +206,18 @@ public sealed class GenericXmlElementValueSourceAdapter
 internal static class XmlElementValueReader
 {
     public static async ValueTask<IReadOnlyList<InterpretedSourceValue>> ReadValuesAsync(
+        SourceId originatingSourceId,
         XmlReader reader,
         CancellationToken cancellationToken)
     {
         var values = new List<InterpretedSourceValue>();
 
         await ReadAsync(
+            originatingSourceId,
             reader,
-            (informationType, value) =>
+            value =>
             {
-                values.Add(new InterpretedSourceValue(informationType, value));
+                values.Add(value);
                 return ValueTask.CompletedTask;
             },
             cancellationToken).ConfigureAwait(false);
@@ -216,6 +226,7 @@ internal static class XmlElementValueReader
     }
 
     public static async ValueTask<SourceOccurrenceRead> ReadOccurrenceAsync(
+        SourceId originatingSourceId,
         XmlReader reader,
         string informationType,
         int localOrdinal,
@@ -225,11 +236,12 @@ internal static class XmlElementValueReader
         string? requestedValue = null;
 
         await ReadAsync(
+            originatingSourceId,
             reader,
-            (currentInformationType, value) =>
+            value =>
             {
                 if (!string.Equals(
-                        currentInformationType,
+                        value.InformationType,
                         informationType,
                         StringComparison.Ordinal))
                 {
@@ -239,7 +251,7 @@ internal static class XmlElementValueReader
                 occurrenceCount++;
                 if (occurrenceCount == localOrdinal)
                 {
-                    requestedValue = value;
+                    requestedValue = value.Content;
                 }
 
                 return ValueTask.CompletedTask;
@@ -250,6 +262,7 @@ internal static class XmlElementValueReader
     }
 
     public static async ValueTask<int> ReadSelectedValuesAsync(
+        SourceId originatingSourceId,
         XmlReader reader,
         IReadOnlySet<string> selectedInformationTypes,
         Func<IReadOnlyList<InterpretedSourceValue>, ValueTask> onBatch,
@@ -260,15 +273,16 @@ internal static class XmlElementValueReader
         var valueCount = 0;
 
         await ReadAsync(
+            originatingSourceId,
             reader,
-            async (informationType, value) =>
+            async value =>
             {
-                if (!selectedInformationTypes.Contains(informationType))
+                if (!selectedInformationTypes.Contains(value.InformationType))
                 {
                     return;
                 }
 
-                batch.Add(new InterpretedSourceValue(informationType, value));
+                batch.Add(value);
                 valueCount++;
                 if (batch.Count == batchSize)
                 {
@@ -287,11 +301,14 @@ internal static class XmlElementValueReader
     }
 
     private static async ValueTask ReadAsync(
+        SourceId originatingSourceId,
         XmlReader reader,
-        Func<string, string, ValueTask> onValue,
+        Func<InterpretedSourceValue, ValueTask> onValue,
         CancellationToken cancellationToken)
     {
-        var containingElements = new Stack<string>();
+        var containingElements = new Stack<SourceElementInstance>();
+        long elementInstanceId = 0;
+        long valueTraversalOrder = 0;
 
         do
         {
@@ -299,16 +316,35 @@ internal static class XmlElementValueReader
 
             switch (reader.NodeType)
             {
-                case XmlNodeType.Element when !reader.IsEmptyElement:
-                    containingElements.Push(reader.Name);
+                case XmlNodeType.Element:
+                    var element = new SourceElementInstance(
+                        reader.LocalName,
+                        reader.NamespaceURI,
+                        reader.Name,
+                        checked(++elementInstanceId));
+
+                    if (!reader.IsEmptyElement)
+                    {
+                        containingElements.Push(element);
+                    }
+
                     break;
 
                 case XmlNodeType.Text:
                 case XmlNodeType.CDATA:
-                    if (containingElements.TryPeek(out var informationType)
+                    if (containingElements.TryPeek(out var containingElement)
                         && !string.IsNullOrWhiteSpace(reader.Value))
                     {
-                        await onValue(informationType, reader.Value).ConfigureAwait(false);
+                        var lineage = new SourceValueLineage(
+                            originatingSourceId,
+                            containingElements.Reverse(),
+                            checked(++valueTraversalOrder));
+                        await onValue(
+                                new InterpretedSourceValue(
+                                    containingElement.QualifiedName,
+                                    reader.Value,
+                                    lineage))
+                            .ConfigureAwait(false);
                     }
 
                     break;
