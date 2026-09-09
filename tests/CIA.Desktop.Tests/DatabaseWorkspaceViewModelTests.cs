@@ -1,3 +1,5 @@
+using System.Text.Json;
+using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
 using CIA.Core;
 using CIA.Desktop.Discovery;
@@ -190,6 +192,140 @@ public sealed class DatabaseWorkspaceViewModelTests
             column => column.Width == DatabaseColumnPresentation.DefaultWidth));
         Assert.IsFalse(alpha.IsExported);
         Assert.AreEqual("Alpha heading", alpha.ExcelHeader);
+    }
+
+    [TestMethod]
+    public async Task ExportConfigurationOwnsCompanionsAndOrdersIndependentlyFromDatabase()
+    {
+        var configuration = CreateConfiguration(
+            ["alpha", "beta", "gamma"],
+            ["alpha", "beta", "gamma"]);
+        using var workflow = CreateWorkflowCoordinator();
+        using var viewModel = new DatabaseWorkspaceViewModel(configuration, workflow);
+        await MakeDiscoveryCurrentAsync(workflow);
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.DatabaseBuild);
+        var alpha = viewModel.ExportColumns.Single(
+            column => column.InformationType == "alpha");
+        var beta = viewModel.ExportColumns.Single(
+            column => column.InformationType == "beta");
+        var gamma = viewModel.ExportColumns.Single(
+            column => column.InformationType == "gamma");
+
+        Assert.IsTrue(viewModel.ExportColumns.All(column => column.IsExported));
+        Assert.IsTrue(viewModel.ExportColumns.All(
+            column => !column.IsSourceIdExported));
+
+        alpha.ExcelHeader = "Alpha heading";
+        alpha.IsSourceIdExported = true;
+        beta.IsExported = false;
+        beta.IsSourceIdExported = true;
+        viewModel.MoveExportFieldUpCommand.Execute(gamma);
+        viewModel.MoveExportFieldUpCommand.Execute(gamma);
+        viewModel.MoveColumnDownCommand.Execute(
+            viewModel.Columns.Single(column => column.InformationType == "alpha"));
+        alpha.IsVisible = false;
+        alpha.Width = 275;
+
+        CollectionAssert.AreEqual(
+            new[] { "beta", "alpha", "gamma" },
+            viewModel.Columns.Select(column => column.InformationType).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "gamma", "alpha", "beta" },
+            viewModel.ExportColumns.Select(column => column.InformationType).ToArray());
+        Assert.IsFalse(beta.IsSourceIdExported);
+
+        var snapshot = viewModel.CaptureExportConfiguration();
+        var output = snapshot.CreateIncludedOutputColumns();
+        CollectionAssert.AreEqual(
+            new[] { "gamma", "Alpha heading", "Alpha heading SourceId" },
+            output.Select(column => column.Header).ToArray());
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                ExportOutputColumnKind.Value,
+                ExportOutputColumnKind.Value,
+                ExportOutputColumnKind.SourceId
+            },
+            output.Select(column => column.Kind).ToArray());
+        Assert.AreEqual(
+            output[1].OwningDatabaseFieldIdentity,
+            output[2].OwningDatabaseFieldIdentity);
+        Assert.AreEqual("alpha", output[1].OwningDatabaseFieldIdentity);
+        Assert.IsTrue(output.All(column =>
+            !string.IsNullOrWhiteSpace(column.OwningDatabaseFieldIdentity)));
+        Assert.IsFalse(output.Any(column =>
+            column.Kind == ExportOutputColumnKind.SourceId
+            && output.All(candidate =>
+                candidate.Kind != ExportOutputColumnKind.Value
+                || candidate.OwningDatabaseFieldIdentity
+                    != column.OwningDatabaseFieldIdentity)));
+        Assert.IsFalse(alpha.IsVisible);
+        Assert.AreEqual(275, alpha.Width);
+        Assert.AreEqual(WorkflowArtifactStatus.Unavailable, workflow.Current.Extraction);
+        Assert.IsFalse(viewModel.IsExportAvailable);
+    }
+
+    [TestMethod]
+    public async Task HeaderAndExportResetRestoreCanonicalRulesDeterministically()
+    {
+        var configuration = CreateConfiguration(
+            ["alpha", "beta", "gamma"],
+            ["alpha", "beta", "gamma"]);
+        using var workflow = CreateWorkflowCoordinator();
+        using var viewModel = new DatabaseWorkspaceViewModel(configuration, workflow);
+        await MakeDiscoveryCurrentAsync(workflow);
+        await CompleteSuccessfullyAsync(workflow, WorkflowOperationKind.DatabaseBuild);
+        var alpha = viewModel.ExportColumns.Single(
+            column => column.InformationType == "alpha");
+        var beta = viewModel.ExportColumns.Single(
+            column => column.InformationType == "beta");
+        var gamma = viewModel.ExportColumns.Single(
+            column => column.InformationType == "gamma");
+
+        alpha.ExcelHeader = "Description";
+        Assert.AreEqual("Description SourceId", alpha.SourceIdExportHeader);
+        alpha.IsSourceIdExported = true;
+        beta.IsExported = false;
+        viewModel.MoveExportFieldUpCommand.Execute(gamma);
+        viewModel.MoveExportFieldUpCommand.Execute(gamma);
+
+        var firstJson = JsonSerializer.Serialize(viewModel.CaptureExportConfiguration());
+        var secondJson = JsonSerializer.Serialize(viewModel.CaptureExportConfiguration());
+        Assert.AreEqual(firstJson, secondJson);
+        var roundTripped = JsonSerializer.Deserialize<ExportConfigurationSnapshot>(firstJson);
+        Assert.IsNotNull(roundTripped);
+        CollectionAssert.AreEqual(
+            new[] { "gamma", "alpha", "beta" },
+            roundTripped.Fields
+                .Select(field => field.DatabaseFieldIdentity)
+                .ToArray());
+        Assert.AreEqual("Description SourceId", roundTripped.Fields[1].SourceIdCompanionHeader);
+
+        viewModel.ResetExportCommand.Execute(null);
+
+        CollectionAssert.AreEqual(
+            new[] { "alpha", "beta", "gamma" },
+            viewModel.ExportColumns.Select(column => column.InformationType).ToArray());
+        Assert.IsTrue(viewModel.ExportColumns.All(column => column.IsExported));
+        Assert.IsTrue(viewModel.ExportColumns.All(
+            column => !column.IsSourceIdExported));
+        Assert.AreEqual("Description", alpha.ExcelHeader);
+        Assert.AreEqual("Description SourceId", alpha.SourceIdExportHeader);
+
+        viewModel.ResetHeadersCommand.Execute(null);
+
+        Assert.AreEqual("alpha", alpha.ExcelHeader);
+        Assert.AreEqual("alpha SourceId", alpha.SourceIdExportHeader);
+    }
+
+    [TestMethod]
+    public void ExportConfigurationRejectsACompanionWithoutItsOwningValueField()
+    {
+        Assert.ThrowsExactly<ArgumentException>(() => new ExportFieldConfiguration(
+            "database-field",
+            isValueIncluded: false,
+            "Field",
+            isSourceIdCompanionIncluded: true));
     }
 
     [TestMethod]

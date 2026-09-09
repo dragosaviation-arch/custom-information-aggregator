@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
 using CIA.Core.Database;
 using CIA.Desktop.Database;
@@ -26,7 +27,9 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private readonly Dictionary<string, DatabaseColumnPresentation> _columnCache = new(
         StringComparer.Ordinal);
     private readonly List<string> _publishedColumnOrder = [];
+    private readonly List<string> _canonicalExportOrder = [];
     private readonly ObservableCollection<DatabaseColumnPresentation> _columns = [];
+    private readonly ObservableCollection<DatabaseColumnPresentation> _exportColumns = [];
     private readonly ObservableCollection<DatabaseColumnPresentation> _visibleColumns = [];
     private readonly ObservableCollection<DatabaseReviewRowPresentation> _records = [];
     private WorkflowArtifactStatus _databaseStatus;
@@ -57,6 +60,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _extractionCoordinator = extractionCoordinator;
         _uiSynchronizationContext = SynchronizationContext.Current;
         Columns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(_columns);
+        ExportColumns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(
+            _exportColumns);
         VisibleColumns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(
             _visibleColumns);
         Records = new ReadOnlyObservableCollection<DatabaseReviewRowPresentation>(_records);
@@ -66,6 +71,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         MoveColumnDownCommand = new RelayCommand<DatabaseColumnPresentation>(
             MoveColumnDown,
             CanMoveColumnDown);
+        MoveExportFieldUpCommand = new RelayCommand<DatabaseColumnPresentation>(
+            MoveExportFieldUp,
+            CanMoveExportFieldUp);
+        MoveExportFieldDownCommand = new RelayCommand<DatabaseColumnPresentation>(
+            MoveExportFieldDown,
+            CanMoveExportFieldDown);
         ResetColumnLayoutCommand = new RelayCommand(ResetColumnLayout, HasColumns);
         ResetHeadersCommand = new RelayCommand(ResetHeaders, HasColumns);
         ResetExportCommand = new RelayCommand(ResetExport, HasColumns);
@@ -102,6 +113,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     public ReadOnlyObservableCollection<DatabaseColumnPresentation> Columns { get; }
 
+    public ReadOnlyObservableCollection<DatabaseColumnPresentation> ExportColumns { get; }
+
     public ReadOnlyObservableCollection<DatabaseColumnPresentation> VisibleColumns { get; }
 
     public ReadOnlyObservableCollection<DatabaseReviewRowPresentation> Records { get; }
@@ -109,6 +122,10 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand<DatabaseColumnPresentation> MoveColumnUpCommand { get; }
 
     public IRelayCommand<DatabaseColumnPresentation> MoveColumnDownCommand { get; }
+
+    public IRelayCommand<DatabaseColumnPresentation> MoveExportFieldUpCommand { get; }
+
+    public IRelayCommand<DatabaseColumnPresentation> MoveExportFieldDownCommand { get; }
 
     public IRelayCommand ResetColumnLayoutCommand { get; }
 
@@ -214,10 +231,10 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     public string ColumnCountText => $"{VisibleColumns.Count} / {Columns.Count} columns";
 
     public string ExportFieldCountText =>
-        $"{Columns.Count(column => column.IsExported)} / {Columns.Count} fields";
+        $"{ExportColumns.Count(column => column.IsExported)} / {ExportColumns.Count} fields";
 
     public string WorkbookExportFieldCountText =>
-        $"{Columns.Count(column => column.IsExported)} selected";
+        $"{CaptureExportConfiguration().CreateIncludedOutputColumns().Count} selected";
 
     public bool IsExportAvailable => false;
 
@@ -329,6 +346,17 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         && _extractionCoordinator?.CurrentResult?.DatabaseGeneration.OperationId
             == publishedGenerationId;
 
+    public ExportConfigurationSnapshot CaptureExportConfiguration()
+    {
+        return new ExportConfigurationSnapshot(_exportColumns
+            .Select(column => new ExportFieldConfiguration(
+                column.DatabaseField,
+                column.IsExported,
+                column.ExcelHeader,
+                column.IsSourceIdExported))
+            .ToArray());
+    }
+
     public string OutputFolder { get; set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
         "CIA",
@@ -416,6 +444,47 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         UpdatePositionsAndPresentation();
     }
 
+    private bool CanMoveExportFieldUp(DatabaseColumnPresentation? column)
+    {
+        return column is not null && _exportColumns.IndexOf(column) > 0;
+    }
+
+    private bool CanMoveExportFieldDown(DatabaseColumnPresentation? column)
+    {
+        return column is not null
+            && _exportColumns.IndexOf(column) is var index
+            && index >= 0
+            && index < _exportColumns.Count - 1;
+    }
+
+    private void MoveExportFieldUp(DatabaseColumnPresentation? column)
+    {
+        MoveExportField(column, -1);
+    }
+
+    private void MoveExportFieldDown(DatabaseColumnPresentation? column)
+    {
+        MoveExportField(column, 1);
+    }
+
+    private void MoveExportField(DatabaseColumnPresentation? column, int offset)
+    {
+        if (column is null)
+        {
+            return;
+        }
+
+        var currentIndex = _exportColumns.IndexOf(column);
+        var nextIndex = currentIndex + offset;
+        if (currentIndex < 0 || nextIndex < 0 || nextIndex >= _exportColumns.Count)
+        {
+            return;
+        }
+
+        _exportColumns.Move(currentIndex, nextIndex);
+        UpdateExportPositionsAndSnapshot();
+    }
+
     private void ResetColumnLayout()
     {
         foreach (var column in _columns)
@@ -437,10 +506,13 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private void ResetExport()
     {
-        foreach (var column in _columns)
+        foreach (var column in _exportColumns)
         {
-            column.IsExported = true;
+            column.ResetExport();
         }
+
+        ReorderExportColumns(_canonicalExportOrder);
+        UpdateExportPositionsAndSnapshot();
     }
 
     private IReadOnlyList<DatabaseColumnMapping> CapturePublishedColumns()
@@ -493,13 +565,26 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             .Where(identity => !retainedPresentationOrder.Contains(
                 identity,
                 StringComparer.Ordinal)));
+        var retainedExportOrder = _exportColumns
+            .Where(column => publishedIds.Contains(column.MappingIdentity))
+            .Select(column => column.MappingIdentity)
+            .ToList();
+        retainedExportOrder.AddRange(publishedColumns
+            .Select(column => CreateColumnIdentity(column.SourceInformationTypes))
+            .Where(identity => !retainedExportOrder.Contains(
+                identity,
+                StringComparer.Ordinal)));
 
         _publishedColumnOrder.Clear();
         _publishedColumnOrder.AddRange(
             publishedColumns.Select(column => CreateColumnIdentity(
                 column.SourceInformationTypes)));
+        _canonicalExportOrder.Clear();
+        _canonicalExportOrder.AddRange(_publishedColumnOrder);
         ReorderColumns(retainedPresentationOrder);
+        ReorderExportColumns(retainedExportOrder);
         UpdatePositionsAndPresentation();
+        UpdateExportPositionsAndSnapshot();
     }
 
     private void ReorderColumns(IEnumerable<string> orderedColumnIdentities)
@@ -510,6 +595,18 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             if (_columnCache.TryGetValue(columnIdentity, out var column))
             {
                 _columns.Add(column);
+            }
+        }
+    }
+
+    private void ReorderExportColumns(IEnumerable<string> orderedColumnIdentities)
+    {
+        _exportColumns.Clear();
+        foreach (var columnIdentity in orderedColumnIdentities)
+        {
+            if (_columnCache.TryGetValue(columnIdentity, out var column))
+            {
+                _exportColumns.Add(column);
             }
         }
     }
@@ -528,6 +625,18 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         ResetColumnLayoutCommand.NotifyCanExecuteChanged();
         ResetHeadersCommand.NotifyCanExecuteChanged();
         ResetExportCommand.NotifyCanExecuteChanged();
+    }
+
+    private void UpdateExportPositionsAndSnapshot()
+    {
+        for (var index = 0; index < _exportColumns.Count; index++)
+        {
+            _exportColumns[index].SetExportPosition(index + 1);
+        }
+
+        NotifyExportConfigurationChanged();
+        MoveExportFieldUpCommand.NotifyCanExecuteChanged();
+        MoveExportFieldDownCommand.NotifyCanExecuteChanged();
     }
 
     private void RebuildVisibleColumns()
@@ -549,6 +658,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(WorkbookExportFieldCountText));
     }
 
+    private void NotifyExportConfigurationChanged()
+    {
+        OnPropertyChanged(nameof(ExportFieldCountText));
+        OnPropertyChanged(nameof(WorkbookExportFieldCountText));
+    }
+
     private void OnColumnPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(DatabaseColumnPresentation.IsVisible))
@@ -556,10 +671,11 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             RebuildVisibleColumns();
         }
 
-        if (e.PropertyName == nameof(DatabaseColumnPresentation.IsExported))
+        if (e.PropertyName is nameof(DatabaseColumnPresentation.IsExported)
+            or nameof(DatabaseColumnPresentation.IsSourceIdExported)
+            or nameof(DatabaseColumnPresentation.ExcelHeader))
         {
-            OnPropertyChanged(nameof(ExportFieldCountText));
-            OnPropertyChanged(nameof(WorkbookExportFieldCountText));
+            NotifyExportConfigurationChanged();
         }
     }
 
@@ -935,7 +1051,9 @@ public sealed class DatabaseColumnPresentation : ObservableObject
     private bool _isVisible = true;
     private double _width = DefaultWidth;
     private int _position;
+    private int _exportPosition;
     private bool _isExported = true;
+    private bool _isSourceIdExported;
 
     internal DatabaseColumnPresentation(
         string mappingIdentity,
@@ -973,6 +1091,7 @@ public sealed class DatabaseColumnPresentation : ObservableObject
             if (SetProperty(ref _excelHeader, normalized))
             {
                 OnPropertyChanged(nameof(HasExcelHeaderOverride));
+                OnPropertyChanged(nameof(SourceIdExportHeader));
             }
         }
     }
@@ -1000,11 +1119,39 @@ public sealed class DatabaseColumnPresentation : ObservableObject
         private set => SetProperty(ref _position, value);
     }
 
+    public int ExportPosition
+    {
+        get => _exportPosition;
+        private set => SetProperty(ref _exportPosition, value);
+    }
+
     public bool IsExported
     {
         get => _isExported;
-        set => SetProperty(ref _isExported, value);
+        set
+        {
+            if (SetProperty(ref _isExported, value) && !value)
+            {
+                IsSourceIdExported = false;
+            }
+        }
     }
+
+    public bool IsSourceIdExported
+    {
+        get => _isSourceIdExported;
+        set
+        {
+            if (value && !IsExported)
+            {
+                return;
+            }
+
+            SetProperty(ref _isSourceIdExported, value);
+        }
+    }
+
+    public string SourceIdExportHeader => $"{ExcelHeader} SourceId";
 
     internal void UpdateMapping(DatabaseColumnMapping mapping)
     {
@@ -1035,6 +1182,11 @@ public sealed class DatabaseColumnPresentation : ObservableObject
         Position = position;
     }
 
+    internal void SetExportPosition(int position)
+    {
+        ExportPosition = position;
+    }
+
     internal void ResetPresentation()
     {
         IsVisible = true;
@@ -1044,5 +1196,11 @@ public sealed class DatabaseColumnPresentation : ObservableObject
     internal void ResetExcelHeader()
     {
         ExcelHeader = DatabaseField;
+    }
+
+    internal void ResetExport()
+    {
+        IsExported = true;
+        IsSourceIdExported = false;
     }
 }
