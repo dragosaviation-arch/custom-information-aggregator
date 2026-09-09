@@ -47,15 +47,26 @@ public sealed class InterpretedSourceDocument
 public sealed class InterpretedSourceValue
 {
     public InterpretedSourceValue(string informationType, string content)
+        : this(informationType, content, lineage: null)
+    {
+    }
+
+    public InterpretedSourceValue(
+        string informationType,
+        string content,
+        SourceValueLineage? lineage)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
         ArgumentNullException.ThrowIfNull(content);
 
         InformationType = informationType;
         Content = content;
+        Lineage = lineage;
     }
 
     public string InformationType { get; }
 
     public string Content { get; }
+
+    public SourceValueLineage? Lineage { get; }
 }
