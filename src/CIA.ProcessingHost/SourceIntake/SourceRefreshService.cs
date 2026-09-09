@@ -145,6 +145,7 @@ public sealed class SourceRefreshService(
         return reloaded with
         {
             SourceId = source.SourceId,
+            SourceSetId = source.SourceSetId,
             IsIncluded = source.IsIncluded,
             Status = status
         };

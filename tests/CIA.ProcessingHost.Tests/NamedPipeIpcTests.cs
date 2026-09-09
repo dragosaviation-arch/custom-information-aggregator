@@ -230,6 +230,7 @@ public sealed class NamedPipeIpcTests
         var archiveId = SourceId.CreateNew();
         var source = new LoadedSourceContract(
             SourceId.CreateNew(),
+            command.SourceSetId,
             Path.Combine(extractionRoot, "source.xml"),
             IsIncluded: true,
             LoadedSourceStatus.Ready,
@@ -296,6 +297,10 @@ public sealed class NamedPipeIpcTests
         var typedResponse = (LoadSourcesResponse)roundTrippedResponse;
         Assert.HasCount(1, typedResponse.Sources);
         Assert.AreEqual(source.SourceId, typedResponse.Sources[0].SourceId);
+        Assert.AreEqual(
+            command.SourceSetId,
+            ((LoadSourcesCommand)roundTrippedCommand).SourceSetId);
+        Assert.AreEqual(source.SourceSetId, typedResponse.Sources[0].SourceSetId);
         Assert.AreEqual(source.Path, typedResponse.Sources[0].Path);
         Assert.AreEqual(
             source.ArchiveProvenance?.OriginalArchiveSourceId,

@@ -39,6 +39,156 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    public async Task FirstSuccessfulLoadCreatesSetOneAndCarriesItsIdentityDownstream()
+    {
+        var path = Path.GetFullPath("first.xml");
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(
+            new StubSourceIntakeClient(Accept(CreateXml(path))),
+            sourceSet,
+            workflow);
+
+        var result = await coordinator.AddAsync(SourceSelectionKind.XmlFile, path);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.HasCount(1, sourceSet.SourceSets);
+        Assert.AreEqual("Set 1", sourceSet.SourceSets[0].Name);
+        Assert.AreSame(sourceSet.SourceSets[0], sourceSet.ActiveSourceSet);
+        Assert.AreNotEqual(Guid.Empty, sourceSet.SourceSets[0].SourceSetId.Value);
+        Assert.AreEqual(sourceSet.SourceSets[0].SourceSetId, sourceSet.Items[0].SourceSetId);
+        Assert.AreEqual("Set 1", sourceSet.Items[0].SourceSetName);
+        Assert.AreEqual(
+            sourceSet.SourceSets[0].SourceSetId,
+            sourceSet.CreateIncludedReadySnapshot().Single().SourceSetId);
+    }
+
+    [TestMethod]
+    public async Task ExistingAndNewSetLoadingPreserveNormalActiveSetBehavior()
+    {
+        var firstPath = Path.GetFullPath("first.xml");
+        var secondPath = Path.GetFullPath("second.xml");
+        var thirdPath = Path.GetFullPath("third.xml");
+        var fourthPath = Path.GetFullPath("fourth.xml");
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(
+            new SequencedSourceIntakeClient(
+                Accept(CreateXml(firstPath)),
+                Accept(CreateXml(secondPath)),
+                Accept(CreateXml(thirdPath)),
+                Accept(CreateXml(fourthPath))),
+            sourceSet,
+            workflow);
+
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, firstPath);
+        var firstSet = sourceSet.ActiveSourceSet!;
+        var created = coordinator.CreateSourceSet();
+        var secondSet = created.SourceSet!;
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, secondPath);
+        await coordinator.AddToSourceSetAsync(
+            SourceSelectionKind.XmlFile,
+            thirdPath,
+            SourceLoadSettings.Default,
+            firstSet.SourceSetId);
+        var newSetLoad = await coordinator.AddToNewSourceSetAsync(
+            SourceSelectionKind.XmlFile,
+            fourthPath,
+            SourceLoadSettings.Default);
+
+        Assert.AreEqual("Set 2", secondSet.Name);
+        Assert.AreEqual(secondSet.SourceSetId, sourceSet.Items.Single(item => item.Path == secondPath).SourceSetId);
+        Assert.AreEqual(firstSet.SourceSetId, sourceSet.Items.Single(item => item.Path == thirdPath).SourceSetId);
+        Assert.AreEqual("Set 3", sourceSet.ActiveSourceSet?.Name);
+        Assert.AreEqual(newSetLoad.SourceSetId, sourceSet.Items.Single(item => item.Path == fourthPath).SourceSetId);
+    }
+
+    [TestMethod]
+    public async Task LoadSettingsCreateAndRenameKeepTheInternalSetIdentityStable()
+    {
+        var path = Path.GetFullPath("source.xml");
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(
+            new StubSourceIntakeClient(Accept(CreateXml(path))),
+            sourceSet,
+            workflow);
+
+        Assert.IsFalse(coordinator.CreateSourceSet().Accepted);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, path);
+        var created = coordinator.CreateSourceSet();
+        var identity = created.SourceSet!.SourceSetId;
+        var renamed = coordinator.RenameSourceSet(identity, "Engine manuals");
+
+        Assert.IsTrue(renamed.Accepted);
+        Assert.AreEqual(identity, renamed.SourceSet?.SourceSetId);
+        Assert.AreEqual("Engine manuals", sourceSet.ActiveSourceSet?.Name);
+        Assert.IsFalse(coordinator.RenameSourceSet(identity, "Set 1").Accepted);
+    }
+
+    [TestMethod]
+    public async Task DragDropUsesTheActiveSourceSet()
+    {
+        var firstPath = Path.GetFullPath("first.xml");
+        var droppedPath = Path.GetFullPath("dropped.xml");
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(
+            new SequencedSourceIntakeClient(
+                Accept(CreateXml(firstPath)),
+                Accept(CreateXml(droppedPath))),
+            sourceSet,
+            workflow);
+        using var viewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(firstPath),
+            coordinator,
+            sourceSet,
+            workflow,
+            new MainWindowViewModel(new ApplicationSession()));
+
+        await viewModel.AddXmlFileCommand.ExecuteAsync(null);
+        viewModel.CreateSourceSetCommand.Execute(null);
+        var activeSetId = viewModel.ActiveSourceSet!.SourceSetId;
+        await viewModel.AddDroppedPathsAsync([droppedPath]);
+
+        Assert.AreEqual(activeSetId, sourceSet.Items.Single(item => item.Path == droppedPath).SourceSetId);
+    }
+
+    [TestMethod]
+    public async Task SingleAndBatchReassignmentPreserveSourcesAndInvalidateDownstream()
+    {
+        var first = CreateXml(Path.GetFullPath("first.xml"));
+        var second = CreateXml(Path.GetFullPath("second.xml"));
+        var third = CreateXml(Path.GetFullPath("third.xml"));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(
+            new StubSourceIntakeClient(Accept(first, second, third)),
+            sourceSet,
+            workflow);
+        await coordinator.AddAsync(SourceSelectionKind.Folder, Path.GetFullPath("folder"));
+        var originalSetId = sourceSet.ActiveSourceSet!.SourceSetId;
+        var destination = coordinator.CreateSourceSet().SourceSet!;
+        await CompleteWorkflowThroughExtractionAsync(workflow);
+
+        var single = coordinator.ReassignSources([sourceSet.Items[0]], destination.SourceSetId);
+        var batch = coordinator.ReassignSources(
+            [sourceSet.Items[1], sourceSet.Items[2]],
+            destination.SourceSetId);
+
+        Assert.AreEqual(1, single.ChangedCount);
+        Assert.AreEqual(2, batch.ChangedCount);
+        Assert.IsTrue(sourceSet.Items.All(item => item.SourceSetId == destination.SourceSetId));
+        Assert.IsTrue(sourceSet.Items.All(item => item.SourceSetId != originalSetId));
+        CollectionAssert.AreEquivalent(
+            new[] { first.SourceId, second.SourceId, third.SourceId },
+            sourceSet.Items.Select(item => item.SourceId).ToArray());
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Extraction);
+    }
+
+    [TestMethod]
     public async Task FilteredBulkInclusionUsesVisibleRowsAndUpdatesCompactCount()
     {
         var alphaPath = Path.GetFullPath("alpha.xml");

@@ -89,6 +89,28 @@ public sealed class UiReferenceReconciliationTests
             StringComparison.Ordinal)));
     }
 
+    [TestMethod]
+    public void LoadWorkspaceExposesNamedSourceSetsWithoutDisplayingInternalIds()
+    {
+        var root = FindRepositoryRoot();
+        var loadView = File.ReadAllText(Path.Combine(
+            root,
+            "src",
+            "CIA.Desktop",
+            "Views",
+            "LoadWorkspaceView.xaml"));
+
+        StringAssert.Contains(loadView, "AddFilesSetMenuButton");
+        StringAssert.Contains(loadView, "AddFolderSetMenuButton");
+        StringAssert.Contains(loadView, "AddArchiveSetMenuButton");
+        StringAssert.Contains(loadView, "ReassignSetMenuButton");
+        StringAssert.Contains(loadView, "ItemsSource=\"{Binding SourceSets}\"");
+        StringAssert.Contains(loadView, "Text=\"{Binding SourceSetName}\"");
+        Assert.IsFalse(loadView.Contains(
+            "Text=\"{Binding SourceSetId}\"",
+            StringComparison.Ordinal));
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

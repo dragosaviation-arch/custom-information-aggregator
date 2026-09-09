@@ -19,6 +19,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
     private readonly ISourcePathPicker _pathPicker;
     private readonly SourceLoadingCoordinator _loadingCoordinator;
+    private readonly ActiveLoadedSourceSet _sourceSet;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly MainWindowViewModel _shell;
     private readonly SynchronizationContext? _uiSynchronizationContext;
@@ -30,6 +31,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _cancelRemovalCommand;
     private readonly AsyncRelayCommand<LoadedSourceItem> _refreshSourceCommand;
     private readonly AsyncRelayCommand _refreshSelectedCommand;
+    private readonly RelayCommand _createSourceSetCommand;
+    private readonly RelayCommand _renameActiveSourceSetCommand;
     private IReadOnlyList<LoadedSourceItem> _highlightedSources = [];
     private IReadOnlyList<LoadedSourceItem> _pendingRemovalSources = [];
     private bool _includeXmlFiles = true;
@@ -46,6 +49,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private string _minimumSizeMb = string.Empty;
     private string _maximumSizeMb = string.Empty;
     private string _removalConfirmationMessage = string.Empty;
+    private string _activeSourceSetName = string.Empty;
     private LoadedSourceStatus? _appliedStatus;
     private double? _appliedMinimumSizeMb;
     private double? _appliedMaximumSizeMb;
@@ -75,6 +79,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
         _pathPicker = pathPicker;
         _loadingCoordinator = loadingCoordinator;
+        _sourceSet = sourceSet;
         _workflowCoordinator = workflowCoordinator;
         _shell = shell;
         _uiSynchronizationContext = SynchronizationContext.Current;
@@ -90,6 +95,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         ((INotifyCollectionChanged)Sources).CollectionChanged += OnSourcesChanged;
+        ((INotifyCollectionChanged)SourceSets).CollectionChanged += OnSourceSetsChanged;
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
 
         AddXmlFileCommand = new AsyncRelayCommand(
@@ -119,6 +125,12 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _refreshSelectedCommand = new AsyncRelayCommand(
             RefreshSelectedAsync,
             () => !IsBusy && _highlightedSources.Count > 0);
+        _createSourceSetCommand = new RelayCommand(
+            CreateSourceSet,
+            () => !IsBusy && HasSourceSets);
+        _renameActiveSourceSetCommand = new RelayCommand(
+            RenameActiveSourceSet,
+            () => !IsBusy && ActiveSourceSet is not null);
         ToggleFilterOptionsCommand = new RelayCommand(
             () => IsFilterOptionsOpen = !IsFilterOptionsOpen);
         ApplyFilterOptionsCommand = new RelayCommand(ApplyFilterOptions);
@@ -126,6 +138,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     }
 
     public ReadOnlyObservableCollection<LoadedSourceItem> Sources { get; }
+    public ReadOnlyObservableCollection<SourceSetDefinition> SourceSets => _sourceSet.SourceSets;
     public ICollectionView VisibleSources { get; }
     public IAsyncRelayCommand AddXmlFileCommand { get; }
     public IAsyncRelayCommand AddFolderCommand { get; }
@@ -138,13 +151,40 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand CancelRemovalCommand => _cancelRemovalCommand;
     public IAsyncRelayCommand RefreshSourceCommand => _refreshSourceCommand;
     public IAsyncRelayCommand RefreshSelectedCommand => _refreshSelectedCommand;
+    public IRelayCommand CreateSourceSetCommand => _createSourceSetCommand;
+    public IRelayCommand RenameActiveSourceSetCommand => _renameActiveSourceSetCommand;
     public IRelayCommand ToggleFilterOptionsCommand { get; }
     public IRelayCommand ApplyFilterOptionsCommand { get; }
     public IRelayCommand ClearFilterOptionsCommand { get; }
     public IReadOnlyList<string> FilterStatuses => AvailableStatuses;
     public bool HasSources => Sources.Count > 0;
+    public bool HasSourceSets => SourceSets.Count > 0;
+    public bool HasHighlightedSources => _highlightedSources.Count > 0;
     public int IncludedCount => Sources.Count(source => source.IsIncluded);
     public string IncludedSummary => $"{IncludedCount} / {Sources.Count} included";
+
+    public SourceSetDefinition? ActiveSourceSet
+    {
+        get => _sourceSet.ActiveSourceSet;
+        set
+        {
+            if (value is null
+                || ReferenceEquals(value, _sourceSet.ActiveSourceSet)
+                || !_loadingCoordinator.ActivateSourceSet(value.SourceSetId).Accepted)
+            {
+                return;
+            }
+
+            ActiveSourceSetName = value.Name;
+            OnPropertyChanged();
+        }
+    }
+
+    public string ActiveSourceSetName
+    {
+        get => _activeSourceSetName;
+        set => SetProperty(ref _activeSourceSetName, value);
+    }
     public string SourceSummary => _liveProgress is { } progress
         ? $"Found {progress.EncounteredItemCount} · Loaded {progress.LoadedSourceCount} · Issues {progress.IssueCount} · Failures {progress.FailureCount}"
         : $"Files found {Sources.Count} · Loaded {Sources.Count(source => source.Status == LoadedSourceStatus.Ready)} · Issues {_lastIntakeIssueCount + Sources.Count(source => source.Status == LoadedSourceStatus.Unsupported)} · Failures {_lastIntakeFailureCount + Sources.Count(source => source.Status is LoadedSourceStatus.Unavailable or LoadedSourceStatus.FailedValidation)}";
@@ -331,11 +371,67 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
+    public async Task AddUsingSourceSetAsync(
+        SourceSelectionKind selectionKind,
+        SourceSetDefinition? targetSourceSet)
+    {
+        Func<string?> pickPath = selectionKind switch
+        {
+            SourceSelectionKind.XmlFile => _pathPicker.PickXmlFile,
+            SourceSelectionKind.Folder => _pathPicker.PickFolder,
+            SourceSelectionKind.Archive => _pathPicker.PickArchive,
+            _ => throw new ArgumentOutOfRangeException(nameof(selectionKind))
+        };
+        var path = pickPath();
+        if (path is null)
+        {
+            return;
+        }
+
+        await AddPathAsync(
+            selectionKind,
+            path,
+            allowNavigation: true,
+            targetSourceSet,
+            createNewSourceSet: targetSourceSet is null);
+    }
+
+    public void ReassignHighlightedSources(SourceSetDefinition? targetSourceSet)
+    {
+        var result = targetSourceSet is null
+            ? _loadingCoordinator.ReassignSourcesToNewSet(_highlightedSources)
+            : _loadingCoordinator.ReassignSources(
+                _highlightedSources,
+                targetSourceSet.SourceSetId);
+
+        if (!result.Accepted)
+        {
+            StatusTitle = "Source membership unchanged";
+            StatusDetail = result.FailureDescription
+                ?? "The selected sources could not be reassigned.";
+            return;
+        }
+
+        if (result.SourceSet is not null)
+        {
+            _loadingCoordinator.ActivateSourceSet(result.SourceSet.SourceSetId);
+            NotifyActiveSourceSetChanged();
+        }
+
+        StatusTitle = result.ChangedCount == 0
+            ? "Source membership unchanged"
+            : "Source membership updated";
+        StatusDetail = result.ChangedCount == 0
+            ? "The selected sources already belong to that Source Set."
+            : $"Moved {result.ChangedCount} source(s) to {result.SourceSet!.Name}.";
+    }
+
     public void SetHighlightedSources(IEnumerable<LoadedSourceItem> sources)
     {
         ArgumentNullException.ThrowIfNull(sources);
         _highlightedSources = sources.Where(Sources.Contains).Distinct().ToArray();
         _refreshSelectedCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(HasHighlightedSources));
     }
 
     public void Dispose()
@@ -346,6 +442,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         ((INotifyCollectionChanged)Sources).CollectionChanged -= OnSourcesChanged;
+        ((INotifyCollectionChanged)SourceSets).CollectionChanged -= OnSourceSetsChanged;
         _workflowCoordinator.StateChanged -= OnWorkflowStateChanged;
 
         foreach (var source in Sources)
@@ -367,7 +464,9 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private async Task<bool> AddPathAsync(
         SourceSelectionKind selectionKind,
         string path,
-        bool allowNavigation)
+        bool allowNavigation,
+        SourceSetDefinition? targetSourceSet = null,
+        bool createNewSourceSet = false)
     {
         var progressGeneration = ++_progressGeneration;
         IsBusy = true;
@@ -387,11 +486,24 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
                 : SourceLoadSettings.Default;
             var progress = new InlineProgress<SourceIntakeProgressSnapshot>(snapshot =>
                 DispatchToUi(() => ApplyProgress(snapshot, progressGeneration)));
-            var result = await _loadingCoordinator.AddAsync(
-                selectionKind,
-                path,
-                settings,
-                progress);
+            var result = createNewSourceSet
+                ? await _loadingCoordinator.AddToNewSourceSetAsync(
+                    selectionKind,
+                    path,
+                    settings,
+                    progress)
+                : targetSourceSet is null
+                    ? await _loadingCoordinator.AddAsync(
+                        selectionKind,
+                        path,
+                        settings,
+                        progress)
+                    : await _loadingCoordinator.AddToSourceSetAsync(
+                        selectionKind,
+                        path,
+                        settings,
+                        targetSourceSet.SourceSetId,
+                        progress);
             _lastIntakeIssueCount = result.Issues.Count;
             _lastIntakeFailureCount = result.Accepted ? 0 : 1;
             OnPropertyChanged(nameof(SourceSummary));
@@ -406,6 +518,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             }
 
             SelectedSource = Sources.LastOrDefault();
+            NotifyActiveSourceSetChanged();
             ProgressText = result.Issues.Count > 0 ? "Completed with issues" : "Completed";
             CurrentArchiveText = SelectedSource?.ArchiveProvenance is { } provenance
                 ? $"Archive: {Path.GetFileName(provenance.OriginalArchivePath)} · Level {provenance.ArchiveNestingLevel}"
@@ -738,6 +851,56 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _removeCheckedCommand.NotifyCanExecuteChanged();
         _refreshSourceCommand.NotifyCanExecuteChanged();
         _refreshSelectedCommand.NotifyCanExecuteChanged();
+        _createSourceSetCommand.NotifyCanExecuteChanged();
+        _renameActiveSourceSetCommand.NotifyCanExecuteChanged();
+    }
+
+    private void CreateSourceSet()
+    {
+        var result = _loadingCoordinator.CreateSourceSet();
+        if (!result.Accepted)
+        {
+            StatusTitle = "Source Set not created";
+            StatusDetail = result.FailureDescription ?? "The Source Set could not be created.";
+            return;
+        }
+
+        NotifyActiveSourceSetChanged();
+        StatusTitle = "Source Set created";
+        StatusDetail = $"{result.SourceSet!.Name} is now the active Source Set.";
+    }
+
+    private void RenameActiveSourceSet()
+    {
+        if (ActiveSourceSet is null)
+        {
+            return;
+        }
+
+        var result = _loadingCoordinator.RenameSourceSet(
+            ActiveSourceSet.SourceSetId,
+            ActiveSourceSetName);
+        if (!result.Accepted)
+        {
+            StatusTitle = "Source Set not renamed";
+            StatusDetail = result.FailureDescription ?? "The Source Set name could not be changed.";
+            return;
+        }
+
+        NotifyActiveSourceSetChanged();
+        StatusTitle = result.ChangedCount == 0 ? "Source Set name unchanged" : "Source Set renamed";
+        StatusDetail = result.ChangedCount == 0
+            ? "The active Source Set already uses that name."
+            : $"The active Source Set is now named {result.SourceSet!.Name}.";
+    }
+
+    private void NotifyActiveSourceSetChanged()
+    {
+        ActiveSourceSetName = ActiveSourceSet?.Name ?? string.Empty;
+        OnPropertyChanged(nameof(ActiveSourceSet));
+        OnPropertyChanged(nameof(HasSourceSets));
+        _createSourceSetCommand.NotifyCanExecuteChanged();
+        _renameActiveSourceSetCommand.NotifyCanExecuteChanged();
     }
 
     private void NavigateToDiscovery()
@@ -767,6 +930,11 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasSources));
         NotifySourceCountsChanged();
         NotifySourceCommandsCanExecuteChanged();
+    }
+
+    private void OnSourceSetsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        NotifyActiveSourceSetChanged();
     }
 
     private void OnSourcePropertyChanged(object? sender, PropertyChangedEventArgs e)

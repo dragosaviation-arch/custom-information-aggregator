@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace CIA.Contracts.Sources;
 
 public enum SourceSelectionKind
@@ -45,13 +47,25 @@ public sealed record SourceLoadSettings(
         TraverseSubfolders: true);
 }
 
+[method: JsonConstructor]
 public sealed record LoadedSourceContract(
     SourceId SourceId,
+    SourceSetId SourceSetId,
     string Path,
     bool IsIncluded,
     LoadedSourceStatus Status,
     LoadedSourceKind Kind)
 {
+    public LoadedSourceContract(
+        SourceId SourceId,
+        string Path,
+        bool IsIncluded,
+        LoadedSourceStatus Status,
+        LoadedSourceKind Kind)
+        : this(SourceId, SourceSetId.CreateNew(), Path, IsIncluded, Status, Kind)
+    {
+    }
+
     public ArchiveSourceProvenance? ArchiveProvenance { get; init; }
 }
 

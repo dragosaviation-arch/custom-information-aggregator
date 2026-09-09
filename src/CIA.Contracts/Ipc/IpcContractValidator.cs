@@ -149,6 +149,11 @@ public static class IpcContractValidator
 
     private static void ValidateLoadSourcesCommand(LoadSourcesCommand command)
     {
+        if (!SourceSetId.IsValid(command.SourceSetId.Value))
+        {
+            throw InvalidContract("A source-load command requires a non-empty Source Set ID.");
+        }
+
         if (!Enum.IsDefined(command.SelectionKind))
         {
             throw InvalidContract("The source-selection kind is not supported.");
@@ -892,6 +897,11 @@ public static class IpcContractValidator
         if (!SourceId.IsValid(source.SourceId.Value))
         {
             throw InvalidContract("A loaded source requires a non-empty Source ID.");
+        }
+
+        if (!SourceSetId.IsValid(source.SourceSetId.Value))
+        {
+            throw InvalidContract("A loaded source requires a non-empty Source Set ID.");
         }
 
         ValidatePath(source.Path);

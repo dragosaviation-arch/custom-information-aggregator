@@ -36,11 +36,27 @@ public sealed class SourceIdentityTests
     }
 
     [TestMethod]
+    public void SourceSetIdentityUsesStrictTypedJsonAndRemainsOpaqueToPresentation()
+    {
+        var sourceSetId = SourceSetId.CreateNew();
+        var json = JsonSerializer.Serialize(sourceSetId);
+
+        Assert.AreNotEqual(Guid.Empty, sourceSetId.Value);
+        Assert.AreEqual($"\"{sourceSetId}\"", json);
+        Assert.AreEqual(sourceSetId, JsonSerializer.Deserialize<SourceSetId>(json));
+        Assert.ThrowsExactly<ArgumentException>(() => SourceSetId.From(Guid.Empty));
+        Assert.ThrowsExactly<JsonException>(
+            () => JsonSerializer.Deserialize<SourceSetId>($"\"{Guid.Empty}\""));
+    }
+
+    [TestMethod]
     public void SourceIdentityRemainsStableWhenThePathAttributeChanges()
     {
         var sourceId = SourceId.CreateNew();
+        var sourceSetId = SourceSetId.CreateNew();
         var source = new LoadedSourceContract(
             sourceId,
+            sourceSetId,
             Path.GetFullPath("original/source.xml"),
             IsIncluded: true,
             LoadedSourceStatus.Ready,
@@ -49,6 +65,7 @@ public sealed class SourceIdentityTests
         var updatedPath = source with { Path = Path.GetFullPath("relinked/source.xml") };
 
         Assert.AreEqual(sourceId, updatedPath.SourceId);
+        Assert.AreEqual(sourceSetId, updatedPath.SourceSetId);
         Assert.AreNotEqual(source.Path, updatedPath.Path);
     }
 
