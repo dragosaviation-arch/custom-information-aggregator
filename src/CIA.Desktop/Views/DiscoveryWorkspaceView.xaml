@@ -171,39 +171,51 @@
                         <Grid Margin="6,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="34" />
-                                <ColumnDefinition Width="1.1*" MinWidth="90" />
-                                <ColumnDefinition Width="1.15*" MinWidth="100" />
-                                <ColumnDefinition Width="82" />
-                                <ColumnDefinition Width="60" />
-                                <ColumnDefinition Width="1.55*" MinWidth="110" />
+                                <ColumnDefinition Width="0.8*" MinWidth="72" />
+                                <ColumnDefinition Width="1.05*" MinWidth="86" />
+                                <ColumnDefinition Width="0.75*" MinWidth="70" />
+                                <ColumnDefinition Width="0.9*" MinWidth="82" />
+                                <ColumnDefinition Width="72" />
+                                <ColumnDefinition Width="54" />
+                                <ColumnDefinition Width="1.05*" MinWidth="90" />
                                 <ColumnDefinition Width="76" />
                             </Grid.ColumnDefinitions>
                             <Button Grid.Column="1"
                                     Command="{Binding SortCommand}"
+                                    CommandParameter="SourceSet"
+                                    Content="{Binding SourceSetHeaderText}"
+                                    Style="{StaticResource DiscoverySortHeaderStyle}" />
+                            <Button Grid.Column="2"
+                                    Command="{Binding SortCommand}"
+                                    CommandParameter="Context"
+                                    Content="{Binding ContextHeaderText}"
+                                    Style="{StaticResource DiscoverySortHeaderStyle}" />
+                            <Button Grid.Column="3"
+                                    Command="{Binding SortCommand}"
                                     CommandParameter="Tag"
                                     Content="{Binding TagHeaderText}"
                                     Style="{StaticResource DiscoverySortHeaderStyle}" />
-                            <Button Grid.Column="2"
+                            <Button Grid.Column="4"
                                     Command="{Binding SortCommand}"
                                     CommandParameter="DatabaseTag"
                                     Content="{Binding DatabaseTagHeaderText}"
                                     Style="{StaticResource DiscoverySortHeaderStyle}" />
-                            <Button Grid.Column="3"
+                            <Button Grid.Column="5"
                                     Command="{Binding SortCommand}"
                                     CommandParameter="Occurrences"
                                     Content="{Binding OccurrencesHeaderText}"
                                     Style="{StaticResource DiscoverySortHeaderStyle}" />
-                            <Button Grid.Column="4"
+                            <Button Grid.Column="6"
                                     Command="{Binding SortCommand}"
                                     CommandParameter="Sources"
                                     Content="{Binding SourcesHeaderText}"
                                     Style="{StaticResource DiscoverySortHeaderStyle}" />
-                            <Button Grid.Column="5"
+                            <Button Grid.Column="7"
                                     Command="{Binding SortCommand}"
                                     CommandParameter="Sample"
                                     Content="{Binding SampleHeaderText}"
                                     Style="{StaticResource DiscoverySortHeaderStyle}" />
-                            <TextBlock Grid.Column="6"
+                            <TextBlock Grid.Column="8"
                                        Style="{StaticResource CiaSourceHeaderTextStyle}"
                                        Text="Blacklist" />
                         </Grid>
@@ -265,11 +277,13 @@
                                     <Grid Margin="6,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="34" />
-                                            <ColumnDefinition Width="1.1*" MinWidth="90" />
-                                            <ColumnDefinition Width="1.15*" MinWidth="100" />
-                                            <ColumnDefinition Width="82" />
-                                            <ColumnDefinition Width="60" />
-                                            <ColumnDefinition Width="1.55*" MinWidth="110" />
+                                            <ColumnDefinition Width="0.8*" MinWidth="72" />
+                                            <ColumnDefinition Width="1.05*" MinWidth="86" />
+                                            <ColumnDefinition Width="0.75*" MinWidth="70" />
+                                            <ColumnDefinition Width="0.9*" MinWidth="82" />
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="54" />
+                                            <ColumnDefinition Width="1.05*" MinWidth="90" />
                                             <ColumnDefinition Width="76" />
                                         </Grid.ColumnDefinitions>
                                         <CheckBox HorizontalAlignment="Center"
@@ -279,11 +293,23 @@
                                                   CommandParameter="{Binding}"
                                                   IsChecked="{Binding IsSelected, Mode=OneWay}" />
                                         <TextBlock Grid.Column="1"
+                                                   Style="{StaticResource DiscoveryRowTextStyle}"
+                                                   Text="{Binding SourceSetName}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding SourceSetName}" />
+                                        <TextBlock Grid.Column="2"
+                                                   FontFamily="Consolas"
+                                                   Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                                   Style="{StaticResource DiscoveryRowTextStyle}"
+                                                   Text="{Binding StructuralPath}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding StructuralPath}" />
+                                        <TextBlock Grid.Column="3"
                                                    FontFamily="Consolas"
                                                    FontWeight="SemiBold"
                                                    Style="{StaticResource DiscoveryRowTextStyle}"
                                                    Text="{Binding InformationType}" />
-                                        <TextBlock Grid.Column="2"
+                                        <TextBlock Grid.Column="4"
                                                    FontWeight="SemiBold"
                                                    Text="{Binding DatabaseTag}">
                                             <TextBlock.Style>
@@ -297,10 +323,10 @@
                                                 </Style>
                                             </TextBlock.Style>
                                         </TextBlock>
-                                        <TextBlock Grid.Column="3"
+                                        <TextBlock Grid.Column="5"
                                                    Style="{StaticResource DiscoveryRowTextStyle}"
                                                    Text="{Binding TotalOccurrenceText}" />
-                                        <Button Grid.Column="4"
+                                        <Button Grid.Column="6"
                                                 Height="24"
                                                 Padding="5,0"
                                                 Command="{Binding DataContext.InspectSourcesCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
@@ -309,11 +335,11 @@
                                                 Foreground="{StaticResource CiaAccentBrush}"
                                                 Style="{StaticResource CiaGhostButtonStyle}"
                                                 ToolTip="Inspect contributing source identities and occurrence counts." />
-                                        <TextBlock Grid.Column="5"
+                                        <TextBlock Grid.Column="7"
                                                    Foreground="{StaticResource CiaTextSecondaryBrush}"
                                                    Style="{StaticResource DiscoveryRowTextStyle}"
                                                    Text="{Binding SampleValue}" />
-                                        <Button Grid.Column="6"
+                                        <Button Grid.Column="8"
                                                 AutomationProperties.Name="Toggle information blacklist"
                                                 Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                 CommandParameter="{Binding}"
@@ -623,6 +649,30 @@
                                                   IsEnabled="False"
                                                   Content="Confirm before re-running Discovery when Database is current"
                                                   ToolTip="Database-current confirmation is implemented by a later story." />
+                                        <TextBlock Margin="0,12,0,5"
+                                                   FontSize="10"
+                                                   FontWeight="Bold"
+                                                   Foreground="{StaticResource CiaAccentBrush}"
+                                                   Text="REPEATED DATA LAYOUT" />
+                                        <ItemsControl ItemsSource="{Binding SourceSetLayouts}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Margin="0,0,0,7">
+                                                        <TextBlock Margin="0,0,0,3"
+                                                                   FontWeight="SemiBold"
+                                                                   Text="{Binding SourceSetName}"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   ToolTip="{Binding SourceSetName}" />
+                                                        <ComboBox Height="28"
+                                                                  DisplayMemberPath="DisplayName"
+                                                                  IsEnabled="{Binding DataContext.CanConfigureRepeatedDataLayout, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                  ItemsSource="{Binding Options}"
+                                                                  SelectedValue="{Binding SelectedLayout, Mode=TwoWay}"
+                                                                  SelectedValuePath="Mode" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
                                         <TextBlock Margin="0,0,0,5"

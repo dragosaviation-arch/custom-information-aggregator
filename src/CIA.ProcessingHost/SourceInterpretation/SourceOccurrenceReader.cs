@@ -10,6 +10,7 @@ public interface ISourceOccurrenceReader
     Task<SourceOccurrenceReadResult> ReadAsync(
         LoadedSourceContract source,
         string informationType,
+        string structuralPath,
         int localOrdinal,
         CancellationToken cancellationToken = default);
 }
@@ -47,11 +48,13 @@ public sealed class SourceOccurrenceReader : ISourceOccurrenceReader
     public async Task<SourceOccurrenceReadResult> ReadAsync(
         LoadedSourceContract source,
         string informationType,
+        string structuralPath,
         int localOrdinal,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(structuralPath);
 
         if (localOrdinal < 1)
         {
@@ -130,6 +133,7 @@ public sealed class SourceOccurrenceReader : ISourceOccurrenceReader
                         source.SourceId,
                         reader,
                         informationType,
+                        structuralPath,
                         localOrdinal,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -141,6 +145,7 @@ public sealed class SourceOccurrenceReader : ISourceOccurrenceReader
                         source.SourceId,
                         reader,
                         informationType,
+                        structuralPath,
                         localOrdinal,
                         cancellationToken)
                     .ConfigureAwait(false);

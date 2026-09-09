@@ -120,7 +120,7 @@ public sealed class ProcessingHostLifecycleTests
             load.Sources);
         var lookup = new DiscoveryOccurrenceLookup(
             correlation.OperationId,
-            "identifier",
+            discovery.Information.Single().Identity,
             GlobalOrdinal: 2,
             TotalOccurrenceCount: 2,
             load.Sources[0],

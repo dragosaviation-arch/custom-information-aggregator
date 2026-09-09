@@ -18,6 +18,53 @@ namespace CIA.ProcessingHost.Tests;
 public sealed class DiscoveryServiceTests
 {
     [TestMethod]
+    public async Task DiscoveryKeepsSourceSetsAndStructuralPathsIndependentlyIdentifiable()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var firstSet = SourceSetId.CreateNew();
+        var secondSet = SourceSetId.CreateNew();
+        var first = workspace.CreateSource(
+            "first.xml",
+            "<root><buyer><name>Buyer A</name></buyer><seller><name>Seller A</name></seller></root>",
+            firstSet);
+        var second = workspace.CreateSource(
+            "second.xml",
+            "<root><buyer><name>Buyer B</name></buyer></root>",
+            secondSet);
+        var service = CreateGenericService();
+        var correlation = OperationCorrelation.CreateNew();
+
+        var result = await service.RunAsync(correlation, [first, second]);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.HasCount(3, result.Information);
+        var firstBuyer = result.Information.Single(item =>
+            item.SourceSetId == firstSet && item.StructuralPath == "/root/buyer/name");
+        var firstSeller = result.Information.Single(item =>
+            item.SourceSetId == firstSet && item.StructuralPath == "/root/seller/name");
+        var secondBuyer = result.Information.Single(item =>
+            item.SourceSetId == secondSet && item.StructuralPath == "/root/buyer/name");
+        Assert.AreEqual("name", firstBuyer.InformationType);
+        Assert.AreEqual("name", firstSeller.InformationType);
+        Assert.AreEqual("name", secondBuyer.InformationType);
+
+        var preview = await CreateGenericService().GetOccurrenceAsync(
+            new DiscoveryOccurrenceLookup(
+                correlation.OperationId,
+                firstSeller.Identity,
+                GlobalOrdinal: 1,
+                TotalOccurrenceCount: 1,
+                first,
+                LocalOrdinal: 1,
+                ExpectedSourceOccurrenceCount: 1));
+
+        Assert.IsTrue(preview.Accepted);
+        Assert.AreEqual("Seller A", preview.Occurrence?.Value);
+        Assert.AreEqual(firstSeller.Identity, preview.Occurrence?.Identity);
+        Assert.AreEqual(first.SourceId, preview.Occurrence?.SourceId);
+    }
+
+    [TestMethod]
     public async Task ThreeSourcesAggregateCountsAndDistinctProvenanceInSourceOrder()
     {
         using var workspace = new DiscoveryWorkspace();
@@ -439,6 +486,21 @@ public sealed class DiscoveryServiceTests
         return new DiscoveryService(interpreter, occurrenceReader);
     }
 
+    private static DiscoveryService CreateGenericService()
+    {
+        ISourceAdapter[] adapters = [];
+        var generic = new GenericXmlElementValueSourceAdapter();
+        return new DiscoveryService(
+            new SourceInterpreter(
+                adapters,
+                generic,
+                NullLogger<SourceInterpreter>.Instance),
+            new SourceOccurrenceReader(
+                adapters,
+                generic,
+                NullLogger<SourceOccurrenceReader>.Instance));
+    }
+
     private sealed class CatalogDiscoveryAdapter : ISourceAdapter, ISourceOccurrenceAdapter
     {
         private readonly Dictionary<SourceId, int> _interpretCallCounts = [];
@@ -478,6 +540,7 @@ public sealed class DiscoveryServiceTests
             SourceId originatingSourceId,
             XmlReader reader,
             string informationType,
+            string structuralPath,
             int localOrdinal,
             CancellationToken cancellationToken = default)
         {
@@ -503,6 +566,10 @@ public sealed class DiscoveryServiceTests
                             && string.Equals(
                                 currentInformationType,
                                 informationType,
+                                StringComparison.Ordinal)
+                            && string.Equals(
+                                structuralPath,
+                                $"/{informationType}",
                                 StringComparison.Ordinal)
                             && !string.IsNullOrWhiteSpace(reader.Value))
                         {
@@ -551,6 +618,7 @@ public sealed class DiscoveryServiceTests
         private readonly string _testRoot = System.IO.Path.Combine(
             System.IO.Path.GetTempPath(),
             "CIA.SPR69.Tests");
+        private readonly SourceSetId _defaultSourceSetId = SourceSetId.CreateNew();
 
         public DiscoveryWorkspace()
         {
@@ -560,13 +628,17 @@ public sealed class DiscoveryServiceTests
 
         public string Path { get; }
 
-        public LoadedSourceContract CreateSource(string fileName, string content)
+        public LoadedSourceContract CreateSource(
+            string fileName,
+            string content,
+            SourceSetId? sourceSetId = null)
         {
             var path = System.IO.Path.Combine(Path, fileName);
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
             File.WriteAllText(path, content);
             return new LoadedSourceContract(
                 SourceId.CreateNew(),
+                sourceSetId ?? _defaultSourceSetId,
                 path,
                 IsIncluded: true,
                 LoadedSourceStatus.Ready,

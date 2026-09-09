@@ -14,6 +14,116 @@ namespace CIA.Desktop.Tests;
 public sealed class DiscoveryWorkspaceViewModelTests
 {
     [TestMethod]
+    public async Task SetAwareRowsKeepConfigurationPreviewAndLayoutsIndependent()
+    {
+        var first = CreateSource("first.xml");
+        var second = CreateSource("second.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, loading) = await LoadSourcesAsync(workflow, first, second);
+        var secondSet = loading.CreateSourceSet("Set 2").SourceSet!;
+        Assert.IsTrue(loading.ReassignSources([sourceSet.Items[1]], secondSet.SourceSetId).Accepted);
+
+        var client = new StubDiscoveryClient(
+            (correlation, sources) =>
+            {
+                var setOneSource = sources.Single(source =>
+                    source.SourceSetId != secondSet.SourceSetId);
+                var setTwoSource = sources.Single(source =>
+                    source.SourceSetId == secondSet.SourceSetId);
+                return Accept(
+                    correlation,
+                    sources,
+                    [
+                        CreateSetAwareInformation(
+                            setOneSource,
+                            "/root/buyer/name",
+                            "Buyer A"),
+                        CreateSetAwareInformation(
+                            setOneSource,
+                            "/root/seller/name",
+                            "Seller A"),
+                        CreateSetAwareInformation(
+                            setTwoSource,
+                            "/root/buyer/name",
+                            "Buyer B")
+                    ]);
+            },
+            lookup => AcceptOccurrence(
+                lookup.Identity,
+                lookup.GlobalOrdinal,
+                lookup.TotalOccurrenceCount,
+                lookup.Source.SourceId,
+                lookup.Identity.StructuralPath.Contains("seller", StringComparison.Ordinal)
+                    ? "Seller A"
+                    : "Buyer value"));
+        var configuration = new ActiveDiscoveryConfiguration();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.HasCount(3, viewModel.Information);
+        var setOneBuyer = viewModel.Information.Single(item =>
+            item.SourceSetName == "Set 1" && item.StructuralPath == "/root/buyer/name");
+        var setOneSeller = viewModel.Information.Single(item =>
+            item.SourceSetName == "Set 1" && item.StructuralPath == "/root/seller/name");
+        var setTwoBuyer = viewModel.Information.Single(item =>
+            item.SourceSetName == "Set 2" && item.StructuralPath == "/root/buyer/name");
+        Assert.AreNotEqual(setOneBuyer.Identity, setOneSeller.Identity);
+        Assert.AreNotEqual(setOneBuyer.Identity, setTwoBuyer.Identity);
+
+        viewModel.ToggleSelectionCommand.Execute(setOneBuyer);
+        viewModel.SelectedInformation = setTwoBuyer;
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        viewModel.SelectedDatabaseTag = "Set Two Name";
+
+        Assert.IsTrue(setOneBuyer.IsSelected);
+        Assert.IsFalse(setOneSeller.IsSelected);
+        Assert.IsFalse(setTwoBuyer.IsSelected);
+        Assert.AreEqual("name", setOneBuyer.DatabaseTag);
+        Assert.AreEqual("Set Two Name", setTwoBuyer.DatabaseTag);
+        Assert.AreEqual(setTwoBuyer.Identity, client.LastOccurrenceLookup?.Identity);
+
+        CollectionAssert.AreEquivalent(
+            Enum.GetValues<RepeatedDataLayout>(),
+            viewModel.RepeatedDataLayoutOptions.Select(option => option.Mode).ToArray());
+        Assert.IsTrue(viewModel.SourceSetLayouts.All(layout =>
+            layout.SelectedLayout == RepeatedDataLayout.AlignRepeatedGroupsByPosition));
+
+        var database = await workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
+        workflow.CompleteOperation(database.Operation!.OperationId, OperationOutcome.CompletedSuccessfully);
+        var extraction = await workflow.BeginOperationAsync(WorkflowOperationKind.Extraction);
+        workflow.CompleteOperation(extraction.Operation!.OperationId, OperationOutcome.CompletedSuccessfully);
+        var firstLayout = viewModel.SourceSetLayouts.Single(layout =>
+            layout.SourceSetId == setOneBuyer.SourceSetId);
+        var secondLayout = viewModel.SourceSetLayouts.Single(layout =>
+            layout.SourceSetId == setTwoBuyer.SourceSetId);
+
+        firstLayout.SelectedLayout = RepeatedDataLayout.StructuralRows;
+
+        Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Extraction);
+        Assert.AreEqual(RepeatedDataLayout.StructuralRows, firstLayout.SelectedLayout);
+        Assert.AreEqual(
+            RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+            secondLayout.SelectedLayout);
+        Assert.AreEqual(
+            RepeatedDataLayout.StructuralRows,
+            configuration.Current.SourceSets.Single(item =>
+                item.SourceSetId == firstLayout.SourceSetId).RepeatedDataLayout);
+
+        var identityBeforeRename = setTwoBuyer.Identity;
+        Assert.IsTrue(loading.RenameSourceSet(secondSet.SourceSetId, "Renamed Set").Accepted);
+        Assert.AreEqual("Renamed Set", setTwoBuyer.SourceSetName);
+        Assert.AreEqual(identityBeforeRename, setTwoBuyer.Identity);
+    }
+
+    [TestMethod]
     public async Task RunUsesIncludedReadySourcesAndPresentsReconciledResults()
     {
         var first = CreateSource("first.xml");
@@ -809,6 +919,18 @@ public sealed class DiscoveryWorkspaceViewModelTests
             .ToArray();
     }
 
+    private static DiscoveredInformation CreateSetAwareInformation(
+        LoadedSourceContract source,
+        string structuralPath,
+        string sampleValue)
+    {
+        return new DiscoveredInformation(
+            new DiscoveryInformationIdentity(source.SourceSetId, structuralPath, "name"),
+            1,
+            [new DiscoveredSourceContribution(source.SourceId, Path.GetFileName(source.Path), 1)],
+            sampleValue);
+    }
+
     private static DiscoveryInformationDisposition GetDisposition(
         ActiveDiscoveryConfiguration configuration,
         string informationType)
@@ -891,6 +1013,25 @@ public sealed class DiscoveryWorkspaceViewModelTests
                     failureCode))),
             failureCode,
             "The Processing Host could not complete Discovery.");
+    }
+
+    private static DiscoveryOccurrenceClientResult AcceptOccurrence(
+        DiscoveryInformationIdentity identity,
+        int ordinal,
+        int totalOccurrenceCount,
+        SourceId sourceId,
+        string value)
+    {
+        return new DiscoveryOccurrenceClientResult(
+            true,
+            new DiscoveredOccurrence(
+                identity,
+                ordinal,
+                totalOccurrenceCount,
+                sourceId,
+                value),
+            FailureCode: null,
+            FailureDescription: null);
     }
 
     private static DiscoveryOccurrenceClientResult AcceptOccurrence(
@@ -983,9 +1124,9 @@ public sealed class DiscoveryWorkspaceViewModelTests
             }
 
             var information = _lastInformation.Single(
-                item => item.InformationType == lookup.InformationType);
+                item => item.Identity == lookup.Identity);
             return Task.FromResult(AcceptOccurrence(
-                lookup.InformationType,
+                lookup.Identity,
                 lookup.GlobalOrdinal,
                 information.TotalOccurrenceCount,
                 lookup.Source.SourceId,

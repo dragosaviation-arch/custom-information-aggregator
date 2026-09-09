@@ -55,6 +55,7 @@ public sealed class DiscoveryService
             {
                 aggregation.AddSource(
                     interpretation.Source!,
+                    source.SourceSetId,
                     sourceName,
                     usableSourceCount);
                 usableSourceCount++;
@@ -107,7 +108,15 @@ public sealed class DiscoveryService
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(lookup.InformationType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(lookup.StructuralPath);
         ArgumentNullException.ThrowIfNull(lookup.Source);
+
+        if (lookup.Identity.SourceSetId != lookup.Source.SourceSetId)
+        {
+            throw new ArgumentException(
+                "A Discovery occurrence lookup must target a source from the identified Source Set.",
+                nameof(lookup));
+        }
 
         if (lookup.GlobalOrdinal < 1
             || lookup.TotalOccurrenceCount < lookup.GlobalOrdinal
@@ -124,6 +133,7 @@ public sealed class DiscoveryService
             .ReadAsync(
                 lookup.Source,
                 lookup.InformationType,
+                lookup.StructuralPath,
                 lookup.LocalOrdinal,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -144,7 +154,7 @@ public sealed class DiscoveryService
 
         return DiscoveryOccurrenceHostResult.Accept(
             new DiscoveredOccurrence(
-                lookup.InformationType,
+                lookup.Identity,
                 lookup.GlobalOrdinal,
                 lookup.TotalOccurrenceCount,
                 lookup.Source.SourceId,
@@ -153,22 +163,28 @@ public sealed class DiscoveryService
 
     private sealed class DiscoveryAggregation
     {
-        private readonly Dictionary<string, InformationAggregation> _information = new(
-            StringComparer.Ordinal);
+        private readonly Dictionary<DiscoveryInformationIdentity, InformationAggregation>
+            _information = [];
 
         public void AddSource(
             InterpretedSourceDocument source,
+            SourceSetId sourceSetId,
             string sourceName,
             int sourceOrder)
         {
             foreach (var value in source.Values)
             {
-                if (!_information.TryGetValue(value.InformationType, out var aggregate))
+                var identity = new DiscoveryInformationIdentity(
+                    sourceSetId,
+                    value.Lineage?.StructuralPath ?? $"/{value.InformationType}",
+                    value.InformationType);
+                if (!_information.TryGetValue(identity, out var aggregate))
                 {
                     aggregate = new InformationAggregation(
-                        value.InformationType,
-                        value.Content);
-                    _information.Add(value.InformationType, aggregate);
+                        identity,
+                        value.Content,
+                        sourceOrder);
+                    _information.Add(identity, aggregate);
                 }
 
                 aggregate.AddOccurrence(
@@ -181,7 +197,9 @@ public sealed class DiscoveryService
         public IReadOnlyList<DiscoveredInformation> CreateInformation()
         {
             return _information.Values
-                .OrderBy(information => information.InformationType, StringComparer.Ordinal)
+                .OrderBy(information => information.SourceSetOrder)
+                .ThenBy(information => information.Identity.StructuralPath, StringComparer.Ordinal)
+                .ThenBy(information => information.Identity.InformationType, StringComparer.Ordinal)
                 .Select(information => information.CreateContract())
                 .ToArray();
         }
@@ -191,13 +209,19 @@ public sealed class DiscoveryService
     {
         private readonly Dictionary<SourceId, SourceContributionAggregation> _sources = [];
 
-        public InformationAggregation(string informationType, string sampleValue)
+        public InformationAggregation(
+            DiscoveryInformationIdentity identity,
+            string sampleValue,
+            int sourceSetOrder)
         {
-            InformationType = informationType;
+            Identity = identity;
             SampleValue = sampleValue;
+            SourceSetOrder = sourceSetOrder;
         }
 
-        public string InformationType { get; }
+        public DiscoveryInformationIdentity Identity { get; }
+
+        public int SourceSetOrder { get; }
 
         private string SampleValue { get; }
 
@@ -218,7 +242,7 @@ public sealed class DiscoveryService
         public DiscoveredInformation CreateContract()
         {
             return new DiscoveredInformation(
-                InformationType,
+                Identity,
                 TotalOccurrenceCount,
                 _sources.Values
                     .OrderBy(source => source.SourceOrder)

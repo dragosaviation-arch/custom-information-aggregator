@@ -76,7 +76,10 @@ public sealed class ProductionXmlSourceAdapterTests
 
         var occurrence = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
             correlation.OperationId,
-            "identifier",
+            new DiscoveryInformationIdentity(
+                source.SourceSetId,
+                "/amm/identifier",
+                "identifier"),
             GlobalOrdinal: 2,
             TotalOccurrenceCount: 2,
             source,
@@ -184,7 +187,11 @@ public sealed class ProductionXmlSourceAdapterTests
             NullLogger<SourceOccurrenceReader>.Instance);
 
         var interpretation = await interpreter.InterpretAsync(source);
-        var occurrence = await occurrenceReader.ReadAsync(source, "value", 1);
+        var occurrence = await occurrenceReader.ReadAsync(
+            source,
+            "value",
+            "/specialized/value",
+            1);
 
         Assert.AreEqual(SourceInterpretationStatus.Usable, interpretation.Status);
         Assert.AreEqual("test.specialized.v1", interpretation.Source?.StructureId);
