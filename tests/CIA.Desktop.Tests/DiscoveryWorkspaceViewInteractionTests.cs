@@ -5,14 +5,17 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Database;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Views;
 using CIA.Desktop.Workflow;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.Desktop.Tests;
 
@@ -32,6 +35,79 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
     public async Task SameNameRowsSwitchPreviewByFullIdentityWithoutConcurrentReads()
     {
         await WpfTestApplication.RunAsync(VerifySameNameSwitchAsync).WaitAsync(TestTimeout);
+    }
+
+    [TestMethod]
+    public async Task LogicalMultiPathSelectionDoesNotTerminateWpfCommandStateEvaluation()
+    {
+        await WpfTestApplication.RunAsync(async () =>
+        {
+            var source = new LoadedSourceContract(
+                SourceId.CreateNew(),
+                Path.GetFullPath("logical-field-source.xml"),
+                IsIncluded: true,
+                LoadedSourceStatus.Ready,
+                LoadedSourceKind.XmlFile);
+            var sourceSet = new ActiveLoadedSourceSet();
+            using var workflow = new ApplicationWorkflowCoordinator(
+                new ReadyProcessingHostSupervisor(),
+                new RecordingProcessingHistoryRecorder());
+            var loading = new SourceLoadingCoordinator(
+                new SuccessfulSourceIntakeClient(source),
+                sourceSet,
+                workflow);
+            Assert.IsTrue((await loading.AddAsync(SourceSelectionKind.XmlFile, source.Path)).Accepted);
+            var configuration = new ActiveDiscoveryConfiguration();
+            var databaseBuild = new DatabaseBuildCoordinator(
+                configuration,
+                sourceSet,
+                workflow,
+                new UnexpectedDatabaseClient(),
+                NullLogger<DatabaseBuildCoordinator>.Instance);
+            using var viewModel = new DiscoveryWorkspaceViewModel(
+                new LogicalFieldDiscoveryClient(),
+                configuration,
+                sourceSet,
+                workflow,
+                databaseBuild);
+            var window = new Window
+            {
+                Width = 1400,
+                Height = 760,
+                Content = new DiscoveryWorkspaceView { DataContext = viewModel },
+                ShowInTaskbar = false,
+                WindowStyle = WindowStyle.None
+            };
+
+            try
+            {
+                window.Show();
+                await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+                await AwaitOccurrencePreviewAsync(viewModel);
+                var logical = viewModel.Information.Single();
+                viewModel.ToggleSelectionCommand.Execute(logical);
+                await Dispatcher.Yield(DispatcherPriority.DataBind);
+                Assert.IsTrue(logical.IsSelected);
+                Assert.IsTrue(viewModel.BuildDatabaseCommand.CanExecute(null));
+            }
+            finally
+            {
+                window.Close();
+            }
+        }).WaitAsync(TestTimeout);
+    }
+
+    private static async Task AwaitOccurrencePreviewAsync(
+        DiscoveryWorkspaceViewModel viewModel)
+    {
+        var timeout = System.Diagnostics.Stopwatch.StartNew();
+        while (viewModel.IsOccurrenceLoading && timeout.Elapsed < TimeSpan.FromSeconds(20))
+        {
+            await Task.Delay(10);
+            await Dispatcher.Yield(DispatcherPriority.Background);
+        }
+
+        Assert.IsFalse(viewModel.IsOccurrenceLoading);
     }
 
     private static async Task VerifySameNameSwitchAsync()
@@ -304,6 +380,83 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                     $"{lookup.InformationType} occurrence {lookup.GlobalOrdinal}"),
                 FailureCode: null,
                 FailureDescription: null));
+        }
+    }
+
+    private sealed class LogicalFieldDiscoveryClient : IDiscoveryClient
+    {
+        public Task<DiscoveryClientResult> RunAsync(
+            OperationCorrelation correlation,
+            IReadOnlyList<LoadedSourceContract> sources,
+            CancellationToken cancellationToken = default)
+        {
+            var source = sources.Single();
+            var contributions = new[]
+            {
+                new DiscoveredSourceContribution(source.SourceId, "source.xml", 1)
+            };
+            var completion = OperationCompletion.FromCompletedItems(
+                correlation,
+                [OperationItemStatus.ProcessedSuccessfully(source.SourceId.ToString())]);
+            return Task.FromResult(new DiscoveryClientResult(
+                true,
+                [
+                    new DiscoveredInformation(
+                        new DiscoveryInformationIdentity(
+                            source.SourceSetId,
+                            "/root/first/comment",
+                            "comment",
+                            SourceValueCandidateKind.Element,
+                            "/root/first/comment"),
+                        1,
+                        contributions,
+                        "First"),
+                    new DiscoveredInformation(
+                        new DiscoveryInformationIdentity(
+                            source.SourceSetId,
+                            "/root/second/comment",
+                            "comment",
+                            SourceValueCandidateKind.Element,
+                            "/root/second/comment"),
+                        1,
+                        contributions,
+                        "Second")
+                ],
+                [],
+                completion,
+                FailureCode: null,
+                FailureDescription: null));
+        }
+
+        public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
+            DiscoveryOccurrenceLookup lookup,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new DiscoveryOccurrenceClientResult(
+                true,
+                new DiscoveredOccurrence(
+                    lookup.Identity,
+                    lookup.GlobalOrdinal,
+                    lookup.TotalOccurrenceCount,
+                    lookup.Source.SourceId,
+                    lookup.Identity.StructuralPath.Contains("first", StringComparison.Ordinal)
+                        ? "First"
+                        : "Second"),
+                FailureCode: null,
+                FailureDescription: null));
+        }
+    }
+
+    private sealed class UnexpectedDatabaseClient : IDatabaseClient
+    {
+        public Task<DatabaseClientResult> BuildAsync(
+            OperationCorrelation correlation,
+            IReadOnlyList<LoadedSourceContract> sources,
+            DatabaseMappingSnapshot mapping,
+            CancellationToken cancellationToken = default)
+        {
+            throw new AssertFailedException(
+                "The selection regression must not start Database generation.");
         }
     }
 

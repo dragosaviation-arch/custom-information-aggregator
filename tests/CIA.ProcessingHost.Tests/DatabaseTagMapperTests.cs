@@ -84,6 +84,41 @@ public sealed class DatabaseTagMapperTests
         Assert.IsNull(unselected);
     }
 
+    [TestMethod]
+    public void LogicalElementSelectedAcrossStructuralPathsMapsOneSourceInformationType()
+    {
+        var sourceSetId = SourceSetId.CreateNew();
+        var configuration = new DiscoveryConfigurationSnapshot(
+        [
+            new DiscoveryConfigurationItem(
+                new DiscoveryInformationIdentity(
+                    sourceSetId,
+                    "/root/application/comment",
+                    "comment",
+                    SourceValueCandidateKind.Element,
+                    "/root/application/comment"),
+                DiscoveryInformationDisposition.Selected),
+            new DiscoveryConfigurationItem(
+                new DiscoveryInformationIdentity(
+                    sourceSetId,
+                    "/root/application/alternative/comment",
+                    "comment",
+                    SourceValueCandidateKind.Element,
+                    "/root/application/alternative/comment"),
+                DiscoveryInformationDisposition.Selected)
+        ]);
+
+        var mapping = DatabaseTagMapper.CreateMapping(
+            configuration,
+            new Dictionary<string, string>(StringComparer.Ordinal));
+
+        Assert.HasCount(1, mapping.Columns);
+        Assert.AreEqual("comment", mapping.Columns[0].DatabaseTagName);
+        CollectionAssert.AreEqual(
+            new[] { "comment" },
+            mapping.Columns[0].SourceInformationTypes.ToArray());
+    }
+
     private static DiscoveryConfigurationSnapshot CreateConfiguration(
         params (string InformationType, DiscoveryInformationDisposition Disposition)[] items)
     {

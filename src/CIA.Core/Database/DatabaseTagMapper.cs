@@ -31,7 +31,12 @@ public static class DatabaseTagMapper
                 columnsByName.Add(databaseTagName, column);
             }
 
-            column.SourceInformationTypes.Add(item.InformationType);
+            if (!column.SourceInformationTypes.Contains(
+                    item.InformationType,
+                    StringComparer.Ordinal))
+            {
+                column.SourceInformationTypes.Add(item.InformationType);
+            }
         }
 
         return new DatabaseMappingSnapshot(
