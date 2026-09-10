@@ -1,24 +1,64 @@
-# custom-information-aggregator
+# Custom Information Aggregator
 
-A configurable application for discovering, indexing, querying, filtering, extracting, aggregating, and exporting structured data from large XML document sets.
+A Windows desktop application for turning large XML document sets into structured, reviewable and exportable information.
 
-## Project status
+<!-- APPLICATION SCREENSHOT
+Add the recruiter-facing screenshot as:
 
-- STEP-000 — Complete
-- STEP-001 — Complete
-- STEP-002 — Complete
-- STEP-003 — Complete
-- STEP-004 — Complete
-- **STEP-005 — Complete**
-- Next control point: **STEP-006 — Implementation / Development**
+docs/assets/cia-overview.png
 
-STEP-003 establishes the current approved System / Software Requirements Specification through **SR-168**, with complete 67/67 User Requirement → System Requirement coverage and 168/168 reverse traceability / controlled derivation after the STEP-002.14 controlled amendment.
+Then replace this comment block with:
+![Custom Information Aggregator — application overview](docs/assets/cia-overview.png)
+-->
 
-STEP-004 establishes the approved architecture baseline with **DRV-001–DRV-009**, **CMP-001–CMP-013**, **ADR-001–ADR-012**, complete **168/168 System Requirement → architecture primary ownership**, and no unresolved architecture-significant forks.
+## What is this?
 
-STEP-005 establishes the executable delivery-plan baseline: **8 implementation Epics, 63 Stories/Tasks, 328 Story Points, 78 acyclic hard dependencies, delivery-order 001–063, native Sprint 6–16 allocation**, and complete requirements / architecture downstream accounting. Implementation begins with Sprint 6 as the calibration sprint.
+Custom Information Aggregator started as a practical response to a real Maintenance, Repair and Overhaul (MRO) problem: useful information can be buried inside thousands of structured technical documents, while extracting it manually is slow, repetitive and difficult to scale.
 
-Project baselines:
+An earlier working prototype proved that a large part of that work could be automated. This repository is a ground-up rebuild of that idea as a configurable desktop application, with the emphasis shifted from a one-off automation script to a maintainable product with a clear workflow, formal requirements, architecture, automated verification and release planning.
+
+The application is designed to let a user load large XML document sets, discover the information structures inside them, choose what matters, build a reviewable database and export the resulting information to Excel without manually searching through the source files.
+
+## Basic workflow
+
+1. **Load** files, folders or archives into the application.
+2. **Discover** the XML information available across the loaded sources.
+3. **Select** the information to keep, rename it where useful, and exclude unwanted data.
+4. **Build the Database** from the selected information.
+5. **Review** the resulting data and configure how it should be presented.
+6. **Prepare and export** the required fields to Excel.
+
+The workflow is still being refined during Alpha development, so individual controls and presentation details may change before release.
+
+## Development status
+
+**Current stage: Alpha development**
+
+- ✅ Application foundation, desktop workspace and processing architecture
+- ✅ File, folder and archive loading with active source management
+- ✅ Generic XML discovery, structural context and field selection
+- ✅ Database generation and review workflow
+- ✅ Extraction pipeline and configurable Excel export engine
+- 🟡 End-to-end UI/UX completion and workflow refinement
+- 🟡 Release validation, defect correction and packaging
+
+### Release roadmap
+
+| Milestone | Target | Goal |
+|---|---:|---|
+| **Full Alpha** | **11 September 2026** | Complete end-to-end application workflow available for Alpha testing |
+| **Release Candidate** | **18 September 2026** | Feature-complete build focused on verification, defects and release readiness |
+| **First Release** | After RC acceptance | Packaged release following successful Release Candidate validation |
+
+Dates are current project targets and may move if release-blocking defects are found during validation.
+
+## For technical reviewers
+
+The project is being developed as a full software-engineering lifecycle rather than only as a coding exercise. The current implementation uses **C# / .NET 10 / WPF**, with a separate desktop UI and processing host communicating through typed named-pipe IPC. Data-processing workflows use bounded/streaming approaches, SQLite-backed intermediate results and native `.xlsx` generation without requiring Microsoft Excel.
+
+The repository also contains controlled requirements, architecture and delivery-planning baselines, with implementation work developed through short-lived branches and pull requests and supported by an automated test suite.
+
+### Project baselines
 
 - [STEP-001 — Project Initiation](docs/initiation/STEP-001-project-initiation-baseline.md)
 - [STEP-002 — User Requirements](docs/requirements/STEP-002-requirements-baseline.md)
@@ -26,13 +66,4 @@ Project baselines:
 - [STEP-004 — Architecture & Solution Design](docs/architecture/STEP-004-architecture-baseline.md)
 - [STEP-005 — Delivery Planning / Backlog Decomposition](docs/delivery/STEP-005-delivery-plan-baseline.md)
 
-Detailed controlled requirements, architecture decisions and traceability are maintained in Confluence; Jira tracks SDLC execution and sprint work.
-
-## Git branch lifecycle
-
-- `main` is the canonical integrated project baseline and is not used for direct working commits.
-- At most one long-lived working branch is used for the current major SDLC phase.
-- Controlled repository changes reach `main` through pull requests; direct commits to `main` are prohibited by project process.
-- A major-phase branch is created from current `main`, merged through a pull request, and deleted after its baseline is merged.
-- Changes discovered later for an already closed phase use a new short-lived amendment/cleanup branch from current `main`; closed phase branches are not revived as development branches.
-- Full repository audits must enumerate every non-`main` branch, compare it with `main`, identify its PR/lifecycle state, and flag any stale or orphan branch.
+Detailed controlled requirements, architecture decisions and traceability are maintained in Confluence; Jira is used to track SDLC execution and sprint work.
