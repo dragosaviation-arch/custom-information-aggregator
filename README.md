@@ -2,14 +2,7 @@
 
 A Windows desktop application for turning large XML document sets into structured, reviewable and exportable information.
 
-<!-- APPLICATION SCREENSHOT
-Add the recruiter-facing screenshot as:
-
-docs/assets/cia-overview.png
-
-Then replace this comment block with:
-![Custom Information Aggregator — application overview](docs/assets/cia-overview.png)
--->
+![Custom Information Aggregator — application overview](docs/assets/Screenshot 2026-09-10 173313.png)
 
 ## What is this?
 
