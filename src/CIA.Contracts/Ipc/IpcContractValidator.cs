@@ -899,7 +899,9 @@ public static class IpcContractValidator
         if (identity is null
             || !SourceSetId.IsValid(identity.SourceSetId.Value)
             || string.IsNullOrWhiteSpace(identity.StructuralPath)
-            || string.IsNullOrWhiteSpace(identity.InformationType))
+            || string.IsNullOrWhiteSpace(identity.InformationType)
+            || !Enum.IsDefined(identity.CandidateKind)
+            || string.IsNullOrWhiteSpace(identity.StructuralIdentity))
         {
             throw InvalidContract("A Discovery information identity is invalid.");
         }

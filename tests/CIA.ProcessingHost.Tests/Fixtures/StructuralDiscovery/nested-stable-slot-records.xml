@@ -1,0 +1,24 @@
+<records>
+  <record>
+    <slot key="A">
+      <wrapper><code>C100</code></wrapper>
+    </slot>
+    <slot key="B">
+      <wrapper>2</wrapper>
+    </slot>
+    <slot key="C">
+      <wrapper>Widget</wrapper>
+    </slot>
+  </record>
+  <record>
+    <slot key="A">
+      <wrapper><code>C200</code></wrapper>
+    </slot>
+    <slot key="B">
+      <wrapper>5</wrapper>
+    </slot>
+    <slot key="C">
+      <wrapper>Gadget</wrapper>
+    </slot>
+  </record>
+</records>

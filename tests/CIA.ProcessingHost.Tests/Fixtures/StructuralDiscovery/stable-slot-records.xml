@@ -1,0 +1,12 @@
+<records>
+  <record key="one">
+    <cell slot="A"><code>C100</code></cell>
+    <cell slot="B">2</cell>
+    <cell slot="C">Widget</cell>
+  </record>
+  <record key="two">
+    <cell slot="A"><code>C200</code></cell>
+    <cell slot="B">5</cell>
+    <cell slot="C">Gadget</cell>
+  </record>
+</records>

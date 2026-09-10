@@ -134,6 +134,8 @@ public sealed class DiscoveryService
                 lookup.Source,
                 lookup.InformationType,
                 lookup.StructuralPath,
+                lookup.Identity.CandidateKind,
+                lookup.Identity.StructuralIdentity,
                 lookup.LocalOrdinal,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -177,7 +179,9 @@ public sealed class DiscoveryService
                 var identity = new DiscoveryInformationIdentity(
                     sourceSetId,
                     value.Lineage?.StructuralPath ?? $"/{value.InformationType}",
-                    value.InformationType);
+                    value.InformationType,
+                    value.CandidateKind,
+                    value.StructuralIdentity);
                 if (!_information.TryGetValue(identity, out var aggregate))
                 {
                     aggregate = new InformationAggregation(
@@ -198,7 +202,8 @@ public sealed class DiscoveryService
         {
             return _information.Values
                 .OrderBy(information => information.SourceSetOrder)
-                .ThenBy(information => information.Identity.StructuralPath, StringComparer.Ordinal)
+                .ThenBy(information => information.Identity.StructuralIdentity, StringComparer.Ordinal)
+                .ThenBy(information => information.Identity.CandidateKind)
                 .ThenBy(information => information.Identity.InformationType, StringComparer.Ordinal)
                 .Select(information => information.CreateContract())
                 .ToArray();

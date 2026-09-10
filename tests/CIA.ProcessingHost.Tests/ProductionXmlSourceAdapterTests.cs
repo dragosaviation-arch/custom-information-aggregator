@@ -191,6 +191,8 @@ public sealed class ProductionXmlSourceAdapterTests
             source,
             "value",
             "/specialized/value",
+            SourceValueCandidateKind.Element,
+            "/specialized/value",
             1);
 
         Assert.AreEqual(SourceInterpretationStatus.Usable, interpretation.Status);

@@ -1,0 +1,12 @@
+<records>
+  <record>
+    <slot><outer><wrapper><code>C100</code></wrapper></outer></slot>
+    <slot><outer><wrapper>2</wrapper></outer></slot>
+    <slot><outer><wrapper>Widget</wrapper></outer></slot>
+  </record>
+  <record>
+    <slot><outer><wrapper><code>C200</code></wrapper></outer></slot>
+    <slot><outer><wrapper>5</wrapper></outer></slot>
+    <slot><outer><wrapper>Gadget</wrapper></outer></slot>
+  </record>
+</records>

@@ -11,6 +11,8 @@ public interface ISourceOccurrenceReader
         LoadedSourceContract source,
         string informationType,
         string structuralPath,
+        SourceValueCandidateKind candidateKind,
+        string structuralIdentity,
         int localOrdinal,
         CancellationToken cancellationToken = default);
 }
@@ -49,12 +51,20 @@ public sealed class SourceOccurrenceReader : ISourceOccurrenceReader
         LoadedSourceContract source,
         string informationType,
         string structuralPath,
+        SourceValueCandidateKind candidateKind,
+        string structuralIdentity,
         int localOrdinal,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
         ArgumentException.ThrowIfNullOrWhiteSpace(structuralPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(structuralIdentity);
+
+        if (!Enum.IsDefined(candidateKind))
+        {
+            throw new ArgumentOutOfRangeException(nameof(candidateKind), candidateKind, null);
+        }
 
         if (localOrdinal < 1)
         {
@@ -134,6 +144,8 @@ public sealed class SourceOccurrenceReader : ISourceOccurrenceReader
                         reader,
                         informationType,
                         structuralPath,
+                        candidateKind,
+                        structuralIdentity,
                         localOrdinal,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -146,6 +158,8 @@ public sealed class SourceOccurrenceReader : ISourceOccurrenceReader
                         reader,
                         informationType,
                         structuralPath,
+                        candidateKind,
+                        structuralIdentity,
                         localOrdinal,
                         cancellationToken)
                     .ConfigureAwait(false);

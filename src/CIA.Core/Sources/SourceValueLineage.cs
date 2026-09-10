@@ -9,6 +9,23 @@ public sealed class SourceElementInstance
         string namespaceUri,
         string qualifiedName,
         long instanceId)
+        : this(
+            localName,
+            namespaceUri,
+            qualifiedName,
+            instanceId,
+            siblingPosition: 1,
+            Array.Empty<SourceXmlAttribute>())
+    {
+    }
+
+    public SourceElementInstance(
+        string localName,
+        string namespaceUri,
+        string qualifiedName,
+        long instanceId,
+        int siblingPosition,
+        IEnumerable<SourceXmlAttribute> attributes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localName);
         ArgumentNullException.ThrowIfNull(namespaceUri);
@@ -21,10 +38,28 @@ public sealed class SourceElementInstance
                 "A source element instance ID must be positive.");
         }
 
+        if (siblingPosition < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(siblingPosition),
+                "A source element sibling position must be positive.");
+        }
+
+        ArgumentNullException.ThrowIfNull(attributes);
+        var attributeArray = attributes.ToArray();
+        if (attributeArray.Any(attribute => attribute is null))
+        {
+            throw new ArgumentException(
+                "Source element attributes cannot contain null items.",
+                nameof(attributes));
+        }
+
         LocalName = localName;
         NamespaceUri = namespaceUri;
         QualifiedName = qualifiedName;
         InstanceId = instanceId;
+        SiblingPosition = siblingPosition;
+        Attributes = Array.AsReadOnly(attributeArray);
     }
 
     public string LocalName { get; }
@@ -34,6 +69,42 @@ public sealed class SourceElementInstance
     public string QualifiedName { get; }
 
     public long InstanceId { get; }
+
+    public int SiblingPosition { get; }
+
+    public IReadOnlyList<SourceXmlAttribute> Attributes { get; }
+
+    public string ExpandedName => string.IsNullOrEmpty(NamespaceUri)
+        ? LocalName
+        : $"{{{NamespaceUri}}}{LocalName}";
+}
+
+public sealed class SourceXmlAttribute
+{
+    public SourceXmlAttribute(
+        string localName,
+        string namespaceUri,
+        string qualifiedName,
+        string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localName);
+        ArgumentNullException.ThrowIfNull(namespaceUri);
+        ArgumentException.ThrowIfNullOrWhiteSpace(qualifiedName);
+        ArgumentNullException.ThrowIfNull(value);
+
+        LocalName = localName;
+        NamespaceUri = namespaceUri;
+        QualifiedName = qualifiedName;
+        Value = value;
+    }
+
+    public string LocalName { get; }
+
+    public string NamespaceUri { get; }
+
+    public string QualifiedName { get; }
+
+    public string Value { get; }
 
     public string ExpandedName => string.IsNullOrEmpty(NamespaceUri)
         ? LocalName

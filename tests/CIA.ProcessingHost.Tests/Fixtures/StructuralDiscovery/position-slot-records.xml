@@ -1,0 +1,12 @@
+<unrelated xmlns="urn:generic:unrelated">
+  <group>
+    <member><code>X-1</code></member>
+    <member>10</member>
+    <member>Alpha</member>
+  </group>
+  <group>
+    <member><code>X-2</code></member>
+    <member>20</member>
+    <member>Beta</member>
+  </group>
+</unrelated>

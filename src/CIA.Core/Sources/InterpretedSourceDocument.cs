@@ -55,13 +55,36 @@ public sealed class InterpretedSourceValue
         string informationType,
         string content,
         SourceValueLineage? lineage)
+        : this(
+            informationType,
+            content,
+            lineage,
+            SourceValueCandidateKind.Element,
+            lineage?.StructuralPath ?? $"/{informationType}")
+    {
+    }
+
+    public InterpretedSourceValue(
+        string informationType,
+        string content,
+        SourceValueLineage? lineage,
+        SourceValueCandidateKind candidateKind,
+        string structuralIdentity)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
         ArgumentNullException.ThrowIfNull(content);
+        ArgumentException.ThrowIfNullOrWhiteSpace(structuralIdentity);
+
+        if (!Enum.IsDefined(candidateKind))
+        {
+            throw new ArgumentOutOfRangeException(nameof(candidateKind), candidateKind, null);
+        }
 
         InformationType = informationType;
         Content = content;
         Lineage = lineage;
+        CandidateKind = candidateKind;
+        StructuralIdentity = structuralIdentity;
     }
 
     public string InformationType { get; }
@@ -69,4 +92,8 @@ public sealed class InterpretedSourceValue
     public string Content { get; }
 
     public SourceValueLineage? Lineage { get; }
+
+    public SourceValueCandidateKind CandidateKind { get; }
+
+    public string StructuralIdentity { get; }
 }

@@ -301,9 +301,9 @@
                                                    FontFamily="Consolas"
                                                    Foreground="{StaticResource CiaTextSecondaryBrush}"
                                                    Style="{StaticResource DiscoveryRowTextStyle}"
-                                                   Text="{Binding StructuralPath}"
+                                                   Text="{Binding StructuralIdentity}"
                                                    TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding StructuralPath}" />
+                                                   ToolTip="{Binding StructuralContextToolTip}" />
                                         <TextBlock Grid.Column="3"
                                                    FontFamily="Consolas"
                                                    FontWeight="SemiBold"
