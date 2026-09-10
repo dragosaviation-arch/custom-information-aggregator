@@ -1212,7 +1212,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             query = query.Where(information =>
                 information.InformationType.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
                 || information.SourceSetName.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
-                || information.StructuralPath.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
+                || information.StructuralIdentity.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
+                || information.CandidateKindText.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
                 || information.DatabaseTag.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
                 || information.SampleValue.Contains(SearchText, StringComparison.OrdinalIgnoreCase));
         }
@@ -1270,7 +1271,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         Func<DiscoveredInformationItemViewModel, object> keySelector = _sortColumn switch
         {
             "SourceSet" => item => item.SourceSetName,
-            "Context" => item => item.StructuralPath,
+            "Context" => item => item.StructuralIdentity,
             "DatabaseTag" => item => item.DatabaseTag,
             "Occurrences" => item => item.TotalOccurrenceCount,
             "Sources" => item => item.SourceCount,
@@ -1514,6 +1515,19 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
     public string SourceSetName => _sourceSetName;
 
     public string StructuralPath => Identity.StructuralPath;
+
+    public string StructuralIdentity => Identity.StructuralIdentity;
+
+    public SourceValueCandidateKind CandidateKind => Identity.CandidateKind;
+
+    public string CandidateKindText => CandidateKind switch
+    {
+        SourceValueCandidateKind.Attribute => "Attribute",
+        SourceValueCandidateKind.Structural => "Structural",
+        _ => "Element"
+    };
+
+    public string StructuralContextToolTip => $"{CandidateKindText}: {StructuralIdentity}";
 
     public string InformationType => Identity.InformationType;
 

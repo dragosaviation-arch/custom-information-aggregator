@@ -1,0 +1,10 @@
+<root>
+  <left>
+    <record><cell slot="A">L1</cell><cell slot="B">1</cell></record>
+    <record><cell slot="A">L2</cell><cell slot="B">2</cell></record>
+  </left>
+  <right>
+    <record><cell slot="A">R1</cell><cell slot="B">3</cell></record>
+    <record><cell slot="A">R2</cell><cell slot="B">4</cell></record>
+  </right>
+</root>

@@ -404,6 +404,7 @@ public sealed class DiscoveryServiceTests
     public async Task DiscoveryContractsRoundTripAndRejectCountMismatch()
     {
         var sourceId = SourceId.CreateNew();
+        var sourceSetId = SourceSetId.CreateNew();
         var correlation = OperationCorrelation.CreateNew();
         var completion = OperationCompletion.FromCompletedItems(
             correlation,
@@ -416,7 +417,12 @@ public sealed class DiscoveryServiceTests
             completion,
             [
                 new DiscoveredInformation(
-                    "Name",
+                    new DiscoveryInformationIdentity(
+                        sourceSetId,
+                        "/catalog/item",
+                        "code",
+                        SourceValueCandidateKind.Attribute,
+                        "/catalog/item/@code"),
                     2,
                     [new DiscoveredSourceContribution(sourceId, "source.xml", 2)],
                     "Alpha")
@@ -431,7 +437,13 @@ public sealed class DiscoveryServiceTests
             .ReadAsync(stream);
 
         Assert.AreEqual(response.Completion.Correlation, roundTripped.Completion.Correlation);
-        Assert.AreEqual("Name", roundTripped.Information[0].InformationType);
+        Assert.AreEqual("code", roundTripped.Information[0].InformationType);
+        Assert.AreEqual(
+            SourceValueCandidateKind.Attribute,
+            roundTripped.Information[0].Identity.CandidateKind);
+        Assert.AreEqual(
+            "/catalog/item/@code",
+            roundTripped.Information[0].Identity.StructuralIdentity);
         Assert.AreEqual(sourceId, roundTripped.Information[0].ContributingSources[0].SourceId);
 
         var invalid = response with
@@ -541,6 +553,8 @@ public sealed class DiscoveryServiceTests
             XmlReader reader,
             string informationType,
             string structuralPath,
+            SourceValueCandidateKind candidateKind,
+            string structuralIdentity,
             int localOrdinal,
             CancellationToken cancellationToken = default)
         {
@@ -569,6 +583,11 @@ public sealed class DiscoveryServiceTests
                                 StringComparison.Ordinal)
                             && string.Equals(
                                 structuralPath,
+                                $"/{informationType}",
+                                StringComparison.Ordinal)
+                            && candidateKind == SourceValueCandidateKind.Element
+                            && string.Equals(
+                                structuralIdentity,
                                 $"/{informationType}",
                                 StringComparison.Ordinal)
                             && !string.IsNullOrWhiteSpace(reader.Value))

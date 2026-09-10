@@ -296,7 +296,8 @@ public sealed class ActiveDiscoveryConfiguration
         return new DiscoveryConfigurationSnapshot(
             _items
                 .OrderBy(item => _sourceSetOrder.IndexOf(item.Key.SourceSetId))
-                .ThenBy(item => item.Key.StructuralPath, StringComparer.Ordinal)
+                .ThenBy(item => item.Key.StructuralIdentity, StringComparer.Ordinal)
+                .ThenBy(item => item.Key.CandidateKind)
                 .ThenBy(item => item.Key.InformationType, StringComparer.Ordinal)
                 .Select(item => new DiscoveryConfigurationItem(item.Key, item.Value))
                 .ToArray(),

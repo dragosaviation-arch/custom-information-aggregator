@@ -12,4 +12,10 @@
     <ProjectReference Include="..\..\src\CIA.ProcessingHost\CIA.ProcessingHost.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Fixtures\StructuralDiscovery\*.xml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

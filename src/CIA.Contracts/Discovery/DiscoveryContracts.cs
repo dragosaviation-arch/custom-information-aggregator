@@ -9,11 +9,26 @@ public sealed record DiscoveryInformationIdentity
     private static readonly SourceSetId LegacySourceSetId = SourceSetId.From(
         Guid.Parse("00000000-0000-7000-8000-000000000136"));
 
-    [JsonConstructor]
     public DiscoveryInformationIdentity(
         SourceSetId sourceSetId,
         string structuralPath,
         string informationType)
+        : this(
+            sourceSetId,
+            structuralPath,
+            informationType,
+            SourceValueCandidateKind.Element,
+            structuralPath)
+    {
+    }
+
+    [JsonConstructor]
+    public DiscoveryInformationIdentity(
+        SourceSetId sourceSetId,
+        string structuralPath,
+        string informationType,
+        SourceValueCandidateKind candidateKind,
+        string structuralIdentity)
     {
         if (!SourceSetId.IsValid(sourceSetId.Value))
         {
@@ -24,10 +39,18 @@ public sealed record DiscoveryInformationIdentity
 
         ArgumentException.ThrowIfNullOrWhiteSpace(structuralPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(structuralIdentity);
+
+        if (!Enum.IsDefined(candidateKind))
+        {
+            throw new ArgumentOutOfRangeException(nameof(candidateKind), candidateKind, null);
+        }
 
         SourceSetId = sourceSetId;
         StructuralPath = structuralPath;
         InformationType = informationType;
+        CandidateKind = candidateKind;
+        StructuralIdentity = structuralIdentity;
     }
 
     public SourceSetId SourceSetId { get; }
@@ -35,6 +58,10 @@ public sealed record DiscoveryInformationIdentity
     public string StructuralPath { get; }
 
     public string InformationType { get; }
+
+    public SourceValueCandidateKind CandidateKind { get; }
+
+    public string StructuralIdentity { get; }
 
     internal static DiscoveryInformationIdentity CreateLegacy(string informationType)
     {

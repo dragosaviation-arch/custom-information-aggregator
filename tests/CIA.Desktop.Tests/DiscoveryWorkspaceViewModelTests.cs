@@ -14,6 +14,70 @@ namespace CIA.Desktop.Tests;
 public sealed class DiscoveryWorkspaceViewModelTests
 {
     [TestMethod]
+    public async Task CandidateKindAndStructuralIdentityRemainDistinctInPresentationAndConfiguration()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var client = new StubDiscoveryClient(
+            (correlation, sources) =>
+            {
+                var loadedSource = sources.Single();
+                return Accept(
+                    correlation,
+                    sources,
+                    [
+                        new DiscoveredInformation(
+                            new DiscoveryInformationIdentity(
+                                loadedSource.SourceSetId,
+                                "/root/item/code",
+                                "code",
+                                SourceValueCandidateKind.Element,
+                                "/root/item/code"),
+                            1,
+                            [new DiscoveredSourceContribution(loadedSource.SourceId, "source.xml", 1)],
+                            "element"),
+                        new DiscoveredInformation(
+                            new DiscoveryInformationIdentity(
+                                loadedSource.SourceSetId,
+                                "/root/item",
+                                "code",
+                                SourceValueCandidateKind.Attribute,
+                                "/root/item/@code"),
+                            1,
+                            [new DiscoveredSourceContribution(loadedSource.SourceId, "source.xml", 1)],
+                            "attribute")
+                    ]);
+            });
+        var configuration = new ActiveDiscoveryConfiguration();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var element = viewModel.Information.Single(item =>
+            item.CandidateKind == SourceValueCandidateKind.Element);
+        var attribute = viewModel.Information.Single(item =>
+            item.CandidateKind == SourceValueCandidateKind.Attribute);
+        viewModel.ToggleSelectionCommand.Execute(attribute);
+
+        Assert.AreNotEqual(element.Identity, attribute.Identity);
+        Assert.AreEqual("Element", element.CandidateKindText);
+        Assert.AreEqual("Attribute", attribute.CandidateKindText);
+        Assert.AreEqual("/root/item/@code", attribute.StructuralIdentity);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Selected,
+            configuration.Current.Items.Single(item =>
+                item.Identity == attribute.Identity).Disposition);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Neutral,
+            configuration.Current.Items.Single(item =>
+                item.Identity == element.Identity).Disposition);
+    }
+
+    [TestMethod]
     public async Task SetAwareRowsKeepConfigurationPreviewAndLayoutsIndependent()
     {
         var first = CreateSource("first.xml");

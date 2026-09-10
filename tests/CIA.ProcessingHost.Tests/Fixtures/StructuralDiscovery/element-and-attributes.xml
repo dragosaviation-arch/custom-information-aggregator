@@ -1,0 +1,6 @@
+<inventory release="R1">
+  <item code="C100" category="A">
+    <code>C100</code>
+    <name>  Widget  </name>
+  </item>
+</inventory>
