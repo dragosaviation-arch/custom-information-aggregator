@@ -106,6 +106,104 @@ public sealed class StructuralDiscoveryCandidateTests
     }
 
     [TestMethod]
+    public async Task NestedWrappersUseTheNearestStableSlotAttributeWithoutDuplicatingExplicitValues()
+    {
+        using var workspace = new StructuralDiscoveryWorkspace();
+        var source = workspace.CopyFixture("nested-stable-slot-records.xml");
+
+        var values = (await InterpretAsync(source)).Values;
+        var codes = values
+            .Where(value => value.InformationType == "code")
+            .ToArray();
+        var quantities = values
+            .Where(value => value.StructuralIdentity ==
+                "/records/record/slot[@key='B']/wrapper")
+            .ToArray();
+        var descriptions = values
+            .Where(value => value.StructuralIdentity ==
+                "/records/record/slot[@key='C']/wrapper")
+            .ToArray();
+
+        CollectionAssert.AreEqual(new[] { "C100", "C200" }, codes.Select(value => value.Content).ToArray());
+        CollectionAssert.AreEqual(new[] { "2", "5" }, quantities.Select(value => value.Content).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "Widget", "Gadget" },
+            descriptions.Select(value => value.Content).ToArray());
+        Assert.IsTrue(codes.All(value => value.CandidateKind == SourceValueCandidateKind.Element));
+        Assert.IsTrue(quantities.All(value => value.CandidateKind == SourceValueCandidateKind.Structural));
+        Assert.IsTrue(descriptions.All(value => value.CandidateKind == SourceValueCandidateKind.Structural));
+        Assert.AreEqual(
+            GetRecordInstanceId(quantities[0]),
+            GetRecordInstanceId(descriptions[0]));
+        Assert.AreEqual(
+            GetRecordInstanceId(quantities[1]),
+            GetRecordInstanceId(descriptions[1]));
+        Assert.AreNotEqual(
+            GetRecordInstanceId(quantities[0]),
+            GetRecordInstanceId(quantities[1]));
+        Assert.HasCount(1, values.Where(value => value.Content == "C100"));
+        Assert.HasCount(1, values.Where(value => value.Content == "2"));
+        Assert.HasCount(1, values.Where(value => value.Content == "Widget"));
+    }
+
+    [TestMethod]
+    public async Task NestedWrappersFallBackToTheEnclosingSlotPosition()
+    {
+        using var workspace = new StructuralDiscoveryWorkspace();
+        var source = workspace.CopyFixture("nested-position-slot-records.xml");
+
+        var values = (await InterpretAsync(source)).Values;
+        var quantities = values
+            .Where(value => value.StructuralIdentity ==
+                "/records/record/slot[position=2]/outer/wrapper")
+            .ToArray();
+        var descriptions = values
+            .Where(value => value.StructuralIdentity ==
+                "/records/record/slot[position=3]/outer/wrapper")
+            .ToArray();
+
+        CollectionAssert.AreEqual(new[] { "2", "5" }, quantities.Select(value => value.Content).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "Widget", "Gadget" },
+            descriptions.Select(value => value.Content).ToArray());
+        Assert.IsTrue(quantities.All(value =>
+            value.InformationType == "slot [position 2]"
+            && value.CandidateKind == SourceValueCandidateKind.Structural));
+        Assert.IsTrue(descriptions.All(value =>
+            value.InformationType == "slot [position 3]"
+            && value.CandidateKind == SourceValueCandidateKind.Structural));
+    }
+
+    [TestMethod]
+    public async Task NestedStructuralFieldsRemainDeterministicThroughStatelessPreview()
+    {
+        using var workspace = new StructuralDiscoveryWorkspace();
+        var source = workspace.CopyFixture("nested-stable-slot-records.xml");
+        var service = CreateDiscoveryService();
+        var correlation = OperationCorrelation.CreateNew();
+
+        var discovery = await service.RunAsync(correlation, [source]);
+        var quantity = discovery.Information.Single(information =>
+            information.Identity.StructuralIdentity ==
+            "/records/record/slot[@key='B']/wrapper");
+        var description = discovery.Information.Single(information =>
+            information.Identity.StructuralIdentity ==
+            "/records/record/slot[@key='C']/wrapper");
+
+        var secondQuantity = await CreateDiscoveryService().GetOccurrenceAsync(
+            CreateLookup(correlation, quantity, source, globalOrdinal: 2));
+        var firstDescription = await CreateDiscoveryService().GetOccurrenceAsync(
+            CreateLookup(correlation, description, source, globalOrdinal: 1));
+
+        Assert.IsTrue(secondQuantity.Accepted);
+        Assert.AreEqual("5", secondQuantity.Occurrence?.Value);
+        Assert.AreEqual(quantity.Identity, secondQuantity.Occurrence?.Identity);
+        Assert.IsTrue(firstDescription.Accepted);
+        Assert.AreEqual("Widget", firstDescription.Occurrence?.Value);
+        Assert.AreEqual(description.Identity, firstDescription.Occurrence?.Identity);
+    }
+
+    [TestMethod]
     public async Task MixedExplicitAndStructuralValuesAreNotDuplicated()
     {
         using var workspace = new StructuralDiscoveryWorkspace();
@@ -245,6 +343,27 @@ public sealed class StructuralDiscoveryCandidateTests
                 [],
                 generic,
                 NullLogger<SourceOccurrenceReader>.Instance));
+    }
+
+    private static DiscoveryOccurrenceLookup CreateLookup(
+        OperationCorrelation correlation,
+        DiscoveredInformation information,
+        LoadedSourceContract source,
+        int globalOrdinal)
+    {
+        return new DiscoveryOccurrenceLookup(
+            correlation.OperationId,
+            information.Identity,
+            globalOrdinal,
+            information.TotalOccurrenceCount,
+            source,
+            globalOrdinal,
+            information.TotalOccurrenceCount);
+    }
+
+    private static long GetRecordInstanceId(InterpretedSourceValue value)
+    {
+        return value.Lineage!.ElementPath.Single(element => element.LocalName == "record").InstanceId;
     }
 
     private sealed class StructuralDiscoveryWorkspace : IDisposable

@@ -427,38 +427,30 @@ internal static class XmlElementValueReader
                             "The XML element boundary is not valid.");
                     }
 
-                    var completedElement = containingElements.Pop();
-                    await EmitDirectValueChildrenAsync(
-                            completedElement,
+                    var completedElement = await CompleteElementAsync(
+                            containingElements.Pop(),
                             structuralSlots,
                             onValue)
                         .ConfigureAwait(false);
 
-                    if (completedElement.DirectTextValues.Count > 0)
+                    if (completedElement is not null)
                     {
                         if (containingElements.TryPeek(out var parent))
                         {
                             if (containingElements.Count == 1)
                             {
-                                foreach (var value in completedElement.DirectTextValues)
-                                {
-                                    await onValue(value).ConfigureAwait(false);
-                                }
+                                await EmitRawValuesAsync(completedElement, onValue)
+                                    .ConfigureAwait(false);
                             }
                             else
                             {
-                                parent.DirectValueChildren.Add(
-                                    new CompletedValueElement(
-                                        completedElement.Element,
-                                        completedElement.DirectTextValues.ToArray()));
+                                parent.ValueChildren.Add(completedElement);
                             }
                         }
                         else
                         {
-                            foreach (var value in completedElement.DirectTextValues)
-                            {
-                                await onValue(value).ConfigureAwait(false);
-                            }
+                            await EmitRawValuesAsync(completedElement, onValue)
+                                .ConfigureAwait(false);
                         }
                     }
 
@@ -509,27 +501,65 @@ internal static class XmlElementValueReader
         return attributes;
     }
 
-    private static async ValueTask EmitDirectValueChildrenAsync(
+    private static async ValueTask<CompletedValueElement?> CompleteElementAsync(
         ElementFrame frame,
         StructuralSlotDetector structuralSlots,
         Func<InterpretedSourceValue, ValueTask> onValue)
     {
-        foreach (var group in frame.DirectValueChildren.GroupBy(
+        if (frame.DirectTextValues.Count > 0 && frame.ValueChildren.Count == 0)
+        {
+            return new CompletedValueElement(
+                frame.Element,
+                frame.DirectTextValues.ToArray());
+        }
+
+        if (frame.DirectTextValues.Count > 0)
+        {
+            foreach (var value in frame.DirectTextValues)
+            {
+                await onValue(value).ConfigureAwait(false);
+            }
+
+            foreach (var child in frame.ValueChildren)
+            {
+                await EmitRawValuesAsync(child, onValue).ConfigureAwait(false);
+            }
+
+            return null;
+        }
+
+        if (frame.ValueChildren.Count == 1)
+        {
+            return new CompletedValueElement(
+                frame.Element,
+                frame.ValueChildren[0].Values);
+        }
+
+        foreach (var group in frame.ValueChildren.GroupBy(
                      child => child.Element.ExpandedName,
                      StringComparer.Ordinal))
         {
             var children = group.ToArray();
             if (children.Length == 1)
             {
-                foreach (var value in children[0].Values)
-                {
-                    await onValue(value).ConfigureAwait(false);
-                }
+                await EmitRawValuesAsync(children[0], onValue).ConfigureAwait(false);
 
                 continue;
             }
 
             await structuralSlots.ProcessAsync(children).ConfigureAwait(false);
+        }
+
+        return null;
+    }
+
+    private static async ValueTask EmitRawValuesAsync(
+        CompletedValueElement element,
+        Func<InterpretedSourceValue, ValueTask> onValue)
+    {
+        foreach (var value in element.Values)
+        {
+            await onValue(value).ConfigureAwait(false);
         }
     }
 
@@ -541,7 +571,7 @@ internal static class XmlElementValueReader
 
         public List<InterpretedSourceValue> DirectTextValues { get; } = [];
 
-        public List<CompletedValueElement> DirectValueChildren { get; } = [];
+        public List<CompletedValueElement> ValueChildren { get; } = [];
 
         public int TakeNextChildPosition() => checked(++nextChildPosition);
     }
@@ -569,9 +599,12 @@ internal static class XmlElementValueReader
 
             if (pendingGroups.Remove(key, out var firstGroup))
             {
-                selector = FindStableAttributeName(firstGroup, children) is { } attributeName
-                    ? new StructuralSlotSelector(attributeName)
-                    : StructuralSlotSelector.ByPosition;
+                var structuralRelativePaths = FindStructuralRelativePaths(
+                    firstGroup,
+                    children);
+                selector = new StructuralSlotSelector(
+                    FindStableAttributeName(firstGroup, children),
+                    structuralRelativePaths);
                 confirmedStructuralGroups.Add(key, selector);
                 await EmitStructuralValuesAsync(firstGroup, selector).ConfigureAwait(false);
                 await EmitStructuralValuesAsync(children, selector).ConfigureAwait(false);
@@ -603,13 +636,22 @@ internal static class XmlElementValueReader
         {
             foreach (var child in children)
             {
-                var rawValue = child.Values[0];
-                var (displayName, structuralIdentity) = selector.AttributeName is null
-                    ? CreatePositionIdentity(child, rawValue)
-                    : CreateAttributeIdentity(child, rawValue, selector.AttributeName);
-
                 foreach (var value in child.Values)
                 {
+                    var relativePath = GetRelativeStructuralPath(child, value);
+                    if (!selector.StructuralRelativePaths.Contains(relativePath))
+                    {
+                        await onValue(value).ConfigureAwait(false);
+                        continue;
+                    }
+
+                    var (displayName, structuralIdentity) = selector.AttributeName is null
+                        ? CreatePositionIdentity(child, value, relativePath)
+                        : CreateAttributeIdentity(
+                            child,
+                            value,
+                            selector.AttributeName,
+                            relativePath);
                     await onValue(
                             new InterpretedSourceValue(
                                 displayName,
@@ -624,11 +666,36 @@ internal static class XmlElementValueReader
 
         private static string CreateGroupKey(CompletedValueElement child)
         {
-            var path = child.Values[0].Lineage?.StructuralPath
-                ?? $"/{child.Element.ExpandedName}";
+            var path = GetElementStructuralPath(child, child.Values[0]);
             var separator = path.LastIndexOf('/');
             var parentPath = separator > 0 ? path[..separator] : "/";
             return $"{parentPath}\u001f{child.Element.ExpandedName}";
+        }
+
+        private static IReadOnlySet<string> FindStructuralRelativePaths(
+            IReadOnlyList<CompletedValueElement> firstGroup,
+            IReadOnlyList<CompletedValueElement> secondGroup)
+        {
+            var firstPaths = FindRepeatedRelativePaths(firstGroup);
+            firstPaths.IntersectWith(FindRepeatedRelativePaths(secondGroup));
+            return firstPaths;
+        }
+
+        private static HashSet<string> FindRepeatedRelativePaths(
+            IReadOnlyList<CompletedValueElement> children)
+        {
+            return children
+                .SelectMany(child => child.Values
+                    .Select(value => GetRelativeStructuralPath(child, value))
+                    .Distinct(StringComparer.Ordinal)
+                    .Select(path => new { child.Element.InstanceId, Path = path }))
+                .GroupBy(candidate => candidate.Path, StringComparer.Ordinal)
+                .Where(group => group
+                    .Select(candidate => candidate.InstanceId)
+                    .Distinct()
+                    .Count() > 1)
+                .Select(group => group.Key)
+                .ToHashSet(StringComparer.Ordinal);
         }
 
         private static string? FindStableAttributeName(
@@ -670,7 +737,8 @@ internal static class XmlElementValueReader
         private static (string DisplayName, string StructuralIdentity) CreateAttributeIdentity(
             CompletedValueElement child,
             InterpretedSourceValue rawValue,
-            string attributeName)
+            string attributeName,
+            string relativePath)
         {
             var attribute = child.Element.Attributes.SingleOrDefault(
                 candidate => string.Equals(
@@ -679,7 +747,7 @@ internal static class XmlElementValueReader
                     StringComparison.Ordinal));
             if (attribute is null)
             {
-                return CreatePositionIdentity(child, rawValue);
+                return CreatePositionIdentity(child, rawValue, relativePath);
             }
 
             var escapedValue = attribute.Value
@@ -687,21 +755,76 @@ internal static class XmlElementValueReader
                 .Replace("'", "\\'", StringComparison.Ordinal);
             return (
                 $"{child.Element.QualifiedName} [{attribute.QualifiedName}={attribute.Value}]",
-                $"{rawValue.Lineage?.StructuralPath ?? $"/{child.Element.ExpandedName}"}[@{attributeName}='{escapedValue}']");
+                $"{GetElementStructuralPath(child, rawValue)}[@{attributeName}='{escapedValue}']{relativePath}");
         }
 
         private static (string DisplayName, string StructuralIdentity) CreatePositionIdentity(
             CompletedValueElement child,
-            InterpretedSourceValue rawValue)
+            InterpretedSourceValue rawValue,
+            string relativePath)
         {
             return (
                 $"{child.Element.QualifiedName} [position {child.Element.SiblingPosition}]",
-                $"{rawValue.Lineage?.StructuralPath ?? $"/{child.Element.ExpandedName}"}[position={child.Element.SiblingPosition}]");
+                $"{GetElementStructuralPath(child, rawValue)}[position={child.Element.SiblingPosition}]{relativePath}");
         }
 
-        private sealed record StructuralSlotSelector(string? AttributeName)
+        private static string GetElementStructuralPath(
+            CompletedValueElement child,
+            InterpretedSourceValue value)
         {
-            public static StructuralSlotSelector ByPosition { get; } = new(AttributeName: null);
+            if (value.Lineage is null)
+            {
+                return $"/{child.Element.ExpandedName}";
+            }
+
+            var elementIndex = FindElementIndex(child, value);
+            return "/" + string.Join(
+                "/",
+                value.Lineage.ElementPath
+                    .Take(elementIndex + 1)
+                    .Select(element => element.ExpandedName));
         }
+
+        private static string GetRelativeStructuralPath(
+            CompletedValueElement child,
+            InterpretedSourceValue value)
+        {
+            if (value.Lineage is null)
+            {
+                return string.Empty;
+            }
+
+            var elementIndex = FindElementIndex(child, value);
+            var descendants = value.Lineage.ElementPath
+                .Skip(elementIndex + 1)
+                .Select(element => element.ExpandedName)
+                .ToArray();
+            return descendants.Length == 0
+                ? string.Empty
+                : "/" + string.Join("/", descendants);
+        }
+
+        private static int FindElementIndex(
+            CompletedValueElement child,
+            InterpretedSourceValue value)
+        {
+            var elementPath = value.Lineage?.ElementPath
+                ?? throw new InvalidOperationException(
+                    "A structural source candidate requires source lineage.");
+            for (var index = elementPath.Count - 1; index >= 0; index--)
+            {
+                if (elementPath[index].InstanceId == child.Element.InstanceId)
+                {
+                    return index;
+                }
+            }
+
+            throw new InvalidOperationException(
+                "A structural source candidate must descend from its enclosing slot element.");
+        }
+
+        private sealed record StructuralSlotSelector(
+            string? AttributeName,
+            IReadOnlySet<string> StructuralRelativePaths);
     }
 }
