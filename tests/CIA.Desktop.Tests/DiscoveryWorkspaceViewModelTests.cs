@@ -287,25 +287,29 @@ public sealed class DiscoveryWorkspaceViewModelTests
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
         await AwaitSelectedOccurrenceAsync(viewModel);
 
-        Assert.HasCount(3, viewModel.Information);
-        var setOneBuyer = viewModel.Information.Single(item =>
-            item.SourceSetName == "Set 1" && item.StructuralPath == "/root/buyer/name");
-        var setOneSeller = viewModel.Information.Single(item =>
-            item.SourceSetName == "Set 1" && item.StructuralPath == "/root/seller/name");
+        Assert.HasCount(2, viewModel.Information);
+        var setOneName = viewModel.Information.Single(item =>
+            item.SourceSetName == "Set 1");
         var setTwoBuyer = viewModel.Information.Single(item =>
             item.SourceSetName == "Set 2" && item.StructuralPath == "/root/buyer/name");
-        Assert.AreNotEqual(setOneBuyer.Identity, setOneSeller.Identity);
-        Assert.AreNotEqual(setOneBuyer.Identity, setTwoBuyer.Identity);
+        Assert.HasCount(2, setOneName.DetailedIdentities);
+        Assert.IsTrue(setOneName.DetailedIdentities.Any(identity =>
+            identity.StructuralPath == "/root/buyer/name"));
+        Assert.IsTrue(setOneName.DetailedIdentities.Any(identity =>
+            identity.StructuralPath == "/root/seller/name"));
+        Assert.AreNotEqual(setOneName.Identity, setTwoBuyer.Identity);
 
-        viewModel.ToggleSelectionCommand.Execute(setOneBuyer);
+        viewModel.ToggleSelectionCommand.Execute(setOneName);
         viewModel.SelectedInformation = setTwoBuyer;
         await AwaitSelectedOccurrenceAsync(viewModel);
         viewModel.SelectedDatabaseTag = "Set Two Name";
 
-        Assert.IsTrue(setOneBuyer.IsSelected);
-        Assert.IsFalse(setOneSeller.IsSelected);
+        Assert.IsTrue(setOneName.IsSelected);
+        Assert.IsTrue(setOneName.DetailedIdentities.All(identity =>
+            configuration.Current.Items.Single(item => item.Identity == identity).Disposition
+                == DiscoveryInformationDisposition.Selected));
         Assert.IsFalse(setTwoBuyer.IsSelected);
-        Assert.AreEqual("name", setOneBuyer.DatabaseTag);
+        Assert.AreEqual("name", setOneName.DatabaseTag);
         Assert.AreEqual("Set Two Name", setTwoBuyer.DatabaseTag);
         Assert.AreEqual(setTwoBuyer.Identity, client.LastOccurrenceLookup?.Identity);
 
@@ -320,7 +324,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         var extraction = await workflow.BeginOperationAsync(WorkflowOperationKind.Extraction);
         workflow.CompleteOperation(extraction.Operation!.OperationId, OperationOutcome.CompletedSuccessfully);
         var firstLayout = viewModel.SourceSetLayouts.Single(layout =>
-            layout.SourceSetId == setOneBuyer.SourceSetId);
+            layout.SourceSetId == setOneName.SourceSetId);
         var secondLayout = viewModel.SourceSetLayouts.Single(layout =>
             layout.SourceSetId == setTwoBuyer.SourceSetId);
 
@@ -342,6 +346,225 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.IsTrue(loading.RenameSourceSet(secondSet.SourceSetId, "Renamed Set").Accepted);
         Assert.AreEqual("Renamed Set", setTwoBuyer.SourceSetName);
         Assert.AreEqual(identityBeforeRename, setTwoBuyer.Identity);
+    }
+
+    [TestMethod]
+    public async Task ElementRowsAcrossPathsBecomeOneLogicalFieldWithAggregatePreviewOrder()
+    {
+        var source = CreateSource("logical-fields.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var occurrenceLookups = new List<DiscoveryOccurrenceLookup>();
+        var client = new StubDiscoveryClient(
+            (correlation, sources) =>
+            {
+                var loadedSource = sources.Single();
+                return Accept(
+                    correlation,
+                    sources,
+                    [
+                        CreateDetailedInformation(
+                            loadedSource,
+                            "/root/first/toolnbr",
+                            "toolnbr",
+                            SourceValueCandidateKind.Element,
+                            "/root/first/toolnbr",
+                            4,
+                            "first"),
+                        CreateDetailedInformation(
+                            loadedSource,
+                            "/root/second/toolnbr",
+                            "toolnbr",
+                            SourceValueCandidateKind.Element,
+                            "/root/second/toolnbr",
+                            6,
+                            "second"),
+                        CreateDetailedInformation(
+                            loadedSource,
+                            "/root/third/toolnbr",
+                            "toolnbr",
+                            SourceValueCandidateKind.Element,
+                            "/root/third/toolnbr",
+                            6,
+                            "third")
+                    ]);
+            },
+            lookup =>
+            {
+                occurrenceLookups.Add(lookup);
+                return AcceptOccurrence(
+                    lookup.Identity,
+                    lookup.GlobalOrdinal,
+                    lookup.TotalOccurrenceCount,
+                    lookup.Source.SourceId,
+                    $"{lookup.Identity.StructuralPath}:{lookup.LocalOrdinal}");
+            });
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        var logicalField = viewModel.Information.Single();
+        Assert.AreEqual("toolnbr", logicalField.InformationType);
+        Assert.AreEqual(16, logicalField.TotalOccurrenceCount);
+        Assert.HasCount(3, logicalField.DetailedIdentities);
+        Assert.HasCount(1, logicalField.ContributingSources);
+        Assert.AreEqual(16, logicalField.ContributingSources[0].OccurrenceCount);
+        Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual(16, viewModel.OccurrenceTotal);
+
+        viewModel.OccurrenceOrdinalInput = "5";
+        await AwaitOrdinalJumpAsync(viewModel);
+
+        Assert.AreEqual(5, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual("/root/second/toolnbr:1", viewModel.OccurrencePreviewText);
+        Assert.AreEqual("/root/second/toolnbr", occurrenceLookups[^1].Identity.StructuralPath);
+        Assert.AreEqual(1, occurrenceLookups[^1].LocalOrdinal);
+    }
+
+    [TestMethod]
+    public void LogicalGroupingPreservesCandidateKindNamespaceAndStructuralSlots()
+    {
+        var sourceSetId = SourceSetId.CreateNew();
+        var sourceId = SourceId.CreateNew();
+        var information = new[]
+        {
+            CreateDetailedInformation(
+                sourceSetId,
+                sourceId,
+                "/{https://example.test/one}root/{https://example.test/one}first/{https://example.test/one}name",
+                "one:name",
+                SourceValueCandidateKind.Element,
+                "/{https://example.test/one}root/{https://example.test/one}first/{https://example.test/one}name"),
+            CreateDetailedInformation(
+                sourceSetId,
+                sourceId,
+                "/{https://example.test/one}root/{https://example.test/one}second/{https://example.test/one}name",
+                "one:name",
+                SourceValueCandidateKind.Element,
+                "/{https://example.test/one}root/{https://example.test/one}second/{https://example.test/one}name"),
+            CreateDetailedInformation(
+                sourceSetId,
+                sourceId,
+                "/{urn:two}root/{urn:two}name",
+                "two:name",
+                SourceValueCandidateKind.Element,
+                "/{urn:two}root/{urn:two}name"),
+            CreateDetailedInformation(
+                sourceSetId,
+                sourceId,
+                "/{urn:one}root/{urn:one}item",
+                "one:name",
+                SourceValueCandidateKind.Attribute,
+                "/{urn:one}root/{urn:one}item/@{urn:one}name"),
+            CreateDetailedInformation(
+                sourceSetId,
+                sourceId,
+                "/{urn:one}root/{urn:one}record/{urn:one}slot",
+                "value",
+                SourceValueCandidateKind.Structural,
+                "/{urn:one}root/{urn:one}record/{urn:one}slot[@key='B']"),
+            CreateDetailedInformation(
+                sourceSetId,
+                sourceId,
+                "/{urn:one}root/{urn:one}record/{urn:one}slot",
+                "value",
+                SourceValueCandidateKind.Structural,
+                "/{urn:one}root/{urn:one}record/{urn:one}slot[@key='C']")
+        };
+
+        var logical = DiscoveredInformationItemViewModel.CreateLogicalItems(
+            information,
+            _ => "Set 1",
+            _ => DiscoveryInformationDisposition.Neutral,
+            _ => null).ToArray();
+
+        Assert.HasCount(5, logical);
+        Assert.HasCount(2, logical.Single(item =>
+            item.CandidateKind == SourceValueCandidateKind.Element
+            && item.InformationType == "one:name").DetailedIdentities);
+        Assert.HasCount(1, logical.Single(item =>
+            item.InformationType == "two:name").DetailedIdentities);
+        Assert.HasCount(1, logical.Single(item =>
+            item.CandidateKind == SourceValueCandidateKind.Attribute).DetailedIdentities);
+        Assert.HasCount(2, logical.Where(item =>
+            item.CandidateKind == SourceValueCandidateKind.Structural).ToArray());
+    }
+
+    [TestMethod]
+    public async Task LogicalConfigurationActionsFanOutToEveryDetailedIdentity()
+    {
+        var source = CreateSource("logical-configuration.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var configuration = new ActiveDiscoveryConfiguration();
+        var client = new StubDiscoveryClient((correlation, sources) =>
+        {
+            var loadedSource = sources.Single();
+            return Accept(
+                correlation,
+                sources,
+                [
+                    CreateDetailedInformation(
+                        loadedSource,
+                        "/root/a/toolname",
+                        "toolname",
+                        SourceValueCandidateKind.Element,
+                        "/root/a/toolname"),
+                    CreateDetailedInformation(
+                        loadedSource,
+                        "/root/b/toolname",
+                        "toolname",
+                        SourceValueCandidateKind.Element,
+                        "/root/b/toolname")
+                ]);
+        });
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        var logicalField = viewModel.Information.Single();
+
+        viewModel.ToggleSelectionCommand.Execute(logicalField);
+
+        Assert.AreEqual("1 / 1 selected", viewModel.SelectionSummary);
+        Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
+            configuration.Current.Items.Single(item => item.Identity == identity).Disposition
+                == DiscoveryInformationDisposition.Selected));
+
+        viewModel.ToggleSelectionCommand.Execute(logicalField);
+        Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
+            configuration.Current.Items.Single(item => item.Identity == identity).Disposition
+                == DiscoveryInformationDisposition.Neutral));
+
+        viewModel.ToggleSelectionCommand.Execute(logicalField);
+        viewModel.ToggleBlacklistCommand.Execute(logicalField);
+        Assert.IsTrue(logicalField.IsBlacklisted);
+        Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
+            configuration.Current.Items.Single(item => item.Identity == identity).Disposition
+                == DiscoveryInformationDisposition.Blacklisted));
+
+        viewModel.ToggleBlacklistCommand.Execute(logicalField);
+        viewModel.SelectedDatabaseTag = "Tool Name";
+        Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
+            configuration.DatabaseTagOverridesByIdentity[identity] == "Tool Name"));
+
+        viewModel.SelectedDatabaseTag = "Renamed Tool";
+        Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
+            configuration.DatabaseTagOverridesByIdentity[identity] == "Renamed Tool"));
+
+        viewModel.ClearDatabaseTagOverrideCommand.Execute(null);
+        Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
+            !configuration.DatabaseTagOverridesByIdentity.ContainsKey(identity)));
+        Assert.HasCount(2, configuration.Current.Items);
     }
 
     [TestMethod]
@@ -1152,6 +1375,48 @@ public sealed class DiscoveryWorkspaceViewModelTests
             sampleValue);
     }
 
+    private static DiscoveredInformation CreateDetailedInformation(
+        LoadedSourceContract source,
+        string structuralPath,
+        string informationType,
+        SourceValueCandidateKind candidateKind,
+        string structuralIdentity,
+        int occurrenceCount = 1,
+        string sampleValue = "sample")
+    {
+        return CreateDetailedInformation(
+            source.SourceSetId,
+            source.SourceId,
+            structuralPath,
+            informationType,
+            candidateKind,
+            structuralIdentity,
+            occurrenceCount,
+            sampleValue);
+    }
+
+    private static DiscoveredInformation CreateDetailedInformation(
+        SourceSetId sourceSetId,
+        SourceId sourceId,
+        string structuralPath,
+        string informationType,
+        SourceValueCandidateKind candidateKind,
+        string structuralIdentity,
+        int occurrenceCount = 1,
+        string sampleValue = "sample")
+    {
+        return new DiscoveredInformation(
+            new DiscoveryInformationIdentity(
+                sourceSetId,
+                structuralPath,
+                informationType,
+                candidateKind,
+                structuralIdentity),
+            occurrenceCount,
+            [new DiscoveredSourceContribution(sourceId, "source.xml", occurrenceCount)],
+            sampleValue);
+    }
+
     private static DiscoveryInformationDisposition GetDisposition(
         ActiveDiscoveryConfiguration configuration,
         string informationType)
@@ -1320,6 +1585,8 @@ public sealed class DiscoveryWorkspaceViewModelTests
 
         public DiscoveryOccurrenceLookup? LastOccurrenceLookup { get; private set; }
 
+        public List<DiscoveryOccurrenceLookup> OccurrenceLookups { get; } = [];
+
         public Task<DiscoveryClientResult> RunAsync(
             OperationCorrelation correlation,
             IReadOnlyList<LoadedSourceContract> sources,
@@ -1338,6 +1605,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         {
             OccurrenceCallCount++;
             LastOccurrenceLookup = lookup;
+            OccurrenceLookups.Add(lookup);
 
             if (_occurrenceResultFactory is not null)
             {
@@ -1349,7 +1617,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
             return Task.FromResult(AcceptOccurrence(
                 lookup.Identity,
                 lookup.GlobalOrdinal,
-                information.TotalOccurrenceCount,
+                lookup.TotalOccurrenceCount,
                 lookup.Source.SourceId,
                 lookup.GlobalOrdinal == 1
                     ? information.SampleValue

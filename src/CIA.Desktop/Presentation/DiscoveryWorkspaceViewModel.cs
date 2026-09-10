@@ -374,7 +374,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public string SelectionSummary => string.Format(
         CultureInfo.CurrentCulture,
         "{0:N0} / {1:N0} selected",
-        _activeConfiguration.Current.SelectedCount,
+        _allInformation.Count(information => information.IsSelected),
         _allInformation.Count);
 
     public string ShowingSummary
@@ -402,8 +402,6 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public string TagHeaderText => HeaderText("Tag", "Tag");
 
     public string SourceSetHeaderText => HeaderText("SourceSet", "Source Set");
-
-    public string ContextHeaderText => HeaderText("Context", "Context");
 
     public string DatabaseTagHeaderText => HeaderText("DatabaseTag", "Database Tag");
 
@@ -656,12 +654,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 item => item.Identity,
                 item => item.Disposition);
             var databaseTagOverrides = _activeConfiguration.DatabaseTagOverridesByIdentity;
-            _allInformation = result.Information
-                .Select(information => new DiscoveredInformationItemViewModel(
-                    information,
-                    ResolveSourceSetName(information.SourceSetId),
-                    dispositions[information.Identity],
-                    databaseTagOverrides.GetValueOrDefault(information.Identity)))
+            _allInformation = DiscoveredInformationItemViewModel
+                .CreateLogicalItems(
+                    result.Information,
+                    ResolveSourceSetName,
+                    identity => dispositions[identity],
+                    identity => databaseTagOverrides.GetValueOrDefault(identity))
                 .ToArray();
             RefreshSourceSetLayouts();
             _publishedDiscoveryOperationId = result.Completion.Correlation.OperationId;
@@ -862,7 +860,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             var occurrence = result.Occurrence;
             if (!result.Accepted
                 || occurrence is null
-                || occurrence.Identity != information.Identity
+                || occurrence.Identity != lookup.Identity
                 || occurrence.Ordinal != ordinal
                 || occurrence.TotalOccurrenceCount != information.TotalOccurrenceCount
                 || occurrence.SourceId != lookup.Source.SourceId)
@@ -954,28 +952,31 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         out DiscoveryOccurrenceLookup lookup)
     {
         var localOrdinal = globalOrdinal;
-        foreach (var contribution in information.ContributingSources)
+        foreach (var member in information.DetailedInformation)
         {
-            if (localOrdinal > contribution.OccurrenceCount)
+            foreach (var contribution in member.ContributingSources)
             {
-                localOrdinal -= contribution.OccurrenceCount;
-                continue;
-            }
+                if (localOrdinal > contribution.OccurrenceCount)
+                {
+                    localOrdinal -= contribution.OccurrenceCount;
+                    continue;
+                }
 
-            if (_publishedDiscoverySources.TryGetValue(contribution.SourceId, out var source))
-            {
-                lookup = new DiscoveryOccurrenceLookup(
-                    discoveryOperationId,
-                    information.Identity,
-                    globalOrdinal,
-                    information.TotalOccurrenceCount,
-                    source,
-                    localOrdinal,
-                    contribution.OccurrenceCount);
-                return true;
-            }
+                if (_publishedDiscoverySources.TryGetValue(contribution.SourceId, out var source))
+                {
+                    lookup = new DiscoveryOccurrenceLookup(
+                        discoveryOperationId,
+                        member.Identity,
+                        globalOrdinal,
+                        information.TotalOccurrenceCount,
+                        source,
+                        localOrdinal,
+                        contribution.OccurrenceCount);
+                    return true;
+                }
 
-            break;
+                break;
+            }
         }
 
         lookup = null!;
@@ -1093,7 +1094,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         ApplyConfigurationChange(
             () => _activeConfiguration.SetSelection(
-                [information.Identity],
+                information.DetailedIdentities,
                 !information.IsSelected));
     }
 
@@ -1106,10 +1107,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         ApplyConfigurationChange(
             () => _activeConfiguration.SetBlacklisted(
-                    information.Identity,
-                    !information.IsBlacklisted)
-                ? 1
-                : 0);
+                information.DetailedIdentities,
+                !information.IsBlacklisted));
     }
 
     private void ClearDatabaseTagOverride()
@@ -1138,10 +1137,13 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 StringComparison.Ordinal)
                 ? null
                 : candidate;
-        if (string.Equals(
-                information.DatabaseTagOverride,
-                next,
-                StringComparison.Ordinal))
+        var currentOverrides = _activeConfiguration.DatabaseTagOverridesByIdentity;
+        if (information.DetailedIdentities.All(identity => next is null
+                ? !currentOverrides.ContainsKey(identity)
+                : string.Equals(
+                    currentOverrides.GetValueOrDefault(identity),
+                    next,
+                    StringComparison.Ordinal)))
         {
             OnPropertyChanged(nameof(SelectedDatabaseTag));
             return;
@@ -1149,9 +1151,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         var workflowResult = _workflowCoordinator.RecordDiscoveryConfigurationChanged();
         if (!workflowResult.Accepted
-            || !_activeConfiguration.SetDatabaseTagOverride(
-                information.Identity,
-                next))
+            || _activeConfiguration.SetDatabaseTagOverride(
+                information.DetailedIdentities,
+                next) == 0)
         {
             OnPropertyChanged(nameof(SelectedDatabaseTag));
             return;
@@ -1170,7 +1172,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             .Where(information => isSelected
                 ? !information.IsSelected && !information.IsBlacklisted
                 : information.IsSelected)
-            .Select(information => information.Identity)
+            .SelectMany(information => information.DetailedIdentities)
             .ToArray();
         if (targets.Length == 0)
         {
@@ -1205,9 +1207,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         var databaseTagOverrides = _activeConfiguration.DatabaseTagOverridesByIdentity;
         foreach (var information in _allInformation)
         {
-            information.ApplyDisposition(dispositions[information.Identity]);
-            information.ApplyDatabaseTagOverride(
-                databaseTagOverrides.GetValueOrDefault(information.Identity));
+            information.ApplyDisposition(ResolveLogicalDisposition(
+                information.DetailedIdentities.Select(identity => dispositions[identity])));
+            information.ApplyDatabaseTagOverride(ResolveLogicalDatabaseTagOverride(
+                information.DetailedIdentities.Select(identity =>
+                    databaseTagOverrides.GetValueOrDefault(identity))));
         }
 
         OnPropertyChanged(nameof(SelectedDatabaseTag));
@@ -1259,6 +1263,21 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         return _sourceSet.SourceSets
             .FirstOrDefault(sourceSet => sourceSet.SourceSetId == sourceSetId)?.Name
             ?? "Unknown Source Set";
+    }
+
+    private static DiscoveryInformationDisposition ResolveLogicalDisposition(
+        IEnumerable<DiscoveryInformationDisposition> dispositions)
+    {
+        var values = dispositions.Distinct().ToArray();
+        return values.Length == 1
+            ? values[0]
+            : DiscoveryInformationDisposition.Neutral;
+    }
+
+    private static string? ResolveLogicalDatabaseTagOverride(IEnumerable<string?> overrides)
+    {
+        var values = overrides.Distinct(StringComparer.Ordinal).ToArray();
+        return values.Length == 1 ? values[0] : null;
     }
 
     private void RefreshPresentation()
@@ -1329,7 +1348,6 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         Func<DiscoveredInformationItemViewModel, object> keySelector = _sortColumn switch
         {
             "SourceSet" => item => item.SourceSetName,
-            "Context" => item => item.StructuralIdentity,
             "DatabaseTag" => item => item.DatabaseTag,
             "Occurrences" => item => item.TotalOccurrenceCount,
             "Sources" => item => item.SourceCount,
@@ -1470,7 +1488,6 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private void NotifyHeaderTextChanged()
     {
         OnPropertyChanged(nameof(SourceSetHeaderText));
-        OnPropertyChanged(nameof(ContextHeaderText));
         OnPropertyChanged(nameof(TagHeaderText));
         OnPropertyChanged(nameof(DatabaseTagHeaderText));
         OnPropertyChanged(nameof(OccurrencesHeaderText));
@@ -1544,33 +1561,79 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         string sourceSetName,
         DiscoveryInformationDisposition disposition,
         string? databaseTagOverride = null)
+        : this([information], sourceSetName, disposition, databaseTagOverride)
+    {
+    }
+
+    private DiscoveredInformationItemViewModel(
+        IReadOnlyList<DiscoveredInformation> information,
+        string sourceSetName,
+        DiscoveryInformationDisposition disposition,
+        string? databaseTagOverride)
     {
         ArgumentNullException.ThrowIfNull(information);
+        if (information.Count == 0)
+        {
+            throw new ArgumentException(
+                "A logical Discovery item requires at least one detailed identity.",
+                nameof(information));
+        }
+
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceSetName);
         if (!Enum.IsDefined(disposition))
         {
             throw new ArgumentOutOfRangeException(nameof(disposition), disposition, null);
         }
 
-        Identity = information.Identity;
+        DetailedInformation = information;
+        DetailedIdentities = information.Select(item => item.Identity).ToArray();
+        Identity = information[0].Identity;
         _sourceSetName = sourceSetName;
         var candidate = databaseTagOverride?.Trim();
         _databaseTagOverride = string.IsNullOrWhiteSpace(candidate)
             || string.Equals(
                 candidate,
-                information.InformationType,
+                Identity.InformationType,
                 StringComparison.Ordinal)
                 ? null
                 : candidate;
-        TotalOccurrenceCount = information.TotalOccurrenceCount;
-        ContributingSources = information.ContributingSources
-            .Select(source => new DiscoveredSourceContributionViewModel(source))
-            .ToArray();
-        SampleValue = information.SampleValue;
+        TotalOccurrenceCount = information.Sum(item => item.TotalOccurrenceCount);
+        ContributingSources = CreateLogicalContributions(information);
+        SampleValue = information[0].SampleValue;
         _disposition = disposition;
     }
 
+    public static IEnumerable<DiscoveredInformationItemViewModel> CreateLogicalItems(
+        IEnumerable<DiscoveredInformation> information,
+        Func<SourceSetId, string> resolveSourceSetName,
+        Func<DiscoveryInformationIdentity, DiscoveryInformationDisposition> resolveDisposition,
+        Func<DiscoveryInformationIdentity, string?> resolveDatabaseTagOverride)
+    {
+        ArgumentNullException.ThrowIfNull(information);
+        ArgumentNullException.ThrowIfNull(resolveSourceSetName);
+        ArgumentNullException.ThrowIfNull(resolveDisposition);
+        ArgumentNullException.ThrowIfNull(resolveDatabaseTagOverride);
+
+        return information
+            .GroupBy(item => LogicalDiscoveryIdentity.Create(item.Identity))
+            .Select(group => group
+                .OrderBy(item => item.Identity.StructuralIdentity, StringComparer.Ordinal)
+                .ThenBy(item => item.Identity.StructuralPath, StringComparer.Ordinal)
+                .ThenBy(item => item.Identity.InformationType, StringComparer.Ordinal)
+                .ToArray())
+            .Select(group => new DiscoveredInformationItemViewModel(
+                group,
+                resolveSourceSetName(group[0].SourceSetId),
+                ResolveLogicalDisposition(group.Select(item => resolveDisposition(item.Identity))),
+                ResolveLogicalDatabaseTagOverride(
+                    group.Select(item => resolveDatabaseTagOverride(item.Identity)))));
+    }
+
     public DiscoveryInformationIdentity Identity { get; }
+
+    public IReadOnlyList<DiscoveredInformation> DetailedInformation { get; }
+
+    public IReadOnlyList<DiscoveryInformationIdentity> DetailedIdentities { get; }
 
     public SourceSetId SourceSetId => Identity.SourceSetId;
 
@@ -1667,6 +1730,90 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceSetName);
         SetProperty(ref _sourceSetName, sourceSetName, nameof(SourceSetName));
     }
+
+    private static IReadOnlyList<DiscoveredSourceContributionViewModel>
+        CreateLogicalContributions(IEnumerable<DiscoveredInformation> information)
+    {
+        var contributions = new List<DiscoveredSourceContributionViewModel>();
+        var positionsBySource = new Dictionary<SourceId, int>();
+        foreach (var source in information.SelectMany(item => item.ContributingSources))
+        {
+            if (positionsBySource.TryGetValue(source.SourceId, out var position))
+            {
+                var current = contributions[position];
+                contributions[position] = new DiscoveredSourceContributionViewModel(
+                    current.SourceId,
+                    current.SourceName,
+                    checked(current.OccurrenceCount + source.OccurrenceCount));
+                continue;
+            }
+
+            positionsBySource.Add(source.SourceId, contributions.Count);
+            contributions.Add(new DiscoveredSourceContributionViewModel(source));
+        }
+
+        return contributions;
+    }
+
+    private static DiscoveryInformationDisposition ResolveLogicalDisposition(
+        IEnumerable<DiscoveryInformationDisposition> dispositions)
+    {
+        var values = dispositions.Distinct().ToArray();
+        return values.Length == 1
+            ? values[0]
+            : DiscoveryInformationDisposition.Neutral;
+    }
+
+    private static string? ResolveLogicalDatabaseTagOverride(IEnumerable<string?> overrides)
+    {
+        var values = overrides.Distinct(StringComparer.Ordinal).ToArray();
+        return values.Length == 1 ? values[0] : null;
+    }
+
+    private readonly record struct LogicalDiscoveryIdentity(
+        SourceSetId SourceSetId,
+        SourceValueCandidateKind CandidateKind,
+        string CanonicalFieldIdentity)
+    {
+        public static LogicalDiscoveryIdentity Create(DiscoveryInformationIdentity identity)
+        {
+            var canonicalFieldIdentity = identity.CandidateKind switch
+            {
+                SourceValueCandidateKind.Element => GetFinalStructuralSegment(
+                    identity.StructuralPath),
+                SourceValueCandidateKind.Attribute => GetFinalStructuralSegment(
+                    identity.StructuralIdentity),
+                _ => identity.StructuralIdentity
+            };
+            return new LogicalDiscoveryIdentity(
+                identity.SourceSetId,
+                identity.CandidateKind,
+                canonicalFieldIdentity);
+        }
+
+        private static string GetFinalStructuralSegment(string path)
+        {
+            var namespaceDepth = 0;
+            var finalSeparator = -1;
+            for (var index = 0; index < path.Length; index++)
+            {
+                switch (path[index])
+                {
+                    case '{':
+                        namespaceDepth++;
+                        break;
+                    case '}' when namespaceDepth > 0:
+                        namespaceDepth--;
+                        break;
+                    case '/' when namespaceDepth == 0:
+                        finalSeparator = index;
+                        break;
+                }
+            }
+
+            return finalSeparator < 0 ? path : path[(finalSeparator + 1)..];
+        }
+    }
 }
 
 public sealed record RepeatedDataLayoutOption(RepeatedDataLayout Mode, string DisplayName);
@@ -1720,6 +1867,16 @@ public sealed class DiscoveredSourceContributionViewModel
         SourceId = contribution.SourceId;
         SourceName = contribution.SourceName;
         OccurrenceCount = contribution.OccurrenceCount;
+    }
+
+    internal DiscoveredSourceContributionViewModel(
+        SourceId sourceId,
+        string sourceName,
+        int occurrenceCount)
+    {
+        SourceId = sourceId;
+        SourceName = sourceName;
+        OccurrenceCount = occurrenceCount;
     }
 
     public SourceId SourceId { get; }
