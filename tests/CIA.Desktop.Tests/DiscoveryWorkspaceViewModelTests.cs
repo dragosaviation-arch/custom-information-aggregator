@@ -14,6 +14,163 @@ namespace CIA.Desktop.Tests;
 public sealed class DiscoveryWorkspaceViewModelTests
 {
     [TestMethod]
+    public async Task SameNameIdentitySwitchSupersedesPendingPreviewAndUsesFullIdentity()
+    {
+        var source = CreateSource("same-name-source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var client = new SameNameSwitchDiscoveryClient();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await client.FirstRequestStarted;
+        var first = viewModel.Information.Single(item =>
+            item.StructuralPath == "/root/first/toolnbr");
+        var second = viewModel.Information.Single(item =>
+            item.StructuralPath == "/root/second/slot");
+
+        viewModel.SelectedInformation = second;
+
+        Assert.AreSame(second, viewModel.SelectedInformation);
+        Assert.AreEqual(second.TotalOccurrenceCount, viewModel.OccurrenceTotal);
+        Assert.AreEqual(1, client.OccurrenceCallCount,
+            "A second source read started while the first same-name preview was still active.");
+
+        client.CompleteFirstRequest();
+        await client.SecondRequestCompleted.WaitAsync(TimeSpan.FromSeconds(5));
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreEqual(1, client.MaximumConcurrentRequests);
+        Assert.HasCount(2, client.Lookups);
+        Assert.AreEqual(first.Identity, client.Lookups[0].Identity);
+        Assert.AreEqual(second.Identity, client.Lookups[1].Identity);
+        Assert.AreEqual(second.Identity.SourceSetId, client.Lookups[1].Identity.SourceSetId);
+        Assert.AreEqual(second.StructuralPath, client.Lookups[1].Identity.StructuralPath);
+        Assert.AreEqual(second.CandidateKind, client.Lookups[1].Identity.CandidateKind);
+        Assert.AreEqual(second.StructuralIdentity, client.Lookups[1].Identity.StructuralIdentity);
+        Assert.AreEqual(second.InformationType, client.Lookups[1].Identity.InformationType);
+        Assert.AreEqual("second identity value", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual(second.TotalOccurrenceCount, viewModel.OccurrenceTotal);
+    }
+
+    [TestMethod]
+    public async Task RapidSameNameSwitchKeepsOnlyLatestPendingIdentity()
+    {
+        var source = CreateSource("rapid-switch-source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var client = new SameNameSwitchDiscoveryClient();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await client.FirstRequestStarted;
+        var first = viewModel.Information.Single(item =>
+            item.StructuralPath == "/root/first/toolnbr");
+        var second = viewModel.Information.Single(item =>
+            item.StructuralPath == "/root/second/slot");
+
+        viewModel.SelectedInformation = second;
+        viewModel.SelectedInformation = first;
+
+        Assert.AreEqual(1, client.OccurrenceCallCount,
+            "Rapid selection changes accumulated concurrent source reads.");
+
+        client.CompleteFirstRequest();
+        await client.SecondRequestCompleted.WaitAsync(TimeSpan.FromSeconds(5));
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreEqual(1, client.MaximumConcurrentRequests);
+        Assert.HasCount(2, client.Lookups);
+        Assert.AreEqual(first.Identity, client.Lookups[0].Identity);
+        Assert.AreEqual(first.Identity, client.Lookups[1].Identity);
+        Assert.AreSame(first, viewModel.SelectedInformation);
+        Assert.AreEqual("first identity value", viewModel.OccurrencePreviewText);
+    }
+
+    [TestMethod]
+    public async Task SameNamePreviewFailureIsContainedForTheSelectedIdentity()
+    {
+        var source = CreateSource("same-name-failure.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var occurrenceCallCount = 0;
+        var client = new StubDiscoveryClient(
+            (correlation, sources) =>
+            {
+                var loadedSource = sources.Single();
+                return Accept(
+                    correlation,
+                    sources,
+                    [
+                        new DiscoveredInformation(
+                            new DiscoveryInformationIdentity(
+                                loadedSource.SourceSetId,
+                                "/root/first/toolnbr",
+                                "toolnbr",
+                                SourceValueCandidateKind.Element,
+                                "/root/first/toolnbr"),
+                            1,
+                            [new DiscoveredSourceContribution(
+                                loadedSource.SourceId,
+                                "source.xml",
+                                1)],
+                            "first sample"),
+                        new DiscoveredInformation(
+                            new DiscoveryInformationIdentity(
+                                loadedSource.SourceSetId,
+                                "/root/second/slot",
+                                "toolnbr",
+                                SourceValueCandidateKind.Structural,
+                                "/root/second/slot[@key='tool']"),
+                            2,
+                            [new DiscoveredSourceContribution(
+                                loadedSource.SourceId,
+                                "source.xml",
+                                2)],
+                            "second sample")
+                    ]);
+            },
+            lookup => ++occurrenceCallCount == 1
+                ? AcceptOccurrence(
+                    lookup.Identity,
+                    lookup.GlobalOrdinal,
+                    lookup.TotalOccurrenceCount,
+                    lookup.Source.SourceId,
+                    "first identity value")
+                : throw new IOException("Contained preview read failure."));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        var second = viewModel.Information.Single(item =>
+            item.StructuralPath == "/root/second/slot");
+
+        viewModel.SelectedInformation = second;
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreSame(second, viewModel.SelectedInformation);
+        Assert.AreEqual(2, viewModel.OccurrenceTotal);
+        Assert.AreEqual(0, viewModel.CurrentOccurrenceOrdinal);
+        Assert.AreEqual(
+            "The selected occurrence could not be retrieved.",
+            viewModel.OccurrencePreviewText);
+        Assert.IsFalse(viewModel.IsOccurrenceLoading);
+    }
+
+    [TestMethod]
     public async Task CandidateKindAndStructuralIdentityRemainDistinctInPresentationAndConfiguration()
     {
         var source = CreateSource("source.xml");
@@ -1239,6 +1396,126 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 occurrenceCount,
                 sourceId,
                 value));
+        }
+    }
+
+    private sealed class SameNameSwitchDiscoveryClient : IDiscoveryClient
+    {
+        private readonly TaskCompletionSource _firstRequestStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseFirstRequest =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _secondRequestCompleted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly object _gate = new();
+        private int _activeRequests;
+        private int _maximumConcurrentRequests;
+        private int _occurrenceCallCount;
+
+        public Task FirstRequestStarted => _firstRequestStarted.Task;
+
+        public Task SecondRequestCompleted => _secondRequestCompleted.Task;
+
+        public int OccurrenceCallCount => Volatile.Read(ref _occurrenceCallCount);
+
+        public int MaximumConcurrentRequests => Volatile.Read(ref _maximumConcurrentRequests);
+
+        public List<DiscoveryOccurrenceLookup> Lookups { get; } = [];
+
+        public Task<DiscoveryClientResult> RunAsync(
+            OperationCorrelation correlation,
+            IReadOnlyList<LoadedSourceContract> sources,
+            CancellationToken cancellationToken = default)
+        {
+            var source = sources.Single();
+            var firstIdentity = new DiscoveryInformationIdentity(
+                source.SourceSetId,
+                "/root/first/toolnbr",
+                "toolnbr",
+                SourceValueCandidateKind.Element,
+                "/root/first/toolnbr");
+            var secondIdentity = new DiscoveryInformationIdentity(
+                source.SourceSetId,
+                "/root/second/slot",
+                "toolnbr",
+                SourceValueCandidateKind.Structural,
+                "/root/second/slot[@key='tool']");
+            return Task.FromResult(Accept(
+                correlation,
+                sources,
+                [
+                    new DiscoveredInformation(
+                        firstIdentity,
+                        2,
+                        [new DiscoveredSourceContribution(source.SourceId, "same-name.xml", 2)],
+                        "first sample"),
+                    new DiscoveredInformation(
+                        secondIdentity,
+                        3,
+                        [new DiscoveredSourceContribution(source.SourceId, "same-name.xml", 3)],
+                        "second sample")
+                ]));
+        }
+
+        public async Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
+            DiscoveryOccurrenceLookup lookup,
+            CancellationToken cancellationToken = default)
+        {
+            var callNumber = Interlocked.Increment(ref _occurrenceCallCount);
+            lock (_gate)
+            {
+                Lookups.Add(lookup);
+            }
+
+            var active = Interlocked.Increment(ref _activeRequests);
+            UpdateMaximumConcurrentRequests(active);
+
+            try
+            {
+                if (callNumber == 1)
+                {
+                    _firstRequestStarted.TrySetResult();
+                    await _releaseFirstRequest.Task;
+                }
+
+                return AcceptOccurrence(
+                    lookup.Identity,
+                    lookup.GlobalOrdinal,
+                    lookup.TotalOccurrenceCount,
+                    lookup.Source.SourceId,
+                    lookup.Identity.StructuralPath.Contains("first", StringComparison.Ordinal)
+                        ? "first identity value"
+                        : "second identity value");
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeRequests);
+                if (callNumber == 2)
+                {
+                    _secondRequestCompleted.TrySetResult();
+                }
+            }
+        }
+
+        public void CompleteFirstRequest()
+        {
+            _releaseFirstRequest.TrySetResult();
+        }
+
+        private void UpdateMaximumConcurrentRequests(int activeRequests)
+        {
+            while (true)
+            {
+                var maximum = Volatile.Read(ref _maximumConcurrentRequests);
+                if (activeRequests <= maximum
+                    || Interlocked.CompareExchange(
+                        ref _maximumConcurrentRequests,
+                        activeRequests,
+                        maximum) == maximum)
+                {
+                    return;
+                }
+            }
         }
     }
 

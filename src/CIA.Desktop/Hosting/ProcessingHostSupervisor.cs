@@ -402,10 +402,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                     || occurrenceResponse.CommandMessageId != command.MessageId
                     || occurrenceResponse.DiscoveryOperationId != lookup.DiscoveryOperationId
                     || occurrenceResponse.Occurrence is { } occurrence
-                    && (!string.Equals(
-                            occurrence.InformationType,
-                            lookup.InformationType,
-                            StringComparison.Ordinal)
+                    && (occurrence.Identity != lookup.Identity
                         || occurrence.Ordinal != lookup.GlobalOrdinal
                         || occurrence.TotalOccurrenceCount != lookup.TotalOccurrenceCount
                         || occurrence.SourceId != lookup.Source.SourceId))

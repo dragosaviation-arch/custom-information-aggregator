@@ -65,6 +65,58 @@ public sealed class DiscoveryServiceTests
     }
 
     [TestMethod]
+    public async Task SameNameStructuralRowsRemainIndependentAcrossRepeatedPreviewSwitches()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var source = workspace.CreateSource(
+            "same-name-paths.xml",
+            "<root><first><toolnbr>A-100</toolnbr></first>" +
+            "<second><toolnbr>B-200</toolnbr></second></root>");
+        var service = CreateGenericService();
+        var correlation = OperationCorrelation.CreateNew();
+        var discovery = await service.RunAsync(correlation, [source]);
+        var first = discovery.Information.Single(item =>
+            item.StructuralPath == "/root/first/toolnbr");
+        var second = discovery.Information.Single(item =>
+            item.StructuralPath == "/root/second/toolnbr");
+
+        var firstPreview = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
+            correlation.OperationId,
+            first.Identity,
+            GlobalOrdinal: 1,
+            TotalOccurrenceCount: 1,
+            source,
+            LocalOrdinal: 1,
+            ExpectedSourceOccurrenceCount: 1));
+        var secondPreview = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
+            correlation.OperationId,
+            second.Identity,
+            GlobalOrdinal: 1,
+            TotalOccurrenceCount: 1,
+            source,
+            LocalOrdinal: 1,
+            ExpectedSourceOccurrenceCount: 1));
+        var firstAgain = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
+            correlation.OperationId,
+            first.Identity,
+            GlobalOrdinal: 1,
+            TotalOccurrenceCount: 1,
+            source,
+            LocalOrdinal: 1,
+            ExpectedSourceOccurrenceCount: 1));
+
+        Assert.AreEqual("toolnbr", first.InformationType);
+        Assert.AreEqual("toolnbr", second.InformationType);
+        Assert.AreNotEqual(first.Identity, second.Identity);
+        Assert.AreEqual("A-100", firstPreview.Occurrence?.Value);
+        Assert.AreEqual(first.Identity, firstPreview.Occurrence?.Identity);
+        Assert.AreEqual("B-200", secondPreview.Occurrence?.Value);
+        Assert.AreEqual(second.Identity, secondPreview.Occurrence?.Identity);
+        Assert.AreEqual("A-100", firstAgain.Occurrence?.Value);
+        Assert.AreEqual(first.Identity, firstAgain.Occurrence?.Identity);
+    }
+
+    [TestMethod]
     public async Task ThreeSourcesAggregateCountsAndDistinctProvenanceInSourceOrder()
     {
         using var workspace = new DiscoveryWorkspace();

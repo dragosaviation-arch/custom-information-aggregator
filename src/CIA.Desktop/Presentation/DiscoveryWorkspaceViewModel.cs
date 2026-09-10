@@ -38,6 +38,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _clearDatabaseTagOverrideCommand;
     private readonly RelayCommand _selectVisibleCommand;
     private readonly RelayCommand _deselectVisibleCommand;
+    private readonly SemaphoreSlim _previewRequestGate = new(1, 1);
+    private readonly object _previewRequestStateGate = new();
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private IReadOnlyList<DiscoveredInformationItemViewModel> _allInformation = [];
     private IReadOnlyList<DiscoveredInformationItemViewModel> _filteredInformation = [];
@@ -69,6 +71,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private int _occurrenceTotal;
     private bool _isOccurrenceLoading;
     private int _previewRequestVersion;
+    private CancellationTokenSource _previewRequestCancellation = new();
     private int _disposed;
 
     public DiscoveryWorkspaceViewModel(
@@ -573,7 +576,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             sourceSet.PropertyChanged -= OnSourceSetPropertyChanged;
         }
 
-        Interlocked.Increment(ref _previewRequestVersion);
+        lock (_previewRequestStateGate)
+        {
+            Interlocked.Increment(ref _previewRequestVersion);
+            _previewRequestCancellation.Cancel();
+        }
     }
 
     private bool CanRunDiscovery()
@@ -722,7 +729,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     private async Task SelectInformationAsync(DiscoveredInformationItemViewModel? information)
     {
-        var requestVersion = Volatile.Read(ref _previewRequestVersion);
+        var request = CapturePreviewRequest();
         if (information is null
             || _publishedDiscoveryOperationId is null
             || !ReferenceEquals(SelectedInformation, information))
@@ -730,12 +737,16 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
-        await LoadOccurrenceAsync(information, ordinal: 1, requestVersion);
+        await LoadOccurrenceAsync(
+            information,
+            ordinal: 1,
+            request.Version,
+            request.CancellationToken);
     }
 
     private void PrepareOccurrenceSelection(DiscoveredInformationItemViewModel? information)
     {
-        Interlocked.Increment(ref _previewRequestVersion);
+        SupersedePreviewRequest();
         var canLoadOccurrence = information is not null
             && _publishedDiscoveryOperationId is not null;
         IsOccurrenceLoading = canLoadOccurrence;
@@ -766,8 +777,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return Task.CompletedTask;
         }
 
-        var requestVersion = Interlocked.Increment(ref _previewRequestVersion);
-        return LoadOccurrenceAsync(information, ordinal, requestVersion);
+        var request = SupersedePreviewRequest();
+        return LoadOccurrenceAsync(
+            information,
+            ordinal,
+            request.Version,
+            request.CancellationToken);
     }
 
     private Task JumpToOccurrenceAsync()
@@ -796,35 +811,47 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private async Task LoadOccurrenceAsync(
         DiscoveredInformationItemViewModel information,
         int ordinal,
-        int requestVersion)
+        int requestVersion,
+        CancellationToken cancellationToken)
     {
-        var discoveryOperationId = _publishedDiscoveryOperationId;
-        if (discoveryOperationId is null)
-        {
-            return;
-        }
-
-        if (!TryCreateOccurrenceLookup(
-                discoveryOperationId.Value,
-                information,
-                ordinal,
-                out var lookup))
-        {
-            if (IsCurrentPreviewRequest(requestVersion, information)
-                && CurrentOccurrenceOrdinal == 0)
-            {
-                OccurrencePreviewText = "The selected occurrence could not be retrieved.";
-                IsOccurrenceLoading = false;
-            }
-
-            RestoreOccurrenceOrdinalInput();
-            return;
-        }
-
-        IsOccurrenceLoading = true;
+        var enteredRequestGate = false;
 
         try
         {
+            await _previewRequestGate.WaitAsync(cancellationToken);
+            enteredRequestGate = true;
+
+            if (!IsCurrentPreviewRequest(requestVersion, information))
+            {
+                return;
+            }
+
+            var discoveryOperationId = _publishedDiscoveryOperationId;
+            if (discoveryOperationId is null)
+            {
+                return;
+            }
+
+            if (!TryCreateOccurrenceLookup(
+                    discoveryOperationId.Value,
+                    information,
+                    ordinal,
+                    out var lookup))
+            {
+                if (CurrentOccurrenceOrdinal == 0)
+                {
+                    OccurrencePreviewText = "The selected occurrence could not be retrieved.";
+                }
+
+                RestoreOccurrenceOrdinalInput();
+                return;
+            }
+
+            IsOccurrenceLoading = true;
+
+            // Once a framed IPC request is sent, its response must be drained before another
+            // request uses the shared connection. Supersession therefore cancels queued reads
+            // and ignores an obsolete active result rather than abandoning the response frame.
             var result = await _discoveryClient.GetOccurrenceAsync(lookup);
 
             if (!IsCurrentPreviewRequest(requestVersion, information))
@@ -856,6 +883,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             SetOccurrenceOrdinalInput(
                 occurrence.Ordinal.ToString(CultureInfo.InvariantCulture));
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
         catch (Exception)
         {
             if (IsCurrentPreviewRequest(requestVersion, information)
@@ -868,10 +898,38 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            if (enteredRequestGate)
+            {
+                _previewRequestGate.Release();
+            }
+
             if (requestVersion == Volatile.Read(ref _previewRequestVersion))
             {
                 IsOccurrenceLoading = false;
             }
+        }
+    }
+
+    private PreviewRequest SupersedePreviewRequest()
+    {
+        lock (_previewRequestStateGate)
+        {
+            _previewRequestCancellation.Cancel();
+            _previewRequestCancellation.Dispose();
+            _previewRequestCancellation = new CancellationTokenSource();
+            return new PreviewRequest(
+                Interlocked.Increment(ref _previewRequestVersion),
+                _previewRequestCancellation.Token);
+        }
+    }
+
+    private PreviewRequest CapturePreviewRequest()
+    {
+        lock (_previewRequestStateGate)
+        {
+            return new PreviewRequest(
+                Volatile.Read(ref _previewRequestVersion),
+                _previewRequestCancellation.Token);
         }
     }
 
@@ -1469,6 +1527,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 : Comparer<object>.Default.Compare(x, y);
         }
     }
+
+    private readonly record struct PreviewRequest(
+        int Version,
+        CancellationToken CancellationToken);
 }
 
 public sealed class DiscoveredInformationItemViewModel : ObservableObject
