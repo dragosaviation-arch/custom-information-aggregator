@@ -131,6 +131,26 @@ public sealed class ActiveDiscoveryConfiguration
         }
     }
 
+    public int SetDatabaseTagOverride(
+        IEnumerable<DiscoveryInformationIdentity> identities,
+        string? databaseTagOverride)
+    {
+        ArgumentNullException.ThrowIfNull(identities);
+        lock (_stateGate)
+        {
+            var changedCount = 0;
+            foreach (var identity in identities.Distinct())
+            {
+                if (SetDatabaseTagOverrideCore(identity, databaseTagOverride))
+                {
+                    changedCount++;
+                }
+            }
+
+            return changedCount;
+        }
+    }
+
     public int SetSelection(IEnumerable<string> informationTypes, bool isSelected)
     {
         ArgumentNullException.ThrowIfNull(informationTypes);
@@ -173,6 +193,26 @@ public sealed class ActiveDiscoveryConfiguration
         lock (_stateGate)
         {
             return SetBlacklistedCore(identity, isBlacklisted);
+        }
+    }
+
+    public int SetBlacklisted(
+        IEnumerable<DiscoveryInformationIdentity> identities,
+        bool isBlacklisted)
+    {
+        ArgumentNullException.ThrowIfNull(identities);
+        lock (_stateGate)
+        {
+            var changedCount = 0;
+            foreach (var identity in identities.Distinct())
+            {
+                if (SetBlacklistedCore(identity, isBlacklisted))
+                {
+                    changedCount++;
+                }
+            }
+
+            return changedCount;
         }
     }
 
