@@ -28,6 +28,95 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
         await WpfTestApplication.RunAsync(VerifyInteractionAsync).WaitAsync(TestTimeout);
     }
 
+    [TestMethod]
+    public async Task SameNameRowsSwitchPreviewByFullIdentityWithoutConcurrentReads()
+    {
+        await WpfTestApplication.RunAsync(VerifySameNameSwitchAsync).WaitAsync(TestTimeout);
+    }
+
+    private static async Task VerifySameNameSwitchAsync()
+    {
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            Path.GetFullPath("wpf-same-name-source.xml"),
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = new ApplicationWorkflowCoordinator(
+            new ReadyProcessingHostSupervisor(),
+            new RecordingProcessingHistoryRecorder());
+        var loading = new SourceLoadingCoordinator(
+            new SuccessfulSourceIntakeClient(source),
+            sourceSet,
+            workflow);
+        Assert.IsTrue((await loading.AddAsync(SourceSelectionKind.XmlFile, source.Path)).Accepted);
+
+        var client = new SameNameWpfDiscoveryClient();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+        var view = new DiscoveryWorkspaceView { DataContext = viewModel };
+        var window = new Window
+        {
+            Width = 1400,
+            Height = 760,
+            Content = view,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None
+        };
+
+        try
+        {
+            window.Show();
+            await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+            await client.FirstRequestStarted;
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+
+            var second = viewModel.Information.Single(item =>
+                item.StructuralPath == "/root/second/slot");
+            var rows = (ListBox)view.FindName("DiscoveryRows");
+            rows.ScrollIntoView(second);
+            view.UpdateLayout();
+            var row = (ListBoxItem?)rows.ItemContainerGenerator.ContainerFromItem(second);
+            Assert.IsNotNull(row);
+
+            row.RaiseEvent(new MouseButtonEventArgs(
+                Mouse.PrimaryDevice,
+                Environment.TickCount,
+                MouseButton.Left)
+            {
+                RoutedEvent = Mouse.PreviewMouseDownEvent,
+                Source = row
+            });
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+
+            Assert.AreSame(second, rows.SelectedItem);
+            Assert.AreSame(second, viewModel.SelectedInformation);
+            Assert.AreEqual(3, viewModel.OccurrenceTotal);
+            Assert.AreEqual(1, client.OccurrenceCallCount);
+
+            client.CompleteFirstRequest();
+            await client.SecondRequestCompleted.WaitAsync(TimeSpan.FromSeconds(5));
+            if (viewModel.SelectInformationCommand.ExecutionTask is { } selectionTask)
+            {
+                await selectionTask;
+            }
+
+            Assert.AreEqual(1, client.MaximumConcurrentRequests);
+            Assert.AreEqual(second.Identity, client.LastLookup?.Identity);
+            Assert.AreEqual("second identity value", viewModel.OccurrencePreviewText);
+            Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+            Assert.AreEqual(3, viewModel.OccurrenceTotal);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static async Task VerifyInteractionAsync()
     {
         var source = new LoadedSourceContract(
@@ -215,6 +304,131 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                     $"{lookup.InformationType} occurrence {lookup.GlobalOrdinal}"),
                 FailureCode: null,
                 FailureDescription: null));
+        }
+    }
+
+    private sealed class SameNameWpfDiscoveryClient : IDiscoveryClient
+    {
+        private readonly TaskCompletionSource _firstRequestStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseFirstRequest =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _secondRequestCompleted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _activeRequests;
+        private int _maximumConcurrentRequests;
+        private int _occurrenceCallCount;
+
+        public Task FirstRequestStarted => _firstRequestStarted.Task;
+
+        public Task SecondRequestCompleted => _secondRequestCompleted.Task;
+
+        public int OccurrenceCallCount => Volatile.Read(ref _occurrenceCallCount);
+
+        public int MaximumConcurrentRequests => Volatile.Read(ref _maximumConcurrentRequests);
+
+        public DiscoveryOccurrenceLookup? LastLookup { get; private set; }
+
+        public Task<DiscoveryClientResult> RunAsync(
+            OperationCorrelation correlation,
+            IReadOnlyList<LoadedSourceContract> sources,
+            CancellationToken cancellationToken = default)
+        {
+            var source = sources.Single();
+            var first = new DiscoveryInformationIdentity(
+                source.SourceSetId,
+                "/root/first/toolnbr",
+                "toolnbr",
+                SourceValueCandidateKind.Element,
+                "/root/first/toolnbr");
+            var second = new DiscoveryInformationIdentity(
+                source.SourceSetId,
+                "/root/second/slot",
+                "toolnbr",
+                SourceValueCandidateKind.Structural,
+                "/root/second/slot[@key='tool']");
+            var completion = OperationCompletion.FromCompletedItems(
+                correlation,
+                [OperationItemStatus.ProcessedSuccessfully(source.SourceId.ToString())]);
+            return Task.FromResult(new DiscoveryClientResult(
+                true,
+                [
+                    new DiscoveredInformation(
+                        first,
+                        2,
+                        [new DiscoveredSourceContribution(source.SourceId, "source.xml", 2)],
+                        "first sample"),
+                    new DiscoveredInformation(
+                        second,
+                        3,
+                        [new DiscoveredSourceContribution(source.SourceId, "source.xml", 3)],
+                        "second sample")
+                ],
+                [],
+                completion,
+                FailureCode: null,
+                FailureDescription: null));
+        }
+
+        public async Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
+            DiscoveryOccurrenceLookup lookup,
+            CancellationToken cancellationToken = default)
+        {
+            LastLookup = lookup;
+            var callNumber = Interlocked.Increment(ref _occurrenceCallCount);
+            var active = Interlocked.Increment(ref _activeRequests);
+            UpdateMaximumConcurrentRequests(active);
+
+            try
+            {
+                if (callNumber == 1)
+                {
+                    _firstRequestStarted.TrySetResult();
+                    await _releaseFirstRequest.Task;
+                }
+
+                return new DiscoveryOccurrenceClientResult(
+                    true,
+                    new DiscoveredOccurrence(
+                        lookup.Identity,
+                        lookup.GlobalOrdinal,
+                        lookup.TotalOccurrenceCount,
+                        lookup.Source.SourceId,
+                        lookup.Identity.StructuralPath.Contains("first", StringComparison.Ordinal)
+                            ? "first identity value"
+                            : "second identity value"),
+                    FailureCode: null,
+                    FailureDescription: null);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeRequests);
+                if (callNumber == 2)
+                {
+                    _secondRequestCompleted.TrySetResult();
+                }
+            }
+        }
+
+        public void CompleteFirstRequest()
+        {
+            _releaseFirstRequest.TrySetResult();
+        }
+
+        private void UpdateMaximumConcurrentRequests(int activeRequests)
+        {
+            while (true)
+            {
+                var maximum = Volatile.Read(ref _maximumConcurrentRequests);
+                if (activeRequests <= maximum
+                    || Interlocked.CompareExchange(
+                        ref _maximumConcurrentRequests,
+                        activeRequests,
+                        maximum) == maximum)
+                {
+                    return;
+                }
+            }
         }
     }
 
