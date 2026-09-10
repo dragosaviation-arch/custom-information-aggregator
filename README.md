@@ -2,7 +2,7 @@
 
 A Windows desktop application for turning large XML document sets into structured, reviewable and exportable information.
 
-![Custom Information Aggregator — application overview](docs/assets/assets/cia-overview.png)
+![Custom Information Aggregator — application overview](docs/assets/cia-overview.png)
 
 ## What is this?
 
