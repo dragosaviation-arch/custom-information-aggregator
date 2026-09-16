@@ -117,6 +117,50 @@ public sealed class DiscoveryServiceTests
     }
 
     [TestMethod]
+    public async Task MultiPathElementPreviewIgnoresEmptySiblingsAndRetainsDetailedIdentity()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var source = workspace.CreateSource(
+            "multi-path-empty-elements.xml",
+            "<root><application><comment>First</comment></application>"
+            + "<alternatives><alternative><comment>Second</comment></alternative>"
+            + "<alternative><comment /></alternative></alternatives>"
+            + "<other><branch><comment /></branch></other></root>");
+        var service = CreateGenericService();
+        var correlation = OperationCorrelation.CreateNew();
+
+        var discovery = await service.RunAsync(correlation, [source]);
+        var comments = discovery.Information
+            .Where(item => item.InformationType == "comment"
+                && item.Identity.CandidateKind == SourceValueCandidateKind.Element)
+            .OrderBy(item => item.Identity.StructuralPath, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.IsTrue(discovery.Accepted);
+        Assert.HasCount(2, comments);
+        Assert.AreEqual(2, comments.Sum(item => item.TotalOccurrenceCount));
+
+        for (var index = 0; index < comments.Length; index++)
+        {
+            var member = comments[index];
+            var preview = await service.GetOccurrenceAsync(
+                new DiscoveryOccurrenceLookup(
+                    correlation.OperationId,
+                    member.Identity,
+                    GlobalOrdinal: index + 1,
+                    TotalOccurrenceCount: 2,
+                    source,
+                    LocalOrdinal: 1,
+                    ExpectedSourceOccurrenceCount: 1));
+
+            Assert.IsTrue(preview.Accepted);
+            Assert.AreEqual(member.Identity, preview.Occurrence?.Identity);
+            Assert.AreEqual(index + 1, preview.Occurrence?.Ordinal);
+            Assert.AreEqual(source.SourceId, preview.Occurrence?.SourceId);
+        }
+    }
+
+    [TestMethod]
     public async Task ThreeSourcesAggregateCountsAndDistinctProvenanceInSourceOrder()
     {
         using var workspace = new DiscoveryWorkspace();
