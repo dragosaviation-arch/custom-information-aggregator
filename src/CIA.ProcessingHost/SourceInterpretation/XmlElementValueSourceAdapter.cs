@@ -427,8 +427,9 @@ internal static class XmlElementValueReader
                             "The XML element boundary is not valid.");
                     }
 
+                    var completedFrame = containingElements.Pop();
                     var completedElement = await CompleteElementAsync(
-                            containingElements.Pop(),
+                            completedFrame,
                             structuralSlots,
                             onValue)
                         .ConfigureAwait(false);
@@ -441,6 +442,7 @@ internal static class XmlElementValueReader
                             {
                                 await EmitRawValuesAsync(completedElement, onValue)
                                     .ConfigureAwait(false);
+                                parent.HasEmittedDescendantValues = true;
                             }
                             else
                             {
@@ -452,6 +454,11 @@ internal static class XmlElementValueReader
                             await EmitRawValuesAsync(completedElement, onValue)
                                 .ConfigureAwait(false);
                         }
+                    }
+                    else if (completedFrame.HasRepresentedValues
+                             && containingElements.TryPeek(out var containingParent))
+                    {
+                        containingParent.HasEmittedDescendantValues = true;
                     }
 
                     break;
@@ -506,7 +513,9 @@ internal static class XmlElementValueReader
         StructuralSlotDetector structuralSlots,
         Func<InterpretedSourceValue, ValueTask> onValue)
     {
-        if (frame.DirectTextValues.Count > 0 && frame.ValueChildren.Count == 0)
+        if (frame.DirectTextValues.Count > 0
+            && frame.ValueChildren.Count == 0
+            && !frame.HasEmittedDescendantValues)
         {
             return new CompletedValueElement(
                 frame.Element,
@@ -528,7 +537,7 @@ internal static class XmlElementValueReader
             return null;
         }
 
-        if (frame.ValueChildren.Count == 1)
+        if (frame.ValueChildren.Count == 1 && !frame.HasEmittedDescendantValues)
         {
             return new CompletedValueElement(
                 frame.Element,
@@ -572,6 +581,12 @@ internal static class XmlElementValueReader
         public List<InterpretedSourceValue> DirectTextValues { get; } = [];
 
         public List<CompletedValueElement> ValueChildren { get; } = [];
+
+        public bool HasEmittedDescendantValues { get; set; }
+
+        public bool HasRepresentedValues => HasEmittedDescendantValues
+            || DirectTextValues.Count > 0
+            || ValueChildren.Count > 0;
 
         public int TakeNextChildPosition() => checked(++nextChildPosition);
     }

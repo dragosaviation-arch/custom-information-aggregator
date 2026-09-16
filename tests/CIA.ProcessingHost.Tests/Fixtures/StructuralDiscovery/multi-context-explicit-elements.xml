@@ -1,0 +1,96 @@
+<root>
+  <field>direct-01</field>
+  <collection>
+    <alternative><field>repeated-01</field><field /><metadata><label>label-01</label><code>code-01</code></metadata></alternative>
+    <alternative><field>repeated-02</field><field /><metadata><label>label-02</label><code>code-02</code></metadata></alternative>
+    <alternative><field>repeated-03</field><field /><metadata><label>label-03</label><code>code-03</code></metadata></alternative>
+    <alternative><field>repeated-04</field><field /><metadata><label>label-04</label><code>code-04</code></metadata></alternative>
+    <alternative><field>repeated-05</field><field /><metadata><label>label-05</label><code>code-05</code></metadata></alternative>
+    <alternative><field>repeated-06</field><field /><metadata><label>label-06</label><code>code-06</code></metadata></alternative>
+    <alternative><field>repeated-07</field><field /><metadata><label>label-07</label><code>code-07</code></metadata></alternative>
+    <alternative><field>repeated-08</field><field /><metadata><label>label-08</label><code>code-08</code></metadata></alternative>
+    <alternative><field>repeated-09</field><field /><metadata><label>label-09</label><code>code-09</code></metadata></alternative>
+    <alternative><field>repeated-10</field><field /><metadata><label>label-10</label><code>code-10</code></metadata></alternative>
+    <alternative><field>repeated-11</field><field /><metadata><label>label-11</label><code>code-11</code></metadata></alternative>
+    <alternative><field>repeated-12</field><field /><metadata><label>label-12</label><code>code-12</code></metadata></alternative>
+    <alternative><field>repeated-13</field><field /><metadata><label>label-13</label><code>code-13</code></metadata></alternative>
+    <alternative><field>repeated-14</field><field /><metadata><label>label-14</label><code>code-14</code></metadata></alternative>
+    <alternative><field>repeated-15</field><field /><metadata><label>label-15</label><code>code-15</code></metadata></alternative>
+    <alternative><field>repeated-16</field><field /><metadata><label>label-16</label><code>code-16</code></metadata></alternative>
+    <alternative><field>repeated-17</field><field /><metadata><label>label-17</label><code>code-17</code></metadata></alternative>
+    <alternative><field>repeated-18</field><field /><metadata><label>label-18</label><code>code-18</code></metadata></alternative>
+    <alternative><field>repeated-19</field><field /><metadata><label>label-19</label><code>code-19</code></metadata></alternative>
+    <alternative><field>repeated-20</field><field /><metadata><label>label-20</label><code>code-20</code></metadata></alternative>
+    <alternative><field>repeated-21</field><field /><metadata><label>label-21</label><code>code-21</code></metadata></alternative>
+    <alternative><field>repeated-22</field><field /><metadata><label>label-22</label><code>code-22</code></metadata></alternative>
+    <alternative><field>repeated-23</field><field /><metadata><label>label-23</label><code>code-23</code></metadata></alternative>
+    <alternative><field>repeated-24</field><field /><metadata><label>label-24</label><code>code-24</code></metadata></alternative>
+    <alternative><field>repeated-25</field><field /><metadata><label>label-25</label><code>code-25</code></metadata></alternative>
+    <alternative><field>repeated-26</field><field /><metadata><label>label-26</label><code>code-26</code></metadata></alternative>
+    <alternative><field>repeated-27</field><field /><metadata><label>label-27</label><code>code-27</code></metadata></alternative>
+    <alternative><field>repeated-28</field><field /><metadata><label>label-28</label><code>code-28</code></metadata></alternative>
+    <alternative><field>repeated-29</field><field /><metadata><label>label-29</label><code>code-29</code></metadata></alternative>
+    <alternative><field>repeated-30</field><field /><metadata><label>label-30</label><code>code-30</code></metadata></alternative>
+    <alternative><field>repeated-31</field><field /><metadata><label>label-31</label><code>code-31</code></metadata></alternative>
+    <alternative><field>repeated-32</field><field /><metadata><label>label-32</label><code>code-32</code></metadata></alternative>
+    <alternative><field>repeated-33</field><field /><metadata><label>label-33</label><code>code-33</code></metadata></alternative>
+  </collection>
+  <collection>
+    <alternative><field>repeated-34</field><field /><metadata><label>label-34</label><code>code-34</code></metadata></alternative>
+    <alternative><field>repeated-35</field><field /><metadata><label>label-35</label><code>code-35</code></metadata></alternative>
+    <alternative><field>repeated-36</field><field /><metadata><label>label-36</label><code>code-36</code></metadata></alternative>
+    <alternative><field>repeated-37</field><field /><metadata><label>label-37</label><code>code-37</code></metadata></alternative>
+    <alternative><field>repeated-38</field><field /><metadata><label>label-38</label><code>code-38</code></metadata></alternative>
+    <alternative><field>repeated-39</field><field /><metadata><label>label-39</label><code>code-39</code></metadata></alternative>
+    <alternative><field>repeated-40</field><field /><metadata><label>label-40</label><code>code-40</code></metadata></alternative>
+    <alternative><field>repeated-41</field><field /><metadata><label>label-41</label><code>code-41</code></metadata></alternative>
+    <alternative><field>repeated-42</field><field /><metadata><label>label-42</label><code>code-42</code></metadata></alternative>
+    <alternative><field>repeated-43</field><field /><metadata><label>label-43</label><code>code-43</code></metadata></alternative>
+    <alternative><field>repeated-44</field><field /><metadata><label>label-44</label><code>code-44</code></metadata></alternative>
+    <alternative><field>repeated-45</field><field /><metadata><label>label-45</label><code>code-45</code></metadata></alternative>
+    <alternative><field>repeated-46</field><field /><metadata><label>label-46</label><code>code-46</code></metadata></alternative>
+    <alternative><field>repeated-47</field><field /><metadata><label>label-47</label><code>code-47</code></metadata></alternative>
+    <alternative><field>repeated-48</field><field /><metadata><label>label-48</label><code>code-48</code></metadata></alternative>
+    <alternative><field>repeated-49</field><field /><metadata><label>label-49</label><code>code-49</code></metadata></alternative>
+    <alternative><field>repeated-50</field><field /><metadata><label>label-50</label><code>code-50</code></metadata></alternative>
+    <alternative><field>repeated-51</field><field /><metadata><label>label-51</label><code>code-51</code></metadata></alternative>
+    <alternative><field>repeated-52</field><field /><metadata><label>label-52</label><code>code-52</code></metadata></alternative>
+    <alternative><field>repeated-53</field><field /><metadata><label>label-53</label><code>code-53</code></metadata></alternative>
+    <alternative><field>repeated-54</field><field /><metadata><label>label-54</label><code>code-54</code></metadata></alternative>
+    <alternative><field>repeated-55</field><field /><metadata><label>label-55</label><code>code-55</code></metadata></alternative>
+    <alternative><field>repeated-56</field><field /><metadata><label>label-56</label><code>code-56</code></metadata></alternative>
+    <alternative><field>repeated-57</field><field /><metadata><label>label-57</label><code>code-57</code></metadata></alternative>
+    <alternative><field>repeated-58</field><field /><metadata><label>label-58</label><code>code-58</code></metadata></alternative>
+    <alternative><field>repeated-59</field><field /><metadata><label>label-59</label><code>code-59</code></metadata></alternative>
+    <alternative><field>repeated-60</field><field /><metadata><label>label-60</label><code>code-60</code></metadata></alternative>
+    <alternative><field>repeated-61</field><field /><metadata><label>label-61</label><code>code-61</code></metadata></alternative>
+    <alternative><field>repeated-62</field><field /><metadata><label>label-62</label><code>code-62</code></metadata></alternative>
+    <alternative><field>repeated-63</field><field /><metadata><label>label-63</label><code>code-63</code></metadata></alternative>
+    <alternative><field>repeated-64</field><field /><metadata><label>label-64</label><code>code-64</code></metadata></alternative>
+    <alternative><field>repeated-65</field><field /><metadata><label>label-65</label><code>code-65</code></metadata></alternative>
+    <alternative><field>repeated-66</field><field /><metadata><label>label-66</label><code>code-66</code></metadata></alternative>
+  </collection>
+  <empty-siblings>
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+    <field />
+  </empty-siblings>
+</root>
