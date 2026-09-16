@@ -2,6 +2,7 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Sources;
+using CIA.Desktop.Presentation;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.SourceInterpretation;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -11,6 +12,73 @@ namespace CIA.ProcessingHost.Tests;
 [TestClass]
 public sealed class StructuralDiscoveryCandidateTests
 {
+    [TestMethod]
+    public async Task RepeatedExplicitElementsAcrossVariableStructuralContextsRemainCanonicalAndReconcile()
+    {
+        using var workspace = new StructuralDiscoveryWorkspace();
+        var source = workspace.CopyFixture("multi-context-explicit-elements.xml");
+        var document = await InterpretAsync(source);
+        var elementValues = document.Values
+            .Where(value =>
+                value.InformationType == "field"
+                && value.CandidateKind == SourceValueCandidateKind.Element)
+            .ToArray();
+
+        Assert.HasCount(67, elementValues);
+        Assert.IsTrue(elementValues.All(value => !string.IsNullOrWhiteSpace(value.Content)));
+        Assert.AreEqual(
+            1,
+            elementValues.Count(value => value.Lineage?.StructuralPath == "/root/field"));
+        Assert.AreEqual(
+            66,
+            elementValues.Count(value =>
+                value.Lineage?.StructuralPath == "/root/collection/alternative/field"));
+        Assert.IsFalse(document.Values.Any(value =>
+            value.CandidateKind == SourceValueCandidateKind.Structural
+            && value.Content.StartsWith("repeated-", StringComparison.Ordinal)));
+
+        var service = CreateDiscoveryService();
+        var correlation = OperationCorrelation.CreateNew();
+        var discovery = await service.RunAsync(correlation, [source]);
+        var detailed = discovery.Information
+            .Where(information =>
+                information.InformationType == "field"
+                && information.Identity.CandidateKind == SourceValueCandidateKind.Element)
+            .OrderBy(information => information.Identity.StructuralPath, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.HasCount(2, detailed);
+        CollectionAssert.AreEquivalent(
+            new[] { 1, 66 },
+            detailed.Select(information => information.TotalOccurrenceCount).ToArray());
+        Assert.AreEqual(67, detailed.Sum(information => information.TotalOccurrenceCount));
+        Assert.AreEqual(
+            67,
+            detailed.Sum(information =>
+                information.ContributingSources.Single().OccurrenceCount));
+
+        var logical = DiscoveredInformationItemViewModel.CreateLogicalItems(
+                detailed,
+                _ => "Set 1",
+                _ => DiscoveryInformationDisposition.Neutral,
+                _ => null)
+            .Single();
+
+        Assert.AreEqual(67, logical.TotalOccurrenceCount);
+        Assert.HasCount(2, logical.DetailedIdentities);
+        Assert.AreEqual(67, logical.ContributingSources.Single().OccurrenceCount);
+
+        var repeated = detailed.Single(information =>
+            information.Identity.StructuralPath == "/root/collection/alternative/field");
+        var last = await CreateDiscoveryService().GetOccurrenceAsync(
+            CreateLookup(correlation, repeated, source, globalOrdinal: 66));
+
+        Assert.IsTrue(last.Accepted);
+        Assert.AreEqual("repeated-66", last.Occurrence?.Value);
+        Assert.AreEqual(66, last.Occurrence?.TotalOccurrenceCount);
+        Assert.AreEqual(repeated.Identity, last.Occurrence?.Identity);
+    }
+
     [TestMethod]
     public async Task GenericInterpretationPreservesElementFieldsAndExposesDistinctAttributes()
     {
