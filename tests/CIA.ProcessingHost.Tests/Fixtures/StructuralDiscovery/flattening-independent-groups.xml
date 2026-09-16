@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<dataset>
+  <context>
+    <variant>
+      <code>A</code>
+      <price>10</price>
+    </variant>
+    <variant>
+      <code>B</code>
+      <price>20</price>
+    </variant>
+    <color>red</color>
+    <color>blue</color>
+    <color>green</color>
+    <size>S</size>
+    <size>M</size>
+  </context>
+</dataset>
