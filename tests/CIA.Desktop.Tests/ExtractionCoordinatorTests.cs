@@ -40,12 +40,42 @@ public sealed class ExtractionCoordinatorTests
         Assert.AreEqual(
             OperationOutcome.CompletedSuccessfully,
             coordinator.CurrentCompletion?.Outcome);
+        Assert.IsTrue(coordinator.CurrentResult?.IsHierarchyAware);
+        Assert.HasCount(database.Datasets.Count, coordinator.CurrentResult!.Datasets);
         Assert.IsFalse(typeof(ExtractionResultSummary).GetProperties().Any(property =>
             property.Name.Contains("Visible", StringComparison.OrdinalIgnoreCase)
             || property.Name.Contains("Width", StringComparison.OrdinalIgnoreCase)
-            || property.Name.Contains("Order", StringComparison.OrdinalIgnoreCase)
-            || property.Name.Contains("Filter", StringComparison.OrdinalIgnoreCase)
-            || property.Name.Contains("Row", StringComparison.OrdinalIgnoreCase)));
+            || property.Name.Contains("Filter", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [TestMethod]
+    public async Task AcceptedResultWithDifferentTypedDatabaseSnapshotIsRejected()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        var database = await context.BuildCurrentDatabaseAsync();
+        var basis = database.Datasets.Single();
+        var mismatched = new DatabaseGenerationSummary(
+            database.OperationId,
+            [new DatabaseDatasetSummary(
+                basis.SourceSetId,
+                "Different Set name",
+                basis.Ordinal,
+                basis.RepeatedDataLayout,
+                basis.RowCount,
+                basis.ValueCount,
+                basis.Columns,
+                basis.Mappings)]);
+        var client = new RecordingExtractionClient((correlation, _) =>
+            Success(correlation, mismatched));
+        var coordinator = context.CreateExtractionCoordinator(client);
+
+        var result = await coordinator.ExtractAsync();
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.OperationMismatch, result.Rejection?.Code);
+        Assert.IsNull(coordinator.CurrentResult);
+        Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Extraction);
+        Assert.AreEqual(WorkflowOperationState.Failed, context.Workflow.Current.LatestOperation?.State);
     }
 
     [TestMethod]
@@ -296,7 +326,7 @@ public sealed class ExtractionCoordinatorTests
     }
 
     [TestMethod]
-    public async Task WorkbookExportCapturesCurrentExtractionAndConfiguration()
+    public async Task WorkbookExportGuardsHierarchyExtractionUntilSetAwareRouting()
     {
         var context = await ExtractionContext.CreateAsync();
         await context.BuildCurrentDatabaseAsync(valueCount: 2);
@@ -331,16 +361,55 @@ public sealed class ExtractionCoordinatorTests
 
         var result = await coordinator.ExportAsync(targetPath, configuration);
 
-        Assert.IsTrue(result.Accepted);
-        Assert.AreSame(extraction.CurrentResult, exportClient.ExtractionResult);
-        Assert.AreSame(configuration, exportClient.Configuration);
-        Assert.AreEqual(targetPath, exportClient.TargetPath);
-        Assert.AreEqual(extraction.CurrentResult?.OperationId, coordinator.LastWorkbook?.ExtractionResultId);
-        Assert.AreEqual(WorkflowOperationKind.Export, context.Workflow.Current.LatestOperation?.Kind);
-        Assert.AreEqual(
-            WorkflowOperationState.CompletedSuccessfully,
-            context.Workflow.Current.LatestOperation?.State);
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.ExtractionNotCurrent, result.Rejection?.Code);
+        StringAssert.Contains(result.Rejection?.Reason, "SPR-140/141");
+        Assert.AreEqual(0, exportClient.CallCount);
+        Assert.IsNull(coordinator.LastWorkbook);
         Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
+    }
+
+    [TestMethod]
+    public async Task UnexpectedClientExceptionRejectsFirstExtractionAndRecordsFailure()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var coordinator = context.CreateExtractionCoordinator(new ThrowingExtractionClient());
+
+        var result = await coordinator.ExtractAsync();
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.OperationFailed, result.Rejection?.Code);
+        Assert.AreEqual("Extraction failed unexpectedly.", result.Rejection?.Reason);
+        Assert.IsNull(coordinator.CurrentResult);
+        Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Extraction);
+        Assert.AreEqual(WorkflowOperationState.Failed, context.Workflow.Current.LatestOperation?.State);
+    }
+
+    [TestMethod]
+    public async Task UnexpectedReplacementExceptionRetainsPriorExtractionAndReturnsRejection()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var calls = 0;
+        var client = new RecordingExtractionClient((correlation, basis) =>
+        {
+            calls++;
+            return calls == 1
+                ? Success(correlation, basis)
+                : throw new InvalidOperationException("replacement extraction failure");
+        });
+        var coordinator = context.CreateExtractionCoordinator(client);
+        Assert.IsTrue((await coordinator.ExtractAsync()).Accepted);
+        var retained = coordinator.CurrentResult;
+
+        var replacement = await coordinator.ExtractAsync();
+
+        Assert.IsFalse(replacement.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.OperationFailed, replacement.Rejection?.Code);
+        Assert.AreSame(retained, coordinator.CurrentResult);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
+        Assert.AreEqual(WorkflowOperationState.Failed, context.Workflow.Current.LatestOperation?.State);
     }
 
     [TestMethod]
@@ -391,7 +460,7 @@ public sealed class ExtractionCoordinatorTests
             OperationCompletion.FromCompletedItems(
                 correlation,
                 [OperationItemStatus.ProcessedSuccessfully("extraction-publication")]),
-            new ExtractionResultSummary(correlation.OperationId, databaseGeneration),
+            CreateExtractionSummary(correlation.OperationId, databaseGeneration),
             FailureCode: null,
             FailureDescription: null);
     }
@@ -424,10 +493,25 @@ public sealed class ExtractionCoordinatorTests
                     OperationItemStatus.Failed("failed-item", "item-failed"),
                     OperationItemStatus.Unprocessed("unprocessed-item", "not-processed")
                 ]),
-            new ExtractionResultSummary(correlation.OperationId, databaseGeneration),
+            CreateExtractionSummary(correlation.OperationId, databaseGeneration),
             FailureCode: null,
             FailureDescription: null);
     }
+
+    private static ExtractionResultSummary CreateExtractionSummary(
+        OperationId operationId,
+        DatabaseGenerationSummary databaseGeneration) =>
+        new(
+            operationId,
+            databaseGeneration,
+            databaseGeneration.Datasets.Select(dataset => new ExtractionDatasetSummary(
+                dataset.SourceSetId,
+                dataset.DisplayName,
+                dataset.Ordinal,
+                dataset.RepeatedDataLayout,
+                dataset.RowCount,
+                dataset.ValueCount,
+                dataset.Columns)).ToArray());
 
     private sealed class RecordingExtractionClient : IExtractionClient
     {
@@ -468,6 +552,15 @@ public sealed class ExtractionCoordinatorTests
             Started.TrySetResult();
             return _extract(correlation, databaseGeneration);
         }
+    }
+
+    private sealed class ThrowingExtractionClient : IExtractionClient
+    {
+        public Task<ExtractionClientResult> ExtractAsync(
+            OperationCorrelation correlation,
+            DatabaseGenerationSummary databaseGeneration,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("unexpected Extraction client failure");
     }
 
     private sealed class RecordingWorkbookExportClient : IWorkbookExportClient
@@ -594,29 +687,10 @@ public sealed class ExtractionCoordinatorTests
 
         public async Task<DatabaseGenerationSummary> BuildCurrentDatabaseAsync(int valueCount = 1)
         {
-            var begin = await Workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
-            Assert.IsTrue(begin.Accepted);
-            var generation = new DatabaseGenerationSummary(
-                begin.Operation!.OperationId,
-                new DatabaseMappingSnapshot(
-                    [new DatabaseColumnMapping("Database Field", ["tag"])]),
-                valueCount);
-
-            // These pre-SPR-138 extraction tests require a legacy generation. Production
-            // DatabaseBuildCoordinator now rejects that shape, so seed only this test fixture.
-            typeof(DatabaseBuildCoordinator)
-                .GetField("_currentGeneration", System.Reflection.BindingFlags.Instance
-                    | System.Reflection.BindingFlags.NonPublic)!
-                .SetValue(DatabaseCoordinator, generation);
-            Assert.IsTrue(Workflow.CompleteOperation(
-                begin.Operation.OperationId,
-                OperationOutcome.CompletedSuccessfully).Accepted);
-            var handlers = (EventHandler<DatabaseGenerationSummary>?)typeof(DatabaseBuildCoordinator)
-                .GetField(nameof(DatabaseBuildCoordinator.PublishedGenerationChanged),
-                    System.Reflection.BindingFlags.Instance
-                    | System.Reflection.BindingFlags.NonPublic)!
-                .GetValue(DatabaseCoordinator);
-            handlers?.Invoke(DatabaseCoordinator, generation);
+            DatabaseClient.ValueCount = valueCount;
+            Assert.IsTrue((await DatabaseCoordinator.BuildAsync()).Accepted);
+            var generation = DatabaseCoordinator.CurrentGeneration;
+            Assert.IsNotNull(generation);
             return generation;
         }
 

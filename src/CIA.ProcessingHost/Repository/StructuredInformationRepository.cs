@@ -7,7 +7,7 @@ namespace CIA.ProcessingHost.Repository;
 
 public sealed partial class StructuredInformationRepository
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
     public const string DatabaseFileName = "cia.sqlite3";
 
     private const string OccurrencesTableName = "indexed_occurrences";
@@ -268,6 +268,7 @@ public sealed partial class StructuredInformationRepository
                 1 => await ApplyVersionTwoAsync(connection, cancellationToken).ConfigureAwait(false),
                 2 => await ApplyVersionThreeAsync(connection, cancellationToken).ConfigureAwait(false),
                 3 => await ApplyVersionFourAsync(connection, cancellationToken).ConfigureAwait(false),
+                4 => await ApplyVersionFiveAsync(connection, cancellationToken).ConfigureAwait(false),
                 _ => throw new StructuredInformationRepositoryException(
                     $"No repository migration is available from schema version {version}.")
             };
@@ -611,6 +612,168 @@ public sealed partial class StructuredInformationRepository
         }
     }
 
+    private static async Task<int> ApplyVersionFiveAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                DELETE FROM extraction_publication;
+                DELETE FROM extraction_results;
+
+                CREATE TABLE hierarchy_extraction_results (
+                    extraction_id TEXT PRIMARY KEY CHECK (length(extraction_id) = 36),
+                    database_generation_id TEXT NOT NULL CHECK (length(database_generation_id) = 36),
+                    database_generation_json TEXT NOT NULL,
+                    created_utc TEXT NOT NULL
+                );
+                CREATE TABLE hierarchy_extraction_datasets (
+                    extraction_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL CHECK (length(source_set_id) = 36),
+                    display_name TEXT NOT NULL CHECK (length(display_name) > 0),
+                    dataset_ordinal INTEGER NOT NULL CHECK (dataset_ordinal >= 1),
+                    repeated_data_layout INTEGER NOT NULL,
+                    row_count INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+                    value_count INTEGER NOT NULL DEFAULT 0 CHECK (value_count >= 0),
+                    PRIMARY KEY (extraction_id, source_set_id),
+                    UNIQUE (extraction_id, dataset_ordinal),
+                    FOREIGN KEY (extraction_id)
+                        REFERENCES hierarchy_extraction_results (extraction_id) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_extraction_columns (
+                    extraction_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    column_ordinal INTEGER NOT NULL CHECK (column_ordinal >= 1),
+                    field_key TEXT NOT NULL,
+                    effective_name TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    PRIMARY KEY (extraction_id, source_set_id, field_key, repeat_coordinates_json),
+                    UNIQUE (extraction_id, source_set_id, column_ordinal),
+                    FOREIGN KEY (extraction_id, source_set_id)
+                        REFERENCES hierarchy_extraction_datasets (extraction_id, source_set_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_extraction_rows (
+                    extraction_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL CHECK (row_ordinal >= 1),
+                    database_row_ordinal INTEGER NOT NULL CHECK (database_row_ordinal >= 1),
+                    source_row_ordinal INTEGER NOT NULL CHECK (source_row_ordinal >= 1),
+                    record_identity TEXT NOT NULL,
+                    source_id TEXT NOT NULL CHECK (length(source_id) = 36),
+                    source_set_name TEXT NOT NULL,
+                    source_file_name TEXT NOT NULL,
+                    full_source_path TEXT NOT NULL,
+                    source_kind INTEGER NOT NULL,
+                    archive_path TEXT,
+                    archive_member_path TEXT,
+                    file_modified_utc TEXT,
+                    PRIMARY KEY (extraction_id, source_set_id, row_ordinal),
+                    UNIQUE (extraction_id, source_set_id, database_row_ordinal),
+                    FOREIGN KEY (extraction_id, source_set_id)
+                        REFERENCES hierarchy_extraction_datasets (extraction_id, source_set_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_extraction_cells (
+                    extraction_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL,
+                    field_key TEXT NOT NULL,
+                    effective_name TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    has_conflict INTEGER NOT NULL CHECK (has_conflict IN (0, 1)),
+                    PRIMARY KEY (
+                        extraction_id,
+                        source_set_id,
+                        row_ordinal,
+                        field_key,
+                        repeat_coordinates_json),
+                    FOREIGN KEY (extraction_id, source_set_id, row_ordinal)
+                        REFERENCES hierarchy_extraction_rows (
+                            extraction_id,
+                            source_set_id,
+                            row_ordinal)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY (extraction_id, source_set_id, field_key, repeat_coordinates_json)
+                        REFERENCES hierarchy_extraction_columns (
+                            extraction_id,
+                            source_set_id,
+                            field_key,
+                            repeat_coordinates_json)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_extraction_cell_values (
+                    extraction_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL,
+                    field_key TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    value_ordinal INTEGER NOT NULL CHECK (value_ordinal >= 1),
+                    value TEXT NOT NULL,
+                    information_type TEXT NOT NULL,
+                    structural_path TEXT NOT NULL,
+                    candidate_kind INTEGER NOT NULL,
+                    structural_identity TEXT NOT NULL,
+                    source_id TEXT NOT NULL CHECK (length(source_id) = 36),
+                    lineage_json TEXT NOT NULL,
+                    PRIMARY KEY (
+                        extraction_id,
+                        source_set_id,
+                        row_ordinal,
+                        field_key,
+                        repeat_coordinates_json,
+                        value_ordinal),
+                    FOREIGN KEY (
+                        extraction_id,
+                        source_set_id,
+                        row_ordinal,
+                        field_key,
+                        repeat_coordinates_json)
+                        REFERENCES hierarchy_extraction_cells (
+                            extraction_id,
+                            source_set_id,
+                            row_ordinal,
+                            field_key,
+                            repeat_coordinates_json)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX ix_hierarchy_extraction_rows_order
+                    ON hierarchy_extraction_rows (
+                        extraction_id,
+                        source_set_id,
+                        row_ordinal);
+                CREATE INDEX ix_hierarchy_extraction_values_order
+                    ON hierarchy_extraction_cell_values (
+                        extraction_id,
+                        source_set_id,
+                        row_ordinal,
+                        field_key,
+                        repeat_coordinates_json,
+                        value_ordinal);
+                CREATE TABLE hierarchy_extraction_publication (
+                    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                    extraction_id TEXT NOT NULL UNIQUE,
+                    FOREIGN KEY (extraction_id)
+                        REFERENCES hierarchy_extraction_results (extraction_id)
+                );
+                PRAGMA user_version = 5;
+                """;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return 5;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
     private static async Task ValidateCurrentSchemaAsync(
         SqliteConnection connection,
         CancellationToken cancellationToken)
@@ -656,6 +819,8 @@ public sealed partial class StructuredInformationRepository
         await ValidateDatabaseGenerationSchemaAsync(connection, cancellationToken)
             .ConfigureAwait(false);
         await ValidateExtractionSchemaAsync(connection, cancellationToken)
+            .ConfigureAwait(false);
+        await ValidateHierarchyExtractionSchemaAsync(connection, cancellationToken)
             .ConfigureAwait(false);
         await ValidateHierarchyDatabaseSchemaAsync(connection, cancellationToken)
             .ConfigureAwait(false);
@@ -771,6 +936,59 @@ public sealed partial class StructuredInformationRepository
             {
                 throw new StructuredInformationRepositoryException(
                     $"The Extraction Result schema is missing the required index '{indexName}'.");
+            }
+        }
+    }
+
+    private static async Task ValidateHierarchyExtractionSchemaAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        string[] tables =
+        [
+            "hierarchy_extraction_results",
+            "hierarchy_extraction_datasets",
+            "hierarchy_extraction_columns",
+            "hierarchy_extraction_rows",
+            "hierarchy_extraction_cells",
+            "hierarchy_extraction_cell_values",
+            "hierarchy_extraction_publication"
+        ];
+        foreach (var table in tables)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"SELECT 1 FROM {table} LIMIT 0;";
+            try
+            {
+                await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (SqliteException exception)
+            {
+                throw new StructuredInformationRepositoryException(
+                    "The hierarchy-aware Extraction Result schema is incomplete or invalid.",
+                    exception);
+            }
+        }
+
+        foreach (var indexName in new[]
+        {
+            "ix_hierarchy_extraction_rows_order",
+            "ix_hierarchy_extraction_values_order"
+        })
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT EXISTS(
+                    SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = $name);
+                """;
+            command.Parameters.AddWithValue("$name", indexName);
+            var exists = Convert.ToInt32(
+                await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+                CultureInfo.InvariantCulture) != 0;
+            if (!exists)
+            {
+                throw new StructuredInformationRepositoryException(
+                    $"The hierarchy-aware Extraction Result schema is missing '{indexName}'.");
             }
         }
     }

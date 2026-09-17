@@ -120,7 +120,7 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.AreSame(viewModel.ExportColumns, exportRows.ItemsSource);
             Assert.AreEqual(Visibility.Visible, excelExport.Visibility);
             Assert.IsFalse(exportButton.IsEnabled);
-            Assert.IsFalse(prepareButton.IsEnabled);
+            Assert.IsTrue(prepareButton.IsEnabled);
             Assert.AreEqual("Not prepared", extractionState.Text);
             Assert.IsNull(view.FindName("DatabaseFiltersButton"));
             Assert.IsNull(view.FindName("ExtractionReviewRows"));
@@ -342,7 +342,16 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                     [OperationItemStatus.ProcessedSuccessfully("extraction-publication")]),
                 new CIA.Contracts.Extraction.ExtractionResultSummary(
                     correlation.OperationId,
-                    databaseGeneration),
+                    databaseGeneration,
+                    databaseGeneration.Datasets.Select(dataset =>
+                        new CIA.Contracts.Extraction.ExtractionDatasetSummary(
+                            dataset.SourceSetId,
+                            dataset.DisplayName,
+                            dataset.Ordinal,
+                            dataset.RepeatedDataLayout,
+                            dataset.RowCount,
+                            dataset.ValueCount,
+                            dataset.Columns)).ToArray()),
                 FailureCode: null,
                 FailureDescription: null));
         }

@@ -468,8 +468,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     public bool ExtractionBasisMatchesReviewedDatabase =>
         _publishedGenerationId is { } publishedGenerationId
-        && _extractionCoordinator?.CurrentResult?.DatabaseGeneration.OperationId
-            == publishedGenerationId;
+        && _databaseBuildCoordinator?.CurrentGeneration is { } currentGeneration
+        && currentGeneration.OperationId == publishedGenerationId
+        && _extractionCoordinator?.CurrentResult is { } extractionResult
+        && DatabaseGenerationSnapshotComparer.AreEquivalent(
+            currentGeneration,
+            extractionResult.DatabaseGeneration);
 
     public ExportConfigurationSnapshot CaptureExportConfiguration()
     {

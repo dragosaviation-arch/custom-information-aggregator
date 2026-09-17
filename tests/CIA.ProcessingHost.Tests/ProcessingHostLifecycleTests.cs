@@ -373,10 +373,21 @@ public sealed class ProcessingHostLifecycleTests
         var extractionMessage = await connection.ReceiveAsync(timeout.Token);
         Assert.IsInstanceOfType<RunExtractionResponse>(extractionMessage);
         var extractionResponse = (RunExtractionResponse)extractionMessage;
-        Assert.AreEqual(CommandAcceptance.Rejected, extractionResponse.Acceptance);
-        Assert.AreEqual(OperationOutcome.Failed, extractionResponse.Completion.Outcome);
-        Assert.AreEqual("hierarchy-aware-extraction-not-supported", extractionResponse.Failure?.Code);
-        Assert.IsNull(extractionResponse.PublishedResult);
+        Assert.AreEqual(CommandAcceptance.Accepted, extractionResponse.Acceptance);
+        Assert.AreEqual(
+            OperationOutcome.CompletedSuccessfully,
+            extractionResponse.Completion.Outcome);
+        Assert.IsNull(extractionResponse.Failure);
+        var publishedExtraction = extractionResponse.PublishedResult;
+        Assert.IsNotNull(publishedExtraction);
+        Assert.IsTrue(publishedExtraction.IsHierarchyAware);
+        var currentGeneration = coordinator.CurrentGeneration;
+        Assert.IsNotNull(currentGeneration);
+        Assert.AreEqual(
+            currentGeneration.OperationId,
+            publishedExtraction.DatabaseGeneration.OperationId);
+        Assert.AreEqual(2, publishedExtraction.ValueCount);
+        Assert.HasCount(1, publishedExtraction.Datasets);
 
         var stop = new StopProcessingHostCommand(Guid.CreateVersion7(), DateTimeOffset.UtcNow);
         await connection.SendAsync(stop, timeout.Token);

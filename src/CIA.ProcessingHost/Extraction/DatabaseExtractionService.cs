@@ -23,18 +23,18 @@ public sealed class DatabaseExtractionService(
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(databaseGeneration);
 
-        if (databaseGeneration.IsHierarchyAware)
+        if (!databaseGeneration.IsHierarchyAware)
         {
             var completion = OperationCompletion.FromTerminalOutcome(
                 correlation,
                 OperationOutcome.Failed,
                 [OperationItemStatus.Unprocessed(
                     PublicationItemId,
-                    "hierarchy-aware-extraction-not-supported")]);
+                    "legacy-flat-extraction-not-supported")]);
             return DatabaseExtractionHostResult.Reject(
                 completion,
-                "hierarchy-aware-extraction-not-supported",
-                "Hierarchy-aware Source Set extraction is intentionally unavailable until SPR-139.");
+                "legacy-flat-extraction-not-supported",
+                "Extraction requires a hierarchy-aware published Database generation.");
         }
 
         var operation = operationCancellation.BeginOperation(

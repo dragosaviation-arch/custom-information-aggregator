@@ -477,6 +477,13 @@ public sealed class HierarchyDatabaseGenerationTests
                     generation_id, database_tag_name, source_information_ordinal, source_information_type)
                 VALUES ('{generation}', 'legacy', 0, 'legacy');
                 INSERT INTO database_publication (singleton_id, generation_id) VALUES (1, '{generation}');
+                DROP TABLE hierarchy_extraction_publication;
+                DROP TABLE hierarchy_extraction_cell_values;
+                DROP TABLE hierarchy_extraction_cells;
+                DROP TABLE hierarchy_extraction_rows;
+                DROP TABLE hierarchy_extraction_columns;
+                DROP TABLE hierarchy_extraction_datasets;
+                DROP TABLE hierarchy_extraction_results;
                 DROP TABLE hierarchy_database_publication;
                 DROP TABLE hierarchy_database_cell_values;
                 DROP TABLE hierarchy_database_cells;

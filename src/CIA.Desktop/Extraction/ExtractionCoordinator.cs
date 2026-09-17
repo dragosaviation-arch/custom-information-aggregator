@@ -45,7 +45,7 @@ public sealed class ExtractionCoordinator(
     {
         return workflowCoordinator.Current.Database == WorkflowArtifactStatus.Current
             && workflowCoordinator.Current.ActiveOperation is null
-            && databaseBuildCoordinator.CurrentGeneration is { IsHierarchyAware: false };
+            && databaseBuildCoordinator.CurrentGeneration is { IsHierarchyAware: true };
     }
 
     public async Task<WorkflowCommandResult> ExtractAsync(
@@ -56,9 +56,7 @@ public sealed class ExtractionCoordinator(
         {
             return WorkflowCommandResult.Reject(
                 WorkflowRejectionCode.DatabaseNotCurrent,
-                databaseGeneration?.IsHierarchyAware == true
-                    ? "Extraction of hierarchy-aware Source Set datasets requires SPR-139 and is not yet available."
-                    : "Extraction requires the active published Database to be current.");
+                "Extraction requires the active hierarchy-aware published Database to be current.");
         }
 
         var begin = await workflowCoordinator
@@ -77,7 +75,7 @@ public sealed class ExtractionCoordinator(
             if (result.Accepted
                 && (result.PublishedResult is null
                     || result.PublishedResult.OperationId != begin.Operation.OperationId
-                    || !DatabaseGenerationsEqual(
+                    || !DatabaseGenerationSnapshotComparer.AreEquivalent(
                         databaseGeneration,
                         result.PublishedResult.DatabaseGeneration)))
             {
@@ -124,26 +122,12 @@ public sealed class ExtractionCoordinator(
                 exception,
                 "Extraction coordination failed for operation {OperationId}",
                 begin.Operation.OperationId);
-            return workflowCoordinator.CompleteOperation(
+            workflowCoordinator.CompleteOperation(
                 begin.Operation.OperationId,
                 OperationOutcome.Failed);
+            return WorkflowCommandResult.Reject(
+                WorkflowRejectionCode.OperationFailed,
+                "Extraction failed unexpectedly.");
         }
-    }
-
-    private static bool DatabaseGenerationsEqual(
-        DatabaseGenerationSummary expected,
-        DatabaseGenerationSummary actual)
-    {
-        return expected.OperationId == actual.OperationId
-            && expected.ValueCount == actual.ValueCount
-            && expected.Mapping.Columns.Count == actual.Mapping.Columns.Count
-            && expected.Mapping.Columns.Zip(actual.Mapping.Columns).All(pair =>
-                string.Equals(
-                    pair.First.DatabaseTagName,
-                    pair.Second.DatabaseTagName,
-                    StringComparison.Ordinal)
-                && pair.First.SourceInformationTypes.SequenceEqual(
-                    pair.Second.SourceInformationTypes,
-                    StringComparer.Ordinal));
     }
 }

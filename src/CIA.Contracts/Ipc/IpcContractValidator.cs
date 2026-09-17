@@ -741,6 +741,12 @@ public static class IpcContractValidator
         ExportConfigurationSnapshot configuration,
         ExtractionResultSummary extractionResult)
     {
+        if (extractionResult.IsHierarchyAware)
+        {
+            throw InvalidContract(
+                "Hierarchy-aware Extraction Results require the later Set-aware workbook contract.");
+        }
+
         if (configuration is null
             || configuration.Fields is null
             || configuration.Fields.Count == 0)
@@ -865,10 +871,15 @@ public static class IpcContractValidator
         ValidateDatabaseGeneration(result.DatabaseGeneration);
 
         if (result.OperationId == result.DatabaseGeneration.OperationId
-            || result.ValueCount != result.DatabaseGeneration.ValueCount)
+            || !result.IsHierarchyAware
+            || !result.DatabaseGeneration.IsHierarchyAware
+            || result.Datasets is null
+            || result.Datasets.Count != result.DatabaseGeneration.Datasets.Count
+            || result.RowCount > result.DatabaseGeneration.RowCount
+            || result.ValueCount > result.DatabaseGeneration.ValueCount)
         {
             throw InvalidContract(
-                "An Extraction Result requires a distinct identity and matching Database basis.");
+                "An Extraction Result requires a distinct identity and hierarchy-aware Database snapshot.");
         }
     }
 

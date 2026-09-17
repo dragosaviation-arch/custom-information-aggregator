@@ -31,6 +31,20 @@ public sealed class ExcelWorkbookExportService(
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
 
+        if (extractionResult.IsHierarchyAware)
+        {
+            var unsupported = OperationCompletion.FromTerminalOutcome(
+                correlation,
+                OperationOutcome.Failed,
+                [OperationItemStatus.Unprocessed(
+                    PublicationItemId,
+                    "hierarchy-aware-export-not-supported")]);
+            return WorkbookExportHostResult.Reject(
+                unsupported,
+                "hierarchy-aware-export-not-supported",
+                "Set-aware hierarchy Extraction Results require SPR-140/141 workbook routing.");
+        }
+
         var operation = operationCancellation.BeginOperation(
             correlation,
             "Export",
