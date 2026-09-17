@@ -484,15 +484,54 @@ public sealed class DatabaseBuildCoordinatorTests
     }
 
     [TestMethod]
+    public async Task UnexpectedExceptionRejectsFirstBuildAfterRecordingFailedWorkflowState()
+    {
+        var context = await BuildContext.CreateAsync();
+        var coordinator = context.CreateCoordinator(new ThrowingDatabaseClient());
+
+        var result = await coordinator.BuildAsync();
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.OperationFailed, result.Rejection?.Code);
+        Assert.AreEqual("Database generation failed unexpectedly.", result.Rejection?.Reason);
+        Assert.IsNull(coordinator.CurrentGeneration);
+        Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Database);
+        Assert.AreEqual(WorkflowOperationState.Failed, context.Workflow.Current.LatestOperation?.State);
+    }
+
+    [TestMethod]
+    public async Task UnexpectedReplacementExceptionRetainsPriorGenerationAndReturnsRejection()
+    {
+        var context = await BuildContext.CreateAsync();
+        var callCount = 0;
+        var client = new RecordingDatabaseClient((correlation, specification) =>
+        {
+            callCount++;
+            return callCount == 1
+                ? HierarchySuccess(correlation, specification, rowCount: 1, valueCount: 1)
+                : throw new InvalidOperationException("replacement failure");
+        });
+        var coordinator = context.CreateCoordinator(client);
+        Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
+        var published = coordinator.CurrentGeneration;
+        Assert.IsNotNull(published);
+
+        Assert.IsTrue(context.Workflow.RecordDiscoveryConfigurationChanged().Accepted);
+        Assert.IsTrue(context.Configuration.SetDatabaseTagOverride("tag", "Replacement"));
+        var replacement = await coordinator.BuildAsync();
+
+        Assert.IsFalse(replacement.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.OperationFailed, replacement.Rejection?.Code);
+        Assert.AreSame(published, coordinator.CurrentGeneration);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, context.Workflow.Current.Database);
+        Assert.AreEqual(WorkflowOperationState.Failed, context.Workflow.Current.LatestOperation?.State);
+    }
+
+    [TestMethod]
     public async Task DiscoveryDatabaseActionSurfacesTypedPublicationFailure()
     {
         var context = await BuildContext.CreateAsync();
-        var client = new RecordingDatabaseClient((correlation, specification) =>
-            Failure(
-                correlation,
-                specification.Datasets.SelectMany(dataset => dataset.Sources).ToArray(),
-                OperationOutcome.Failed));
-        var coordinator = context.CreateCoordinator(client);
+        var coordinator = context.CreateCoordinator(new ThrowingDatabaseClient());
         using var viewModel = new DiscoveryWorkspaceViewModel(
             new UnexpectedDiscoveryClient(),
             context.Configuration,
@@ -504,7 +543,8 @@ public sealed class DatabaseBuildCoordinatorTests
         await viewModel.BuildDatabaseCommand.ExecuteAsync(null);
 
         Assert.AreEqual("Database creation failed", viewModel.StatusTitle);
-        Assert.AreEqual("The candidate was not published.", viewModel.StatusDetail);
+        Assert.AreEqual("Database generation failed unexpectedly.", viewModel.StatusDetail);
+        Assert.AreNotEqual("Database created", viewModel.StatusTitle);
         Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Database);
     }
 
@@ -795,6 +835,15 @@ public sealed class DatabaseBuildCoordinatorTests
             }
             return Task.FromResult(result);
         }
+    }
+
+    private sealed class ThrowingDatabaseClient : IDatabaseClient
+    {
+        public Task<DatabaseClientResult> BuildAsync(
+            OperationCorrelation correlation,
+            DatabaseBuildSpecification specification,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("unexpected Database client failure");
     }
 
     private sealed class RecordingHierarchyDatabaseReviewClient(

@@ -1,27 +1,12 @@
 using CIA.Contracts.Database;
-using CIA.Contracts.Operations;
 
 namespace CIA.Desktop.Database;
 
 public interface IDatabaseReviewClient
 {
     Task<DatabaseReviewClientResult> ReadPageAsync(
-        OperationId generationId,
-        int startRowOrdinal,
-        int rowCount,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult(new DatabaseReviewClientResult(
-            false, null, "legacy-database-review-unavailable",
-            "Legacy independent-column Database review is no longer available."));
-
-    Task<DatabaseReviewClientResult> ReadPageAsync(
         DatabaseReviewQuery query,
-        CancellationToken cancellationToken = default) =>
-        ReadPageAsync(
-            query.GenerationId,
-            query.StartRowOrdinal,
-            query.RowCount,
-            cancellationToken);
+        CancellationToken cancellationToken = default);
 
     Task<DatabaseRowInclusionClientResult> SetRowsIncludedAsync(
         DatabaseRowInclusionChange change,

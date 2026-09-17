@@ -117,60 +117,7 @@ public sealed record BuildDatabaseCommand(
     DateTimeOffset TimestampUtc,
     OperationCorrelation Correlation,
     DatabaseBuildSpecification Specification)
-    : IpcCommand(MessageId, TimestampUtc)
-{
-    public BuildDatabaseCommand(
-        Guid messageId,
-        DateTimeOffset timestampUtc,
-        OperationCorrelation correlation,
-        IReadOnlyList<LoadedSourceContract> sources,
-        DatabaseMappingSnapshot mapping)
-        : this(messageId, timestampUtc, correlation, CreateLegacySpecification(sources, mapping))
-    {
-        Sources = sources;
-        Mapping = mapping;
-    }
-
-    [JsonIgnore]
-    public IReadOnlyList<LoadedSourceContract> Sources { get; } =
-        Specification.Datasets.SelectMany(dataset => dataset.Sources).ToArray();
-
-    [JsonIgnore]
-    public DatabaseMappingSnapshot Mapping { get; } = new(
-        Specification.Datasets.SelectMany(dataset => dataset.Fields)
-            .GroupBy(field => field.EffectiveName, StringComparer.Ordinal)
-            .Select(group => new DatabaseColumnMapping(
-                group.Key,
-                group.SelectMany(field => field.DetailedIdentities)
-                    .Select(identity => identity.InformationType)
-                    .Distinct(StringComparer.Ordinal).ToArray())).ToArray());
-
-    private static DatabaseBuildSpecification CreateLegacySpecification(
-        IReadOnlyList<LoadedSourceContract> sources,
-        DatabaseMappingSnapshot mapping)
-    {
-        var datasets = sources.GroupBy(source => source.SourceSetId).Select((group, index) =>
-        {
-            var fields = mapping.Columns.Select(column =>
-            {
-                var details = column.SourceInformationTypes.Select(type =>
-                    new DiscoveryInformationIdentity(
-                        group.Key, $"/{type}", type,
-                        SourceValueCandidateKind.Element, $"/{type}")).ToArray();
-                return new DatabaseFieldMapping(
-                    DatabaseLogicalFieldIdentity.Create(details[0]),
-                    column.DatabaseTagName,
-                    !string.Equals(column.DatabaseTagName, details[0].InformationType, StringComparison.Ordinal),
-                    details);
-            }).ToArray();
-            return new DatabaseDatasetBuildSpecification(
-                group.Key, $"Set {index + 1}", index + 1,
-                RepeatedDataLayout.AlignRepeatedGroupsByPosition,
-                group.ToArray(), fields);
-        }).ToArray();
-        return new DatabaseBuildSpecification(datasets);
-    }
-}
+    : IpcCommand(MessageId, TimestampUtc);
 
 public sealed record RunExtractionCommand(
     Guid MessageId,
@@ -195,18 +142,6 @@ public sealed record GetDatabaseReviewPageCommand(
     DatabaseReviewQuery Query)
     : IpcCommand(MessageId, TimestampUtc)
 {
-    public GetDatabaseReviewPageCommand(
-        Guid MessageId,
-        DateTimeOffset TimestampUtc,
-        OperationId GenerationId,
-        int StartRowOrdinal,
-        int RowCount)
-        : this(MessageId, TimestampUtc, new DatabaseReviewQuery(
-            GenerationId, SourceSetId.From(GenerationId.Value), StartRowOrdinal, RowCount, null,
-            DatabaseRowInclusionFilter.All))
-    {
-    }
-
     [JsonIgnore]
     public OperationId GenerationId => Query.GenerationId;
 

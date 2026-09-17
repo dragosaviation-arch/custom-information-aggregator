@@ -122,9 +122,12 @@ public sealed class DatabaseBuildCoordinator(
                 exception,
                 "Database build coordination failed for operation {OperationId}",
                 begin.Operation.OperationId);
-            return workflowCoordinator.CompleteOperation(
+            workflowCoordinator.CompleteOperation(
                 begin.Operation.OperationId,
                 OperationOutcome.Failed);
+            return WorkflowCommandResult.Reject(
+                WorkflowRejectionCode.OperationFailed,
+                "Database generation failed unexpectedly.");
         }
     }
 
