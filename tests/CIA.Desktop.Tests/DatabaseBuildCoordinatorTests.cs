@@ -10,6 +10,7 @@ using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 
 namespace CIA.Desktop.Tests;
 
@@ -20,8 +21,8 @@ public sealed class DatabaseBuildCoordinatorTests
     public async Task FirstSuccessfulBuildPublishesCapturedGenerationAndWorkspaceState()
     {
         var context = await BuildContext.CreateAsync();
-        var client = new RecordingDatabaseClient((correlation, _, mapping) =>
-            Success(correlation, mapping, valueCount: 3));
+        var client = new RecordingDatabaseClient((correlation, specification) =>
+            HierarchySuccess(correlation, specification, rowCount: 1, valueCount: 3));
         var coordinator = context.CreateCoordinator(client);
         using var database = new DatabaseWorkspaceViewModel(
             context.Configuration,
@@ -35,7 +36,7 @@ public sealed class DatabaseBuildCoordinatorTests
         Assert.AreEqual(client.Correlation?.OperationId, coordinator.CurrentGeneration?.OperationId);
         Assert.HasCount(1, database.Columns);
         Assert.AreEqual("DatabaseName", database.Columns[0].DatabaseField);
-        Assert.AreEqual("3 mapped values", database.RecordCountText);
+        Assert.AreEqual("1 rows · 3 values", database.RecordCountText);
     }
 
     [TestMethod]
@@ -44,10 +45,10 @@ public sealed class DatabaseBuildCoordinatorTests
         var context = await BuildContext.CreateAsync();
         var response = new TaskCompletionSource<DatabaseClientResult>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        DatabaseMappingSnapshot? capturedMapping = null;
-        var client = new RecordingDatabaseClient(async (correlation, _, mapping) =>
+        DatabaseBuildSpecification? capturedSpecification = null;
+        var client = new RecordingDatabaseClient(async (correlation, specification) =>
         {
-            capturedMapping = mapping;
+            capturedSpecification = specification;
             return await response.Task;
         });
         var coordinator = context.CreateCoordinator(client);
@@ -58,13 +59,14 @@ public sealed class DatabaseBuildCoordinatorTests
         Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Database);
 
         Assert.IsTrue(context.Configuration.SetDatabaseTagOverride("tag", "ChangedLater"));
-        response.SetResult(Success(client.Correlation!, capturedMapping!, valueCount: 1));
+        response.SetResult(HierarchySuccess(
+            client.Correlation!, capturedSpecification!, rowCount: 1, valueCount: 1));
         Assert.IsTrue((await buildTask).Accepted);
 
-        Assert.AreEqual("DatabaseName", capturedMapping!.Columns.Single().DatabaseTagName);
+        Assert.AreEqual("DatabaseName", capturedSpecification!.Datasets.Single().Fields.Single().EffectiveName);
         Assert.AreEqual(
             "DatabaseName",
-            coordinator.CurrentGeneration!.Mapping.Columns.Single().DatabaseTagName);
+            coordinator.CurrentGeneration!.Datasets.Single().Mappings.Single().EffectiveName);
     }
 
     [TestMethod]
@@ -77,12 +79,12 @@ public sealed class DatabaseBuildCoordinatorTests
             OperationOutcome.Failed,
             OperationOutcome.Cancelled
         ]);
-        var client = new RecordingDatabaseClient((correlation, sources, mapping) =>
+        var client = new RecordingDatabaseClient((correlation, specification) =>
         {
             var outcome = outcomes.Dequeue();
             return outcome == OperationOutcome.CompletedSuccessfully
-                ? Success(correlation, mapping, valueCount: 1)
-                : Failure(correlation, sources, outcome);
+                ? HierarchySuccess(correlation, specification, rowCount: 1, valueCount: 1)
+                : Failure(correlation, specification.Datasets.SelectMany(dataset => dataset.Sources).ToArray(), outcome);
         });
         var coordinator = context.CreateCoordinator(client);
         Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
@@ -106,7 +108,7 @@ public sealed class DatabaseBuildCoordinatorTests
         var context = await BuildContext.CreateAsync(supervisor);
         var response = new TaskCompletionSource<DatabaseClientResult>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var client = new RecordingDatabaseClient(async (_, _, _) => await response.Task);
+        var client = new RecordingDatabaseClient(async (_, _) => await response.Task);
         var coordinator = context.CreateCoordinator(client);
 
         var buildTask = coordinator.BuildAsync();
@@ -133,8 +135,8 @@ public sealed class DatabaseBuildCoordinatorTests
         foreach (var outcome in new[] { OperationOutcome.Failed, OperationOutcome.Cancelled })
         {
             var context = await BuildContext.CreateAsync();
-            var client = new RecordingDatabaseClient((correlation, sources, _) =>
-                Failure(correlation, sources, outcome));
+            var client = new RecordingDatabaseClient((correlation, specification) =>
+                Failure(correlation, specification.Datasets.SelectMany(dataset => dataset.Sources).ToArray(), outcome));
             var coordinator = context.CreateCoordinator(client);
 
             Assert.IsFalse((await coordinator.BuildAsync()).Accepted);
@@ -272,6 +274,107 @@ public sealed class DatabaseBuildCoordinatorTests
     }
 
     [TestMethod]
+    public async Task RowInclusionRequiresWorkflowAuthorizationBeforeHostMutation()
+    {
+        var context = await BuildContext.CreateAsync();
+        var databaseClient = new RecordingHierarchyDatabaseClient((correlation, specification) =>
+            HierarchySuccess(correlation, specification, rowCount: 2, valueCount: 2));
+        var excluded = new HashSet<int>();
+        var sourceId = SourceId.CreateNew();
+        var reviewClient = new RecordingHierarchyDatabaseReviewClient(
+            query =>
+            {
+                var generation = databaseClient.PublishedGeneration!;
+                var result = AcceptedHierarchyReview(
+                    generation.OperationId,
+                    generation.Datasets.Single(),
+                    query,
+                    2,
+                    [
+                        (sourceId, new[] { ("DatabaseName", "first") }),
+                        (sourceId, new[] { ("DatabaseName", "second") })
+                    ]);
+                var page = result.Page!;
+                var rows = page.Rows.Select(row => new DatabaseReviewRow(
+                    row.Ordinal,
+                    !excluded.Contains(row.Ordinal),
+                    row.RecordIdentity,
+                    row.Source,
+                    row.Cells)).ToArray();
+                return result with
+                {
+                    Page = new DatabaseReviewPage(
+                        page.GenerationId,
+                        page.Dataset,
+                        page.StartRowOrdinal,
+                        page.RequestedRowCount,
+                        page.TotalRowCount,
+                        rows)
+                };
+            },
+            change =>
+            {
+                foreach (var ordinal in change.RowOrdinals)
+                {
+                    if (change.IsIncluded)
+                    {
+                        excluded.Remove(ordinal);
+                    }
+                    else
+                    {
+                        excluded.Add(ordinal);
+                    }
+                }
+                return new DatabaseRowInclusionClientResult(
+                    true, change.RowOrdinals.Count, null, null);
+            });
+        var coordinator = context.CreateCoordinator(databaseClient);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration, context.Workflow, coordinator, reviewClient);
+        Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
+        await WaitForAsync(() => viewModel.Records.Count == 2);
+
+        var extraction = await context.Workflow.BeginOperationAsync(WorkflowOperationKind.Extraction);
+        Assert.IsTrue(extraction.Accepted);
+        Assert.IsTrue(context.Workflow.CompleteOperation(
+            extraction.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully).Accepted);
+        Assert.IsTrue(viewModel.SetRowIncludedCommand.CanExecute(viewModel.Records[0]));
+
+        await viewModel.SetRowIncludedCommand.ExecuteAsync(viewModel.Records[0]);
+        await WaitForAsync(() => !viewModel.Records[0].IsIncluded);
+
+        Assert.HasCount(1, reviewClient.InclusionChanges);
+        Assert.IsTrue(viewModel.IncludeVisibleRowsCommand.CanExecute(null));
+        await viewModel.IncludeVisibleRowsCommand.ExecuteAsync(null);
+        await WaitForAsync(() => viewModel.Records.All(row => row.IsIncluded));
+        Assert.HasCount(2, reviewClient.InclusionChanges);
+        Assert.IsTrue(viewModel.ExcludeVisibleRowsCommand.CanExecute(null));
+        await viewModel.ExcludeVisibleRowsCommand.ExecuteAsync(null);
+        await WaitForAsync(() => viewModel.Records.All(row => !row.IsIncluded));
+        Assert.HasCount(3, reviewClient.InclusionChanges);
+        Assert.HasCount(2, reviewClient.InclusionChanges[^1].RowOrdinals);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, context.Workflow.Current.Extraction);
+
+        var active = await context.Workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
+        Assert.IsTrue(active.Accepted);
+        Assert.IsFalse(viewModel.SetRowIncludedCommand.CanExecute(viewModel.Records[0]));
+        await viewModel.SetRowIncludedCommand.ExecuteAsync(viewModel.Records[0]);
+        Assert.HasCount(3, reviewClient.InclusionChanges);
+        Assert.IsTrue(context.Workflow.CompleteOperation(
+            active.Operation!.OperationId,
+            OperationOutcome.Failed).Accepted);
+
+        Assert.IsTrue(context.Workflow.RecordDiscoveryConfigurationChanged().Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, context.Workflow.Current.Database);
+        Assert.IsFalse(viewModel.SetRowIncludedCommand.CanExecute(viewModel.Records[0]));
+        await viewModel.SetRowIncludedCommand.ExecuteAsync(viewModel.Records[0]);
+        Assert.HasCount(3, reviewClient.InclusionChanges);
+        Assert.HasCount(2, excluded);
+    }
+
+    [TestMethod]
     public async Task StaleFailedAndCancelledBuildsRetainReviewUntilSuccessfulReplacement()
     {
         var context = await BuildContext.CreateAsync();
@@ -333,6 +436,76 @@ public sealed class DatabaseBuildCoordinatorTests
             viewModel.Records.FirstOrDefault()?.Cells[0].DisplayValue == "replacement value");
         Assert.AreEqual(WorkflowArtifactStatus.Current, viewModel.DatabaseStatus);
         Assert.AreEqual("Replacement", viewModel.Columns.Single().DatabaseField);
+    }
+
+    [TestMethod]
+    public async Task RehydratedTypedPublicationMatchesCapturedSpecificationByValue()
+    {
+        var context = await BuildContext.CreateAsync();
+        var client = new RecordingDatabaseClient((correlation, specification) =>
+        {
+            var result = HierarchySuccess(correlation, specification, rowCount: 1, valueCount: 1);
+            var json = JsonSerializer.Serialize(result.PublishedGeneration);
+            var rehydrated = JsonSerializer.Deserialize<DatabaseGenerationSummary>(json);
+            return result with { PublishedGeneration = rehydrated };
+        });
+        var coordinator = context.CreateCoordinator(client);
+
+        var result = await coordinator.BuildAsync();
+
+        Assert.IsTrue(result.Accepted);
+        Assert.IsTrue(coordinator.CurrentGeneration!.IsHierarchyAware);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Database);
+    }
+
+    [TestMethod]
+    public async Task AcceptedLegacyPublicationCannotSatisfyTypedBuild()
+    {
+        var context = await BuildContext.CreateAsync();
+        var client = new RecordingDatabaseClient((correlation, _) =>
+        {
+            var completion = OperationCompletion.FromCompletedItems(
+                correlation,
+                [OperationItemStatus.ProcessedSuccessfully("source")]);
+            var legacy = new DatabaseGenerationSummary(
+                correlation.OperationId,
+                new DatabaseMappingSnapshot([new DatabaseColumnMapping("DatabaseName", ["tag"])]),
+                valueCount: 1);
+            return new DatabaseClientResult(true, completion, legacy, null, null);
+        });
+        var coordinator = context.CreateCoordinator(client);
+
+        var result = await coordinator.BuildAsync();
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.OperationMismatch, result.Rejection?.Code);
+        Assert.IsNull(coordinator.CurrentGeneration);
+        Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Database);
+    }
+
+    [TestMethod]
+    public async Task DiscoveryDatabaseActionSurfacesTypedPublicationFailure()
+    {
+        var context = await BuildContext.CreateAsync();
+        var client = new RecordingDatabaseClient((correlation, specification) =>
+            Failure(
+                correlation,
+                specification.Datasets.SelectMany(dataset => dataset.Sources).ToArray(),
+                OperationOutcome.Failed));
+        var coordinator = context.CreateCoordinator(client);
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            new UnexpectedDiscoveryClient(),
+            context.Configuration,
+            context.Sources,
+            context.Workflow,
+            coordinator);
+
+        Assert.IsTrue(viewModel.BuildDatabaseCommand.CanExecute(null));
+        await viewModel.BuildDatabaseCommand.ExecuteAsync(null);
+
+        Assert.AreEqual("Database creation failed", viewModel.StatusTitle);
+        Assert.AreEqual("The candidate was not published.", viewModel.StatusDetail);
+        Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Database);
     }
 
     [TestMethod]
@@ -425,7 +598,8 @@ public sealed class DatabaseBuildCoordinatorTests
         DatabaseDatasetSummary dataset,
         DatabaseReviewQuery query,
         int totalRowCount,
-        IReadOnlyList<(SourceId SourceId, (string ColumnName, string Value)[] Values)> rowValues)
+        IReadOnlyList<(SourceId SourceId, (string ColumnName, string Value)[] Values)> rowValues,
+        bool isIncluded = true)
     {
         var rows = rowValues.Select((row, index) =>
         {
@@ -465,7 +639,7 @@ public sealed class DatabaseBuildCoordinatorTests
             }).ToArray();
             return new DatabaseReviewRow(
                 query.StartRowOrdinal + index,
-                true,
+                isIncluded,
                 $"record-{query.StartRowOrdinal + index}",
                 new DatabaseSourceMetadata(
                     dataset.SourceSetId,
@@ -542,22 +716,6 @@ public sealed class DatabaseBuildCoordinatorTests
         }
     }
 
-    private static DatabaseClientResult Success(
-        OperationCorrelation correlation,
-        DatabaseMappingSnapshot mapping,
-        int valueCount)
-    {
-        var completion = OperationCompletion.FromCompletedItems(
-            correlation,
-            [OperationItemStatus.ProcessedSuccessfully("source")]);
-        return new DatabaseClientResult(
-            true,
-            completion,
-            new DatabaseGenerationSummary(correlation.OperationId, mapping, valueCount),
-            FailureCode: null,
-            FailureDescription: null);
-    }
-
     private static DatabaseClientResult Failure(
         OperationCorrelation correlation,
         IReadOnlyList<LoadedSourceContract> sources,
@@ -581,26 +739,23 @@ public sealed class DatabaseBuildCoordinatorTests
     {
         private readonly Func<
             OperationCorrelation,
-            IReadOnlyList<LoadedSourceContract>,
-            DatabaseMappingSnapshot,
+            DatabaseBuildSpecification,
             Task<DatabaseClientResult>> _build;
 
         public RecordingDatabaseClient(
             Func<
                 OperationCorrelation,
-                IReadOnlyList<LoadedSourceContract>,
-                DatabaseMappingSnapshot,
+                DatabaseBuildSpecification,
                 DatabaseClientResult> build)
-            : this((correlation, sources, mapping) =>
-                Task.FromResult(build(correlation, sources, mapping)))
+            : this((correlation, specification) =>
+                Task.FromResult(build(correlation, specification)))
         {
         }
 
         public RecordingDatabaseClient(
             Func<
                 OperationCorrelation,
-                IReadOnlyList<LoadedSourceContract>,
-                DatabaseMappingSnapshot,
+                DatabaseBuildSpecification,
                 Task<DatabaseClientResult>> build)
         {
             _build = build;
@@ -613,13 +768,12 @@ public sealed class DatabaseBuildCoordinatorTests
 
         public Task<DatabaseClientResult> BuildAsync(
             OperationCorrelation correlation,
-            IReadOnlyList<LoadedSourceContract> sources,
-            DatabaseMappingSnapshot mapping,
+            DatabaseBuildSpecification specification,
             CancellationToken cancellationToken = default)
         {
             Correlation = correlation;
             Started.TrySetResult();
-            return _build(correlation, sources, mapping);
+            return _build(correlation, specification);
         }
     }
 
@@ -644,7 +798,8 @@ public sealed class DatabaseBuildCoordinatorTests
     }
 
     private sealed class RecordingHierarchyDatabaseReviewClient(
-        Func<DatabaseReviewQuery, DatabaseReviewClientResult> readPage)
+        Func<DatabaseReviewQuery, DatabaseReviewClientResult> readPage,
+        Func<DatabaseRowInclusionChange, DatabaseRowInclusionClientResult>? setRowsIncluded = null)
         : IDatabaseReviewClient
     {
         public List<(OperationId GenerationId, int StartRowOrdinal, int RowCount)> Requests
@@ -654,6 +809,8 @@ public sealed class DatabaseBuildCoordinatorTests
 
         public List<SourceSetId> SourceSetRequests { get; } = [];
 
+        public List<DatabaseRowInclusionChange> InclusionChanges { get; } = [];
+
         public Task<DatabaseReviewClientResult> ReadPageAsync(
             DatabaseReviewQuery query,
             CancellationToken cancellationToken = default)
@@ -661,6 +818,15 @@ public sealed class DatabaseBuildCoordinatorTests
             Requests.Add((query.GenerationId, query.StartRowOrdinal, query.RowCount));
             SourceSetRequests.Add(query.SourceSetId);
             return Task.FromResult(readPage(query));
+        }
+
+        public Task<DatabaseRowInclusionClientResult> SetRowsIncludedAsync(
+            DatabaseRowInclusionChange change,
+            CancellationToken cancellationToken = default)
+        {
+            InclusionChanges.Add(change);
+            return Task.FromResult(setRowsIncluded?.Invoke(change)
+                ?? new DatabaseRowInclusionClientResult(true, change.RowOrdinals.Count, null, null));
         }
     }
 
@@ -786,6 +952,20 @@ public sealed class DatabaseBuildCoordinatorTests
                 FailureCode: null,
                 FailureDescription: null));
         }
+    }
+
+    private sealed class UnexpectedDiscoveryClient : IDiscoveryClient
+    {
+        public Task<DiscoveryClientResult> RunAsync(
+            OperationCorrelation correlation,
+            IReadOnlyList<LoadedSourceContract> sources,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Database creation must not run Discovery.");
+
+        public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
+            DiscoveryOccurrenceLookup lookup,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Database creation must not read an occurrence.");
     }
 
     private sealed class TrackingProcessingHostSupervisor : IProcessingHostSupervisor

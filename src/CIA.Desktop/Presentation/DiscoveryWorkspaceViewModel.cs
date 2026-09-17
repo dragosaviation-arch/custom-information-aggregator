@@ -192,6 +192,36 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             ? "Create Database"
             : "Update Database";
 
+    public string DatabaseBuildAvailabilityReason
+    {
+        get
+        {
+            if (_databaseBuildCoordinator is null)
+            {
+                return "Database creation is unavailable.";
+            }
+
+            if (_workflowCoordinator.Current.ActiveOperation is not null || IsBusy)
+            {
+                return "Wait for the active operation to finish before creating the Database.";
+            }
+
+            if (_workflowCoordinator.Current.Discovery != WorkflowArtifactStatus.Current)
+            {
+                return "Run Discovery successfully before creating the Database.";
+            }
+
+            if (_sourceSet.CreateIncludedReadySnapshot().Count == 0)
+            {
+                return "Include at least one ready source before creating the Database.";
+            }
+
+            return _databaseBuildCoordinator.CanBuild()
+                ? "Create a hierarchy-aware Database from the current selected Discovery mapping."
+                : "Select at least one discovered field from a ready Source Set before creating the Database.";
+        }
+    }
+
     public string DatabaseStateText => _workflowCoordinator.Current.Database switch
     {
         WorkflowArtifactStatus.Current => "Database current",
@@ -328,6 +358,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(DiscoveryStateText));
                 OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
                 OnPropertyChanged(nameof(CanConfigureRepeatedDataLayout));
+                OnPropertyChanged(nameof(DatabaseBuildAvailabilityReason));
                 RunDiscoveryCommand.NotifyCanExecuteChanged();
                 BuildDatabaseCommand.NotifyCanExecuteChanged();
                 NotifyConfigurationCommandsChanged();
@@ -595,10 +626,24 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     private async Task BuildDatabaseAsync()
     {
-        if (_databaseBuildCoordinator is not null)
+        if (_databaseBuildCoordinator is null)
         {
-            await _databaseBuildCoordinator.BuildAsync();
+            return;
         }
+
+        StatusTitle = "Creating Database";
+        StatusDetail = "Building hierarchy-aware Source Set datasets in the Processing Host.";
+        var result = await _databaseBuildCoordinator.BuildAsync();
+        if (result.Accepted)
+        {
+            StatusTitle = "Database created";
+            StatusDetail = "The published Database is current and available in the Database workspace.";
+            return;
+        }
+
+        StatusTitle = "Database creation failed";
+        StatusDetail = result.Rejection?.Reason
+            ?? "The Database could not be created from the current Discovery configuration.";
     }
 
     private async Task RunDiscoveryAsync()
@@ -1339,6 +1384,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(ResultSummary));
         _previousPageCommand.NotifyCanExecuteChanged();
         _nextPageCommand.NotifyCanExecuteChanged();
+        BuildDatabaseCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(DatabaseBuildAvailabilityReason));
         NotifyConfigurationCommandsChanged();
     }
 
@@ -1452,6 +1499,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 BuildDatabaseCommand.NotifyCanExecuteChanged();
                 OnPropertyChanged(nameof(DatabaseStateText));
                 OnPropertyChanged(nameof(DatabaseBuildButtonText));
+                OnPropertyChanged(nameof(DatabaseBuildAvailabilityReason));
                 NotifyConfigurationCommandsChanged();
             });
     }
@@ -1464,6 +1512,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             OnPropertyChanged(nameof(DatabaseStateText));
             OnPropertyChanged(nameof(DatabaseBuildButtonText));
+            OnPropertyChanged(nameof(DatabaseBuildAvailabilityReason));
             BuildDatabaseCommand.NotifyCanExecuteChanged();
         });
     }
@@ -1477,6 +1526,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     {
         OnPropertyChanged(nameof(IncludedSourceSummary));
         RunDiscoveryCommand.NotifyCanExecuteChanged();
+        BuildDatabaseCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(DatabaseBuildAvailabilityReason));
     }
 
     private void NotifyProgressChanged()

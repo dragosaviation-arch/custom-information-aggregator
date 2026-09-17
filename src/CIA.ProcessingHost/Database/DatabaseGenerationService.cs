@@ -8,7 +8,6 @@ using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceInterpretation;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.ProcessingHost.Database;
 
@@ -20,138 +19,6 @@ public sealed class DatabaseGenerationService(
     ILogger<DatabaseGenerationService> logger)
 {
     private const string PublicationItemId = "database-publication";
-    private ISourceValueBatchReader? _legacySourceValueReader;
-
-    public DatabaseGenerationService(
-        StructuredInformationRepository repository,
-        ISourceValueBatchReader sourceValueReader,
-        CooperativeOperationCancellation operationCancellation,
-        ILogger<DatabaseGenerationService> logger)
-        : this(
-            repository,
-            new SourceInterpreter(
-                [],
-                new GenericXmlElementValueSourceAdapter(),
-                NullLogger<SourceInterpreter>.Instance),
-            new HierarchyFlatteningEngine(),
-            operationCancellation,
-            logger)
-    {
-        _legacySourceValueReader = sourceValueReader;
-    }
-
-    public async Task<DatabaseGenerationHostResult> BuildAsync(
-        OperationCorrelation correlation,
-        IReadOnlyList<LoadedSourceContract> sources,
-        DatabaseMappingSnapshot mapping,
-        CancellationToken cancellationToken = default)
-    {
-        var reader = _legacySourceValueReader
-            ?? throw new NotSupportedException("The production Database service accepts typed hierarchy build specifications only.");
-        var plans = sources.Select(source => new ProcessingItemPlan(source.SourceId.ToString()))
-            .Append(new ProcessingItemPlan(PublicationItemId)).ToArray();
-        var operation = operationCancellation.BeginOperation(
-            correlation, "DatabaseBuild", "Legacy Database generation", plans);
-        DatabaseCandidate? candidate = null;
-        try
-        {
-            candidate = await repository.CreateDatabaseCandidateAsync(
-                correlation, mapping, sources.Select(source => source.SourceId).ToArray(), cancellationToken)
-                .ConfigureAwait(false);
-            var selected = mapping.Columns.SelectMany(column => column.SourceInformationTypes)
-                .ToHashSet(StringComparer.Ordinal);
-            foreach (var source in sources)
-            {
-                if (!operation.TryStartItem(source.SourceId.ToString(), out var execution))
-                {
-                    break;
-                }
-                using (execution)
-                using (var linked = CancellationTokenSource.CreateLinkedTokenSource(
-                           cancellationToken, execution!.CancellationToken))
-                {
-                    SourceValueBatchReadResult? readResult = null;
-                    try
-                    {
-                        var committed = await repository.WriteDatabaseCandidateSourceAsync(
-                            candidate, source.SourceId,
-                            async (writer, token) =>
-                            {
-                                readResult = await reader.ReadSelectedAsync(
-                                    source, selected,
-                                    values => writer.AddBatchAsync(values.Select(value =>
-                                        DatabaseTagMapper.MapValue(
-                                            mapping, value.InformationType, value.Content, source.SourceId)!)
-                                        .ToArray(), token), token).ConfigureAwait(false);
-                                return readResult.Accepted;
-                            }, linked.Token).ConfigureAwait(false);
-                        if (committed)
-                        {
-                            execution.CommitCompletedResult();
-                        }
-                        else
-                        {
-                            execution.RecordFailure(readResult?.Failure?.Code ?? "database-source-generation-failed");
-                        }
-                    }
-                    catch (OperationCanceledException) when (linked.IsCancellationRequested)
-                    {
-                        if (!operation.IsCancellationAccepted)
-                        {
-                            operationCancellation.RequestCancellation(correlation.OperationId);
-                        }
-                        execution.StopBeforeCommit();
-                        break;
-                    }
-                }
-            }
-            if (operation.IsCancellationAccepted)
-            {
-                await DiscardWithoutMaskingAsync(candidate).ConfigureAwait(false);
-                return DatabaseGenerationHostResult.Reject(
-                    await operation.Completion.ConfigureAwait(false),
-                    "database-generation-cancelled", "Database generation was cancelled before publication.");
-            }
-            if (!operation.TryStartItem(PublicationItemId, out var publicationExecution))
-            {
-                await DiscardWithoutMaskingAsync(candidate).ConfigureAwait(false);
-                return DatabaseGenerationHostResult.Reject(
-                    operation.CompleteTerminal(OperationOutcome.Failed),
-                    "database-candidate-not-publishable", "The candidate Database could not enter publication.");
-            }
-            using (publicationExecution)
-            {
-                var published = await repository.ValidateAndPublishDatabaseCandidateAsync(
-                    candidate, cancellationToken, operation.TryEnterNonCancellableCommitBoundary)
-                    .ConfigureAwait(false);
-                publicationExecution!.CommitCompletedResult();
-                return DatabaseGenerationHostResult.Accept(published, operation.Complete());
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            operationCancellation.RequestCancellation(correlation.OperationId);
-            if (candidate is not null)
-            {
-                await DiscardWithoutMaskingAsync(candidate).ConfigureAwait(false);
-            }
-            return DatabaseGenerationHostResult.Reject(
-                await operation.Completion.ConfigureAwait(false),
-                "database-generation-cancelled", "Database generation was cancelled before publication.");
-        }
-        catch (Exception exception)
-        {
-            logger.LogError(exception, "Legacy Database build failed for {OperationId}", correlation.OperationId);
-            if (candidate is not null)
-            {
-                await DiscardWithoutMaskingAsync(candidate).ConfigureAwait(false);
-            }
-            FailRemaining(operation, plans, "database-candidate-validation-failed");
-            return DatabaseGenerationHostResult.Reject(
-                operation.CompleteTerminal(OperationOutcome.Failed),
-                "database-candidate-validation-failed", "The candidate Database was not published.");
-        }
-    }
 
     public async Task<DatabaseGenerationHostResult> BuildAsync(
         OperationCorrelation correlation,
@@ -166,6 +33,7 @@ public sealed class DatabaseGenerationService(
         var operation = operationCancellation.BeginOperation(
             correlation, "DatabaseBuild", "Hierarchy-aware candidate Database generation", plans);
         DatabaseCandidate? candidate = null;
+        var sourceContributionFailed = false;
         try
         {
             candidate = await repository.CreateDatabaseCandidateAsync(
@@ -178,6 +46,7 @@ public sealed class DatabaseGenerationService(
                 {
                     if (!operation.TryStartItem(source.SourceId.ToString(), out var execution))
                     {
+                        sourceContributionFailed = !operation.IsCancellationAccepted;
                         break;
                     }
 
@@ -192,6 +61,7 @@ public sealed class DatabaseGenerationService(
                             if (interpretation.Status != SourceInterpretationStatus.Usable
                                 || interpretation.Source is null)
                             {
+                                sourceContributionFailed = true;
                                 execution.RecordFailure(
                                     interpretation.Failure?.Code ?? "database-source-interpretation-failed");
                                 continue;
@@ -228,6 +98,7 @@ public sealed class DatabaseGenerationService(
                         }
                         catch (Exception exception)
                         {
+                            sourceContributionFailed = true;
                             logger.LogWarning(exception,
                                 "Source {SourceId} could not contribute hierarchy-aware rows to Database candidate {OperationId}",
                                 source.SourceId, correlation.OperationId);
@@ -243,6 +114,16 @@ public sealed class DatabaseGenerationService(
                 return DatabaseGenerationHostResult.Reject(
                     await operation.Completion.ConfigureAwait(false),
                     "database-generation-cancelled", "Database generation was cancelled before publication.");
+            }
+
+            if (sourceContributionFailed)
+            {
+                await DiscardWithoutMaskingAsync(candidate).ConfigureAwait(false);
+                FailRemaining(operation, plans, "database-source-contribution-incomplete");
+                return DatabaseGenerationHostResult.Reject(
+                    operation.CompleteTerminal(OperationOutcome.Failed),
+                    "database-source-contribution-incomplete",
+                    "The candidate Database omitted a required source contribution and was not published.");
             }
 
             if (!operation.TryStartItem(PublicationItemId, out var publicationExecution))

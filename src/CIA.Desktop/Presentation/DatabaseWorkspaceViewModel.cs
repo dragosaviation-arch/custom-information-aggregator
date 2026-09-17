@@ -113,9 +113,15 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         PrepareForExportCommand = new AsyncRelayCommand(
             PrepareForExportAsync,
             CanPrepareForExport);
-        SetRowIncludedCommand = new AsyncRelayCommand<DatabaseReviewRowPresentation>(SetRowIncludedAsync);
-        IncludeVisibleRowsCommand = new AsyncRelayCommand(() => SetVisibleRowsIncludedAsync(true));
-        ExcludeVisibleRowsCommand = new AsyncRelayCommand(() => SetVisibleRowsIncludedAsync(false));
+        SetRowIncludedCommand = new AsyncRelayCommand<DatabaseReviewRowPresentation>(
+            SetRowIncludedAsync,
+            CanSetRowIncluded);
+        IncludeVisibleRowsCommand = new AsyncRelayCommand(
+            () => SetVisibleRowsIncludedAsync(true),
+            CanIncludeVisibleRows);
+        ExcludeVisibleRowsCommand = new AsyncRelayCommand(
+            () => SetVisibleRowsIncludedAsync(false),
+            CanExcludeVisibleRows);
 
         _databaseStatus = workflowCoordinator.Current.Database;
         _extractionStatus = workflowCoordinator.Current.Extraction;
@@ -823,6 +829,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             _extractionStatus = e.Extraction;
             CaptureLatestExtractionAttempt(e);
             NotifyExtractionReviewChanged();
+            NotifyRowInclusionCommandsChanged();
         });
     }
 
@@ -1101,6 +1108,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(EmptyStateDetail));
         PreviousReviewPageCommand.NotifyCanExecuteChanged();
         NextReviewPageCommand.NotifyCanExecuteChanged();
+        NotifyRowInclusionCommandsChanged();
     }
 
     private void NotifyExtractionReviewChanged()
@@ -1184,7 +1192,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 " | ",
                 new[] { row.Source.ArchivePath, row.Source.ArchiveMemberPath }
                     .Where(value => !string.IsNullOrWhiteSpace(value))),
-            DatabaseMetadataField.RecordHierarchy => row.RecordIdentity,
+            DatabaseMetadataField.RecordHierarchy => row.RecordHierarchy,
             DatabaseMetadataField.ValuePath => JoinMetadata(values.Select(value => value.Lineage.StructuralPath)),
             DatabaseMetadataField.TraversalOrdinal => JoinMetadata(values.Select(value =>
                 value.Lineage.TraversalOrder.ToString(System.Globalization.CultureInfo.InvariantCulture))),
@@ -1259,21 +1267,51 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         IReadOnlyList<DatabaseReviewRowPresentation> rows,
         bool included)
     {
+        var rowsToChange = rows.Where(row => row.IsIncluded != included).ToArray();
         if (_databaseReviewClient is null || _publishedGenerationId is not { } generationId
-            || SelectedDataset is null || rows.Count == 0)
+            || SelectedDataset is null || rowsToChange.Length == 0)
         {
             return;
         }
+
+        var authorization = _workflowCoordinator.RecordDatabaseReviewChanged();
+        if (!authorization.Accepted)
+        {
+            return;
+        }
+
         var result = await _databaseReviewClient.SetRowsIncludedAsync(
             new DatabaseRowInclusionChange(
                 generationId, SelectedDataset.Summary.SourceSetId,
-                rows.Select(row => row.Ordinal).ToArray(), included)).ConfigureAwait(false);
+                rowsToChange.Select(row => row.Ordinal).ToArray(), included)).ConfigureAwait(false);
         if (result.Accepted && result.ChangedRowCount > 0)
         {
-            _workflowCoordinator.RecordDatabaseReviewChanged();
             await LoadReviewPageAsync(generationId, _reviewPage?.StartRowOrdinal ?? 1)
                 .ConfigureAwait(false);
         }
+    }
+
+    private bool CanSetRowIncluded(DatabaseReviewRowPresentation? row) =>
+        row is not null && CanChangeRowInclusion();
+
+    private bool CanIncludeVisibleRows() =>
+        CanChangeRowInclusion() && _records.Any(row => !row.IsIncluded);
+
+    private bool CanExcludeVisibleRows() =>
+        CanChangeRowInclusion() && _records.Any(row => row.IsIncluded);
+
+    private bool CanChangeRowInclusion() =>
+        _databaseReviewClient is not null
+        && _publishedGenerationId is not null
+        && SelectedDataset is not null
+        && _workflowCoordinator.Current.Database == WorkflowArtifactStatus.Current
+        && _workflowCoordinator.Current.ActiveOperation is null;
+
+    private void NotifyRowInclusionCommandsChanged()
+    {
+        SetRowIncludedCommand.NotifyCanExecuteChanged();
+        IncludeVisibleRowsCommand.NotifyCanExecuteChanged();
+        ExcludeVisibleRowsCommand.NotifyCanExecuteChanged();
     }
 
     private static bool IsSuccessfulDatabasePublication(WorkflowStateSnapshot state)

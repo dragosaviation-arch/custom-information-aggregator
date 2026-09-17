@@ -329,11 +329,10 @@ public sealed class ExcelWorkbookExportServiceTests
                 [],
                 new GenericXmlElementValueSourceAdapter(),
                 NullLogger<SourceValueBatchReader>.Instance);
-            var service = new DatabaseGenerationService(
+            var service = new LegacyDatabaseTestBuilder(
                 Repository,
                 reader,
-                Cancellation,
-                NullLogger<DatabaseGenerationService>.Instance);
+                Cancellation);
             var result = await service.BuildAsync(
                 OperationCorrelation.CreateNew(),
                 sources,

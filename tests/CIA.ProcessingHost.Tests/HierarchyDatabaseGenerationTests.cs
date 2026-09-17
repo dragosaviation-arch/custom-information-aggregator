@@ -20,6 +20,19 @@ namespace CIA.ProcessingHost.Tests;
 public sealed class HierarchyDatabaseGenerationTests
 {
     [TestMethod]
+    public void ProductionDatabaseServiceExposesOnlyTypedHierarchyBuildContract()
+    {
+        var buildMethods = typeof(DatabaseGenerationService).GetMethods()
+            .Where(method => method.Name == nameof(DatabaseGenerationService.BuildAsync))
+            .ToArray();
+
+        Assert.HasCount(1, buildMethods);
+        Assert.AreEqual(
+            typeof(DatabaseBuildSpecification),
+            buildMethods[0].GetParameters()[1].ParameterType);
+    }
+
+    [TestMethod]
     public async Task SourceSetsAndFilesProduceIndependentHierarchyRows()
     {
         using var workspace = new Workspace();
@@ -54,6 +67,9 @@ public sealed class HierarchyDatabaseGenerationTests
         Assert.IsFalse(firstPage.Rows.Any(row => Values(row).Contains("A") && Values(row).Contains("30")));
         Assert.AreEqual("Orders", firstPage.Dataset.DisplayName);
         Assert.AreEqual("Invoices", secondPage.Dataset.DisplayName);
+        Assert.IsTrue(firstPage.Rows.All(row =>
+            row.RecordHierarchy.Contains("/record[", StringComparison.Ordinal)
+            && !row.RecordHierarchy.Contains(row.Source.SourceId.ToString(), StringComparison.Ordinal)));
     }
 
     [TestMethod]
@@ -196,6 +212,34 @@ public sealed class HierarchyDatabaseGenerationTests
     }
 
     [TestMethod]
+    public async Task SearchMatchesVisibleSourceAndCandidateKindNamesBeforePaging()
+    {
+        using var workspace = new Workspace();
+        var set = SourceSetId.CreateNew();
+        var fixture = Path.Combine(
+            AppContext.BaseDirectory, "Fixtures", "StructuralDiscovery", "stable-slot-records.xml");
+        var source = workspace.Source(set, "candidates.xml", File.ReadAllText(fixture));
+        var specification = await workspace.SpecificationAsync(
+            (set, "Candidate kinds", RepeatedDataLayout.StructuralRows, new[] { source }));
+        var result = await workspace.Service.BuildAsync(OperationCorrelation.CreateNew(), specification);
+
+        foreach (var term in new[] { "XmlFile", "Element", "Attribute", "Structural" })
+        {
+            var page = await workspace.Repository.ReadPublishedDatabasePageAsync(
+                new DatabaseReviewQuery(
+                    result.PublishedGeneration!.OperationId,
+                    set,
+                    1,
+                    1,
+                    term,
+                    DatabaseRowInclusionFilter.All));
+            Assert.IsNotNull(page, term);
+            Assert.IsGreaterThan(0, page.TotalRowCount, term);
+            Assert.HasCount(1, page.Rows, term);
+        }
+    }
+
+    [TestMethod]
     public async Task NestedNumberedCoordinatesAndAllCandidateKindsRoundTripLosslessly()
     {
         using var workspace = new Workspace();
@@ -331,7 +375,7 @@ public sealed class HierarchyDatabaseGenerationTests
         var previousId = first.PublishedGeneration!.OperationId;
         var invalid = workspace.Source(set, "invalid.xml", "<root><value>");
         var invalidSpecification = workspace.Specification(
-            set, "Stable", RepeatedDataLayout.StructuralRows, [invalid],
+            set, "Stable", RepeatedDataLayout.StructuralRows, [valid, invalid],
             firstSpecification.Datasets[0].Fields.SelectMany(field => field.DetailedIdentities).ToArray(),
             new Dictionary<DiscoveryInformationIdentity, string>());
 
@@ -341,6 +385,14 @@ public sealed class HierarchyDatabaseGenerationTests
 
         Assert.IsFalse(replacement.Accepted);
         Assert.AreEqual(previousId, retained?.OperationId);
+        Assert.AreEqual(OperationOutcome.Failed, replacement.Completion.Outcome);
+        Assert.AreEqual(
+            OperationItemState.Failed,
+            replacement.Completion.Items.Single(item =>
+                item.ItemId == invalid.SourceId.ToString()).State);
+        Assert.AreEqual(
+            "kept",
+            (await workspace.PageAsync(retained!, set)).Rows.Single().Cells.Single().Values.Single().Value);
     }
 
     [TestMethod]

@@ -177,26 +177,21 @@ public sealed class DatabaseBuildCoordinator(
                 && string.Equals(pair.First.DisplayName, pair.Second.DisplayName, StringComparison.Ordinal)
                 && pair.First.Ordinal == pair.Second.Ordinal
                 && pair.First.RepeatedDataLayout == pair.Second.RepeatedDataLayout
-                && pair.First.Fields.SequenceEqual(pair.Second.Mappings))
-            || (!actual.IsHierarchyAware && LegacyProjectionMatches(expected, actual.Mapping));
+                && FieldMappingsMatch(pair.First.Fields, pair.Second.Mappings));
     }
 
-    private static bool LegacyProjectionMatches(
-        DatabaseBuildSpecification expected,
-        DatabaseMappingSnapshot actual)
+    private static bool FieldMappingsMatch(
+        IReadOnlyList<DatabaseFieldMapping> expected,
+        IReadOnlyList<DatabaseFieldMapping> actual)
     {
-        var projected = expected.Datasets.SelectMany(dataset => dataset.Fields)
-            .GroupBy(field => field.EffectiveName, StringComparer.Ordinal)
-            .Select(group => new DatabaseColumnMapping(
-                group.Key,
-                group.SelectMany(field => field.DetailedIdentities)
-                    .Select(identity => identity.InformationType)
-                    .Distinct(StringComparer.Ordinal).ToArray()))
-            .ToArray();
-        return projected.Length == actual.Columns.Count
-            && projected.Zip(actual.Columns).All(pair =>
-                string.Equals(pair.First.DatabaseTagName, pair.Second.DatabaseTagName, StringComparison.Ordinal)
-                && pair.First.SourceInformationTypes.SequenceEqual(
-                    pair.Second.SourceInformationTypes, StringComparer.Ordinal));
+        return expected.Count == actual.Count
+            && expected.Zip(actual).All(pair =>
+                pair.First.LogicalIdentity == pair.Second.LogicalIdentity
+                && string.Equals(
+                    pair.First.EffectiveName,
+                    pair.Second.EffectiveName,
+                    StringComparison.Ordinal)
+                && pair.First.IsExplicitOverride == pair.Second.IsExplicitOverride
+                && pair.First.DetailedIdentities.SequenceEqual(pair.Second.DetailedIdentities));
     }
 }

@@ -361,7 +361,7 @@ public sealed partial class StructuredInformationRepository
                 OR sources.source_id LIKE $search ESCAPE '\'
                 OR sources.source_file_name LIKE $search ESCAPE '\'
                 OR sources.full_source_path LIKE $search ESCAPE '\'
-                OR CAST(sources.source_kind AS TEXT) LIKE $search ESCAPE '\'
+                OR ($sourceKind >= 0 AND sources.source_kind = $sourceKind)
                 OR COALESCE(sources.archive_path, '') LIKE $search ESCAPE '\'
                 OR COALESCE(sources.archive_member_path, '') LIKE $search ESCAPE '\'
                 OR COALESCE(sources.file_modified_utc, '') LIKE $search ESCAPE '\'
@@ -375,7 +375,7 @@ public sealed partial class StructuredInformationRepository
                         search_values.value LIKE $search ESCAPE '\'
                         OR search_values.information_type LIKE $search ESCAPE '\'
                         OR search_values.structural_path LIKE $search ESCAPE '\'
-                        OR CAST(search_values.candidate_kind AS TEXT) LIKE $search ESCAPE '\'
+                        OR ($candidateKind >= 0 AND search_values.candidate_kind = $candidateKind)
                         OR search_values.structural_identity LIKE $search ESCAPE '\'
                         OR search_values.lineage_json LIKE $search ESCAPE '\')))
             """;
@@ -707,6 +707,21 @@ public sealed partial class StructuredInformationRepository
                 .Replace("%", "\\%", StringComparison.Ordinal)
                 .Replace("_", "\\_", StringComparison.Ordinal);
             command.Parameters.AddWithValue("$search", $"%{escaped}%");
+            command.Parameters.AddWithValue(
+                "$sourceKind",
+                Enum.TryParse<LoadedSourceKind>(query.SearchText, ignoreCase: true, out var sourceKind)
+                    && Enum.IsDefined(sourceKind)
+                    ? (int)sourceKind
+                    : -1);
+            command.Parameters.AddWithValue(
+                "$candidateKind",
+                Enum.TryParse<SourceValueCandidateKind>(
+                    query.SearchText,
+                    ignoreCase: true,
+                    out var candidateKind)
+                    && Enum.IsDefined(candidateKind)
+                    ? (int)candidateKind
+                    : -1);
         }
     }
 

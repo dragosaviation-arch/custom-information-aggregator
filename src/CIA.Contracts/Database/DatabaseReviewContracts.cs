@@ -331,6 +331,55 @@ public sealed record DatabaseReviewRow
 
     [JsonIgnore]
     public bool HasConflict => Cells.Any(cell => cell.HasConflict);
+
+    [JsonIgnore]
+    public string RecordHierarchy => CreateRecordHierarchy();
+
+    private string CreateRecordHierarchy()
+    {
+        var values = Cells.SelectMany(cell => cell.Values).ToArray();
+        if (values.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var firstPath = values[0].Lineage.ElementPath;
+        var commonLength = firstPath.Count;
+        foreach (var value in values.Skip(1))
+        {
+            commonLength = Math.Min(commonLength, value.Lineage.ElementPath.Count);
+            var index = 0;
+            while (index < commonLength
+                && SameElementInstance(firstPath[index], value.Lineage.ElementPath[index]))
+            {
+                index++;
+            }
+
+            commonLength = index;
+        }
+
+        if (values.Length == 1 && commonLength == firstPath.Count && commonLength > 1)
+        {
+            commonLength--;
+        }
+
+        return string.Concat(firstPath.Take(commonLength).Select(FormatElementContext));
+    }
+
+    private static bool SameElementInstance(
+        DatabaseSourceElementEvidence first,
+        DatabaseSourceElementEvidence second) =>
+        first.InstanceId == second.InstanceId
+        && string.Equals(first.LocalName, second.LocalName, StringComparison.Ordinal)
+        && string.Equals(first.NamespaceUri, second.NamespaceUri, StringComparison.Ordinal);
+
+    private static string FormatElementContext(DatabaseSourceElementEvidence element)
+    {
+        var name = string.IsNullOrEmpty(element.NamespaceUri)
+            ? element.QualifiedName
+            : $"{{{element.NamespaceUri}}}{element.LocalName}";
+        return $"/{name}[{element.SiblingPosition}]";
+    }
 }
 
 public sealed record DatabaseReviewPage
