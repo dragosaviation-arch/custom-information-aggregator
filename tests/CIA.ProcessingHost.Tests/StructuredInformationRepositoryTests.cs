@@ -300,6 +300,13 @@ public sealed class StructuredInformationRepositoryTests
                 DROP TABLE extraction_column_sources;
                 DROP TABLE extraction_columns;
                 DROP TABLE extraction_results;
+                DROP TABLE hierarchy_extraction_publication;
+                DROP TABLE hierarchy_extraction_cell_values;
+                DROP TABLE hierarchy_extraction_cells;
+                DROP TABLE hierarchy_extraction_rows;
+                DROP TABLE hierarchy_extraction_columns;
+                DROP TABLE hierarchy_extraction_datasets;
+                DROP TABLE hierarchy_extraction_results;
                 DROP TABLE hierarchy_database_publication;
                 DROP TABLE hierarchy_database_cell_values;
                 DROP TABLE hierarchy_database_cells;
@@ -329,6 +336,64 @@ public sealed class StructuredInformationRepositoryTests
             await ScalarIntAsync(
                 migratedConnection,
                 "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'extraction_results');"));
+    }
+
+    [TestMethod]
+    public async Task VersionFourMigrationInvalidatesLegacyExtractionPublication()
+    {
+        using var workspace = new RepositoryWorkspace();
+        var repository = workspace.CreateRepository();
+        await repository.InitializeAsync();
+        var extractionId = OperationId.CreateNew().ToString();
+        var generationId = OperationId.CreateNew().ToString();
+        var sourceId = SourceId.CreateNew().ToString();
+
+        await using (var connection = await OpenConnectionAsync(repository.DatabasePath))
+        {
+            await ExecuteAsync(
+                connection,
+                $"""
+                DROP TABLE hierarchy_extraction_publication;
+                DROP TABLE hierarchy_extraction_cell_values;
+                DROP TABLE hierarchy_extraction_cells;
+                DROP TABLE hierarchy_extraction_rows;
+                DROP TABLE hierarchy_extraction_columns;
+                DROP TABLE hierarchy_extraction_datasets;
+                DROP TABLE hierarchy_extraction_results;
+                INSERT INTO extraction_results (
+                    extraction_id, database_generation_id, created_utc)
+                VALUES ('{extractionId}', '{generationId}', '{DateTimeOffset.UtcNow:O}');
+                INSERT INTO extraction_columns (
+                    extraction_id, column_ordinal, database_field_name)
+                VALUES ('{extractionId}', 0, 'legacy');
+                INSERT INTO extraction_column_sources (
+                    extraction_id, database_field_name,
+                    source_information_ordinal, source_information_type)
+                VALUES ('{extractionId}', 'legacy', 0, 'legacy');
+                INSERT INTO extraction_values (
+                    extraction_id, value_ordinal, database_field_name,
+                    source_information_type, value, source_id)
+                VALUES ('{extractionId}', 0, 'legacy', 'legacy', 'value', '{sourceId}');
+                INSERT INTO extraction_publication (singleton_id, extraction_id)
+                VALUES (1, '{extractionId}');
+                PRAGMA user_version = 4;
+                """);
+        }
+
+        var migrated = workspace.CreateRepository();
+        await migrated.InitializeAsync();
+
+        Assert.IsNull(await migrated.ReadPublishedExtractionResultAsync());
+        await using var migratedConnection = await OpenConnectionAsync(migrated.DatabasePath);
+        Assert.AreEqual(0, await ScalarIntAsync(
+            migratedConnection,
+            "SELECT COUNT(*) FROM extraction_publication;"));
+        Assert.AreEqual(0, await ScalarIntAsync(
+            migratedConnection,
+            "SELECT COUNT(*) FROM extraction_results;"));
+        Assert.AreEqual(1, await ScalarIntAsync(
+            migratedConnection,
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name = 'hierarchy_extraction_results');"));
     }
 
     [TestMethod]

@@ -32,7 +32,7 @@ public sealed class WorkbookExportCoordinator(
     {
         return workflowCoordinator.Current.Extraction == WorkflowArtifactStatus.Current
             && workflowCoordinator.Current.ActiveOperation is null
-            && extractionCoordinator.CurrentResult is not null;
+            && extractionCoordinator.CurrentResult is { IsHierarchyAware: false };
     }
 
     public async Task<WorkflowCommandResult> ExportAsync(
@@ -48,7 +48,9 @@ public sealed class WorkbookExportCoordinator(
         {
             return WorkflowCommandResult.Reject(
                 WorkflowRejectionCode.ExtractionNotCurrent,
-                "Export requires the active prepared Extraction Result to be current.");
+                extractionResult?.IsHierarchyAware == true
+                    ? "Set-aware hierarchy Extraction Results require SPR-140/141 workbook routing."
+                    : "Export requires the active prepared Extraction Result to be current.");
         }
 
         var begin = await workflowCoordinator
