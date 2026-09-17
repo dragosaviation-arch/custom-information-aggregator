@@ -33,10 +33,13 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
         foreach (var source in request.Sources.OrderBy(source => source.SourceId.Value))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            foreach (var root in BuildSourceTrees(source))
+            var roots = BuildSourceTrees(source);
+            var repeatedFamilyPaths = FindRepeatedFamilyPaths(roots);
+            foreach (var root in roots)
             {
                 var fragments = await FlattenNodeAsync(
                         root,
+                        repeatedFamilyPaths,
                         request.Layout,
                         checkpoint,
                         cancellationToken)
@@ -66,6 +69,7 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
 
     private async ValueTask<IReadOnlyList<RowFragment>> FlattenNodeAsync(
         SourceTreeNode node,
+        IReadOnlySet<string> repeatedFamilyPaths,
         RepeatedDataLayout layout,
         CancellationCheckpoint checkpoint,
         CancellationToken cancellationToken)
@@ -84,18 +88,32 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                      .GroupBy(child => child.Element.ExpandedName, StringComparer.Ordinal))
         {
             var siblings = siblingGroup.ToArray();
-            if (IsRepeatedFamily(siblings))
+            var isRepeatedFamily = IsRepeatedFamily(siblings, repeatedFamilyPaths);
+            var representsTypedStructuralSlots = isRepeatedFamily
+                && ShouldRepresentTypedStructuralSlotsAsRecordFields(
+                    node,
+                    siblings,
+                    repeatedFamilyPaths);
+            if (isRepeatedFamily && !representsTypedStructuralSlots)
             {
                 var repeatedBranch = new List<RowFragment>();
-                foreach (var sibling in siblings)
+                for (var siblingIndex = 0; siblingIndex < siblings.Length; siblingIndex++)
                 {
+                    var sibling = siblings[siblingIndex];
                     var siblingFragments = await FlattenNodeAsync(
                             sibling,
+                            repeatedFamilyPaths,
                             layout,
                             checkpoint,
                             cancellationToken)
                         .ConfigureAwait(false);
-                    repeatedBranch.AddRange(siblingFragments);
+                    repeatedBranch.AddRange(
+                        layout == RepeatedDataLayout.NumberRepeatedValuesIntoColumns
+                            ? siblingFragments.Select(fragment =>
+                                PrependRepeatCoordinate(
+                                    fragment,
+                                    checked(siblingIndex + 1)))
+                            : siblingFragments);
                 }
 
                 if (repeatedBranch.Count > 0)
@@ -108,10 +126,15 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                 continue;
             }
 
+            // SPR-148 has already identified typed structural slots as distinct fields
+            // within the repeated parent record. Their repetition remains recognized,
+            // while their values stay associated with that enclosing record instance.
+
             foreach (var child in siblings)
             {
                 var childFragments = await FlattenNodeAsync(
                         child,
+                        repeatedFamilyPaths,
                         layout,
                         checkpoint,
                         cancellationToken)
@@ -119,7 +142,7 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
 
                 if (childFragments.Count == 1
                     && childFragments[0].Cells.All(
-                        cell => cell.ColumnIdentity.RepeatOrdinal is null))
+                        cell => cell.ColumnIdentity.RepeatCoordinates.Count == 0))
                 {
                     fixedCells.AddRange(childFragments[0].Cells);
                 }
@@ -332,44 +355,76 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
         var cells = new List<FlattenedHierarchyCell>(fixedCells);
         foreach (var branch in branches)
         {
-            for (var index = 0; index < branch.Count; index++)
+            foreach (var fragment in branch)
             {
                 await checkpoint.CheckAsync(cancellationToken).ConfigureAwait(false);
-                var repeatOrdinal = checked(index + 1);
-                foreach (var cell in branch[index].Cells)
-                {
-                    cells.Add(cell.ColumnIdentity.RepeatOrdinal is null
-                        ? WithRepeatOrdinal(cell, repeatOrdinal)
-                        : cell);
-                }
+                cells.AddRange(fragment.Cells);
             }
         }
 
         return [new RowFragment(cells)];
     }
 
-    private static bool IsRepeatedFamily(IReadOnlyList<SourceTreeNode> siblings)
+    private static bool IsRepeatedFamily(
+        IReadOnlyList<SourceTreeNode> siblings,
+        IReadOnlySet<string> repeatedFamilyPaths)
     {
-        if (siblings.Count < 2)
+        return siblings.Count > 0
+               && repeatedFamilyPaths.Contains(siblings[0].StructuralPath);
+    }
+
+    private static bool ShouldRepresentTypedStructuralSlotsAsRecordFields(
+        SourceTreeNode parent,
+        IReadOnlyList<SourceTreeNode> siblings,
+        IReadOnlySet<string> repeatedFamilyPaths)
+    {
+        if (siblings.Count < 2 || !repeatedFamilyPaths.Contains(parent.StructuralPath))
         {
             return false;
         }
 
-        var nonAttributeIdentities = siblings
-            .SelectMany(sibling => sibling.DescendantIdentities)
-            .Where(identity => identity.CandidateKind != SourceValueCandidateKind.Attribute)
-            .ToHashSet();
-        var representedBySibling = siblings
+        var structuralBySibling = siblings
             .Select(sibling => sibling.DescendantIdentities
-                .Where(identity => nonAttributeIdentities.Count == 0
-                                   || identity.CandidateKind
-                                   != SourceValueCandidateKind.Attribute)
+                .Where(identity => identity.CandidateKind == SourceValueCandidateKind.Structural)
                 .ToHashSet())
             .ToArray();
-        return representedBySibling
+        var structuralIdentities = structuralBySibling
             .SelectMany(identities => identities)
             .Distinct()
-            .Any(identity => representedBySibling.Count(identities => identities.Contains(identity)) > 1);
+            .ToArray();
+
+        return structuralIdentities.Length > 0
+               && structuralIdentities.All(identity =>
+                   structuralBySibling.Count(identities => identities.Contains(identity)) == 1);
+    }
+
+    private static IReadOnlySet<string> FindRepeatedFamilyPaths(
+        IReadOnlyList<SourceTreeNode> roots)
+    {
+        var repeatedPaths = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<SourceTreeNode>(roots.Reverse());
+        while (pending.TryPop(out var node))
+        {
+            foreach (var siblingGroup in node.Children.GroupBy(
+                         child => child.Element.ExpandedName,
+                         StringComparer.Ordinal))
+            {
+                var siblings = siblingGroup.ToArray();
+                if (siblings.Length > 1)
+                {
+                    repeatedPaths.Add(siblings[0].StructuralPath);
+                }
+            }
+
+            foreach (var child in node.Children
+                         .OrderByDescending(child => child.Element.SiblingPosition)
+                         .ThenByDescending(child => child.Element.InstanceId))
+            {
+                pending.Push(child);
+            }
+        }
+
+        return repeatedPaths;
     }
 
     private static IReadOnlyList<SourceTreeNode> BuildSourceTrees(HierarchySourceInput source)
@@ -434,15 +489,26 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
             occurrence.Lineage);
     }
 
-    private static FlattenedHierarchyCell WithRepeatOrdinal(
+    private static FlattenedHierarchyCell WithRepeatCoordinate(
         FlattenedHierarchyCell cell,
         int repeatOrdinal)
     {
         return new FlattenedHierarchyCell(
-            new FlattenedColumnIdentity(cell.DetailedIdentity, repeatOrdinal),
+            new FlattenedColumnIdentity(
+                cell.DetailedIdentity,
+                cell.ColumnIdentity.RepeatCoordinates.Prepend(repeatOrdinal)),
             cell.Value,
             cell.SourceId,
             cell.Lineage);
+    }
+
+    private static RowFragment PrependRepeatCoordinate(
+        RowFragment fragment,
+        int repeatOrdinal)
+    {
+        return new RowFragment(fragment.Cells
+            .Select(cell => WithRepeatCoordinate(cell, repeatOrdinal))
+            .ToArray());
     }
 
     private static RowFragment Merge(
@@ -460,7 +526,7 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
             .ThenBy(cell => cell.DetailedIdentity.StructuralPath, StringComparer.Ordinal)
             .ThenBy(cell => cell.DetailedIdentity.StructuralIdentity, StringComparer.Ordinal)
             .ThenBy(cell => cell.DetailedIdentity.CandidateKind)
-            .ThenBy(cell => cell.ColumnIdentity.RepeatOrdinal ?? 0);
+            .ThenBy(cell => cell.ColumnIdentity.RepeatCoordinates);
     }
 
     private sealed record RowFragment(IReadOnlyList<FlattenedHierarchyCell> Cells);
@@ -490,6 +556,10 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
         public List<SourceTreeNode> Children { get; } = [];
 
         public List<HierarchySourceOccurrence> Occurrences { get; } = [];
+
+        public string StructuralPath { get; } = parent is null
+            ? $"/{element.ExpandedName}"
+            : $"{parent.StructuralPath}/{element.ExpandedName}";
 
         public HashSet<DiscoveryInformationIdentity> DescendantIdentities =>
             descendantIdentities ??= Occurrences

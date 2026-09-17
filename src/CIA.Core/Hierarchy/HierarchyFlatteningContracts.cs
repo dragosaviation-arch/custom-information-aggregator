@@ -212,27 +212,122 @@ public sealed class HierarchySourceOccurrence
     }
 }
 
+public sealed class RepeatCoordinatePath : IEquatable<RepeatCoordinatePath>, IComparable<RepeatCoordinatePath>
+{
+    private readonly int[] coordinates;
+
+    public RepeatCoordinatePath(IEnumerable<int> coordinates)
+    {
+        ArgumentNullException.ThrowIfNull(coordinates);
+        this.coordinates = coordinates.ToArray();
+        if (this.coordinates.Any(coordinate => coordinate < 1))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(coordinates),
+                "Numbered-column repeat coordinates must be positive.");
+        }
+
+        Coordinates = Array.AsReadOnly(this.coordinates);
+    }
+
+    public static RepeatCoordinatePath Empty { get; } = new([]);
+
+    public IReadOnlyList<int> Coordinates { get; }
+
+    public int Count => coordinates.Length;
+
+    public int this[int index] => coordinates[index];
+
+    public RepeatCoordinatePath Prepend(int coordinate)
+    {
+        if (coordinate < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(coordinate),
+                "A numbered-column repeat coordinate must be positive.");
+        }
+
+        return new RepeatCoordinatePath(new[] { coordinate }.Concat(coordinates));
+    }
+
+    public bool Equals(RepeatCoordinatePath? other)
+    {
+        return other is not null && coordinates.SequenceEqual(other.coordinates);
+    }
+
+    public override bool Equals(object? obj)
+    {
+        return obj is RepeatCoordinatePath other && Equals(other);
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        foreach (var coordinate in coordinates)
+        {
+            hash.Add(coordinate);
+        }
+
+        return hash.ToHashCode();
+    }
+
+    public int CompareTo(RepeatCoordinatePath? other)
+    {
+        if (other is null)
+        {
+            return 1;
+        }
+
+        var sharedLength = Math.Min(coordinates.Length, other.coordinates.Length);
+        for (var index = 0; index < sharedLength; index++)
+        {
+            var comparison = coordinates[index].CompareTo(other.coordinates[index]);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+        }
+
+        return coordinates.Length.CompareTo(other.coordinates.Length);
+    }
+
+    public override string ToString()
+    {
+        return string.Join("/", coordinates.Select(coordinate => $"[{coordinate}]"));
+    }
+}
+
 public sealed record FlattenedColumnIdentity
 {
     public FlattenedColumnIdentity(
         DiscoveryInformationIdentity detailedIdentity,
         int? repeatOrdinal = null)
+        : this(
+            detailedIdentity,
+            repeatOrdinal is null
+                ? RepeatCoordinatePath.Empty
+                : new RepeatCoordinatePath([repeatOrdinal.Value]))
+    {
+    }
+
+    public FlattenedColumnIdentity(
+        DiscoveryInformationIdentity detailedIdentity,
+        RepeatCoordinatePath repeatCoordinates)
     {
         ArgumentNullException.ThrowIfNull(detailedIdentity);
-        if (repeatOrdinal is < 1)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(repeatOrdinal),
-                "A numbered-column repeat ordinal must be positive.");
-        }
+        ArgumentNullException.ThrowIfNull(repeatCoordinates);
 
         DetailedIdentity = detailedIdentity;
-        RepeatOrdinal = repeatOrdinal;
+        RepeatCoordinates = repeatCoordinates;
     }
 
     public DiscoveryInformationIdentity DetailedIdentity { get; }
 
-    public int? RepeatOrdinal { get; }
+    public RepeatCoordinatePath RepeatCoordinates { get; }
+
+    public int? RepeatOrdinal => RepeatCoordinates.Count == 1
+        ? RepeatCoordinates[0]
+        : null;
 }
 
 public sealed class FlattenedHierarchyCell

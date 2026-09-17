@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<dataset>
+  <record>
+    <a>A1</a>
+  </record>
+  <record>
+    <b>B2</b>
+  </record>
+  <record>
+    <a>A3</a>
+    <b>B3</b>
+  </record>
+</dataset>

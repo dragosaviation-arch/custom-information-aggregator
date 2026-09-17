@@ -169,6 +169,123 @@ public sealed class HierarchyFlatteningEngineTests
     }
 
     [TestMethod]
+    [DataRow(RepeatedDataLayout.AlignRepeatedGroupsByPosition)]
+    [DataRow(RepeatedDataLayout.StructuralRows)]
+    [DataRow(RepeatedDataLayout.AllCombinations)]
+    [DataRow(RepeatedDataLayout.NumberRepeatedValuesIntoColumns)]
+    public async Task SparseRepeatedRecordsRemainDistinctWithoutSelectedIdentityOverlap(
+        RepeatedDataLayout layout)
+    {
+        using var workspace = new FlatteningWorkspace();
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = workspace.CopyFixture("flattening-sparse-records.xml", sourceSetId);
+        var request = await CreateRequestAsync(sourceSetId, layout, source);
+
+        var result = await new HierarchyFlatteningEngine().FlattenAsync(request);
+        var cells = result.Rows.SelectMany(row => row.Cells).ToArray();
+
+        Assert.HasCount(4, cells);
+        Assert.HasCount(3, cells
+            .Select(GetRecordInstanceId)
+            .Distinct());
+        Assert.AreNotEqual(
+            GetLogicalPosition(result, "A1"),
+            GetLogicalPosition(result, "B2"));
+        Assert.AreEqual(
+            GetLogicalPosition(result, "A3"),
+            GetLogicalPosition(result, "B3"));
+        CollectionAssert.AreEquivalent(
+            new[] { "A1", "B2", "A3", "B3" },
+            cells.Select(cell => cell.Value).ToArray());
+    }
+
+    [TestMethod]
+    public async Task SelectedSubsetDoesNotEraseSparseRecordInstanceBoundaries()
+    {
+        using var workspace = new FlatteningWorkspace();
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = workspace.CopyFixture("flattening-sparse-records.xml", sourceSetId);
+        var document = await InterpretAsync(source);
+
+        var selectedA = CreateSourceInput(
+            sourceSetId,
+            document,
+            identity => identity.InformationType == "a");
+        var aResult = await new HierarchyFlatteningEngine().FlattenAsync(
+            new HierarchyFlatteningRequest(
+                sourceSetId,
+                RepeatedDataLayout.NumberRepeatedValuesIntoColumns,
+                [selectedA]));
+        var selectedB = CreateSourceInput(
+            sourceSetId,
+            document,
+            identity => identity.InformationType == "b");
+        var bResult = await new HierarchyFlatteningEngine().FlattenAsync(
+            new HierarchyFlatteningRequest(
+                sourceSetId,
+                RepeatedDataLayout.NumberRepeatedValuesIntoColumns,
+                [selectedB]));
+
+        CollectionAssert.AreEqual(
+            new[] { 1, 2 },
+            aResult.Rows.Single().Cells
+                .Select(cell => cell.ColumnIdentity.RepeatOrdinal!.Value)
+                .ToArray());
+        CollectionAssert.AreEqual(
+            new[] { 1, 2 },
+            bResult.Rows.Single().Cells
+                .Select(cell => cell.ColumnIdentity.RepeatOrdinal!.Value)
+                .ToArray());
+        Assert.AreNotEqual(
+            GetRecordInstanceId(aResult.Rows.Single().Cells[0]),
+            GetRecordInstanceId(aResult.Rows.Single().Cells[1]));
+        Assert.AreNotEqual(
+            GetRecordInstanceId(bResult.Rows.Single().Cells[0]),
+            GetRecordInstanceId(bResult.Rows.Single().Cells[1]));
+        Assert.AreEqual(
+            GetRecordInstanceId(aResult.Rows.Single().Cells.Single(cell => cell.Value == "A3")),
+            GetRecordInstanceId(bResult.Rows.Single().Cells.Single(cell => cell.Value == "B3")));
+        Assert.AreNotEqual(
+            GetRecordInstanceId(aResult.Rows.Single().Cells.Single(cell => cell.Value == "A1")),
+            GetRecordInstanceId(bResult.Rows.Single().Cells.Single(cell => cell.Value == "B2")));
+    }
+
+    [TestMethod]
+    public async Task NestedNumberedColumnsUseUnambiguousOuterToInnerCoordinates()
+    {
+        using var workspace = new FlatteningWorkspace();
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = workspace.CopyFixture("flattening-nested-records.xml", sourceSetId);
+        var request = await CreateRequestAsync(
+            sourceSetId,
+            RepeatedDataLayout.NumberRepeatedValuesIntoColumns,
+            source);
+        var engine = new HierarchyFlatteningEngine();
+
+        var first = await engine.FlattenAsync(request);
+        var second = await engine.FlattenAsync(request);
+        var cells = first.Rows.Single().Cells;
+
+        AssertCoordinates(cells, "P1", 1);
+        AssertCoordinates(cells, "A", 1, 1);
+        AssertCoordinates(cells, "10", 1, 1);
+        AssertCoordinates(cells, "B", 1, 2);
+        AssertCoordinates(cells, "20", 1, 2);
+        AssertCoordinates(cells, "P2", 2);
+        AssertCoordinates(cells, "C", 2, 1);
+        AssertCoordinates(cells, "30", 2, 1);
+        Assert.AreEqual(cells.Count, cells.Select(cell => cell.ColumnIdentity).Distinct().Count());
+        Assert.AreNotEqual(
+            cells.Single(cell => cell.Value == "A").ColumnIdentity,
+            cells.Single(cell => cell.Value == "C").ColumnIdentity);
+        Assert.IsTrue(cells.All(cell =>
+            cell.Lineage.ElementPath.Count > 0
+            && cell.Lineage.NodeInstanceId > 0
+            && cell.Lineage.TraversalOrder > 0));
+        CollectionAssert.AreEqual(CreateSignature(first), CreateSignature(second));
+    }
+
+    [TestMethod]
     public async Task RootLevelRecordFamiliesRemainIndependentInEveryMode()
     {
         using var workspace = new FlatteningWorkspace();
@@ -418,13 +535,15 @@ public sealed class HierarchyFlatteningEngineTests
 
     private static HierarchySourceInput CreateSourceInput(
         SourceSetId sourceSetId,
-        InterpretedSourceDocument document)
+        InterpretedSourceDocument document,
+        Func<DiscoveryInformationIdentity, bool>? include = null)
     {
         var identities = document.Values
             .Where(value => value.Lineage is not null)
             .Select(value => HierarchySourceOccurrence
                 .FromInterpretedValue(sourceSetId, value)
                 .Identity)
+            .Where(identity => include?.Invoke(identity) ?? true)
             .Distinct()
             .ToArray();
         return HierarchySourceInput.FromInterpretedSource(sourceSetId, document, identities);
@@ -450,7 +569,7 @@ public sealed class HierarchyFlatteningEngineTests
                 cell.DetailedIdentity.InformationType,
                 cell.DetailedIdentity.CandidateKind,
                 cell.DetailedIdentity.StructuralIdentity,
-                cell.ColumnIdentity.RepeatOrdinal,
+                cell.ColumnIdentity.RepeatCoordinates,
                 cell.Value,
                 cell.SourceId,
                 cell.Lineage.NodeInstanceId,
@@ -480,6 +599,35 @@ public sealed class HierarchyFlatteningEngineTests
     private static bool Contains(FlattenedHierarchyRow row, string value)
     {
         return row.Cells.Any(cell => string.Equals(cell.Value, value, StringComparison.Ordinal));
+    }
+
+    private static long GetRecordInstanceId(FlattenedHierarchyCell cell)
+    {
+        return cell.Lineage.ElementPath
+            .Single(element => element.LocalName == "record")
+            .InstanceId;
+    }
+
+    private static string GetLogicalPosition(
+        HierarchyFlatteningResult result,
+        string value)
+    {
+        var row = result.Rows.Single(candidate => Contains(candidate, value));
+        var cell = row.Cells.Single(candidate => candidate.Value == value);
+        return cell.ColumnIdentity.RepeatCoordinates.Count == 0
+            ? $"row:{row.Ordinal}"
+            : $"repeat:{cell.ColumnIdentity.RepeatCoordinates}";
+    }
+
+    private static void AssertCoordinates(
+        IReadOnlyList<FlattenedHierarchyCell> cells,
+        string value,
+        params int[] expected)
+    {
+        CollectionAssert.AreEqual(
+            expected,
+            cells.Single(cell => cell.Value == value)
+                .ColumnIdentity.RepeatCoordinates.Coordinates.ToArray());
     }
 
     private sealed class FlatteningWorkspace : IDisposable
