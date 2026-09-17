@@ -5,6 +5,7 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Desktop.Database;
 using CIA.Desktop.Ipc;
 using CIA.ProcessingHost.Ipc;
 
@@ -17,50 +18,82 @@ public sealed class NamedPipeIpcTests
     public async Task DatabaseBuildCommandAndPublicationResponseRoundTripAsTypedContracts()
     {
         var correlation = OperationCorrelation.CreateNew();
+        var sourceSetId = SourceSetId.CreateNew();
         var source = new LoadedSourceContract(
             SourceId.CreateNew(),
+            sourceSetId,
             Path.GetFullPath("source.xml"),
             IsIncluded: true,
             LoadedSourceStatus.Ready,
             LoadedSourceKind.XmlFile);
-        var mapping = new DatabaseMappingSnapshot(
+        var identity = new DiscoveryInformationIdentity(
+            sourceSetId,
+            "/root/sourceTag",
+            "sourceTag",
+            SourceValueCandidateKind.Element,
+            "/root/sourceTag");
+        var specification = new DatabaseBuildSpecification(
         [
-            new DatabaseColumnMapping("DatabaseName", ["sourceTag"])
+            new DatabaseDatasetBuildSpecification(
+                sourceSetId,
+                "Set 1",
+                1,
+                RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+                [source],
+                [new DatabaseFieldMapping(
+                    DatabaseLogicalFieldIdentity.Create(identity),
+                    "DatabaseName",
+                    true,
+                    [identity])])
         ]);
         var command = new BuildDatabaseCommand(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             correlation,
-            [source],
-            mapping);
+            specification);
         var completion = OperationCompletion.FromCompletedItems(
             correlation,
             [OperationItemStatus.ProcessedSuccessfully(source.SourceId.ToString())]);
+        var datasetSummary = new DatabaseDatasetSummary(
+            sourceSetId,
+            "Set 1",
+            1,
+            RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+            1,
+            1,
+            [new DatabaseColumnDefinition(
+                new DatabaseColumnIdentity(
+                    sourceSetId,
+                    "mapped:DatabaseName",
+                    DatabaseRepeatCoordinatePath.Empty),
+                "DatabaseName",
+                1)],
+            specification.Datasets.Single().Fields);
         var response = new BuildDatabaseResponse(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             command.MessageId,
             CommandAcceptance.Accepted,
             completion,
-            new DatabaseGenerationSummary(correlation.OperationId, mapping, 1),
+            new DatabaseGenerationSummary(correlation.OperationId, [datasetSummary]),
             Failure: null);
         var reviewCommand = new GetDatabaseReviewPageCommand(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
-            correlation.OperationId,
-            StartRowOrdinal: 1,
-            RowCount: DatabaseReviewLimits.MaximumRowsPerPage);
+            new DatabaseReviewQuery(
+                correlation.OperationId,
+                sourceSetId,
+                startRowOrdinal: 1,
+                rowCount: DatabaseReviewLimits.MaximumRowsPerPage,
+                searchText: null,
+                DatabaseRowInclusionFilter.All));
         var reviewPage = new DatabaseReviewPage(
             correlation.OperationId,
+            datasetSummary,
             startRowOrdinal: 1,
             requestedRowCount: DatabaseReviewLimits.MaximumRowsPerPage,
-            totalMappedValueCount: 1,
-            [
-                new DatabaseReviewColumn(
-                    "DatabaseName",
-                    totalValueCount: 1,
-                    [new DatabaseReviewValue(1, "exact", "sourceTag", source.SourceId)])
-            ]);
+            totalRowCount: 1,
+            []);
         var reviewResponse = new GetDatabaseReviewPageResponse(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
@@ -86,16 +119,54 @@ public sealed class NamedPipeIpcTests
         var reviewResponseResult = (GetDatabaseReviewPageResponse)await
             LengthPrefixedJsonMessageFramer.ReadAsync(stream);
         Assert.AreEqual(correlation, commandResult.Correlation);
-        Assert.AreEqual(source, commandResult.Sources.Single());
-        Assert.AreEqual("DatabaseName", commandResult.Mapping.Columns.Single().DatabaseTagName);
+        Assert.AreEqual(source, commandResult.Specification.Datasets.Single().Sources.Single());
+        Assert.AreEqual(
+            "DatabaseName",
+            commandResult.Specification.Datasets.Single().Fields.Single().EffectiveName);
         Assert.AreEqual(CommandAcceptance.Accepted, responseResult.Acceptance);
         Assert.AreEqual(correlation, responseResult.Completion.Correlation);
         Assert.AreEqual(correlation.OperationId, responseResult.PublishedGeneration?.OperationId);
         Assert.AreEqual(1, responseResult.PublishedGeneration?.ValueCount);
+        Assert.IsTrue(responseResult.PublishedGeneration?.IsHierarchyAware);
         Assert.AreEqual(correlation.OperationId, reviewCommandResult.GenerationId);
+        Assert.AreEqual(sourceSetId, reviewCommandResult.Query.SourceSetId);
         Assert.AreEqual(DatabaseReviewLimits.MaximumRowsPerPage, reviewCommandResult.RowCount);
-        Assert.AreEqual("exact", reviewResponseResult.Page?.Columns[0].Values[0].Value);
-        Assert.AreEqual(source.SourceId, reviewResponseResult.Page?.Columns[0].Values[0].SourceId);
+        Assert.AreEqual(sourceSetId, reviewResponseResult.Page?.Dataset.SourceSetId);
+    }
+
+    [TestMethod]
+    public void DatabaseIpcPublicEntryPointsRequireTypedHierarchyContracts()
+    {
+        var buildConstructors = typeof(BuildDatabaseCommand).GetConstructors();
+        Assert.HasCount(1, buildConstructors);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                typeof(Guid),
+                typeof(DateTimeOffset),
+                typeof(OperationCorrelation),
+                typeof(DatabaseBuildSpecification)
+            },
+            buildConstructors.Single().GetParameters()
+                .Select(parameter => parameter.ParameterType).ToArray());
+        Assert.IsNull(typeof(BuildDatabaseCommand).GetMethod(
+            "CreateLegacySpecification",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static));
+
+        var reviewConstructors = typeof(GetDatabaseReviewPageCommand).GetConstructors();
+        Assert.HasCount(1, reviewConstructors);
+        CollectionAssert.AreEqual(
+            new[] { typeof(Guid), typeof(DateTimeOffset), typeof(DatabaseReviewQuery) },
+            reviewConstructors.Single().GetParameters()
+                .Select(parameter => parameter.ParameterType).ToArray());
+
+        var reviewMethods = typeof(IDatabaseReviewClient).GetMethods()
+            .Where(method => method.Name == nameof(IDatabaseReviewClient.ReadPageAsync))
+            .ToArray();
+        Assert.HasCount(1, reviewMethods);
+        Assert.AreEqual(
+            typeof(DatabaseReviewQuery),
+            reviewMethods.Single().GetParameters()[0].ParameterType);
     }
 
     [TestMethod]

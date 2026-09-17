@@ -1,5 +1,6 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Diagnostics;
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Extraction;
 using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
@@ -545,10 +546,6 @@ public sealed class ExtractionCoordinatorTests
         public static async Task<ExtractionContext> CreateAsync(
             IProcessingHostSupervisor? supervisor = null)
         {
-            var configuration = new ActiveDiscoveryConfiguration();
-            configuration.Synchronize(["tag"]);
-            configuration.SetSelection(["tag"], isSelected: true);
-            configuration.SetDatabaseTagOverride("tag", "Database Field");
             var sources = new ActiveLoadedSourceSet();
             var source = new LoadedSourceContract(
                 SourceId.CreateNew(),
@@ -566,6 +563,14 @@ public sealed class ExtractionCoordinatorTests
             Assert.IsTrue((await loading.AddAsync(
                 SourceSelectionKind.XmlFile,
                 source.Path)).Accepted);
+            var identity = new DiscoveryInformationIdentity(
+                sources.SourceSets.Single().SourceSetId,
+                "/root/tag",
+                "tag");
+            var configuration = new ActiveDiscoveryConfiguration();
+            configuration.Synchronize([identity]);
+            configuration.SetSelection([identity], isSelected: true);
+            configuration.SetDatabaseTagOverride(identity, "Database Field");
             var discovery = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
             Assert.IsTrue(discovery.Accepted);
             Assert.IsTrue(workflow.CompleteOperation(
@@ -589,9 +594,30 @@ public sealed class ExtractionCoordinatorTests
 
         public async Task<DatabaseGenerationSummary> BuildCurrentDatabaseAsync(int valueCount = 1)
         {
-            DatabaseClient.ValueCount = valueCount;
-            Assert.IsTrue((await DatabaseCoordinator.BuildAsync()).Accepted);
-            return DatabaseCoordinator.CurrentGeneration!;
+            var begin = await Workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
+            Assert.IsTrue(begin.Accepted);
+            var generation = new DatabaseGenerationSummary(
+                begin.Operation!.OperationId,
+                new DatabaseMappingSnapshot(
+                    [new DatabaseColumnMapping("Database Field", ["tag"])]),
+                valueCount);
+
+            // These pre-SPR-138 extraction tests require a legacy generation. Production
+            // DatabaseBuildCoordinator now rejects that shape, so seed only this test fixture.
+            typeof(DatabaseBuildCoordinator)
+                .GetField("_currentGeneration", System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.NonPublic)!
+                .SetValue(DatabaseCoordinator, generation);
+            Assert.IsTrue(Workflow.CompleteOperation(
+                begin.Operation.OperationId,
+                OperationOutcome.CompletedSuccessfully).Accepted);
+            var handlers = (EventHandler<DatabaseGenerationSummary>?)typeof(DatabaseBuildCoordinator)
+                .GetField(nameof(DatabaseBuildCoordinator.PublishedGenerationChanged),
+                    System.Reflection.BindingFlags.Instance
+                    | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(DatabaseCoordinator);
+            handlers?.Invoke(DatabaseCoordinator, generation);
+            return generation;
         }
 
         public ExtractionCoordinator CreateExtractionCoordinator(IExtractionClient client)
@@ -610,10 +636,24 @@ public sealed class ExtractionCoordinatorTests
 
         public Task<DatabaseClientResult> BuildAsync(
             OperationCorrelation correlation,
-            IReadOnlyList<LoadedSourceContract> sources,
-            DatabaseMappingSnapshot mapping,
+            DatabaseBuildSpecification specification,
             CancellationToken cancellationToken = default)
         {
+            var datasets = specification.Datasets.Select(dataset => new DatabaseDatasetSummary(
+                dataset.SourceSetId,
+                dataset.DisplayName,
+                dataset.Ordinal,
+                dataset.RepeatedDataLayout,
+                rowCount: ValueCount,
+                ValueCount,
+                dataset.Fields.Select((field, index) => new DatabaseColumnDefinition(
+                    new DatabaseColumnIdentity(
+                        dataset.SourceSetId,
+                        field.FieldKey,
+                        DatabaseRepeatCoordinatePath.Empty),
+                    field.EffectiveName,
+                    index + 1)).ToArray(),
+                dataset.Fields)).ToArray();
             return Task.FromResult(new DatabaseClientResult(
                 true,
                 OperationCompletion.FromCompletedItems(
@@ -621,8 +661,7 @@ public sealed class ExtractionCoordinatorTests
                     [OperationItemStatus.ProcessedSuccessfully("source")]),
                 new DatabaseGenerationSummary(
                     correlation.OperationId,
-                    mapping,
-                    ValueCount),
+                    datasets),
                 FailureCode: null,
                 FailureDescription: null));
         }

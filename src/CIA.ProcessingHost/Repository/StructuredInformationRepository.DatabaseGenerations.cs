@@ -293,9 +293,9 @@ public sealed partial class StructuredInformationRepository
             await using var connection = await OpenGenerationConnectionAsync(cancellationToken)
                 .ConfigureAwait(false);
             await using var command = connection.CreateCommand();
-            command.CommandText =
-                "DELETE FROM database_generations " +
-                "WHERE generation_id = $generationId AND generation_state = $candidateState;";
+            command.CommandText = candidate.Specification is null
+                ? "DELETE FROM database_generations WHERE generation_id = $generationId AND generation_state = $candidateState;"
+                : "DELETE FROM hierarchy_database_generations WHERE generation_id = $generationId AND generation_state = $candidateState;";
             command.Parameters.AddWithValue(
                 "$generationId",
                 candidate.Correlation.OperationId.ToString());
@@ -317,6 +317,13 @@ public sealed partial class StructuredInformationRepository
     public async Task<DatabaseGenerationSummary?> ReadPublishedDatabaseGenerationAsync(
         CancellationToken cancellationToken = default)
     {
+        var hierarchyGeneration = await ReadPublishedHierarchyDatabaseGenerationAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (hierarchyGeneration is not null)
+        {
+            return hierarchyGeneration;
+        }
+
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
         await using var connection = await OpenGenerationConnectionAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -952,12 +959,25 @@ public sealed class DatabaseCandidate
 {
     internal DatabaseCandidate(
         OperationCorrelation correlation,
+        DatabaseBuildSpecification specification)
+    {
+        Correlation = correlation;
+        Specification = specification;
+        Mapping = new DatabaseMappingSnapshot([]);
+        SourceIds = new ReadOnlyCollection<SourceId>(
+            specification.Datasets.SelectMany(dataset => dataset.Sources)
+                .Select(source => source.SourceId).ToArray());
+    }
+
+    internal DatabaseCandidate(
+        OperationCorrelation correlation,
         DatabaseMappingSnapshot mapping,
         IReadOnlyList<SourceId> sourceIds)
     {
         Correlation = correlation;
         Mapping = mapping;
         SourceIds = new ReadOnlyCollection<SourceId>(sourceIds.ToArray());
+        Specification = null;
     }
 
     public OperationCorrelation Correlation { get; }
@@ -965,6 +985,8 @@ public sealed class DatabaseCandidate
     public DatabaseMappingSnapshot Mapping { get; }
 
     public IReadOnlyList<SourceId> SourceIds { get; }
+
+    public DatabaseBuildSpecification? Specification { get; }
 }
 
 public sealed class DatabaseCandidateValueWriter : IAsyncDisposable

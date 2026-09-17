@@ -344,18 +344,17 @@ public sealed class DatabaseGenerationServiceTests
                 LoadedSourceKind.XmlFile);
         }
 
-        public DatabaseGenerationService CreateService(
+        public LegacyDatabaseTestBuilder CreateService(
             ISourceValueBatchReader? sourceValueReader = null)
         {
             sourceValueReader ??= new SourceValueBatchReader(
                 [],
                 new GenericXmlElementValueSourceAdapter(),
                 NullLogger<SourceValueBatchReader>.Instance);
-            return new DatabaseGenerationService(
+            return new LegacyDatabaseTestBuilder(
                 Repository,
                 sourceValueReader,
-                Cancellation,
-                NullLogger<DatabaseGenerationService>.Instance);
+                Cancellation);
         }
 
         public void Dispose()

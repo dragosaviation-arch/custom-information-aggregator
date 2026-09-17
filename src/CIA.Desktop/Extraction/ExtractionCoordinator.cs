@@ -45,7 +45,7 @@ public sealed class ExtractionCoordinator(
     {
         return workflowCoordinator.Current.Database == WorkflowArtifactStatus.Current
             && workflowCoordinator.Current.ActiveOperation is null
-            && databaseBuildCoordinator.CurrentGeneration is not null;
+            && databaseBuildCoordinator.CurrentGeneration is { IsHierarchyAware: false };
     }
 
     public async Task<WorkflowCommandResult> ExtractAsync(
@@ -56,7 +56,9 @@ public sealed class ExtractionCoordinator(
         {
             return WorkflowCommandResult.Reject(
                 WorkflowRejectionCode.DatabaseNotCurrent,
-                "Extraction requires the active published Database to be current.");
+                databaseGeneration?.IsHierarchyAware == true
+                    ? "Extraction of hierarchy-aware Source Set datasets requires SPR-139 and is not yet available."
+                    : "Extraction requires the active published Database to be current.");
         }
 
         var begin = await workflowCoordinator

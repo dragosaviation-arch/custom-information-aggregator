@@ -451,8 +451,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
     {
         public Task<DatabaseClientResult> BuildAsync(
             OperationCorrelation correlation,
-            IReadOnlyList<LoadedSourceContract> sources,
-            DatabaseMappingSnapshot mapping,
+            DatabaseBuildSpecification specification,
             CancellationToken cancellationToken = default)
         {
             throw new AssertFailedException(

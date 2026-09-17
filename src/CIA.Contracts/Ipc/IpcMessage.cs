@@ -22,6 +22,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RunExtractionCommand), "runExtractionCommand")]
 [JsonDerivedType(typeof(RunWorkbookExportCommand), "runWorkbookExportCommand")]
 [JsonDerivedType(typeof(GetDatabaseReviewPageCommand), "getDatabaseReviewPageCommand")]
+[JsonDerivedType(typeof(SetDatabaseRowsIncludedCommand), "setDatabaseRowsIncludedCommand")]
 [JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
 [JsonDerivedType(typeof(LoadSourcesResponse), "loadSourcesResponse")]
@@ -32,6 +33,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RunExtractionResponse), "runExtractionResponse")]
 [JsonDerivedType(typeof(RunWorkbookExportResponse), "runWorkbookExportResponse")]
 [JsonDerivedType(typeof(GetDatabaseReviewPageResponse), "getDatabaseReviewPageResponse")]
+[JsonDerivedType(typeof(SetDatabaseRowsIncludedResponse), "setDatabaseRowsIncludedResponse")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 [JsonDerivedType(typeof(SourceIntakeProgressEvent), "sourceIntakeProgressEvent")]
 public abstract record IpcMessage(Guid MessageId, DateTimeOffset TimestampUtc);
@@ -109,12 +111,12 @@ public sealed record GetDiscoveryOccurrenceCommand(
     DiscoveryOccurrenceLookup Lookup)
     : IpcCommand(MessageId, TimestampUtc);
 
+[method: JsonConstructor]
 public sealed record BuildDatabaseCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc,
     OperationCorrelation Correlation,
-    IReadOnlyList<LoadedSourceContract> Sources,
-    DatabaseMappingSnapshot Mapping)
+    DatabaseBuildSpecification Specification)
     : IpcCommand(MessageId, TimestampUtc);
 
 public sealed record RunExtractionCommand(
@@ -133,12 +135,27 @@ public sealed record RunWorkbookExportCommand(
     string TargetPath)
     : IpcCommand(MessageId, TimestampUtc);
 
+[method: JsonConstructor]
 public sealed record GetDatabaseReviewPageCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc,
-    OperationId GenerationId,
-    int StartRowOrdinal,
-    int RowCount)
+    DatabaseReviewQuery Query)
+    : IpcCommand(MessageId, TimestampUtc)
+{
+    [JsonIgnore]
+    public OperationId GenerationId => Query.GenerationId;
+
+    [JsonIgnore]
+    public int StartRowOrdinal => Query.StartRowOrdinal;
+
+    [JsonIgnore]
+    public int RowCount => Query.RowCount;
+}
+
+public sealed record SetDatabaseRowsIncludedCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    DatabaseRowInclusionChange Change)
     : IpcCommand(MessageId, TimestampUtc);
 
 public sealed record StopProcessingHostCommand(
@@ -233,6 +250,16 @@ public sealed record GetDatabaseReviewPageResponse(
     OperationId GenerationId,
     CommandAcceptance Acceptance,
     DatabaseReviewPage? Page,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record SetDatabaseRowsIncludedResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    OperationId GenerationId,
+    CommandAcceptance Acceptance,
+    int ChangedRowCount,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 

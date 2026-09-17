@@ -7,7 +7,7 @@ namespace CIA.ProcessingHost.Repository;
 
 public sealed partial class StructuredInformationRepository
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
     public const string DatabaseFileName = "cia.sqlite3";
 
     private const string OccurrencesTableName = "indexed_occurrences";
@@ -267,6 +267,7 @@ public sealed partial class StructuredInformationRepository
                 0 => await ApplyVersionOneAsync(connection, cancellationToken).ConfigureAwait(false),
                 1 => await ApplyVersionTwoAsync(connection, cancellationToken).ConfigureAwait(false),
                 2 => await ApplyVersionThreeAsync(connection, cancellationToken).ConfigureAwait(false),
+                3 => await ApplyVersionFourAsync(connection, cancellationToken).ConfigureAwait(false),
                 _ => throw new StructuredInformationRepositoryException(
                     $"No repository migration is available from schema version {version}.")
             };
@@ -477,6 +478,139 @@ public sealed partial class StructuredInformationRepository
         }
     }
 
+    private static async Task<int> ApplyVersionFourAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                DELETE FROM extraction_publication;
+                DELETE FROM extraction_results;
+                DELETE FROM database_publication;
+                DELETE FROM database_generations;
+
+                CREATE TABLE hierarchy_database_generations (
+                    generation_id TEXT PRIMARY KEY CHECK (length(generation_id) = 36),
+                    created_utc TEXT NOT NULL,
+                    generation_state INTEGER NOT NULL CHECK (generation_state IN (1, 2))
+                );
+                CREATE TABLE hierarchy_database_datasets (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL CHECK (length(source_set_id) = 36),
+                    display_name TEXT NOT NULL CHECK (length(display_name) > 0),
+                    dataset_ordinal INTEGER NOT NULL CHECK (dataset_ordinal >= 1),
+                    repeated_data_layout INTEGER NOT NULL,
+                    PRIMARY KEY (generation_id, source_set_id),
+                    UNIQUE (generation_id, dataset_ordinal),
+                    FOREIGN KEY (generation_id) REFERENCES hierarchy_database_generations (generation_id) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_sources (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL CHECK (length(source_id) = 36),
+                    source_ordinal INTEGER NOT NULL CHECK (source_ordinal >= 1),
+                    source_file_name TEXT NOT NULL,
+                    full_source_path TEXT NOT NULL,
+                    source_kind INTEGER NOT NULL,
+                    archive_path TEXT,
+                    archive_member_path TEXT,
+                    file_modified_utc TEXT,
+                    PRIMARY KEY (generation_id, source_set_id, source_id),
+                    UNIQUE (generation_id, source_set_id, source_ordinal),
+                    FOREIGN KEY (generation_id, source_set_id) REFERENCES hierarchy_database_datasets (generation_id, source_set_id) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_mappings (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    mapping_ordinal INTEGER NOT NULL CHECK (mapping_ordinal >= 1),
+                    mapping_key TEXT NOT NULL,
+                    field_key TEXT NOT NULL,
+                    candidate_kind INTEGER NOT NULL,
+                    canonical_field_identity TEXT NOT NULL,
+                    effective_name TEXT NOT NULL,
+                    is_explicit_override INTEGER NOT NULL CHECK (is_explicit_override IN (0, 1)),
+                    detailed_identities_json TEXT NOT NULL,
+                    PRIMARY KEY (generation_id, source_set_id, mapping_key),
+                    UNIQUE (generation_id, source_set_id, mapping_ordinal),
+                    FOREIGN KEY (generation_id, source_set_id) REFERENCES hierarchy_database_datasets (generation_id, source_set_id) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_columns (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    column_ordinal INTEGER NOT NULL CHECK (column_ordinal >= 1),
+                    field_key TEXT NOT NULL,
+                    effective_name TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    PRIMARY KEY (generation_id, source_set_id, field_key, repeat_coordinates_json),
+                    UNIQUE (generation_id, source_set_id, column_ordinal),
+                    FOREIGN KEY (generation_id, source_set_id) REFERENCES hierarchy_database_datasets (generation_id, source_set_id) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_rows (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL CHECK (row_ordinal >= 1),
+                    source_id TEXT NOT NULL,
+                    source_row_ordinal INTEGER NOT NULL CHECK (source_row_ordinal >= 1),
+                    record_identity TEXT NOT NULL,
+                    is_included INTEGER NOT NULL DEFAULT 1 CHECK (is_included IN (0, 1)),
+                    PRIMARY KEY (generation_id, source_set_id, row_ordinal),
+                    FOREIGN KEY (generation_id, source_set_id, source_id) REFERENCES hierarchy_database_sources (generation_id, source_set_id, source_id) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_cells (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL,
+                    field_key TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    has_conflict INTEGER NOT NULL CHECK (has_conflict IN (0, 1)),
+                    PRIMARY KEY (generation_id, source_set_id, row_ordinal, field_key, repeat_coordinates_json),
+                    FOREIGN KEY (generation_id, source_set_id, row_ordinal) REFERENCES hierarchy_database_rows (generation_id, source_set_id, row_ordinal) ON DELETE CASCADE,
+                    FOREIGN KEY (generation_id, source_set_id, field_key, repeat_coordinates_json) REFERENCES hierarchy_database_columns (generation_id, source_set_id, field_key, repeat_coordinates_json) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_cell_values (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL,
+                    field_key TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    value_ordinal INTEGER NOT NULL CHECK (value_ordinal >= 1),
+                    value TEXT NOT NULL,
+                    information_type TEXT NOT NULL,
+                    structural_path TEXT NOT NULL,
+                    candidate_kind INTEGER NOT NULL,
+                    structural_identity TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    lineage_json TEXT NOT NULL,
+                    PRIMARY KEY (generation_id, source_set_id, row_ordinal, field_key, repeat_coordinates_json, value_ordinal),
+                    FOREIGN KEY (generation_id, source_set_id, row_ordinal, field_key, repeat_coordinates_json) REFERENCES hierarchy_database_cells (generation_id, source_set_id, row_ordinal, field_key, repeat_coordinates_json) ON DELETE CASCADE
+                );
+                CREATE INDEX ix_hierarchy_database_rows_review
+                    ON hierarchy_database_rows (generation_id, source_set_id, is_included, row_ordinal);
+                CREATE INDEX ix_hierarchy_database_values_search
+                    ON hierarchy_database_cell_values (generation_id, source_set_id, value);
+                CREATE TABLE hierarchy_database_publication (
+                    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                    generation_id TEXT NOT NULL UNIQUE,
+                    FOREIGN KEY (generation_id) REFERENCES hierarchy_database_generations (generation_id)
+                );
+                PRAGMA user_version = 4;
+                """;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return 4;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
     private static async Task ValidateCurrentSchemaAsync(
         SqliteConnection connection,
         CancellationToken cancellationToken)
@@ -523,6 +657,36 @@ public sealed partial class StructuredInformationRepository
             .ConfigureAwait(false);
         await ValidateExtractionSchemaAsync(connection, cancellationToken)
             .ConfigureAwait(false);
+        await ValidateHierarchyDatabaseSchemaAsync(connection, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task ValidateHierarchyDatabaseSchemaAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        string[] tables =
+        [
+            "hierarchy_database_generations", "hierarchy_database_datasets",
+            "hierarchy_database_sources", "hierarchy_database_mappings",
+            "hierarchy_database_columns", "hierarchy_database_rows",
+            "hierarchy_database_cells", "hierarchy_database_cell_values",
+            "hierarchy_database_publication"
+        ];
+        foreach (var table in tables)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"SELECT 1 FROM {table} LIMIT 0;";
+            try
+            {
+                await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (SqliteException exception)
+            {
+                throw new StructuredInformationRepositoryException(
+                    "The hierarchy-aware Database schema is incomplete or invalid.", exception);
+            }
+        }
     }
 
     private static async Task ValidateDatabaseGenerationSchemaAsync(

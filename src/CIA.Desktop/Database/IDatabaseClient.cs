@@ -1,6 +1,5 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Operations;
-using CIA.Contracts.Sources;
 
 namespace CIA.Desktop.Database;
 
@@ -8,8 +7,7 @@ public interface IDatabaseClient
 {
     Task<DatabaseClientResult> BuildAsync(
         OperationCorrelation correlation,
-        IReadOnlyList<LoadedSourceContract> sources,
-        DatabaseMappingSnapshot mapping,
+        DatabaseBuildSpecification specification,
         CancellationToken cancellationToken = default);
 }
 

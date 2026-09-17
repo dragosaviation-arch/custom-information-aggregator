@@ -40,7 +40,14 @@ public sealed class DatabaseBuildCoordinator(
             return false;
         }
 
-        return CreateMapping().Columns.Count > 0;
+        try
+        {
+            return CreateBuildSpecification().Datasets.Count > 0;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     public async Task<WorkflowCommandResult> BuildAsync(
@@ -53,8 +60,7 @@ public sealed class DatabaseBuildCoordinator(
                 "Database generation requires current Discovery results, selected information, and ready sources.");
         }
 
-        var sources = sourceSet.CreateIncludedReadySnapshot();
-        var mapping = CreateMapping();
+        var specification = CreateBuildSpecification();
         var begin = await workflowCoordinator
             .BeginOperationAsync(WorkflowOperationKind.DatabaseBuild, cancellationToken)
             .ConfigureAwait(false);
@@ -66,13 +72,13 @@ public sealed class DatabaseBuildCoordinator(
         try
         {
             var result = await databaseClient
-                .BuildAsync(begin.Operation, sources, mapping, cancellationToken)
+                .BuildAsync(begin.Operation, specification, cancellationToken)
                 .ConfigureAwait(false);
 
             if (result.Accepted
                 && (result.PublishedGeneration is null
                     || result.PublishedGeneration.OperationId != begin.Operation.OperationId
-                    || !MappingsEqual(mapping, result.PublishedGeneration.Mapping)))
+                    || !SpecificationMatches(specification, result.PublishedGeneration)))
             {
                 workflowCoordinator.CompleteOperation(
                     begin.Operation.OperationId,
@@ -116,31 +122,79 @@ public sealed class DatabaseBuildCoordinator(
                 exception,
                 "Database build coordination failed for operation {OperationId}",
                 begin.Operation.OperationId);
-            return workflowCoordinator.CompleteOperation(
+            workflowCoordinator.CompleteOperation(
                 begin.Operation.OperationId,
                 OperationOutcome.Failed);
+            return WorkflowCommandResult.Reject(
+                WorkflowRejectionCode.OperationFailed,
+                "Database generation failed unexpectedly.");
         }
     }
 
-    private DatabaseMappingSnapshot CreateMapping()
+    public DatabaseBuildSpecification CreateBuildSpecification()
     {
-        return DatabaseTagMapper.CreateMapping(
-            discoveryConfiguration.Current,
-            discoveryConfiguration.DatabaseTagOverrides);
+        var configuration = discoveryConfiguration.Current;
+        var overrides = discoveryConfiguration.DatabaseTagOverridesByIdentity;
+        var includedSources = sourceSet.CreateIncludedReadySnapshot();
+        var sourceSetNames = sourceSet.SourceSets.ToDictionary(
+            definition => definition.SourceSetId,
+            definition => definition.Name);
+        var datasets = new List<DatabaseDatasetBuildSpecification>();
+
+        foreach (var setConfiguration in configuration.SourceSets)
+        {
+            var fields = DatabaseTagMapper.CreateFieldMappings(
+                setConfiguration.SourceSetId,
+                configuration.Items,
+                overrides);
+            var sources = includedSources
+                .Where(source => source.SourceSetId == setConfiguration.SourceSetId)
+                .ToArray();
+            if (fields.Count == 0 || sources.Length == 0)
+            {
+                continue;
+            }
+
+            datasets.Add(new DatabaseDatasetBuildSpecification(
+                setConfiguration.SourceSetId,
+                sourceSetNames.GetValueOrDefault(
+                    setConfiguration.SourceSetId,
+                    $"Set {datasets.Count + 1}"),
+                datasets.Count + 1,
+                setConfiguration.RepeatedDataLayout,
+                sources,
+                fields));
+        }
+
+        return new DatabaseBuildSpecification(datasets);
     }
 
-    private static bool MappingsEqual(
-        DatabaseMappingSnapshot expected,
-        DatabaseMappingSnapshot actual)
+    private static bool SpecificationMatches(
+        DatabaseBuildSpecification expected,
+        DatabaseGenerationSummary actual)
     {
-        return expected.Columns.Count == actual.Columns.Count
-            && expected.Columns.Zip(actual.Columns).All(pair =>
-                string.Equals(
-                    pair.First.DatabaseTagName,
-                    pair.Second.DatabaseTagName,
+        return actual.IsHierarchyAware
+            && expected.Datasets.Count == actual.Datasets.Count
+            && expected.Datasets.Zip(actual.Datasets).All(pair =>
+                pair.First.SourceSetId == pair.Second.SourceSetId
+                && string.Equals(pair.First.DisplayName, pair.Second.DisplayName, StringComparison.Ordinal)
+                && pair.First.Ordinal == pair.Second.Ordinal
+                && pair.First.RepeatedDataLayout == pair.Second.RepeatedDataLayout
+                && FieldMappingsMatch(pair.First.Fields, pair.Second.Mappings));
+    }
+
+    private static bool FieldMappingsMatch(
+        IReadOnlyList<DatabaseFieldMapping> expected,
+        IReadOnlyList<DatabaseFieldMapping> actual)
+    {
+        return expected.Count == actual.Count
+            && expected.Zip(actual).All(pair =>
+                pair.First.LogicalIdentity == pair.Second.LogicalIdentity
+                && string.Equals(
+                    pair.First.EffectiveName,
+                    pair.Second.EffectiveName,
                     StringComparison.Ordinal)
-                && pair.First.SourceInformationTypes.SequenceEqual(
-                    pair.Second.SourceInformationTypes,
-                    StringComparer.Ordinal));
+                && pair.First.IsExplicitOverride == pair.Second.IsExplicitOverride
+                && pair.First.DetailedIdentities.SequenceEqual(pair.Second.DetailedIdentities));
     }
 }

@@ -7,9 +7,16 @@ using CIA.Contracts.Extraction;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Database;
 using CIA.Core.Diagnostics;
+using CIA.Core.Hierarchy;
 using CIA.Core.Runtime;
 using CIA.Desktop.Hosting;
+using CIA.Desktop.Database;
+using CIA.Desktop.Discovery;
+using CIA.Desktop.Presentation;
+using CIA.Desktop.Sources;
+using CIA.Desktop.Workflow;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Extraction;
@@ -178,7 +185,13 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<SourceRefreshService>();
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();
-        builder.Services.AddSingleton<DatabaseGenerationService>();
+        builder.Services.AddSingleton<IHierarchyFlatteningEngine, HierarchyFlatteningEngine>();
+        builder.Services.AddSingleton(serviceProvider => new DatabaseGenerationService(
+            serviceProvider.GetRequiredService<StructuredInformationRepository>(),
+            serviceProvider.GetRequiredService<ISourceInterpreter>(),
+            serviceProvider.GetRequiredService<IHierarchyFlatteningEngine>(),
+            serviceProvider.GetRequiredService<CooperativeOperationCancellation>(),
+            serviceProvider.GetRequiredService<ILogger<DatabaseGenerationService>>()));
         builder.Services.AddSingleton<DatabaseReviewService>();
         builder.Services.AddSingleton<DatabaseExtractionService>();
         builder.Services.AddSingleton<ExcelWorkbookExportService>();
@@ -240,7 +253,7 @@ public sealed class ProcessingHostLifecycleTests
     }
 
     [TestMethod]
-    public async Task ProcessingHostBuildsDatabaseAndExtractsItOverTypedIpc()
+    public async Task ProcessingHostBuildsHierarchyDatabaseAndGuardsLegacyExtractionOverTypedIpc()
     {
         using var workspace = new TemporaryLifecycleLogDirectory();
         using var timeout = new CancellationTokenSource(TestTimeout);
@@ -249,17 +262,44 @@ public sealed class ProcessingHostLifecycleTests
             sourcePath,
             "<root><identifier> exact first </identifier><ignored>value</ignored>" +
             "<identifier>second</identifier></root>");
-        var source = new LoadedSourceContract(
+        var intakeSource = new LoadedSourceContract(
             SourceId.CreateNew(),
             sourcePath,
             IsIncluded: true,
             LoadedSourceStatus.Ready,
             LoadedSourceKind.XmlFile);
-        var mapping = new DatabaseMappingSnapshot(
-        [
-            new DatabaseColumnMapping("Database Identifier", ["identifier"])
-        ]);
-        var correlation = OperationCorrelation.CreateNew();
+        var workflow = new ApplicationWorkflowCoordinator(
+            new ReadyProcessingHostSupervisor(),
+            new NullProcessingHistory());
+        var activeSources = new ActiveLoadedSourceSet();
+        var loading = new SourceLoadingCoordinator(
+            new StaticSourceIntakeClient(intakeSource), activeSources, workflow);
+        Assert.IsTrue((await loading.AddAsync(
+            SourceSelectionKind.XmlFile, sourcePath, SourceLoadSettings.Default, timeout.Token)).Accepted);
+        var source = activeSources.CreateIncludedReadySnapshot().Single();
+        var interpretation = await new SourceInterpreter(
+                [],
+                new GenericXmlElementValueSourceAdapter(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<SourceInterpreter>.Instance)
+            .InterpretAsync(source, timeout.Token);
+        Assert.IsNotNull(interpretation.Source);
+        var identities = interpretation.Source.Values
+            .Where(value => value.InformationType == "identifier" && value.Lineage is not null)
+            .Select(value => HierarchySourceOccurrence.FromInterpretedValue(
+                source.SourceSetId, value).Identity)
+            .Distinct().ToArray();
+        var configuration = new ActiveDiscoveryConfiguration();
+        configuration.Synchronize(identities);
+        configuration.SetSelection(identities, true);
+        foreach (var identity in identities)
+        {
+            configuration.SetDatabaseTagOverride(identity, "Database Identifier");
+        }
+        var discovery = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery, timeout.Token);
+        Assert.IsTrue(discovery.Accepted);
+        Assert.IsTrue(workflow.CompleteOperation(
+            discovery.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully).Accepted);
         var pipeName = $"CIA.Tests.SPR79.{Guid.NewGuid():N}";
         var builder = Host.CreateApplicationBuilder();
         builder.Logging.ClearProviders();
@@ -277,7 +317,13 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<SourceRefreshService>();
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();
-        builder.Services.AddSingleton<DatabaseGenerationService>();
+        builder.Services.AddSingleton<IHierarchyFlatteningEngine, HierarchyFlatteningEngine>();
+        builder.Services.AddSingleton(serviceProvider => new DatabaseGenerationService(
+            serviceProvider.GetRequiredService<StructuredInformationRepository>(),
+            serviceProvider.GetRequiredService<ISourceInterpreter>(),
+            serviceProvider.GetRequiredService<IHierarchyFlatteningEngine>(),
+            serviceProvider.GetRequiredService<CooperativeOperationCancellation>(),
+            serviceProvider.GetRequiredService<ILogger<DatabaseGenerationService>>()));
         builder.Services.AddSingleton<DatabaseReviewService>();
         builder.Services.AddSingleton<DatabaseExtractionService>();
         builder.Services.AddSingleton<ExcelWorkbookExportService>();
@@ -288,29 +334,33 @@ public sealed class ProcessingHostLifecycleTests
         await using var connection = await CIA.Desktop.Ipc.ProcessingHostIpcClient
             .ConnectAsync(pipeName, timeout.Token);
         await CompleteReadinessHandshakeAsync(connection, timeout.Token);
-        var command = new BuildDatabaseCommand(
-            Guid.CreateVersion7(),
-            DateTimeOffset.UtcNow,
-            correlation,
-            [source],
-            mapping);
+        var databaseClient = new PipeDatabaseClient(connection);
+        var coordinator = new DatabaseBuildCoordinator(
+            configuration,
+            activeSources,
+            workflow,
+            databaseClient,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<DatabaseBuildCoordinator>.Instance);
+        using var databaseWorkspace = new DatabaseWorkspaceViewModel(
+            configuration, workflow, coordinator, databaseClient);
 
-        await connection.SendAsync(command, timeout.Token);
-        var response = await connection.ReceiveAsync(timeout.Token);
+        var build = await coordinator.BuildAsync(timeout.Token);
+        await WaitForAsync(() => databaseWorkspace.Records.Count > 0, timeout.Token);
 
-        Assert.IsInstanceOfType<BuildDatabaseResponse>(response);
-        var databaseResponse = (BuildDatabaseResponse)response;
-        Assert.AreEqual(CommandAcceptance.Accepted, databaseResponse.Acceptance);
-        Assert.AreEqual(OperationOutcome.CompletedSuccessfully, databaseResponse.Completion.Outcome);
-        Assert.AreEqual(correlation.OperationId, databaseResponse.PublishedGeneration?.OperationId);
-        Assert.AreEqual(2, databaseResponse.PublishedGeneration?.ValueCount);
-        var publishedValues = await host.Services
-            .GetRequiredService<StructuredInformationRepository>()
-            .QueryPublishedDatabaseValuesAsync(timeout.Token);
+        Assert.IsTrue(build.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Database);
+        Assert.IsTrue(coordinator.CurrentGeneration?.IsHierarchyAware);
+        Assert.AreEqual(2, coordinator.CurrentGeneration?.ValueCount);
+        Assert.HasCount(1, databaseWorkspace.Datasets);
+        Assert.IsNotNull(databaseWorkspace.SelectedDataset);
+        Assert.IsNotEmpty(databaseWorkspace.Records);
         CollectionAssert.AreEqual(
             new[] { " exact first ", "second" },
-            publishedValues.Select(value => value.Value).ToArray());
-        Assert.IsTrue(publishedValues.All(value => value.SourceId == source.SourceId));
+            databaseWorkspace.Records.SelectMany(row => row.Cells).SelectMany(cell => cell.Cell!.Values)
+                .Select(value => value.Value).ToArray());
+        Assert.IsTrue(databaseWorkspace.Records.SelectMany(row => row.Cells)
+            .SelectMany(cell => cell.Cell!.Values).All(
+            value => value.SourceId == source.SourceId));
 
         File.Delete(sourcePath);
         var extractionCorrelation = OperationCorrelation.CreateNew();
@@ -318,52 +368,15 @@ public sealed class ProcessingHostLifecycleTests
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             extractionCorrelation,
-            databaseResponse.PublishedGeneration!);
+            coordinator.CurrentGeneration!);
         await connection.SendAsync(extractionCommand, timeout.Token);
         var extractionMessage = await connection.ReceiveAsync(timeout.Token);
         Assert.IsInstanceOfType<RunExtractionResponse>(extractionMessage);
         var extractionResponse = (RunExtractionResponse)extractionMessage;
-        Assert.AreEqual(CommandAcceptance.Accepted, extractionResponse.Acceptance);
-        Assert.AreEqual(
-            OperationOutcome.CompletedSuccessfully,
-            extractionResponse.Completion.Outcome);
-        Assert.AreEqual(
-            correlation.OperationId,
-            extractionResponse.PublishedResult?.DatabaseGeneration.OperationId);
-        Assert.AreEqual(2, extractionResponse.PublishedResult?.ValueCount);
-        var extractedValues = new List<ExtractionResultValue>();
-        await foreach (var value in host.Services
-                           .GetRequiredService<StructuredInformationRepository>()
-                           .StreamPublishedExtractionValuesAsync(
-                               extractionResponse.PublishedResult!.OperationId,
-                               timeout.Token))
-        {
-            extractedValues.Add(value);
-        }
-
-        CollectionAssert.AreEqual(
-            new[] { " exact first ", "second" },
-            extractedValues.Select(value => value.Value).ToArray());
-        Assert.IsTrue(extractedValues.All(value => value.SourceId == source.SourceId));
-
-        var reviewCommand = new GetDatabaseReviewPageCommand(
-            Guid.CreateVersion7(),
-            DateTimeOffset.UtcNow,
-            correlation.OperationId,
-            StartRowOrdinal: 1,
-            RowCount: DatabaseReviewLimits.MaximumRowsPerPage);
-        await connection.SendAsync(reviewCommand, timeout.Token);
-        var reviewMessage = await connection.ReceiveAsync(timeout.Token);
-        Assert.IsInstanceOfType<GetDatabaseReviewPageResponse>(reviewMessage);
-        var reviewResponse = (GetDatabaseReviewPageResponse)reviewMessage;
-        Assert.AreEqual(CommandAcceptance.Accepted, reviewResponse.Acceptance);
-        Assert.AreEqual(2, reviewResponse.Page?.TotalMappedValueCount);
-        CollectionAssert.AreEqual(
-            new[] { " exact first ", "second" },
-            reviewResponse.Page!.Columns.Single().Values
-                .Select(value => value.Value).ToArray());
-        Assert.IsTrue(reviewResponse.Page.Columns.Single().Values.All(
-            value => value.SourceId == source.SourceId));
+        Assert.AreEqual(CommandAcceptance.Rejected, extractionResponse.Acceptance);
+        Assert.AreEqual(OperationOutcome.Failed, extractionResponse.Completion.Outcome);
+        Assert.AreEqual("hierarchy-aware-extraction-not-supported", extractionResponse.Failure?.Code);
+        Assert.IsNull(extractionResponse.PublishedResult);
 
         var stop = new StopProcessingHostCommand(Guid.CreateVersion7(), DateTimeOffset.UtcNow);
         await connection.SendAsync(stop, timeout.Token);
@@ -854,6 +867,94 @@ public sealed class ProcessingHostLifecycleTests
         {
             process.Kill(entireProcessTree: true);
         }
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        while (!condition())
+        {
+            await Task.Delay(10, cancellationToken);
+        }
+    }
+
+    private sealed class PipeDatabaseClient(NamedPipeIpcConnection connection)
+        : IDatabaseClient, IDatabaseReviewClient
+    {
+        public async Task<DatabaseClientResult> BuildAsync(
+            OperationCorrelation correlation,
+            DatabaseBuildSpecification specification,
+            CancellationToken cancellationToken = default)
+        {
+            await connection.SendAsync(new BuildDatabaseCommand(
+                Guid.CreateVersion7(), DateTimeOffset.UtcNow, correlation, specification), cancellationToken);
+            var response = Assert.IsInstanceOfType<BuildDatabaseResponse>(
+                await connection.ReceiveAsync(cancellationToken));
+            return new DatabaseClientResult(
+                response.Acceptance == CommandAcceptance.Accepted,
+                response.Completion,
+                response.PublishedGeneration,
+                response.Failure?.Code,
+                response.Failure?.Description);
+        }
+
+        public async Task<DatabaseReviewClientResult> ReadPageAsync(
+            DatabaseReviewQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            await connection.SendAsync(new GetDatabaseReviewPageCommand(
+                Guid.CreateVersion7(), DateTimeOffset.UtcNow, query), cancellationToken);
+            var response = Assert.IsInstanceOfType<GetDatabaseReviewPageResponse>(
+                await connection.ReceiveAsync(cancellationToken));
+            return new DatabaseReviewClientResult(
+                response.Acceptance == CommandAcceptance.Accepted,
+                response.Page,
+                response.Failure?.Code,
+                response.Failure?.Description);
+        }
+    }
+
+    private sealed class StaticSourceIntakeClient(LoadedSourceContract source)
+        : ISourceIntakeClient
+    {
+        public Task<SourceIntakeClientResult> LoadAsync(
+            SourceSelectionKind selectionKind,
+            string path,
+            SourceLoadSettings settings,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new SourceIntakeClientResult(true, [source], null, null));
+
+        public Task<SourceRefreshClientResult> RefreshAsync(
+            LoadedSourceContract refreshedSource,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new SourceRefreshClientResult(true, refreshedSource, null, null));
+    }
+
+    private sealed class ReadyProcessingHostSupervisor : IProcessingHostSupervisor
+    {
+        public ProcessingHostLifecycleSnapshot Current { get; } = new(
+            ProcessingHostLifecycleState.Ready, true, Environment.ProcessId, null);
+
+        public event EventHandler<ProcessingHostLifecycleSnapshot>? StateChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public Task<ProcessingHostLifecycleSnapshot> EnsureAvailableAsync(
+            CancellationToken cancellationToken = default) => Task.FromResult(Current);
+
+        public Task<bool> RequestOperationCancellationAsync(
+            OperationId operationId,
+            CancellationToken cancellationToken = default) => Task.FromResult(true);
+
+        public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class NullProcessingHistory : IProcessingHistoryRecorder
+    {
+        public void RecordAttempt(CIA.Contracts.Diagnostics.ProcessingAttemptRecord record) { }
+
+        public void RecordDiagnostic(CIA.Contracts.Diagnostics.ProcessingDiagnosticRecord record) { }
     }
 
     private sealed class SupervisorFixture : IAsyncDisposable

@@ -23,6 +23,20 @@ public sealed class DatabaseExtractionService(
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(databaseGeneration);
 
+        if (databaseGeneration.IsHierarchyAware)
+        {
+            var completion = OperationCompletion.FromTerminalOutcome(
+                correlation,
+                OperationOutcome.Failed,
+                [OperationItemStatus.Unprocessed(
+                    PublicationItemId,
+                    "hierarchy-aware-extraction-not-supported")]);
+            return DatabaseExtractionHostResult.Reject(
+                completion,
+                "hierarchy-aware-extraction-not-supported",
+                "Hierarchy-aware Source Set extraction is intentionally unavailable until SPR-139.");
+        }
+
         var operation = operationCancellation.BeginOperation(
             correlation,
             "Extraction",

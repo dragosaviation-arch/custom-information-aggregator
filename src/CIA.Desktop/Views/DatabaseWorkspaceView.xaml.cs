@@ -30,6 +30,11 @@ public partial class DatabaseWorkspaceView : UserControl
         ColumnsPopup.IsOpen = !ColumnsPopup.IsOpen;
     }
 
+    private void OnMetadataClick(object sender, RoutedEventArgs e)
+    {
+        MetadataPopup.IsOpen = !MetadataPopup.IsOpen;
+    }
+
     private void OnExportFieldsTabClick(object sender, RoutedEventArgs e)
     {
         _showExcelExport = false;

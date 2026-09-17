@@ -7,92 +7,104 @@ namespace CIA.Core.Database;
 public static class DatabaseTagMapper
 {
     public static DatabaseMappingSnapshot CreateMapping(
-        DiscoveryConfigurationSnapshot discoveryConfiguration,
-        IReadOnlyDictionary<string, string> databaseTagOverrides)
+        DiscoveryConfigurationSnapshot configuration,
+        IReadOnlyDictionary<string, string> overrides)
     {
-        ArgumentNullException.ThrowIfNull(discoveryConfiguration);
-        ArgumentNullException.ThrowIfNull(databaseTagOverrides);
-
-        var columns = new List<MutableColumnMapping>();
-        var columnsByName = new Dictionary<string, MutableColumnMapping>(
-            StringComparer.Ordinal);
-
-        foreach (var item in discoveryConfiguration.Items
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(overrides);
+        var columns = new List<(string Name, List<string> Types)>();
+        foreach (var item in configuration.Items
                      .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected)
                      .OrderBy(item => item.InformationType, StringComparer.Ordinal))
         {
-            var databaseTagName = ResolveDatabaseTagName(
-                item.InformationType,
-                databaseTagOverrides);
-            if (!columnsByName.TryGetValue(databaseTagName, out var column))
+            var name = overrides.GetValueOrDefault(item.InformationType, item.InformationType);
+            var index = columns.FindIndex(column => string.Equals(column.Name, name, StringComparison.Ordinal));
+            if (index < 0)
             {
-                column = new MutableColumnMapping(databaseTagName);
-                columns.Add(column);
-                columnsByName.Add(databaseTagName, column);
+                columns.Add((name, [item.InformationType]));
             }
-
-            if (!column.SourceInformationTypes.Contains(
-                    item.InformationType,
-                    StringComparer.Ordinal))
+            else if (!columns[index].Types.Contains(item.InformationType, StringComparer.Ordinal))
             {
-                column.SourceInformationTypes.Add(item.InformationType);
+                columns[index].Types.Add(item.InformationType);
             }
         }
-
-        return new DatabaseMappingSnapshot(
-            columns
-                .Select(column => new DatabaseColumnMapping(
-                    column.DatabaseTagName,
-                    column.SourceInformationTypes))
-                .ToArray());
+        return new DatabaseMappingSnapshot(columns
+            .Select(column => new DatabaseColumnMapping(column.Name, column.Types)).ToArray());
     }
 
     public static MappedDatabaseValue? MapValue(
         DatabaseMappingSnapshot mapping,
-        string sourceInformationType,
+        string informationType,
         string value,
         SourceId sourceId)
     {
-        ArgumentNullException.ThrowIfNull(mapping);
-        ArgumentException.ThrowIfNullOrWhiteSpace(sourceInformationType);
-        ArgumentNullException.ThrowIfNull(value);
-
-        var column = mapping.Columns.SingleOrDefault(
-            candidate => candidate.SourceInformationTypes.Contains(
-                sourceInformationType,
-                StringComparer.Ordinal));
+        var column = mapping.Columns.SingleOrDefault(candidate =>
+            candidate.SourceInformationTypes.Contains(informationType, StringComparer.Ordinal));
         return column is null
             ? null
-            : new MappedDatabaseValue(
-                column.DatabaseTagName,
-                sourceInformationType,
-                value,
-                sourceId);
+            : new MappedDatabaseValue(column.DatabaseTagName, informationType, value, sourceId);
     }
 
-    private static string ResolveDatabaseTagName(
-        string informationType,
-        IReadOnlyDictionary<string, string> databaseTagOverrides)
+    public static IReadOnlyList<DatabaseFieldMapping> CreateFieldMappings(
+        SourceSetId sourceSetId,
+        IEnumerable<DiscoveryConfigurationItem> configurationItems,
+        IReadOnlyDictionary<DiscoveryInformationIdentity, string> overridesByIdentity)
     {
-        if (!databaseTagOverrides.TryGetValue(informationType, out var databaseTagName))
+        ArgumentNullException.ThrowIfNull(configurationItems);
+        ArgumentNullException.ThrowIfNull(overridesByIdentity);
+
+        var selected = configurationItems
+            .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected
+                && item.Identity.SourceSetId == sourceSetId)
+            .GroupBy(item => DatabaseLogicalFieldIdentity.Create(item.Identity))
+            .OrderBy(group => group.Key.CandidateKind)
+            .ThenBy(group => group.Key.CanonicalFieldIdentity, StringComparer.Ordinal)
+            .ToArray();
+
+        var mappings = new List<DatabaseFieldMapping>(selected.Length);
+        foreach (var group in selected)
         {
-            return informationType;
+            var identities = group.Select(item => item.Identity)
+                .OrderBy(identity => identity.StructuralPath, StringComparer.Ordinal)
+                .ThenBy(identity => identity.StructuralIdentity, StringComparer.Ordinal)
+                .ThenBy(identity => identity.InformationType, StringComparer.Ordinal)
+                .ToArray();
+            var explicitNames = identities
+                .Where(overridesByIdentity.ContainsKey)
+                .Select(identity => overridesByIdentity[identity])
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            if (explicitNames.Length > 1
+                || (explicitNames.Length == 1
+                    && identities.Any(identity => !overridesByIdentity.ContainsKey(identity))))
+            {
+                throw new ArgumentException(
+                    "Detailed path variants of one logical field require one consistent Database Tag mapping.",
+                    nameof(overridesByIdentity));
+            }
+
+            var isExplicitOverride = explicitNames.Length == 1;
+            var effectiveName = isExplicitOverride
+                ? explicitNames[0]
+                : identities.Select(identity => identity.InformationType)
+                    .Distinct(StringComparer.Ordinal)
+                    .Single();
+            mappings.Add(new DatabaseFieldMapping(
+                group.Key,
+                effectiveName,
+                isExplicitOverride,
+                identities));
         }
 
-        if (string.IsNullOrWhiteSpace(databaseTagName))
-        {
-            throw new ArgumentException(
-                $"The Database Tag Name override for '{informationType}' is invalid.",
-                nameof(databaseTagOverrides));
-        }
-
-        return databaseTagName;
+        return mappings;
     }
 
-    private sealed class MutableColumnMapping(string databaseTagName)
+    public static DatabaseFieldMapping FindMapping(
+        IReadOnlyList<DatabaseFieldMapping> mappings,
+        DiscoveryInformationIdentity detailedIdentity)
     {
-        public string DatabaseTagName { get; } = databaseTagName;
-
-        public List<string> SourceInformationTypes { get; } = [];
+        ArgumentNullException.ThrowIfNull(mappings);
+        ArgumentNullException.ThrowIfNull(detailedIdentity);
+        return mappings.Single(mapping => mapping.DetailedIdentities.Contains(detailedIdentity));
     }
 }

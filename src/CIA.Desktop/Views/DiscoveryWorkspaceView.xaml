@@ -730,7 +730,8 @@
                                        Text="Build from the current selected Discovery mapping." />
                             <Button Command="{Binding BuildDatabaseCommand}"
                                     Style="{StaticResource CiaPrimaryButtonStyle}"
-                                    Content="{Binding DatabaseBuildButtonText}" />
+                                    Content="{Binding DatabaseBuildButtonText}"
+                                    ToolTip="{Binding DatabaseBuildAvailabilityReason}" />
                         </WrapPanel>
                     </Border>
                 </Grid>
