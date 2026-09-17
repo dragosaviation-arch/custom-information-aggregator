@@ -11,17 +11,13 @@ public sealed class DatabaseReviewService(
     ILogger<DatabaseReviewService> logger)
 {
     public async Task<DatabaseReviewHostResult> ReadPageAsync(
-        OperationId generationId,
-        int startRowOrdinal,
-        int rowCount,
+        DatabaseReviewQuery query,
         CancellationToken cancellationToken = default)
     {
         try
         {
             var page = await repository.ReadPublishedDatabasePageAsync(
-                    generationId,
-                    startRowOrdinal,
-                    rowCount,
+                    query,
                     cancellationToken)
                 .ConfigureAwait(false);
             return page is null
@@ -39,12 +35,38 @@ public sealed class DatabaseReviewService(
             logger.LogWarning(
                 exception,
                 "Published Database generation {GenerationId} could not provide review rows {StartRowOrdinal} through {EndRowOrdinal}",
-                generationId,
-                startRowOrdinal,
-                startRowOrdinal + rowCount - 1);
+                query.GenerationId,
+                query.StartRowOrdinal,
+                query.StartRowOrdinal + query.RowCount - 1);
             return DatabaseReviewHostResult.Reject(
                 "database-review-read-failed",
                 "The published Database could not provide the requested bounded review page.");
+        }
+    }
+
+    public async Task<DatabaseRowInclusionHostResult> SetRowsIncludedAsync(
+        DatabaseRowInclusionChange change,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var changed = await repository.SetPublishedDatabaseRowsIncludedAsync(
+                    change, cancellationToken)
+                .ConfigureAwait(false);
+            return DatabaseRowInclusionHostResult.Accept(changed);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception,
+                "Published Database generation {GenerationId} row inclusion could not be changed",
+                change.GenerationId);
+            return DatabaseRowInclusionHostResult.Reject(
+                "database-row-inclusion-failed",
+                "The published Database rows could not be updated.");
         }
     }
 }
@@ -66,4 +88,15 @@ public sealed record DatabaseReviewHostResult(
             Page: null,
             new IpcFailure(code, description));
     }
+}
+
+public sealed record DatabaseRowInclusionHostResult(
+    bool Accepted,
+    int ChangedRowCount,
+    IpcFailure? Failure)
+{
+    internal static DatabaseRowInclusionHostResult Accept(int changed) => new(true, changed, null);
+
+    internal static DatabaseRowInclusionHostResult Reject(string code, string description) =>
+        new(false, 0, new IpcFailure(code, description));
 }

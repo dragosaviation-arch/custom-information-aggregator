@@ -427,13 +427,11 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
 
     public async Task<BuildDatabaseResponse> RequestDatabaseBuildAsync(
         OperationCorrelation correlation,
-        IReadOnlyList<LoadedSourceContract> sources,
-        DatabaseMappingSnapshot mapping,
+        DatabaseBuildSpecification specification,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(correlation);
-        ArgumentNullException.ThrowIfNull(sources);
-        ArgumentNullException.ThrowIfNull(mapping);
+        ArgumentNullException.ThrowIfNull(specification);
         ThrowIfDisposed();
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -454,8 +452,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                     Guid.CreateVersion7(),
                     DateTimeOffset.UtcNow,
                     correlation,
-                    sources,
-                    mapping);
+                    specification);
                 await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
                 lock (_stateGate)
                 {
@@ -505,9 +502,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
     }
 
     public async Task<GetDatabaseReviewPageResponse> RequestDatabaseReviewPageAsync(
-        OperationId generationId,
-        int startRowOrdinal,
-        int rowCount,
+        DatabaseReviewQuery query,
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
@@ -529,16 +524,14 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                 var command = new GetDatabaseReviewPageCommand(
                     Guid.CreateVersion7(),
                     DateTimeOffset.UtcNow,
-                    generationId,
-                    startRowOrdinal,
-                    rowCount);
+                    query);
                 await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
                 var response = await connection.ReceiveAsync(cancellationToken)
                     .ConfigureAwait(false);
 
                 if (response is not GetDatabaseReviewPageResponse reviewResponse
                     || reviewResponse.CommandMessageId != command.MessageId
-                    || reviewResponse.GenerationId != generationId)
+                    || reviewResponse.GenerationId != query.GenerationId)
                 {
                     throw new IpcProtocolException(
                         IpcProtocolError.InvalidContract,
@@ -546,6 +539,49 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                 }
 
                 return reviewResponse;
+            }
+            finally
+            {
+                _requestGate.Release();
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    public async Task<SetDatabaseRowsIncludedResponse> RequestDatabaseRowsIncludedAsync(
+        DatabaseRowInclusionChange change,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        ThrowIfDisposed();
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!IsCurrentHostReady())
+            {
+                throw new InvalidOperationException("The Processing Host is not ready for Database review changes.");
+            }
+
+            var connection = _connection!;
+            await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var command = new SetDatabaseRowsIncludedCommand(
+                    Guid.CreateVersion7(), DateTimeOffset.UtcNow, change);
+                await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+                var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+                if (response is not SetDatabaseRowsIncludedResponse includedResponse
+                    || includedResponse.CommandMessageId != command.MessageId
+                    || includedResponse.GenerationId != change.GenerationId)
+                {
+                    throw new IpcProtocolException(
+                        IpcProtocolError.InvalidContract,
+                        "The Processing Host returned an invalid Database inclusion response.");
+                }
+                return includedResponse;
             }
             finally
             {

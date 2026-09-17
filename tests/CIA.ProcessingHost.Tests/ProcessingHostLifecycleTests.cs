@@ -7,7 +7,9 @@ using CIA.Contracts.Extraction;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Database;
 using CIA.Core.Diagnostics;
+using CIA.Core.Hierarchy;
 using CIA.Core.Runtime;
 using CIA.Desktop.Hosting;
 using CIA.ProcessingHost.Database;
@@ -178,7 +180,13 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<SourceRefreshService>();
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();
-        builder.Services.AddSingleton<DatabaseGenerationService>();
+        builder.Services.AddSingleton<IHierarchyFlatteningEngine, HierarchyFlatteningEngine>();
+        builder.Services.AddSingleton(serviceProvider => new DatabaseGenerationService(
+            serviceProvider.GetRequiredService<StructuredInformationRepository>(),
+            serviceProvider.GetRequiredService<ISourceInterpreter>(),
+            serviceProvider.GetRequiredService<IHierarchyFlatteningEngine>(),
+            serviceProvider.GetRequiredService<CooperativeOperationCancellation>(),
+            serviceProvider.GetRequiredService<ILogger<DatabaseGenerationService>>()));
         builder.Services.AddSingleton<DatabaseReviewService>();
         builder.Services.AddSingleton<DatabaseExtractionService>();
         builder.Services.AddSingleton<ExcelWorkbookExportService>();
@@ -240,7 +248,7 @@ public sealed class ProcessingHostLifecycleTests
     }
 
     [TestMethod]
-    public async Task ProcessingHostBuildsDatabaseAndExtractsItOverTypedIpc()
+    public async Task ProcessingHostBuildsHierarchyDatabaseAndGuardsLegacyExtractionOverTypedIpc()
     {
         using var workspace = new TemporaryLifecycleLogDirectory();
         using var timeout = new CancellationTokenSource(TestTimeout);
@@ -255,9 +263,31 @@ public sealed class ProcessingHostLifecycleTests
             IsIncluded: true,
             LoadedSourceStatus.Ready,
             LoadedSourceKind.XmlFile);
-        var mapping = new DatabaseMappingSnapshot(
+        var interpretation = await new SourceInterpreter(
+                [],
+                new GenericXmlElementValueSourceAdapter(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<SourceInterpreter>.Instance)
+            .InterpretAsync(source, timeout.Token);
+        Assert.IsNotNull(interpretation.Source);
+        var identities = interpretation.Source.Values
+            .Where(value => value.InformationType == "identifier" && value.Lineage is not null)
+            .Select(value => HierarchySourceOccurrence.FromInterpretedValue(
+                source.SourceSetId, value).Identity)
+            .Distinct().ToArray();
+        var specification = new DatabaseBuildSpecification(
         [
-            new DatabaseColumnMapping("Database Identifier", ["identifier"])
+            new DatabaseDatasetBuildSpecification(
+                source.SourceSetId,
+                "Set 1",
+                1,
+                RepeatedDataLayout.StructuralRows,
+                [source],
+                DatabaseTagMapper.CreateFieldMappings(
+                    source.SourceSetId,
+                    identities.Select(identity => new DiscoveryConfigurationItem(
+                        identity,
+                        DiscoveryInformationDisposition.Selected)),
+                    identities.ToDictionary(identity => identity, _ => "Database Identifier")))
         ]);
         var correlation = OperationCorrelation.CreateNew();
         var pipeName = $"CIA.Tests.SPR79.{Guid.NewGuid():N}";
@@ -277,7 +307,13 @@ public sealed class ProcessingHostLifecycleTests
         builder.Services.AddSingleton<SourceRefreshService>();
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();
-        builder.Services.AddSingleton<DatabaseGenerationService>();
+        builder.Services.AddSingleton<IHierarchyFlatteningEngine, HierarchyFlatteningEngine>();
+        builder.Services.AddSingleton(serviceProvider => new DatabaseGenerationService(
+            serviceProvider.GetRequiredService<StructuredInformationRepository>(),
+            serviceProvider.GetRequiredService<ISourceInterpreter>(),
+            serviceProvider.GetRequiredService<IHierarchyFlatteningEngine>(),
+            serviceProvider.GetRequiredService<CooperativeOperationCancellation>(),
+            serviceProvider.GetRequiredService<ILogger<DatabaseGenerationService>>()));
         builder.Services.AddSingleton<DatabaseReviewService>();
         builder.Services.AddSingleton<DatabaseExtractionService>();
         builder.Services.AddSingleton<ExcelWorkbookExportService>();
@@ -292,8 +328,7 @@ public sealed class ProcessingHostLifecycleTests
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             correlation,
-            [source],
-            mapping);
+            specification);
 
         await connection.SendAsync(command, timeout.Token);
         var response = await connection.ReceiveAsync(timeout.Token);
@@ -304,13 +339,29 @@ public sealed class ProcessingHostLifecycleTests
         Assert.AreEqual(OperationOutcome.CompletedSuccessfully, databaseResponse.Completion.Outcome);
         Assert.AreEqual(correlation.OperationId, databaseResponse.PublishedGeneration?.OperationId);
         Assert.AreEqual(2, databaseResponse.PublishedGeneration?.ValueCount);
-        var publishedValues = await host.Services
-            .GetRequiredService<StructuredInformationRepository>()
-            .QueryPublishedDatabaseValuesAsync(timeout.Token);
+        var reviewCommand = new GetDatabaseReviewPageCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            new DatabaseReviewQuery(
+                correlation.OperationId,
+                source.SourceSetId,
+                1,
+                DatabaseReviewLimits.MaximumRowsPerPage,
+                null,
+                DatabaseRowInclusionFilter.All));
+        await connection.SendAsync(reviewCommand, timeout.Token);
+        var reviewMessage = await connection.ReceiveAsync(timeout.Token);
+        Assert.IsInstanceOfType<GetDatabaseReviewPageResponse>(reviewMessage);
+        var reviewResponse = (GetDatabaseReviewPageResponse)reviewMessage;
+        Assert.AreEqual(CommandAcceptance.Accepted, reviewResponse.Acceptance);
+        Assert.AreEqual(2, reviewResponse.Page?.TotalMappedValueCount);
         CollectionAssert.AreEqual(
             new[] { " exact first ", "second" },
-            publishedValues.Select(value => value.Value).ToArray());
-        Assert.IsTrue(publishedValues.All(value => value.SourceId == source.SourceId));
+            reviewResponse.Page!.Rows.SelectMany(row => row.Cells).SelectMany(cell => cell.Values)
+                .Select(value => value.Value).ToArray());
+        Assert.IsTrue(reviewResponse.Page.Rows.SelectMany(row => row.Cells)
+            .SelectMany(cell => cell.Values).All(
+            value => value.SourceId == source.SourceId));
 
         File.Delete(sourcePath);
         var extractionCorrelation = OperationCorrelation.CreateNew();
@@ -323,47 +374,10 @@ public sealed class ProcessingHostLifecycleTests
         var extractionMessage = await connection.ReceiveAsync(timeout.Token);
         Assert.IsInstanceOfType<RunExtractionResponse>(extractionMessage);
         var extractionResponse = (RunExtractionResponse)extractionMessage;
-        Assert.AreEqual(CommandAcceptance.Accepted, extractionResponse.Acceptance);
-        Assert.AreEqual(
-            OperationOutcome.CompletedSuccessfully,
-            extractionResponse.Completion.Outcome);
-        Assert.AreEqual(
-            correlation.OperationId,
-            extractionResponse.PublishedResult?.DatabaseGeneration.OperationId);
-        Assert.AreEqual(2, extractionResponse.PublishedResult?.ValueCount);
-        var extractedValues = new List<ExtractionResultValue>();
-        await foreach (var value in host.Services
-                           .GetRequiredService<StructuredInformationRepository>()
-                           .StreamPublishedExtractionValuesAsync(
-                               extractionResponse.PublishedResult!.OperationId,
-                               timeout.Token))
-        {
-            extractedValues.Add(value);
-        }
-
-        CollectionAssert.AreEqual(
-            new[] { " exact first ", "second" },
-            extractedValues.Select(value => value.Value).ToArray());
-        Assert.IsTrue(extractedValues.All(value => value.SourceId == source.SourceId));
-
-        var reviewCommand = new GetDatabaseReviewPageCommand(
-            Guid.CreateVersion7(),
-            DateTimeOffset.UtcNow,
-            correlation.OperationId,
-            StartRowOrdinal: 1,
-            RowCount: DatabaseReviewLimits.MaximumRowsPerPage);
-        await connection.SendAsync(reviewCommand, timeout.Token);
-        var reviewMessage = await connection.ReceiveAsync(timeout.Token);
-        Assert.IsInstanceOfType<GetDatabaseReviewPageResponse>(reviewMessage);
-        var reviewResponse = (GetDatabaseReviewPageResponse)reviewMessage;
-        Assert.AreEqual(CommandAcceptance.Accepted, reviewResponse.Acceptance);
-        Assert.AreEqual(2, reviewResponse.Page?.TotalMappedValueCount);
-        CollectionAssert.AreEqual(
-            new[] { " exact first ", "second" },
-            reviewResponse.Page!.Columns.Single().Values
-                .Select(value => value.Value).ToArray());
-        Assert.IsTrue(reviewResponse.Page.Columns.Single().Values.All(
-            value => value.SourceId == source.SourceId));
+        Assert.AreEqual(CommandAcceptance.Rejected, extractionResponse.Acceptance);
+        Assert.AreEqual(OperationOutcome.Failed, extractionResponse.Completion.Outcome);
+        Assert.AreEqual("hierarchy-aware-extraction-not-supported", extractionResponse.Failure?.Code);
+        Assert.IsNull(extractionResponse.PublishedResult);
 
         var stop = new StopProcessingHostCommand(Guid.CreateVersion7(), DateTimeOffset.UtcNow);
         await connection.SendAsync(stop, timeout.Token);

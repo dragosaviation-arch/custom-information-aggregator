@@ -62,6 +62,9 @@ public static class IpcContractValidator
             case GetDatabaseReviewPageCommand command:
                 ValidateGetDatabaseReviewPageCommand(command);
                 break;
+            case SetDatabaseRowsIncludedCommand command:
+                ValidateDatabaseRowInclusionChange(command.Change);
+                break;
             case CommandAcknowledgement acknowledgement:
                 ValidateCommandAcknowledgement(acknowledgement);
                 break;
@@ -88,6 +91,20 @@ public static class IpcContractValidator
                 break;
             case GetDatabaseReviewPageResponse response:
                 ValidateGetDatabaseReviewPageResponse(response);
+                break;
+            case SetDatabaseRowsIncludedResponse response:
+                ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+                ValidateOperationId(response.GenerationId, "Database row inclusion responses");
+                if (!Enum.IsDefined(response.Acceptance)
+                    || response.ChangedRowCount < 0
+                    || (response.Acceptance == CommandAcceptance.Accepted) == (response.Failure is not null))
+                {
+                    throw InvalidContract("The Database row inclusion response is invalid.");
+                }
+                if (response.Failure is not null)
+                {
+                    ValidateFailure(response.Failure);
+                }
                 break;
             case ProcessingHostAvailabilityEvent availabilityEvent:
                 ValidateProcessingHostAvailabilityEvent(availabilityEvent);
@@ -342,29 +359,31 @@ public static class IpcContractValidator
     private static void ValidateBuildDatabaseCommand(BuildDatabaseCommand command)
     {
         ValidateOperationCorrelation(command.Correlation);
-        ValidateDatabaseMapping(command.Mapping);
-
-        if (command.Sources is null || command.Sources.Count == 0)
+        if (command.Specification?.Datasets is null
+            || command.Specification.Datasets.Count == 0)
         {
-            throw InvalidContract("A Database build command requires an active source set.");
+            throw InvalidContract("A Database build command requires Source Set datasets.");
         }
 
         var sourceIds = new HashSet<SourceId>();
-        foreach (var source in command.Sources)
+        foreach (var dataset in command.Specification.Datasets)
         {
-            if (source is null)
+            if (dataset is null || dataset.Fields.Count == 0 || dataset.Sources.Count == 0)
             {
-                throw InvalidContract("A Database build command cannot contain null sources.");
+                throw InvalidContract("A Database dataset requires fields and sources.");
             }
-
-            ValidateLoadedSource(source);
-            if (!source.IsIncluded
-                || source.Status != LoadedSourceStatus.Ready
-                || source.Kind != LoadedSourceKind.XmlFile
-                || !sourceIds.Add(source.SourceId))
+            foreach (var source in dataset.Sources)
             {
-                throw InvalidContract(
-                    "Database build sources must be unique, included, ready XML sources.");
+                ValidateLoadedSource(source);
+                if (!source.IsIncluded
+                    || source.Status != LoadedSourceStatus.Ready
+                    || source.Kind != LoadedSourceKind.XmlFile
+                    || source.SourceSetId != dataset.SourceSetId
+                    || !sourceIds.Add(source.SourceId))
+                {
+                    throw InvalidContract(
+                        "Database build sources must be unique, included, ready XML sources in their dataset.");
+                }
             }
         }
     }
@@ -372,8 +391,23 @@ public static class IpcContractValidator
     private static void ValidateGetDatabaseReviewPageCommand(
         GetDatabaseReviewPageCommand command)
     {
-        ValidateOperationId(command.GenerationId, "Database review requests");
-        ValidateDatabaseReviewRange(command.StartRowOrdinal, command.RowCount);
+        if (command.Query is null)
+        {
+            throw InvalidContract("A Database review request requires a query.");
+        }
+        ValidateOperationId(command.Query.GenerationId, "Database review requests");
+        ValidateDatabaseReviewRange(command.Query.StartRowOrdinal, command.Query.RowCount);
+    }
+
+    private static void ValidateDatabaseRowInclusionChange(DatabaseRowInclusionChange? change)
+    {
+        if (change is null || change.RowOrdinals is null || change.RowOrdinals.Count == 0
+            || change.RowOrdinals.Any(ordinal => ordinal < 1)
+            || change.RowOrdinals.Distinct().Count() != change.RowOrdinals.Count)
+        {
+            throw InvalidContract("A Database row inclusion request requires unique positive row ordinals.");
+        }
+        ValidateOperationId(change.GenerationId, "Database row inclusion requests");
     }
 
     private static void ValidateRunExtractionCommand(RunExtractionCommand command)
@@ -763,52 +797,32 @@ public static class IpcContractValidator
         ValidateOperationId(page.GenerationId, "Database review pages");
         ValidateDatabaseReviewRange(page.StartRowOrdinal, page.RequestedRowCount);
 
-        if (page.TotalMappedValueCount < 1
-            || page.Columns is null
-            || page.Columns.Count == 0)
+        if (page.Dataset is null || page.Columns.Count == 0 || page.TotalRowCount < 0
+            || page.Rows is null || page.Rows.Count > page.RequestedRowCount)
         {
             throw InvalidContract(
                 "A Database review page requires published values and dynamic columns.");
         }
 
-        var databaseTagNames = new HashSet<string>(StringComparer.Ordinal);
-        long totalMappedValueCount = 0;
-        foreach (var column in page.Columns)
+        var columnIdentities = page.Columns.Select(column => column.Identity).ToHashSet();
+        var previousOrdinal = 0;
+        foreach (var row in page.Rows)
         {
-            if (column is null
-                || string.IsNullOrWhiteSpace(column.DatabaseTagName)
-                || column.TotalValueCount < 0
-                || column.Values is null
-                || column.Values.Count > page.RequestedRowCount
-                || !databaseTagNames.Add(column.DatabaseTagName))
+            if (row is null || row.Ordinal <= previousOrdinal
+                || row.Source.SourceSetId != page.Dataset.SourceSetId)
             {
-                throw InvalidContract("A Database review column is invalid or duplicated.");
+                throw InvalidContract("A Database review row is invalid or unordered.");
             }
-
-            totalMappedValueCount += column.TotalValueCount;
-            var previousOrdinal = page.StartRowOrdinal - 1;
-            foreach (var value in column.Values)
+            previousOrdinal = row.Ordinal;
+            foreach (var cell in row.Cells)
             {
-                if (value is null
-                    || value.ColumnOrdinal <= previousOrdinal
-                    || value.ColumnOrdinal > column.TotalValueCount
-                    || value.ColumnOrdinal >= page.StartRowOrdinal + page.RequestedRowCount
-                    || value.Value is null
-                    || string.IsNullOrWhiteSpace(value.SourceInformationType)
-                    || !SourceId.IsValid(value.SourceId.Value))
+                if (!columnIdentities.Contains(cell.ColumnIdentity)
+                    || cell.Values.Any(value => value.SourceId != row.Source.SourceId))
                 {
                     throw InvalidContract(
-                        "A Database review value is invalid, unordered, or outside its requested page.");
+                        "A Database review cell is outside the dataset schema or source boundary.");
                 }
-
-                previousOrdinal = value.ColumnOrdinal;
             }
-        }
-
-        if (totalMappedValueCount != page.TotalMappedValueCount)
-        {
-            throw InvalidContract(
-                "The Database review mapped-value count does not reconcile with its columns.");
         }
     }
 
@@ -826,12 +840,22 @@ public static class IpcContractValidator
     private static void ValidateDatabaseGeneration(DatabaseGenerationSummary generation)
     {
         ValidateOperationId(generation.OperationId, "Database generations");
-        ValidateDatabaseMapping(generation.Mapping);
-
         if (generation.ValueCount < 1)
         {
             throw InvalidContract(
                 "A published Database generation requires at least one mapped value.");
+        }
+        if (generation.IsHierarchyAware)
+        {
+            if (generation.Datasets is null || generation.Datasets.Count == 0
+                || generation.RowCount < 1)
+            {
+                throw InvalidContract("A hierarchy-aware Database generation requires datasets and rows.");
+            }
+        }
+        else
+        {
+            ValidateDatabaseMapping(generation.Mapping);
         }
     }
 

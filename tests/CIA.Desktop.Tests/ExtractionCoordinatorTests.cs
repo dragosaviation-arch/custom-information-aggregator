@@ -1,5 +1,6 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Diagnostics;
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Extraction;
 using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
@@ -545,10 +546,6 @@ public sealed class ExtractionCoordinatorTests
         public static async Task<ExtractionContext> CreateAsync(
             IProcessingHostSupervisor? supervisor = null)
         {
-            var configuration = new ActiveDiscoveryConfiguration();
-            configuration.Synchronize(["tag"]);
-            configuration.SetSelection(["tag"], isSelected: true);
-            configuration.SetDatabaseTagOverride("tag", "Database Field");
             var sources = new ActiveLoadedSourceSet();
             var source = new LoadedSourceContract(
                 SourceId.CreateNew(),
@@ -566,6 +563,14 @@ public sealed class ExtractionCoordinatorTests
             Assert.IsTrue((await loading.AddAsync(
                 SourceSelectionKind.XmlFile,
                 source.Path)).Accepted);
+            var identity = new DiscoveryInformationIdentity(
+                sources.SourceSets.Single().SourceSetId,
+                "/root/tag",
+                "tag");
+            var configuration = new ActiveDiscoveryConfiguration();
+            configuration.Synchronize([identity]);
+            configuration.SetSelection([identity], isSelected: true);
+            configuration.SetDatabaseTagOverride(identity, "Database Field");
             var discovery = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
             Assert.IsTrue(discovery.Accepted);
             Assert.IsTrue(workflow.CompleteOperation(

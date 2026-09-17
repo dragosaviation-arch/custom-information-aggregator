@@ -40,7 +40,14 @@ public sealed class DatabaseBuildCoordinator(
             return false;
         }
 
-        return CreateMapping().Columns.Count > 0;
+        try
+        {
+            return CreateBuildSpecification().Datasets.Count > 0;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     public async Task<WorkflowCommandResult> BuildAsync(
@@ -53,8 +60,7 @@ public sealed class DatabaseBuildCoordinator(
                 "Database generation requires current Discovery results, selected information, and ready sources.");
         }
 
-        var sources = sourceSet.CreateIncludedReadySnapshot();
-        var mapping = CreateMapping();
+        var specification = CreateBuildSpecification();
         var begin = await workflowCoordinator
             .BeginOperationAsync(WorkflowOperationKind.DatabaseBuild, cancellationToken)
             .ConfigureAwait(false);
@@ -66,13 +72,13 @@ public sealed class DatabaseBuildCoordinator(
         try
         {
             var result = await databaseClient
-                .BuildAsync(begin.Operation, sources, mapping, cancellationToken)
+                .BuildAsync(begin.Operation, specification, cancellationToken)
                 .ConfigureAwait(false);
 
             if (result.Accepted
                 && (result.PublishedGeneration is null
                     || result.PublishedGeneration.OperationId != begin.Operation.OperationId
-                    || !MappingsEqual(mapping, result.PublishedGeneration.Mapping)))
+                    || !SpecificationMatches(specification, result.PublishedGeneration)))
             {
                 workflowCoordinator.CompleteOperation(
                     begin.Operation.OperationId,
@@ -122,25 +128,75 @@ public sealed class DatabaseBuildCoordinator(
         }
     }
 
-    private DatabaseMappingSnapshot CreateMapping()
+    public DatabaseBuildSpecification CreateBuildSpecification()
     {
-        return DatabaseTagMapper.CreateMapping(
-            discoveryConfiguration.Current,
-            discoveryConfiguration.DatabaseTagOverrides);
+        var configuration = discoveryConfiguration.Current;
+        var overrides = discoveryConfiguration.DatabaseTagOverridesByIdentity;
+        var includedSources = sourceSet.CreateIncludedReadySnapshot();
+        var sourceSetNames = sourceSet.SourceSets.ToDictionary(
+            definition => definition.SourceSetId,
+            definition => definition.Name);
+        var datasets = new List<DatabaseDatasetBuildSpecification>();
+
+        foreach (var setConfiguration in configuration.SourceSets)
+        {
+            var fields = DatabaseTagMapper.CreateFieldMappings(
+                setConfiguration.SourceSetId,
+                configuration.Items,
+                overrides);
+            var sources = includedSources
+                .Where(source => source.SourceSetId == setConfiguration.SourceSetId)
+                .ToArray();
+            if (fields.Count == 0 || sources.Length == 0)
+            {
+                continue;
+            }
+
+            datasets.Add(new DatabaseDatasetBuildSpecification(
+                setConfiguration.SourceSetId,
+                sourceSetNames.GetValueOrDefault(
+                    setConfiguration.SourceSetId,
+                    $"Set {datasets.Count + 1}"),
+                datasets.Count + 1,
+                setConfiguration.RepeatedDataLayout,
+                sources,
+                fields));
+        }
+
+        return new DatabaseBuildSpecification(datasets);
     }
 
-    private static bool MappingsEqual(
-        DatabaseMappingSnapshot expected,
+    private static bool SpecificationMatches(
+        DatabaseBuildSpecification expected,
+        DatabaseGenerationSummary actual)
+    {
+        return actual.IsHierarchyAware
+            && expected.Datasets.Count == actual.Datasets.Count
+            && expected.Datasets.Zip(actual.Datasets).All(pair =>
+                pair.First.SourceSetId == pair.Second.SourceSetId
+                && string.Equals(pair.First.DisplayName, pair.Second.DisplayName, StringComparison.Ordinal)
+                && pair.First.Ordinal == pair.Second.Ordinal
+                && pair.First.RepeatedDataLayout == pair.Second.RepeatedDataLayout
+                && pair.First.Fields.SequenceEqual(pair.Second.Mappings))
+            || (!actual.IsHierarchyAware && LegacyProjectionMatches(expected, actual.Mapping));
+    }
+
+    private static bool LegacyProjectionMatches(
+        DatabaseBuildSpecification expected,
         DatabaseMappingSnapshot actual)
     {
-        return expected.Columns.Count == actual.Columns.Count
-            && expected.Columns.Zip(actual.Columns).All(pair =>
-                string.Equals(
-                    pair.First.DatabaseTagName,
-                    pair.Second.DatabaseTagName,
-                    StringComparison.Ordinal)
+        var projected = expected.Datasets.SelectMany(dataset => dataset.Fields)
+            .GroupBy(field => field.EffectiveName, StringComparer.Ordinal)
+            .Select(group => new DatabaseColumnMapping(
+                group.Key,
+                group.SelectMany(field => field.DetailedIdentities)
+                    .Select(identity => identity.InformationType)
+                    .Distinct(StringComparer.Ordinal).ToArray()))
+            .ToArray();
+        return projected.Length == actual.Columns.Count
+            && projected.Zip(actual.Columns).All(pair =>
+                string.Equals(pair.First.DatabaseTagName, pair.Second.DatabaseTagName, StringComparison.Ordinal)
                 && pair.First.SourceInformationTypes.SequenceEqual(
-                    pair.Second.SourceInformationTypes,
-                    StringComparer.Ordinal));
+                    pair.Second.SourceInformationTypes, StringComparer.Ordinal));
     }
 }

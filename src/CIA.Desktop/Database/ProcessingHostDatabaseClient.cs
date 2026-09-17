@@ -1,7 +1,6 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
-using CIA.Contracts.Sources;
 using CIA.Desktop.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -14,13 +13,11 @@ public sealed class ProcessingHostDatabaseClient(
 {
     public async Task<DatabaseClientResult> BuildAsync(
         OperationCorrelation correlation,
-        IReadOnlyList<LoadedSourceContract> sources,
-        DatabaseMappingSnapshot mapping,
+        DatabaseBuildSpecification specification,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(correlation);
-        ArgumentNullException.ThrowIfNull(sources);
-        ArgumentNullException.ThrowIfNull(mapping);
+        ArgumentNullException.ThrowIfNull(specification);
 
         try
         {
@@ -28,13 +25,12 @@ public sealed class ProcessingHostDatabaseClient(
                 .ConfigureAwait(false);
             if (host.State != ProcessingHostLifecycleState.Ready)
             {
-                return Reject(correlation, sources, "processing-host-unavailable");
+                return Reject(correlation, specification, "processing-host-unavailable");
             }
 
             var response = await requestClient.RequestDatabaseBuildAsync(
                     correlation,
-                    sources,
-                    mapping,
+                    specification,
                     cancellationToken)
                 .ConfigureAwait(false);
             return new DatabaseClientResult(
@@ -54,14 +50,12 @@ public sealed class ProcessingHostDatabaseClient(
                 exception,
                 "Database build could not be completed by the Processing Host for operation {OperationId}",
                 correlation.OperationId);
-            return Reject(correlation, sources, "processing-host-unavailable");
+            return Reject(correlation, specification, "processing-host-unavailable");
         }
     }
 
     public async Task<DatabaseReviewClientResult> ReadPageAsync(
-        OperationId generationId,
-        int startRowOrdinal,
-        int rowCount,
+        DatabaseReviewQuery query,
         CancellationToken cancellationToken = default)
     {
         try
@@ -74,9 +68,7 @@ public sealed class ProcessingHostDatabaseClient(
             }
 
             var response = await requestClient.RequestDatabaseReviewPageAsync(
-                    generationId,
-                    startRowOrdinal,
-                    rowCount,
+                    query,
                     cancellationToken)
                 .ConfigureAwait(false);
             return new DatabaseReviewClientResult(
@@ -94,20 +86,54 @@ public sealed class ProcessingHostDatabaseClient(
             logger.LogWarning(
                 exception,
                 "Database generation {GenerationId} review page could not be retrieved from the Processing Host",
-                generationId);
+                query.GenerationId);
             return RejectReview("processing-host-unavailable");
+        }
+    }
+
+    public async Task<DatabaseRowInclusionClientResult> SetRowsIncludedAsync(
+        DatabaseRowInclusionChange change,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var host = await hostSupervisor.EnsureAvailableAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (host.State != ProcessingHostLifecycleState.Ready)
+            {
+                return RejectInclusion("processing-host-unavailable");
+            }
+
+            var response = await requestClient.RequestDatabaseRowsIncludedAsync(
+                    change,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return new DatabaseRowInclusionClientResult(
+                response.Acceptance == CommandAcceptance.Accepted,
+                response.ChangedRowCount,
+                response.Failure?.Code,
+                response.Failure?.Description);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(exception, "Database row inclusion could not be changed");
+            return RejectInclusion("processing-host-unavailable");
         }
     }
 
     private static DatabaseClientResult Reject(
         OperationCorrelation correlation,
-        IReadOnlyList<LoadedSourceContract> sources,
+        DatabaseBuildSpecification specification,
         string failureCode)
     {
         var completion = OperationCompletion.FromTerminalOutcome(
             correlation,
             OperationOutcome.Failed,
-            sources.Select(source => OperationItemStatus.Unprocessed(
+            specification.Datasets.SelectMany(dataset => dataset.Sources).Select(source => OperationItemStatus.Unprocessed(
                 source.SourceId.ToString(),
                 failureCode)).ToArray());
         return new DatabaseClientResult(
@@ -126,4 +152,7 @@ public sealed class ProcessingHostDatabaseClient(
             failureCode,
             "The Processing Host could not provide the published Database review page.");
     }
+
+    private static DatabaseRowInclusionClientResult RejectInclusion(string failureCode) =>
+        new(false, 0, failureCode, "The Processing Host could not change Database row inclusion.");
 }

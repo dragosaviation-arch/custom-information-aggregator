@@ -12,6 +12,8 @@ public interface IApplicationWorkflowCoordinator
 
     WorkflowCommandResult RecordDiscoveryConfigurationChanged();
 
+    WorkflowCommandResult RecordDatabaseReviewChanged();
+
     Task<WorkflowCommandResult> BeginOperationAsync(
         WorkflowOperationKind operationKind,
         CancellationToken cancellationToken = default);

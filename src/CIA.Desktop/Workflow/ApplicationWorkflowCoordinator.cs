@@ -97,6 +97,32 @@ public sealed class ApplicationWorkflowCoordinator :
         return WorkflowCommandResult.Accept();
     }
 
+    public WorkflowCommandResult RecordDatabaseReviewChanged()
+    {
+        WorkflowStateSnapshot changedState;
+        lock (_stateGate)
+        {
+            var conflict = RejectIfOperationActive();
+            if (conflict is not null)
+            {
+                return conflict;
+            }
+            if (_current.Database != WorkflowArtifactStatus.Current)
+            {
+                return WorkflowCommandResult.Reject(
+                    WorkflowRejectionCode.DatabaseNotCurrent,
+                    "Database review content can change only when Database is current.");
+            }
+            _current = _current with
+            {
+                Extraction = MakeStaleIfAvailable(_current.Extraction)
+            };
+            changedState = _current;
+        }
+        PublishStateChanged(changedState);
+        return WorkflowCommandResult.Accept();
+    }
+
     public async Task<WorkflowCommandResult> BeginOperationAsync(
         WorkflowOperationKind operationKind,
         CancellationToken cancellationToken = default)

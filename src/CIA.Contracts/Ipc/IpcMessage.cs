@@ -22,6 +22,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RunExtractionCommand), "runExtractionCommand")]
 [JsonDerivedType(typeof(RunWorkbookExportCommand), "runWorkbookExportCommand")]
 [JsonDerivedType(typeof(GetDatabaseReviewPageCommand), "getDatabaseReviewPageCommand")]
+[JsonDerivedType(typeof(SetDatabaseRowsIncludedCommand), "setDatabaseRowsIncludedCommand")]
 [JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
 [JsonDerivedType(typeof(LoadSourcesResponse), "loadSourcesResponse")]
@@ -32,6 +33,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RunExtractionResponse), "runExtractionResponse")]
 [JsonDerivedType(typeof(RunWorkbookExportResponse), "runWorkbookExportResponse")]
 [JsonDerivedType(typeof(GetDatabaseReviewPageResponse), "getDatabaseReviewPageResponse")]
+[JsonDerivedType(typeof(SetDatabaseRowsIncludedResponse), "setDatabaseRowsIncludedResponse")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 [JsonDerivedType(typeof(SourceIntakeProgressEvent), "sourceIntakeProgressEvent")]
 public abstract record IpcMessage(Guid MessageId, DateTimeOffset TimestampUtc);
@@ -109,13 +111,66 @@ public sealed record GetDiscoveryOccurrenceCommand(
     DiscoveryOccurrenceLookup Lookup)
     : IpcCommand(MessageId, TimestampUtc);
 
+[method: JsonConstructor]
 public sealed record BuildDatabaseCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc,
     OperationCorrelation Correlation,
-    IReadOnlyList<LoadedSourceContract> Sources,
-    DatabaseMappingSnapshot Mapping)
-    : IpcCommand(MessageId, TimestampUtc);
+    DatabaseBuildSpecification Specification)
+    : IpcCommand(MessageId, TimestampUtc)
+{
+    public BuildDatabaseCommand(
+        Guid messageId,
+        DateTimeOffset timestampUtc,
+        OperationCorrelation correlation,
+        IReadOnlyList<LoadedSourceContract> sources,
+        DatabaseMappingSnapshot mapping)
+        : this(messageId, timestampUtc, correlation, CreateLegacySpecification(sources, mapping))
+    {
+        Sources = sources;
+        Mapping = mapping;
+    }
+
+    [JsonIgnore]
+    public IReadOnlyList<LoadedSourceContract> Sources { get; } =
+        Specification.Datasets.SelectMany(dataset => dataset.Sources).ToArray();
+
+    [JsonIgnore]
+    public DatabaseMappingSnapshot Mapping { get; } = new(
+        Specification.Datasets.SelectMany(dataset => dataset.Fields)
+            .GroupBy(field => field.EffectiveName, StringComparer.Ordinal)
+            .Select(group => new DatabaseColumnMapping(
+                group.Key,
+                group.SelectMany(field => field.DetailedIdentities)
+                    .Select(identity => identity.InformationType)
+                    .Distinct(StringComparer.Ordinal).ToArray())).ToArray());
+
+    private static DatabaseBuildSpecification CreateLegacySpecification(
+        IReadOnlyList<LoadedSourceContract> sources,
+        DatabaseMappingSnapshot mapping)
+    {
+        var datasets = sources.GroupBy(source => source.SourceSetId).Select((group, index) =>
+        {
+            var fields = mapping.Columns.Select(column =>
+            {
+                var details = column.SourceInformationTypes.Select(type =>
+                    new DiscoveryInformationIdentity(
+                        group.Key, $"/{type}", type,
+                        SourceValueCandidateKind.Element, $"/{type}")).ToArray();
+                return new DatabaseFieldMapping(
+                    DatabaseLogicalFieldIdentity.Create(details[0]),
+                    column.DatabaseTagName,
+                    !string.Equals(column.DatabaseTagName, details[0].InformationType, StringComparison.Ordinal),
+                    details);
+            }).ToArray();
+            return new DatabaseDatasetBuildSpecification(
+                group.Key, $"Set {index + 1}", index + 1,
+                RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+                group.ToArray(), fields);
+        }).ToArray();
+        return new DatabaseBuildSpecification(datasets);
+    }
+}
 
 public sealed record RunExtractionCommand(
     Guid MessageId,
@@ -133,12 +188,39 @@ public sealed record RunWorkbookExportCommand(
     string TargetPath)
     : IpcCommand(MessageId, TimestampUtc);
 
+[method: JsonConstructor]
 public sealed record GetDatabaseReviewPageCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc,
-    OperationId GenerationId,
-    int StartRowOrdinal,
-    int RowCount)
+    DatabaseReviewQuery Query)
+    : IpcCommand(MessageId, TimestampUtc)
+{
+    public GetDatabaseReviewPageCommand(
+        Guid MessageId,
+        DateTimeOffset TimestampUtc,
+        OperationId GenerationId,
+        int StartRowOrdinal,
+        int RowCount)
+        : this(MessageId, TimestampUtc, new DatabaseReviewQuery(
+            GenerationId, SourceSetId.From(GenerationId.Value), StartRowOrdinal, RowCount, null,
+            DatabaseRowInclusionFilter.All))
+    {
+    }
+
+    [JsonIgnore]
+    public OperationId GenerationId => Query.GenerationId;
+
+    [JsonIgnore]
+    public int StartRowOrdinal => Query.StartRowOrdinal;
+
+    [JsonIgnore]
+    public int RowCount => Query.RowCount;
+}
+
+public sealed record SetDatabaseRowsIncludedCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    DatabaseRowInclusionChange Change)
     : IpcCommand(MessageId, TimestampUtc);
 
 public sealed record StopProcessingHostCommand(
@@ -233,6 +315,16 @@ public sealed record GetDatabaseReviewPageResponse(
     OperationId GenerationId,
     CommandAcceptance Acceptance,
     DatabaseReviewPage? Page,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record SetDatabaseRowsIncludedResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    OperationId GenerationId,
+    CommandAcceptance Acceptance,
+    int ChangedRowCount,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 

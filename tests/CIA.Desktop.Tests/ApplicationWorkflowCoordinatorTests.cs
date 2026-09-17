@@ -104,6 +104,23 @@ public sealed class ApplicationWorkflowCoordinatorTests
     }
 
     [TestMethod]
+    public async Task DatabaseRowInclusionChangeKeepsDatabaseCurrentAndStalesExtractionOnly()
+    {
+        var coordinator = CreateCoordinator(new StubProcessingHostSupervisor());
+        coordinator.RecordSourceSelectionChanged(true);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.Discovery);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.DatabaseBuild);
+        await CompleteSuccessfullyAsync(coordinator, WorkflowOperationKind.Extraction);
+
+        var result = coordinator.RecordDatabaseReviewChanged();
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, coordinator.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, coordinator.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, coordinator.Current.Extraction);
+    }
+
+    [TestMethod]
     public async Task DownstreamOperationsRequireCurrentUpstreamState()
     {
         var supervisor = new StubProcessingHostSupervisor();

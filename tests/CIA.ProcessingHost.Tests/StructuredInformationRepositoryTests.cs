@@ -300,6 +300,15 @@ public sealed class StructuredInformationRepositoryTests
                 DROP TABLE extraction_column_sources;
                 DROP TABLE extraction_columns;
                 DROP TABLE extraction_results;
+                DROP TABLE hierarchy_database_publication;
+                DROP TABLE hierarchy_database_cell_values;
+                DROP TABLE hierarchy_database_cells;
+                DROP TABLE hierarchy_database_rows;
+                DROP TABLE hierarchy_database_columns;
+                DROP TABLE hierarchy_database_mappings;
+                DROP TABLE hierarchy_database_sources;
+                DROP TABLE hierarchy_database_datasets;
+                DROP TABLE hierarchy_database_generations;
                 PRAGMA user_version = 2;
                 """);
         }

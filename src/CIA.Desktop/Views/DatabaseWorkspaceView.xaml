@@ -129,6 +129,22 @@
                         BorderThickness="0,0,0,1">
                     <Grid>
                         <StackPanel Orientation="Horizontal">
+                            <ComboBox Width="150"
+                                      Margin="0,0,6,0"
+                                      AutomationProperties.Name="Database Source Set dataset"
+                                      DisplayMemberPath="DisplayName"
+                                      ItemsSource="{Binding Datasets}"
+                                      SelectedItem="{Binding SelectedDataset}" />
+                            <TextBox Width="160"
+                                     Margin="0,0,6,0"
+                                     AutomationProperties.Name="Search Database rows"
+                                     Style="{StaticResource CiaTextInputStyle}"
+                                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
+                            <ComboBox Width="92"
+                                      Margin="0,0,6,0"
+                                      AutomationProperties.Name="Database row inclusion filter"
+                                      ItemsSource="{Binding RowInclusionFilters}"
+                                      SelectedItem="{Binding RowInclusionFilter}" />
                             <Button x:Name="ColumnsButton"
                                     AutomationProperties.Name="Configure Database columns"
                                     Click="OnColumnsClick"
@@ -145,6 +161,25 @@
                                        Text="{Binding ColumnCountText}" />
                         </StackPanel>
                         <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                            <Button Margin="0,0,4,0"
+                                    Command="{Binding IncludeVisibleRowsCommand}"
+                                    Content="Include visible"
+                                    Style="{StaticResource CiaGhostButtonStyle}" />
+                            <Button Margin="0,0,6,0"
+                                    Command="{Binding ExcludeVisibleRowsCommand}"
+                                    Content="Exclude visible"
+                                    Style="{StaticResource CiaGhostButtonStyle}" />
+                            <ComboBox Width="86"
+                                      Margin="0,0,6,0"
+                                      AutomationProperties.Name="Database metadata visibility"
+                                      ItemsSource="{Binding MetadataVisibilityModes}"
+                                      SelectedItem="{Binding MetadataVisibilityMode}" />
+                            <Button x:Name="MetadataButton"
+                                    Margin="0,0,6,0"
+                                    AutomationProperties.Name="Configure Database metadata fields"
+                                    Click="OnMetadataClick"
+                                    Content="Metadata..."
+                                    Style="{StaticResource CiaGhostButtonStyle}" />
                             <Button x:Name="PreviousDatabasePageButton"
                                     MinWidth="74"
                                     AutomationProperties.Name="Previous Database review page"
@@ -270,6 +305,38 @@
                     </Border>
                 </Popup>
 
+                <Popup x:Name="MetadataPopup"
+                       AllowsTransparency="True"
+                       Placement="Bottom"
+                       PlacementTarget="{Binding ElementName=MetadataButton}"
+                       StaysOpen="False">
+                    <Border Width="270"
+                            Margin="0,4,0,0"
+                            Padding="9"
+                            Background="{StaticResource CiaPanelBrush}"
+                            BorderBrush="{StaticResource CiaBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="9">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource DatabaseSectionTextStyle}"
+                                       Text="ROW METADATA" />
+                            <TextBlock Margin="0,4,0,7"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="Visibility is presentation-only; retained metadata is unchanged."
+                                       TextWrapping="Wrap" />
+                            <ItemsControl ItemsSource="{Binding MetadataFields}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <CheckBox Margin="0,2"
+                                                  Content="{Binding DisplayName}"
+                                                  IsChecked="{Binding IsVisible}" />
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+
                 <Grid Grid.Row="2" MinHeight="0" Background="{StaticResource CiaPanelBrush}">
                     <ScrollViewer HorizontalScrollBarVisibility="Auto"
                                   VerticalScrollBarVisibility="Disabled">
@@ -282,13 +349,30 @@
                                     BorderBrush="{StaticResource CiaBorderBrush}"
                                     BorderThickness="0,0,0,1">
                                 <StackPanel Orientation="Horizontal">
-                                    <Border Width="48"
+                                    <Border Width="72"
                                             BorderBrush="{StaticResource CiaDividerBrush}"
                                             BorderThickness="0,0,1,0">
                                         <TextBlock HorizontalAlignment="Center"
                                                    Style="{StaticResource DatabaseGridHeaderTextStyle}"
-                                                   Text="#" />
+                                                   Text="Include / #" />
                                     </Border>
+                                    <ItemsControl ItemsSource="{Binding VisibleMetadataColumns}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Orientation="Horizontal" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Width="140"
+                                                        BorderBrush="{StaticResource CiaDividerBrush}"
+                                                        BorderThickness="0,0,1,0">
+                                                    <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
+                                                               Text="{Binding DisplayName}" />
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
                                     <ItemsControl x:Name="DynamicDatabaseHeaders"
                                                   ItemsSource="{Binding VisibleColumns}">
                                         <ItemsControl.ItemsPanel>
@@ -316,15 +400,54 @@
                                               ItemsSource="{Binding Records}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <StackPanel Height="30" Orientation="Horizontal">
-                                                <Border Width="48"
+                                            <Border Height="30">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Background" Value="Transparent" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding HasConflict}" Value="True">
+                                                                <Setter Property="Background" Value="{StaticResource CiaWarningSoftBrush}" />
+                                                                <Setter Property="ToolTip" Value="This row contains preserved conflicting mapped values." />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                            <StackPanel Orientation="Horizontal">
+                                                <Border Width="72"
                                                         BorderBrush="{StaticResource CiaDividerBrush}"
                                                         BorderThickness="0,0,1,1">
-                                                    <TextBlock HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center"
-                                                               Foreground="{StaticResource CiaTextMutedBrush}"
-                                                               Text="{Binding Ordinal}" />
+                                                    <StackPanel HorizontalAlignment="Center" Orientation="Horizontal">
+                                                        <CheckBox VerticalAlignment="Center"
+                                                                  IsChecked="{Binding IsIncluded, Mode=OneWay}"
+                                                                  Command="{Binding DataContext.SetRowIncludedCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                  CommandParameter="{Binding}" />
+                                                        <TextBlock Margin="5,0,0,0"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="{StaticResource CiaTextMutedBrush}"
+                                                                   Text="{Binding Ordinal}" />
+                                                    </StackPanel>
                                                 </Border>
+                                                <ItemsControl ItemsSource="{Binding MetadataCells}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <StackPanel Orientation="Horizontal" />
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border Width="140"
+                                                                    BorderBrush="{StaticResource CiaDividerBrush}"
+                                                                    BorderThickness="0,0,1,1"
+                                                                    ToolTip="{Binding Value}">
+                                                                <TextBlock Margin="8,0"
+                                                                           VerticalAlignment="Center"
+                                                                           Foreground="{StaticResource CiaTextMutedBrush}"
+                                                                           Text="{Binding Value}"
+                                                                           TextTrimming="CharacterEllipsis" />
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
                                                 <ItemsControl ItemsSource="{Binding Cells}">
                                                     <ItemsControl.ItemsPanel>
                                                         <ItemsPanelTemplate>
@@ -337,6 +460,15 @@
                                                                     BorderBrush="{StaticResource CiaDividerBrush}"
                                                                     BorderThickness="0,0,1,1"
                                                                     ToolTip="{Binding SourceContext}">
+                                                                <Border.Style>
+                                                                    <Style TargetType="Border">
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding HasConflict}" Value="True">
+                                                                                <Setter Property="Background" Value="{StaticResource CiaWarningSoftBrush}" />
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Border.Style>
                                                                 <TextBlock Margin="8,0"
                                                                            VerticalAlignment="Center"
                                                                            Foreground="{StaticResource CiaTextPrimaryBrush}"
@@ -347,6 +479,7 @@
                                                     </ItemsControl.ItemTemplate>
                                                 </ItemsControl>
                                             </StackPanel>
+                                            </Border>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>

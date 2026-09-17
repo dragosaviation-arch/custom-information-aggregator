@@ -239,9 +239,7 @@ public sealed class ProcessingHostLifetimeService(
 
                 case GetDatabaseReviewPageCommand command when established:
                     var reviewResult = await databaseReview.ReadPageAsync(
-                            command.GenerationId,
-                            command.StartRowOrdinal,
-                            command.RowCount,
+                            command.Query,
                             cancellationToken)
                         .ConfigureAwait(false);
                     await connection.SendAsync(
@@ -249,12 +247,32 @@ public sealed class ProcessingHostLifetimeService(
                                 Guid.CreateVersion7(),
                                 DateTimeOffset.UtcNow,
                                 command.MessageId,
-                                command.GenerationId,
+                                command.Query.GenerationId,
                                 reviewResult.Accepted
                                     ? CommandAcceptance.Accepted
                                     : CommandAcceptance.Rejected,
                                 reviewResult.Page,
                                 reviewResult.Failure),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+
+                case SetDatabaseRowsIncludedCommand command when established:
+                    var inclusionResult = await databaseReview.SetRowsIncludedAsync(
+                            command.Change,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    await connection.SendAsync(
+                            new SetDatabaseRowsIncludedResponse(
+                                Guid.CreateVersion7(),
+                                DateTimeOffset.UtcNow,
+                                command.MessageId,
+                                command.Change.GenerationId,
+                                inclusionResult.Accepted
+                                    ? CommandAcceptance.Accepted
+                                    : CommandAcceptance.Rejected,
+                                inclusionResult.ChangedRowCount,
+                                inclusionResult.Failure),
                             cancellationToken)
                         .ConfigureAwait(false);
                     break;
@@ -387,8 +405,7 @@ public sealed class ProcessingHostLifetimeService(
         var result = await databaseGeneration
             .BuildAsync(
                 command.Correlation,
-                command.Sources,
-                command.Mapping,
+                command.Specification,
                 cancellationToken)
             .ConfigureAwait(false);
         var response = new BuildDatabaseResponse(

@@ -1,5 +1,6 @@
 using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
+using CIA.Core.Hierarchy;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Extraction;
@@ -46,7 +47,13 @@ public static class ProcessingHostApplicationHost
         builder.Services.AddSingleton<SourceRefreshService>();
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();
-        builder.Services.AddSingleton<DatabaseGenerationService>();
+        builder.Services.AddSingleton<IHierarchyFlatteningEngine, HierarchyFlatteningEngine>();
+        builder.Services.AddSingleton(serviceProvider => new DatabaseGenerationService(
+            serviceProvider.GetRequiredService<StructuredInformationRepository>(),
+            serviceProvider.GetRequiredService<ISourceInterpreter>(),
+            serviceProvider.GetRequiredService<IHierarchyFlatteningEngine>(),
+            serviceProvider.GetRequiredService<CooperativeOperationCancellation>(),
+            serviceProvider.GetRequiredService<ILogger<DatabaseGenerationService>>()));
         builder.Services.AddSingleton<DatabaseReviewService>();
         builder.Services.AddSingleton<DatabaseExtractionService>();
         builder.Services.AddSingleton<ExcelWorkbookExportService>();
