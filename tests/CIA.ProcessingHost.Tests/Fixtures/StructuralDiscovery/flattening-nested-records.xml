@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<catalog>
+  <product>
+    <sku>P1</sku>
+    <variants>
+      <variant>
+        <code>A</code>
+        <price>10</price>
+      </variant>
+      <variant>
+        <code>B</code>
+        <price>20</price>
+      </variant>
+    </variants>
+  </product>
+  <product>
+    <sku>P2</sku>
+    <variants>
+      <variant>
+        <code>C</code>
+        <price>30</price>
+      </variant>
+    </variants>
+  </product>
+</catalog>

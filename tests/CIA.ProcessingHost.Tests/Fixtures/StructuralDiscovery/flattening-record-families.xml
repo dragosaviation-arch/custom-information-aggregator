@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<dataset>
+  <families>
+    <buyers>
+      <buyer>
+        <name>Shared</name>
+        <reference>B1</reference>
+      </buyer>
+      <buyer>
+        <name>Shared</name>
+        <reference>B2</reference>
+      </buyer>
+    </buyers>
+    <sellers>
+      <seller>
+        <name>Seller A</name>
+        <reference>S1</reference>
+      </seller>
+      <seller>
+        <name>Seller B</name>
+        <reference>S2</reference>
+      </seller>
+    </sellers>
+  </families>
+</dataset>
