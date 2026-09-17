@@ -364,6 +364,38 @@ public sealed class HierarchyDatabaseGenerationTests
     }
 
     [TestMethod]
+    public async Task NestedRepeatedRowsExposeNestedStructuralRecordHierarchy()
+    {
+        using var workspace = new Workspace();
+        var set = SourceSetId.CreateNew();
+        var fixture = Path.Combine(
+            AppContext.BaseDirectory, "Fixtures", "StructuralDiscovery", "flattening-nested-records.xml");
+        var source = workspace.Source(set, "nested.xml", File.ReadAllText(fixture));
+        var interpreted = await workspace.InterpretAsync(source);
+        var identities = Identities(set, interpreted)
+            .Where(identity => identity.InformationType is "code" or "price")
+            .ToArray();
+        var specification = workspace.Specification(
+            set,
+            "Nested",
+            RepeatedDataLayout.StructuralRows,
+            [source],
+            identities,
+            new Dictionary<DiscoveryInformationIdentity, string>());
+
+        var result = await workspace.Service.BuildAsync(OperationCorrelation.CreateNew(), specification);
+        var page = await workspace.PageAsync(result.PublishedGeneration!, set);
+        var firstVariant = page.Rows.Single(row =>
+            Values(row).Contains("A") && Values(row).Contains("10"));
+
+        StringAssert.Contains(firstVariant.RecordHierarchy, "/catalog[1]/product[1]");
+        StringAssert.Contains(firstVariant.RecordHierarchy, "/variants[");
+        StringAssert.Contains(firstVariant.RecordHierarchy, "/variant[1]");
+        Assert.IsFalse(firstVariant.RecordHierarchy.Contains(
+            firstVariant.Source.SourceId.ToString(), StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public async Task FailedCandidateDoesNotReplacePublishedHierarchyGeneration()
     {
         using var workspace = new Workspace();
