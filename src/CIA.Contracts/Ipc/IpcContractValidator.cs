@@ -424,21 +424,65 @@ public static class IpcContractValidator
 
     private static void ValidateRunWorkbookExportCommand(RunWorkbookExportCommand command)
     {
-        if (command.ExtractionResult is null || command.Configuration is null)
+        if (command.ExtractionResult is null
+            || command.Configuration is null
+            || command.PublicationPlan is null)
         {
             throw InvalidContract(
-                "A workbook export requires an Extraction Result and export configuration.");
+                "A workbook export requires an Extraction Result, export configuration, and publication plan.");
         }
 
         ValidateOperationCorrelation(command.Correlation);
         ValidateExtractionResult(command.ExtractionResult);
         ValidateExportConfiguration(command.Configuration, command.ExtractionResult);
-        ValidatePath(command.OutputDirectory);
+        ValidateWorkbookPublicationPlan(
+            command.PublicationPlan,
+            command.Configuration,
+            command.ExtractionResult);
 
         if (command.Correlation.OperationId == command.ExtractionResult.OperationId)
         {
             throw InvalidContract(
                 "A workbook export requires a distinct operation and a fully qualified output directory.");
+        }
+    }
+
+    private static void ValidateWorkbookPublicationPlan(
+        WorkbookPublicationPlan plan,
+        ExportConfigurationSnapshot configuration,
+        ExtractionResultSummary extractionResult)
+    {
+        ValidatePath(plan.OutputDirectory);
+        var validation = ExportConfigurationValidator.Validate(configuration, extractionResult);
+        if (!validation.IsValid
+            || plan.Targets is null
+            || plan.Targets.Count != validation.RunnableWorkbooks.Count)
+        {
+            throw InvalidContract(
+                "A workbook publication plan must resolve every runnable workbook exactly once.");
+        }
+
+        var targetsById = plan.Targets.ToDictionary(target => target.WorkbookDefinitionId);
+        foreach (var runnable in validation.RunnableWorkbooks)
+        {
+            if (!targetsById.TryGetValue(
+                    runnable.Workbook.WorkbookDefinitionId,
+                    out var target)
+                || !Enum.IsDefined(target.Disposition)
+                || !string.Equals(
+                    Path.GetDirectoryName(target.FinalPath),
+                    plan.OutputDirectory,
+                    StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(
+                    Path.GetFileName(target.FinalPath),
+                    runnable.Workbook.FileName,
+                    StringComparison.Ordinal))
+            {
+                throw InvalidContract(
+                    "A workbook publication target does not match its runnable workbook definition.");
+            }
+
+            ValidatePath(target.FinalPath);
         }
     }
 

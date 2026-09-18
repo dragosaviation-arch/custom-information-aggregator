@@ -3,11 +3,13 @@ using System.Windows.Controls;
 using System.Windows.Threading;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Extraction;
+using CIA.Desktop.Export;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
@@ -108,6 +110,8 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var metadataRows = (ItemsControl)view.FindName("ExportMetadataRows");
             var excelExport = (Border)view.FindName("ExcelExportPanel");
             var exportButton = (Button)view.FindName("ExportToExcelButton");
+            var browseOutputFolder = (Button)view.FindName("BrowseOutputFolderButton");
+            var workbookExportStatus = (TextBlock)view.FindName("WorkbookExportStatusText");
             var prepareButton = (Button)view.FindName("PrepareForExportButton");
             var extractionState = (TextBlock)view.FindName("ExtractionReviewStateText");
 
@@ -131,6 +135,9 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.IsTrue(viewModel.IsExportConfigurationValid);
             Assert.AreEqual(Visibility.Visible, excelExport.Visibility);
             Assert.IsFalse(exportButton.IsEnabled);
+            Assert.IsNotNull(exportButton.Command);
+            Assert.IsNotNull(browseOutputFolder.Command);
+            Assert.AreEqual(viewModel.WorkbookExportStatusText, workbookExportStatus.Text);
             Assert.IsTrue(prepareButton.IsEnabled);
             Assert.AreEqual("Not prepared", extractionState.Text);
             Assert.IsNull(view.FindName("DatabaseFiltersButton"));
@@ -138,6 +145,22 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.IsNull(view.FindName("GlobalSourceIdExportField"));
             Assert.IsNull(view.FindName("SingleSheetMode"));
             Assert.IsNull(view.FindName("MultipleSheetsMode"));
+
+            var collisionId = WorkbookDefinitionId.CreateNew();
+            var collisionDialog = new WorkbookCollisionDialog(
+                new WorkbookCollisionResolutionRequest(
+                    Path.GetFullPath("."),
+                    [new WorkbookCollisionTarget(
+                        collisionId,
+                        "existing.xlsx",
+                        Path.GetFullPath("existing.xlsx"),
+                        Exists: true)],
+                    []));
+            Assert.HasCount(1, collisionDialog.Rows);
+            Assert.AreEqual(
+                WorkbookCollisionAction.Cancel,
+                collisionDialog.Rows[0].SelectedOption.Action);
+            collisionDialog.Close();
 
             Assert.IsNotNull(prepareButton.Command);
             Assert.AreEqual(2, reviewRows.Items.Count);

@@ -13,6 +13,93 @@ public static class ExcelWorkbookLimits
     public const int MaximumCellTextLength = 32_767;
 }
 
+public enum WorkbookPublicationDisposition
+{
+    CreateNew = 1,
+    OverwriteExisting = 2
+}
+
+public sealed record WorkbookPublicationTarget
+{
+    [JsonConstructor]
+    public WorkbookPublicationTarget(
+        WorkbookDefinitionId workbookDefinitionId,
+        string finalPath,
+        WorkbookPublicationDisposition disposition)
+    {
+        if (!WorkbookDefinitionId.IsValid(workbookDefinitionId.Value))
+        {
+            throw new ArgumentException(
+                "A workbook publication target requires a stable workbook identity.",
+                nameof(workbookDefinitionId));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(finalPath);
+        if (!Path.IsPathFullyQualified(finalPath)
+            || !string.Equals(
+                Path.GetExtension(finalPath),
+                ".xlsx",
+                StringComparison.OrdinalIgnoreCase)
+            || !Enum.IsDefined(disposition))
+        {
+            throw new ArgumentException("A workbook publication target is invalid.");
+        }
+
+        WorkbookDefinitionId = workbookDefinitionId;
+        FinalPath = Path.GetFullPath(finalPath);
+        Disposition = disposition;
+    }
+
+    public WorkbookDefinitionId WorkbookDefinitionId { get; }
+
+    public string FinalPath { get; }
+
+    public WorkbookPublicationDisposition Disposition { get; }
+}
+
+public sealed record WorkbookPublicationPlan
+{
+    [JsonConstructor]
+    public WorkbookPublicationPlan(
+        string outputDirectory,
+        IReadOnlyList<WorkbookPublicationTarget> targets)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        ArgumentNullException.ThrowIfNull(targets);
+        if (!Path.IsPathFullyQualified(outputDirectory))
+        {
+            throw new ArgumentException(
+                "A workbook publication plan requires a fully qualified output directory.",
+                nameof(outputDirectory));
+        }
+
+        var resolvedDirectory = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(outputDirectory));
+        var targetArray = targets.ToArray();
+        if (targetArray.Length == 0
+            || targetArray.Any(target => target is null
+                || !string.Equals(
+                    Path.GetDirectoryName(target.FinalPath),
+                    resolvedDirectory,
+                    StringComparison.OrdinalIgnoreCase))
+            || targetArray.Select(target => target.WorkbookDefinitionId).Distinct().Count()
+                != targetArray.Length
+            || targetArray.Select(target => target.FinalPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() != targetArray.Length)
+        {
+            throw new ArgumentException(
+                "A workbook publication plan requires unique workbook identities and targets in one output directory.");
+        }
+
+        OutputDirectory = resolvedDirectory;
+        Targets = new ReadOnlyCollection<WorkbookPublicationTarget>(targetArray);
+    }
+
+    public string OutputDirectory { get; }
+
+    public IReadOnlyList<WorkbookPublicationTarget> Targets { get; }
+}
+
 public sealed record WorkbookExportWorksheetSummary
 {
     [JsonConstructor]

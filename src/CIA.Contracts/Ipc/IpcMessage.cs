@@ -132,7 +132,7 @@ public sealed record RunWorkbookExportCommand(
     OperationCorrelation Correlation,
     ExtractionResultSummary ExtractionResult,
     ExportConfigurationSnapshot Configuration,
-    string OutputDirectory)
+    WorkbookPublicationPlan PublicationPlan)
     : IpcCommand(MessageId, TimestampUtc);
 
 [method: JsonConstructor]

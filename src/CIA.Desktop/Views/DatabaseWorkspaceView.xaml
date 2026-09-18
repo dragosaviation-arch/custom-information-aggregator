@@ -116,10 +116,10 @@
                         <Button x:Name="ExportToExcelButton"
                                 Grid.Column="3"
                                 AutomationProperties.Name="Export to Excel"
+                                Command="{Binding ExportToExcelCommand}"
                                 Content="▣ Export to Excel"
-                                IsEnabled="{Binding IsExportAvailable}"
                                 Style="{StaticResource CiaPrimaryButtonStyle}"
-                                ToolTip="Excel workbook generation is implemented by a later story." />
+                                ToolTip="Publish the prepared workbook batch to the selected output folder." />
                     </Grid>
                 </Border>
 
@@ -840,15 +840,25 @@
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <TextBlock VerticalAlignment="Center" Style="{StaticResource CiaSecondaryTextStyle}" Text="Output folder" />
-                                        <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding OutputFolder, Mode=TwoWay}" />
-                                        <Button Grid.Column="2" Margin="5,0,0,0" IsEnabled="False" Style="{StaticResource CiaButtonStyle}" Content="Browse" />
+                                        <TextBox Grid.Column="1"
+                                                 AutomationProperties.Name="Excel output folder"
+                                                 Style="{StaticResource CiaTextInputStyle}"
+                                                 Text="{Binding OutputFolder, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                        <Button x:Name="BrowseOutputFolderButton"
+                                                Grid.Column="2"
+                                                Margin="5,0,0,0"
+                                                AutomationProperties.Name="Browse for Excel output folder"
+                                                Command="{Binding BrowseOutputFolderCommand}"
+                                                Style="{StaticResource CiaButtonStyle}"
+                                                Content="Browse" />
                                     </Grid>
                                     <CheckBox Margin="0,7,0,0"
                                               Content="Always ask where to export"
                                               IsChecked="{Binding AlwaysAskWhereToExport}" />
-                                    <TextBlock Margin="0,7,0,0"
+                                    <TextBlock x:Name="WorkbookExportStatusText"
+                                               Margin="0,7,0,0"
                                                Style="{StaticResource CiaSecondaryTextStyle}"
-                                               Text="Workbook publication remains unavailable until SPR-141."
+                                               Text="{Binding WorkbookExportStatusText}"
                                                TextWrapping="Wrap" />
                                 </StackPanel>
                                 <StackPanel x:Name="ExcelInfo" Grid.Column="2">

@@ -10,7 +10,7 @@ public interface IWorkbookExportClient
         OperationCorrelation correlation,
         ExtractionResultSummary extractionResult,
         ExportConfigurationSnapshot configuration,
-        string outputDirectory,
+        WorkbookPublicationPlan publicationPlan,
         CancellationToken cancellationToken = default);
 }
 

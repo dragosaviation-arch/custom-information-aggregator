@@ -45,13 +45,13 @@ public sealed class ExcelWorkbookExportService
         OperationCorrelation correlation,
         ExtractionResultSummary extractionResult,
         ExportConfigurationSnapshot configuration,
-        string outputDirectory,
+        WorkbookPublicationPlan publicationPlan,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(extractionResult);
         ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        ArgumentNullException.ThrowIfNull(publicationPlan);
 
         var operation = _operationCancellation.BeginOperation(
             correlation,
@@ -73,7 +73,8 @@ public sealed class ExcelWorkbookExportService
         {
             try
             {
-                var resolvedOutputDirectory = ValidateOutputDirectory(outputDirectory);
+                var resolvedOutputDirectory = ValidateOutputDirectory(
+                    publicationPlan.OutputDirectory);
                 var validation = ExportConfigurationValidator.Validate(configuration, extractionResult);
                 if (!validation.IsValid)
                 {
@@ -89,6 +90,11 @@ public sealed class ExcelWorkbookExportService
                         "The export configuration has no enabled Source Sets to publish.");
                 }
 
+                ValidatePublicationPlan(
+                    publicationPlan,
+                    resolvedOutputDirectory,
+                    validation.RunnableWorkbooks);
+
                 var publishedResult = await _rowSource.ReadPublishedResultAsync(
                         exportCancellation.Token)
                     .ConfigureAwait(false);
@@ -99,12 +105,8 @@ public sealed class ExcelWorkbookExportService
                         "The captured Extraction Result is no longer the active published result.");
                 }
 
-                var targets = validation.RunnableWorkbooks.Select(workbook => (
-                    workbook.Workbook.WorkbookDefinitionId,
-                    FinalPath: Path.Combine(
-                        resolvedOutputDirectory,
-                        workbook.Workbook.FileName))).ToArray();
-                using var publication = WorkbookBatchPublicationScope.Create(targets);
+                using var publication = WorkbookBatchPublicationScope.Create(
+                    publicationPlan.Targets);
                 var workbookSummaries = new List<WorkbookExportFileSummary>(
                     validation.RunnableWorkbooks.Count);
                 var allWorksheetCounters = new List<WorksheetWriteCounter>();
@@ -341,6 +343,53 @@ public sealed class ExcelWorkbookExportService
         }
 
         return resolved;
+    }
+
+    private static void ValidatePublicationPlan(
+        WorkbookPublicationPlan publicationPlan,
+        string resolvedOutputDirectory,
+        IReadOnlyList<RunnableWorkbookDefinition> runnableWorkbooks)
+    {
+        if (!string.Equals(
+                publicationPlan.OutputDirectory,
+                resolvedOutputDirectory,
+                StringComparison.OrdinalIgnoreCase)
+            || publicationPlan.Targets.Count != runnableWorkbooks.Count)
+        {
+            throw new WorkbookExportException(
+                "invalid-publication-plan",
+                "The resolved publication plan does not match the runnable workbook batch.");
+        }
+
+        var targetsById = publicationPlan.Targets.ToDictionary(target =>
+            target.WorkbookDefinitionId);
+        foreach (var runnable in runnableWorkbooks)
+        {
+            if (!targetsById.TryGetValue(
+                    runnable.Workbook.WorkbookDefinitionId,
+                    out var target)
+                || !string.Equals(
+                    Path.GetDirectoryName(target.FinalPath),
+                    resolvedOutputDirectory,
+                    StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(
+                    Path.GetFileName(target.FinalPath),
+                    runnable.Workbook.FileName,
+                    StringComparison.Ordinal))
+            {
+                throw new WorkbookExportException(
+                    "invalid-publication-plan",
+                    "A resolved publication target does not match its runnable workbook definition.");
+            }
+
+            if (target.Disposition == WorkbookPublicationDisposition.CreateNew
+                && File.Exists(target.FinalPath))
+            {
+                throw new WorkbookExportException(
+                    "export-overwrite-not-authorized",
+                    $"Workbook '{runnable.Workbook.FileName}' already exists and overwrite was not explicitly authorized.");
+            }
+        }
     }
 
     private static bool ExtractionResultsMatch(
