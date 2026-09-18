@@ -101,6 +101,11 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var lowerTabs = (Grid)view.FindName("LowerTabs");
             var exportFields = (Border)view.FindName("ExportFieldsPanel");
             var exportRows = (ItemsControl)view.FindName("ExportColumnRows");
+            var exportEnabled = (CheckBox)view.FindName("ExportEnabledToggle");
+            var workbookSelector = (ComboBox)view.FindName("WorkbookDefinitionSelector");
+            var createWorkbook = (Button)view.FindName("CreateWorkbookDefinitionButton");
+            var worksheetName = (TextBox)view.FindName("WorksheetNameInput");
+            var metadataRows = (ItemsControl)view.FindName("ExportMetadataRows");
             var excelExport = (Border)view.FindName("ExcelExportPanel");
             var exportButton = (Button)view.FindName("ExportToExcelButton");
             var prepareButton = (Button)view.FindName("PrepareForExportButton");
@@ -118,6 +123,12 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.AreEqual(Visibility.Visible, exportFields.Visibility);
             Assert.AreEqual(2, exportRows.Items.Count);
             Assert.AreSame(viewModel.ExportColumns, exportRows.ItemsSource);
+            Assert.IsTrue(exportEnabled.IsChecked.GetValueOrDefault());
+            Assert.AreEqual(1, workbookSelector.Items.Count);
+            Assert.IsTrue(createWorkbook.IsEnabled);
+            Assert.AreEqual(viewModel.SelectedWorksheetName, worksheetName.Text);
+            Assert.AreEqual(Enum.GetValues<DatabaseMetadataField>().Length, metadataRows.Items.Count);
+            Assert.IsTrue(viewModel.IsExportConfigurationValid);
             Assert.AreEqual(Visibility.Visible, excelExport.Visibility);
             Assert.IsFalse(exportButton.IsEnabled);
             Assert.IsTrue(prepareButton.IsEnabled);
@@ -125,6 +136,8 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.IsNull(view.FindName("DatabaseFiltersButton"));
             Assert.IsNull(view.FindName("ExtractionReviewRows"));
             Assert.IsNull(view.FindName("GlobalSourceIdExportField"));
+            Assert.IsNull(view.FindName("SingleSheetMode"));
+            Assert.IsNull(view.FindName("MultipleSheetsMode"));
 
             Assert.IsNotNull(prepareButton.Command);
             Assert.AreEqual(2, reviewRows.Items.Count);

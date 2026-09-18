@@ -741,42 +741,16 @@ public static class IpcContractValidator
         ExportConfigurationSnapshot configuration,
         ExtractionResultSummary extractionResult)
     {
-        if (extractionResult.IsHierarchyAware)
-        {
-            throw InvalidContract(
-                "Hierarchy-aware Extraction Results require the later Set-aware workbook contract.");
-        }
-
-        if (configuration is null
-            || configuration.Fields is null
-            || configuration.Fields.Count == 0)
+        if (configuration is null)
         {
             throw InvalidContract("A workbook export requires an export configuration.");
         }
 
-        var configuredFields = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var field in configuration.Fields)
-        {
-            if (field is null
-                || string.IsNullOrWhiteSpace(field.DatabaseFieldIdentity)
-                || string.IsNullOrWhiteSpace(field.ExcelHeader)
-                || field.ExcelHeader.Length > ExcelWorkbookLimits.MaximumCellTextLength
-                || field.IsSourceIdCompanionIncluded && !field.IsValueIncluded
-                || !configuredFields.Add(field.DatabaseFieldIdentity))
-            {
-                throw InvalidContract("A workbook export field is invalid or duplicated.");
-            }
-        }
-
-        var extractionFields = extractionResult.DatabaseGeneration.Mapping.Columns
-            .Select(column => column.DatabaseTagName)
-            .ToHashSet(StringComparer.Ordinal);
-        var outputColumns = configuration.CreateIncludedOutputColumns();
-        if (!configuredFields.SetEquals(extractionFields)
-            || outputColumns.Count is < 1 or > ExcelWorkbookLimits.MaximumColumns)
+        var validation = ExportConfigurationValidator.Validate(configuration, extractionResult);
+        if (!validation.IsValid)
         {
             throw InvalidContract(
-                "The export configuration must match the Extraction Result and Excel column limits.");
+                $"The export configuration is invalid: {validation.Failures[0].Description}");
         }
     }
 

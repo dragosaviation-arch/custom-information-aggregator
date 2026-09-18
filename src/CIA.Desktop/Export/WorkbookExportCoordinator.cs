@@ -49,7 +49,7 @@ public sealed class WorkbookExportCoordinator(
             return WorkflowCommandResult.Reject(
                 WorkflowRejectionCode.ExtractionNotCurrent,
                 extractionResult?.IsHierarchyAware == true
-                    ? "Set-aware hierarchy Extraction Results require SPR-140/141 workbook routing."
+                    ? "SPR-141 owns Set-aware workbook generation and publication."
                     : "Export requires the active prepared Extraction Result to be current.");
         }
 
@@ -76,7 +76,7 @@ public sealed class WorkbookExportCoordinator(
                     || result.Workbook.OperationId != begin.Operation.OperationId
                     || result.Workbook.ExtractionResultId != extractionResult.OperationId
                     || result.Workbook.ColumnCount
-                        != configuration.CreateIncludedOutputColumns().Count
+                        != configuration.IncludedOutputColumnCount
                     || !string.Equals(
                         Path.GetFullPath(result.Workbook.TargetPath),
                         Path.GetFullPath(targetPath),
