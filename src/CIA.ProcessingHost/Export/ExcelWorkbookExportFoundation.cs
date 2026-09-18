@@ -240,7 +240,7 @@ internal sealed class WorkbookPublicationScope : IDisposable
         }
     }
 
-    private static string ValidateTarget(string finalPath)
+    internal static string ValidateTarget(string finalPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(finalPath);
         if (!Path.IsPathFullyQualified(finalPath)
@@ -271,6 +271,151 @@ internal sealed class WorkbookPublicationScope : IDisposable
         }
 
         return resolvedPath;
+    }
+}
+
+internal sealed record WorkbookPublicationCandidate(
+    WorkbookDefinitionId WorkbookDefinitionId,
+    string FinalPath,
+    string TemporaryPath);
+
+internal sealed class WorkbookBatchPublicationScope : IDisposable
+{
+    private readonly IReadOnlyList<WorkbookPublicationCandidate> _candidates;
+    private bool _published;
+    private bool _disposed;
+
+    private WorkbookBatchPublicationScope(
+        IEnumerable<(WorkbookDefinitionId WorkbookDefinitionId, string FinalPath)> targets)
+    {
+        var resolved = targets.Select(target => (
+            target.WorkbookDefinitionId,
+            FinalPath: WorkbookPublicationScope.ValidateTarget(target.FinalPath))).ToArray();
+        if (resolved.Length == 0
+            || resolved.Select(target => target.WorkbookDefinitionId).Distinct().Count()
+                != resolved.Length
+            || resolved.Select(target => target.FinalPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() != resolved.Length)
+        {
+            throw new WorkbookExportException(
+                "invalid-export-batch",
+                "A workbook export batch requires unique workbook identities and target paths.");
+        }
+
+        _candidates = resolved.Select(target => new WorkbookPublicationCandidate(
+            target.WorkbookDefinitionId,
+            target.FinalPath,
+            Path.Combine(
+                Path.GetDirectoryName(target.FinalPath)!,
+                $".cia-export-{Guid.NewGuid():N}.incomplete"))).ToArray();
+    }
+
+    internal IReadOnlyList<WorkbookPublicationCandidate> Candidates => _candidates;
+
+    internal static WorkbookBatchPublicationScope Create(
+        IEnumerable<(WorkbookDefinitionId WorkbookDefinitionId, string FinalPath)> targets)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        return new WorkbookBatchPublicationScope(targets);
+    }
+
+    internal void Publish(
+        Func<bool> tryEnterNonCancellablePublicationBoundary,
+        CancellationToken cancellationToken = default,
+        Action<string, string>? moveFile = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(tryEnterNonCancellablePublicationBoundary);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_candidates.Any(candidate => !File.Exists(candidate.TemporaryPath)))
+        {
+            throw new WorkbookExportException(
+                "export-temporary-file-missing",
+                "One or more temporary workbooks are unavailable for batch publication.");
+        }
+
+        if (_candidates.Any(candidate => File.Exists(candidate.FinalPath)))
+        {
+            throw new WorkbookExportException(
+                "export-target-exists",
+                "An export target already exists and no workbook was published.");
+        }
+
+        if (!tryEnterNonCancellablePublicationBoundary())
+        {
+            throw new OperationCanceledException(
+                "Export was cancelled before its atomic batch publication boundary.",
+                cancellationToken);
+        }
+
+        moveFile ??= static (source, destination) => File.Move(source, destination, overwrite: false);
+        var publishedPaths = new List<string>();
+        try
+        {
+            foreach (var candidate in _candidates)
+            {
+                moveFile(candidate.TemporaryPath, candidate.FinalPath);
+                publishedPaths.Add(candidate.FinalPath);
+            }
+
+            _published = true;
+        }
+        catch (Exception exception)
+        {
+            var rollbackFailures = new List<Exception>();
+            foreach (var path in publishedPaths.AsEnumerable().Reverse())
+            {
+                try
+                {
+                    if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                    }
+                }
+                catch (Exception rollbackFailure)
+                {
+                    rollbackFailures.Add(rollbackFailure);
+                }
+            }
+
+            if (rollbackFailures.Count != 0)
+            {
+                throw new WorkbookExportException(
+                    "export-batch-rollback-failed",
+                    "Workbook batch publication failed and rollback could not remove every file published by this operation.",
+                    new AggregateException([exception, .. rollbackFailures]));
+            }
+
+            throw new WorkbookExportException(
+                File.Exists(_candidates.FirstOrDefault(candidate =>
+                    !publishedPaths.Contains(candidate.FinalPath, StringComparer.OrdinalIgnoreCase))?.FinalPath ?? string.Empty)
+                    ? "export-target-exists"
+                    : "export-batch-publication-failed",
+                "Workbook batch publication failed; files published by this operation were rolled back.",
+                exception);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        if (_published)
+        {
+            return;
+        }
+
+        foreach (var candidate in _candidates)
+        {
+            if (File.Exists(candidate.TemporaryPath))
+            {
+                File.Delete(candidate.TemporaryPath);
+            }
+        }
     }
 }
 

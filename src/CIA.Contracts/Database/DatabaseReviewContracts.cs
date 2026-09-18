@@ -111,6 +111,101 @@ public sealed record DatabaseSourceMetadata(
     string? ArchiveMemberPath,
     DateTimeOffset? FileModifiedUtc);
 
+public sealed record DatabaseRowMetadataValue(
+    DiscoveryInformationIdentity DetailedIdentity,
+    DatabaseLineageEvidence Lineage);
+
+public static class DatabaseRowMetadataProjection
+{
+    public static string GetValue(
+        DatabaseSourceMetadata source,
+        string recordHierarchy,
+        IEnumerable<DatabaseRowMetadataValue> rowValues,
+        DatabaseMetadataField field)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(recordHierarchy);
+        ArgumentNullException.ThrowIfNull(rowValues);
+        var values = rowValues.ToArray();
+        return field switch
+        {
+            DatabaseMetadataField.SourceSet => source.SourceSetName,
+            DatabaseMetadataField.SourceFile => source.SourceFileName,
+            DatabaseMetadataField.FullSourcePath => source.FullSourcePath,
+            DatabaseMetadataField.SourceId => source.SourceId.ToString(),
+            DatabaseMetadataField.FileModified => source.FileModifiedUtc?.ToLocalTime()
+                .ToString("yyyy-MM-dd HH:mm:ss") ?? "Unavailable",
+            DatabaseMetadataField.SourceKind => source.SourceKind.ToString(),
+            DatabaseMetadataField.ContainerProvenance => JoinDistinct(
+                new[] { source.ArchivePath, source.ArchiveMemberPath }
+                    .Where(value => !string.IsNullOrWhiteSpace(value))!),
+            DatabaseMetadataField.RecordHierarchy => recordHierarchy,
+            DatabaseMetadataField.ValuePath => JoinDistinct(
+                values.Select(value => value.Lineage.StructuralPath)),
+            DatabaseMetadataField.TraversalOrdinal => JoinDistinct(values.Select(value =>
+                value.Lineage.TraversalOrder.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture))),
+            DatabaseMetadataField.CandidateKind => JoinDistinct(values.Select(value =>
+                value.DetailedIdentity.CandidateKind.ToString())),
+            DatabaseMetadataField.StructuralIdentity => JoinDistinct(values.Select(value =>
+                value.DetailedIdentity.StructuralIdentity)),
+            _ => string.Empty
+        };
+    }
+
+    public static string CreateRecordHierarchy(
+        IEnumerable<DatabaseLineageEvidence> lineages)
+    {
+        ArgumentNullException.ThrowIfNull(lineages);
+        var values = lineages.ToArray();
+        if (values.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var firstPath = values[0].ElementPath;
+        var commonLength = firstPath.Count;
+        foreach (var value in values.Skip(1))
+        {
+            commonLength = Math.Min(commonLength, value.ElementPath.Count);
+            var index = 0;
+            while (index < commonLength
+                && SameElementInstance(firstPath[index], value.ElementPath[index]))
+            {
+                index++;
+            }
+
+            commonLength = index;
+        }
+
+        if (values.Length == 1 && commonLength == firstPath.Count && commonLength > 1)
+        {
+            commonLength--;
+        }
+
+        return string.Concat(firstPath.Take(commonLength).Select(FormatElementContext));
+    }
+
+    private static string JoinDistinct(IEnumerable<string> values) => string.Join(
+        " | ",
+        values.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal));
+
+    private static bool SameElementInstance(
+        DatabaseSourceElementEvidence first,
+        DatabaseSourceElementEvidence second) =>
+        first.InstanceId == second.InstanceId
+        && string.Equals(first.LocalName, second.LocalName, StringComparison.Ordinal)
+        && string.Equals(first.NamespaceUri, second.NamespaceUri, StringComparison.Ordinal);
+
+    private static string FormatElementContext(DatabaseSourceElementEvidence element)
+    {
+        var name = string.IsNullOrEmpty(element.NamespaceUri)
+            ? element.QualifiedName
+            : $"{{{element.NamespaceUri}}}{element.LocalName}";
+        return $"/{name}[{element.SiblingPosition}]";
+    }
+}
+
 public sealed record DatabaseSourceElementEvidence(
     string LocalName,
     string NamespaceUri,
@@ -333,53 +428,8 @@ public sealed record DatabaseReviewRow
     public bool HasConflict => Cells.Any(cell => cell.HasConflict);
 
     [JsonIgnore]
-    public string RecordHierarchy => CreateRecordHierarchy();
-
-    private string CreateRecordHierarchy()
-    {
-        var values = Cells.SelectMany(cell => cell.Values).ToArray();
-        if (values.Length == 0)
-        {
-            return string.Empty;
-        }
-
-        var firstPath = values[0].Lineage.ElementPath;
-        var commonLength = firstPath.Count;
-        foreach (var value in values.Skip(1))
-        {
-            commonLength = Math.Min(commonLength, value.Lineage.ElementPath.Count);
-            var index = 0;
-            while (index < commonLength
-                && SameElementInstance(firstPath[index], value.Lineage.ElementPath[index]))
-            {
-                index++;
-            }
-
-            commonLength = index;
-        }
-
-        if (values.Length == 1 && commonLength == firstPath.Count && commonLength > 1)
-        {
-            commonLength--;
-        }
-
-        return string.Concat(firstPath.Take(commonLength).Select(FormatElementContext));
-    }
-
-    private static bool SameElementInstance(
-        DatabaseSourceElementEvidence first,
-        DatabaseSourceElementEvidence second) =>
-        first.InstanceId == second.InstanceId
-        && string.Equals(first.LocalName, second.LocalName, StringComparison.Ordinal)
-        && string.Equals(first.NamespaceUri, second.NamespaceUri, StringComparison.Ordinal);
-
-    private static string FormatElementContext(DatabaseSourceElementEvidence element)
-    {
-        var name = string.IsNullOrEmpty(element.NamespaceUri)
-            ? element.QualifiedName
-            : $"{{{element.NamespaceUri}}}{element.LocalName}";
-        return $"/{name}[{element.SiblingPosition}]";
-    }
+    public string RecordHierarchy => DatabaseRowMetadataProjection.CreateRecordHierarchy(
+        Cells.SelectMany(cell => cell.Values).Select(value => value.Lineage));
 }
 
 public sealed record DatabaseReviewPage

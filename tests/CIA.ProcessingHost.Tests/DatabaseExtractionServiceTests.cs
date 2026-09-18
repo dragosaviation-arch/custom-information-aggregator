@@ -254,7 +254,7 @@ public sealed class DatabaseExtractionServiceTests
     }
 
     [TestMethod]
-    public async Task LegacyFlatGenerationIsRejectedAndHierarchyExportStreamIsGuarded()
+    public async Task LegacyFlatGenerationIsRejectedAndNoLegacyExportStreamIsExposed()
     {
         using var workspace = new ExtractionWorkspace();
         var set = SourceSetId.CreateNew();
@@ -264,7 +264,7 @@ public sealed class DatabaseExtractionServiceTests
             "<records><record><tag>value</tag></record></records>");
         var database = await workspace.BuildDatabaseAsync(
             (set, "Set", RepeatedDataLayout.StructuralRows, new[] { source }));
-        var extraction = await workspace.ExtractAsync(database);
+        Assert.IsTrue((await workspace.ExtractAsync(database)).Accepted);
         var legacy = new DatabaseGenerationSummary(
             OperationId.CreateNew(),
             new DatabaseMappingSnapshot([new DatabaseColumnMapping("Field", ["tag"])]),
@@ -274,13 +274,8 @@ public sealed class DatabaseExtractionServiceTests
 
         Assert.IsFalse(rejected.Accepted);
         Assert.AreEqual("legacy-flat-extraction-not-supported", rejected.Failure?.Code);
-        await Assert.ThrowsExactlyAsync<StructuredInformationRepositoryException>(async () =>
-        {
-            await foreach (var _ in workspace.Repository.StreamPublishedExtractionValuesForExportAsync(
-                               extraction.PublishedResult!.OperationId))
-            {
-            }
-        });
+        Assert.IsFalse(typeof(StructuredInformationRepository).GetMethods().Any(method =>
+            method.Name.Contains("ExtractionValuesForExport", StringComparison.Ordinal)));
     }
 
     private static IReadOnlyList<string> Values(DatabaseReviewRow row) =>

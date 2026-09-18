@@ -16,13 +16,13 @@ public sealed class ProcessingHostWorkbookExportClient(
         OperationCorrelation correlation,
         ExtractionResultSummary extractionResult,
         ExportConfigurationSnapshot configuration,
-        string targetPath,
+        string outputDirectory,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(extractionResult);
         ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
 
         try
         {
@@ -37,13 +37,13 @@ public sealed class ProcessingHostWorkbookExportClient(
                     correlation,
                     extractionResult,
                     configuration,
-                    targetPath,
+                    outputDirectory,
                     cancellationToken)
                 .ConfigureAwait(false);
             return new WorkbookExportClientResult(
                 response.Acceptance == CommandAcceptance.Accepted,
                 response.Completion,
-                response.Workbook,
+                response.Batch,
                 response.Failure?.Code,
                 response.Failure?.Description);
         }
@@ -72,7 +72,7 @@ public sealed class ProcessingHostWorkbookExportClient(
         return new WorkbookExportClientResult(
             false,
             completion,
-            Workbook: null,
+            Batch: null,
             failureCode,
             "The Processing Host could not complete the workbook export.");
     }
