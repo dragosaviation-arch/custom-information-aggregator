@@ -132,7 +132,7 @@ public sealed record RunWorkbookExportCommand(
     OperationCorrelation Correlation,
     ExtractionResultSummary ExtractionResult,
     ExportConfigurationSnapshot Configuration,
-    string TargetPath)
+    string OutputDirectory)
     : IpcCommand(MessageId, TimestampUtc);
 
 [method: JsonConstructor]
@@ -239,7 +239,7 @@ public sealed record RunWorkbookExportResponse(
     Guid CommandMessageId,
     CommandAcceptance Acceptance,
     OperationCompletion Completion,
-    WorkbookExportSummary? Workbook,
+    WorkbookExportBatchSummary? Batch,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 

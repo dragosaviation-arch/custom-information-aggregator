@@ -1232,7 +1232,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 _visibleMetadataFields.Select(field => new DatabaseMetadataCellPresentation(
                     field.Field,
                     field.DisplayName,
-                    GetMetadataValue(row, field.Field))).ToArray(),
+                    DatabaseRowMetadataProjection.GetValue(
+                        row.Source,
+                        row.RecordHierarchy,
+                        row.Cells.SelectMany(cell => cell.Values).Select(value =>
+                            new DatabaseRowMetadataValue(value.DetailedIdentity, value.Lineage)),
+                        field.Field))).ToArray(),
                 cells));
         }
 
@@ -1314,38 +1319,6 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         DatabaseMetadataField.StructuralIdentity => "Structural Identity",
         _ => field.ToString()
     };
-
-    private static string GetMetadataValue(DatabaseReviewRow row, DatabaseMetadataField field)
-    {
-        var values = row.Cells.SelectMany(cell => cell.Values).ToArray();
-        return field switch
-        {
-            DatabaseMetadataField.SourceSet => row.Source.SourceSetName,
-            DatabaseMetadataField.SourceFile => row.Source.SourceFileName,
-            DatabaseMetadataField.FullSourcePath => row.Source.FullSourcePath,
-            DatabaseMetadataField.SourceId => row.Source.SourceId.ToString(),
-            DatabaseMetadataField.FileModified => row.Source.FileModifiedUtc?.ToLocalTime()
-                .ToString("yyyy-MM-dd HH:mm:ss") ?? "Unavailable",
-            DatabaseMetadataField.SourceKind => row.Source.SourceKind.ToString(),
-            DatabaseMetadataField.ContainerProvenance => string.Join(
-                " | ",
-                new[] { row.Source.ArchivePath, row.Source.ArchiveMemberPath }
-                    .Where(value => !string.IsNullOrWhiteSpace(value))),
-            DatabaseMetadataField.RecordHierarchy => row.RecordHierarchy,
-            DatabaseMetadataField.ValuePath => JoinMetadata(values.Select(value => value.Lineage.StructuralPath)),
-            DatabaseMetadataField.TraversalOrdinal => JoinMetadata(values.Select(value =>
-                value.Lineage.TraversalOrder.ToString(System.Globalization.CultureInfo.InvariantCulture))),
-            DatabaseMetadataField.CandidateKind => JoinMetadata(values.Select(value =>
-                value.DetailedIdentity.CandidateKind.ToString())),
-            DatabaseMetadataField.StructuralIdentity => JoinMetadata(values.Select(value =>
-                value.DetailedIdentity.StructuralIdentity)),
-            _ => string.Empty
-        };
-    }
-
-    private static string JoinMetadata(IEnumerable<string> values) => string.Join(
-        " | ",
-        values.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal));
 
     private static string CreateColumnIdentity(DatabaseColumnDefinition column) =>
         CreateColumnIdentity(column.Identity);

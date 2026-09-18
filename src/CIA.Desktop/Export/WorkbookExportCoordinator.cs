@@ -15,15 +15,15 @@ public sealed class WorkbookExportCoordinator(
     ILogger<WorkbookExportCoordinator> logger)
 {
     private readonly object _stateGate = new();
-    private WorkbookExportSummary? _lastWorkbook;
+    private WorkbookExportBatchSummary? _lastBatch;
 
-    public WorkbookExportSummary? LastWorkbook
+    public WorkbookExportBatchSummary? LastBatch
     {
         get
         {
             lock (_stateGate)
             {
-                return _lastWorkbook;
+                return _lastBatch;
             }
         }
     }
@@ -32,15 +32,15 @@ public sealed class WorkbookExportCoordinator(
     {
         return workflowCoordinator.Current.Extraction == WorkflowArtifactStatus.Current
             && workflowCoordinator.Current.ActiveOperation is null
-            && extractionCoordinator.CurrentResult is { IsHierarchyAware: false };
+            && extractionCoordinator.CurrentResult is { IsHierarchyAware: true };
     }
 
     public async Task<WorkflowCommandResult> ExportAsync(
-        string targetPath,
+        string outputDirectory,
         ExportConfigurationSnapshot configuration,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
         ArgumentNullException.ThrowIfNull(configuration);
 
         var extractionResult = extractionCoordinator.CurrentResult;
@@ -48,9 +48,7 @@ public sealed class WorkbookExportCoordinator(
         {
             return WorkflowCommandResult.Reject(
                 WorkflowRejectionCode.ExtractionNotCurrent,
-                extractionResult?.IsHierarchyAware == true
-                    ? "SPR-141 owns Set-aware workbook generation and publication."
-                    : "Export requires the active prepared Extraction Result to be current.");
+                "Export requires the active prepared Extraction Result to be current.");
         }
 
         var begin = await workflowCoordinator
@@ -68,19 +66,17 @@ public sealed class WorkbookExportCoordinator(
                     begin.Operation,
                     extractionResult,
                     configuration,
-                    targetPath,
+                    outputDirectory,
                     cancellationToken)
                 .ConfigureAwait(false);
             if (result.Accepted
-                && (result.Workbook is null
-                    || result.Workbook.OperationId != begin.Operation.OperationId
-                    || result.Workbook.ExtractionResultId != extractionResult.OperationId
-                    || result.Workbook.ColumnCount
-                        != configuration.IncludedOutputColumnCount
-                    || !string.Equals(
-                        Path.GetFullPath(result.Workbook.TargetPath),
-                        Path.GetFullPath(targetPath),
-                        StringComparison.OrdinalIgnoreCase)))
+                && (result.Batch is null
+                    || !MatchesRequest(
+                        result.Batch,
+                        begin.Operation.OperationId,
+                        extractionResult,
+                        configuration,
+                        outputDirectory)))
             {
                 workflowCoordinator.CompleteOperation(
                     begin.Operation.OperationId,
@@ -96,7 +92,7 @@ public sealed class WorkbookExportCoordinator(
                 return completion;
             }
 
-            if (!result.Accepted || result.Workbook is null)
+            if (!result.Accepted || result.Batch is null)
             {
                 return WorkflowCommandResult.Reject(
                     WorkflowRejectionCode.OperationFailed,
@@ -105,7 +101,7 @@ public sealed class WorkbookExportCoordinator(
 
             lock (_stateGate)
             {
-                _lastWorkbook = result.Workbook;
+                _lastBatch = result.Batch;
             }
 
             return completion;
@@ -123,9 +119,59 @@ public sealed class WorkbookExportCoordinator(
                 exception,
                 "Workbook export coordination failed for operation {OperationId}",
                 begin.Operation.OperationId);
-            return workflowCoordinator.CompleteOperation(
+            workflowCoordinator.CompleteOperation(
                 begin.Operation.OperationId,
                 OperationOutcome.Failed);
+            return WorkflowCommandResult.Reject(
+                WorkflowRejectionCode.OperationFailed,
+                "Workbook export coordination failed.");
         }
+    }
+
+    private static bool MatchesRequest(
+        WorkbookExportBatchSummary batch,
+        OperationId operationId,
+        ExtractionResultSummary extractionResult,
+        ExportConfigurationSnapshot configuration,
+        string outputDirectory)
+    {
+        var validation = ExportConfigurationValidator.Validate(configuration, extractionResult);
+        if (!validation.IsValid
+            || batch.OperationId != operationId
+            || batch.ExtractionResultId != extractionResult.OperationId
+            || !string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(batch.OutputDirectory)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputDirectory)),
+                StringComparison.OrdinalIgnoreCase)
+            || batch.Workbooks.Count != validation.RunnableWorkbooks.Count)
+        {
+            return false;
+        }
+
+        return validation.RunnableWorkbooks.Zip(batch.Workbooks).All(pair =>
+            pair.First.Workbook.WorkbookDefinitionId == pair.Second.WorkbookDefinitionId
+            && pair.First.Workbook.Order == pair.Second.Order
+            && string.Equals(
+                Path.GetFileName(pair.Second.FinalPath),
+                pair.First.Workbook.FileName,
+                StringComparison.Ordinal)
+            && pair.First.Worksheets.Count == pair.Second.Worksheets.Count
+            && pair.First.Worksheets.Zip(pair.Second.Worksheets).All(worksheetPair =>
+            {
+                var dataset = extractionResult.Datasets.Single(dataset =>
+                    dataset.SourceSetId == worksheetPair.First.Worksheet.SourceSetId);
+                return worksheetPair.First.Worksheet.WorksheetDefinitionId
+                        == worksheetPair.Second.WorksheetDefinitionId
+                    && worksheetPair.First.Worksheet.SourceSetId
+                        == worksheetPair.Second.SourceSetId
+                    && string.Equals(
+                        worksheetPair.First.Worksheet.Name,
+                        worksheetPair.Second.Name,
+                        StringComparison.Ordinal)
+                    && worksheetPair.First.Worksheet.Order == worksheetPair.Second.Order
+                    && worksheetPair.Second.RowCount == dataset.RowCount
+                    && worksheetPair.Second.ColumnCount
+                        == configuration.CreateIncludedOutputColumns(dataset.SourceSetId).Count;
+            }));
     }
 }

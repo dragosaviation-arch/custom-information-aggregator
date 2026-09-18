@@ -326,7 +326,7 @@ public sealed class ExtractionCoordinatorTests
     }
 
     [TestMethod]
-    public async Task WorkbookExportGuardsHierarchyExtractionUntilSetAwareRouting()
+    public async Task WorkbookExportPublishesValidatedHierarchyBatch()
     {
         var context = await ExtractionContext.CreateAsync();
         await context.BuildCurrentDatabaseAsync(valueCount: 2);
@@ -334,20 +334,53 @@ public sealed class ExtractionCoordinatorTests
             Success(correlation, basis));
         var extraction = context.CreateExtractionCoordinator(extractionClient);
         Assert.IsTrue((await extraction.ExtractAsync()).Accepted);
-        var configuration = new ExportConfigurationSnapshot([], []);
-        var targetPath = Path.GetFullPath("captured-export.xlsx");
+        var extractionResult = extraction.CurrentResult!;
+        var dataset = extractionResult.Datasets.Single();
+        var workbookId = WorkbookDefinitionId.CreateNew();
+        var worksheetId = WorksheetDefinitionId.CreateNew();
+        var configuration = new ExportConfigurationSnapshot(
+            [new WorkbookDefinition(
+                workbookId,
+                "captured-export.xlsx",
+                1,
+                [new WorksheetDefinition(
+                    worksheetId,
+                    workbookId,
+                    dataset.SourceSetId,
+                    "Results",
+                    1)])],
+            [new SourceSetExportConfiguration(
+                dataset.SourceSetId,
+                true,
+                worksheetId,
+                dataset.Columns.Select(column => new ExportFieldConfiguration(
+                    column.Identity,
+                    true,
+                    column.EffectiveName,
+                    false)).ToArray(),
+                [])]);
+        var outputDirectory = Path.GetFullPath(".");
         var exportClient = new RecordingWorkbookExportClient(
-            (correlation, result, snapshot, target) => new WorkbookExportClientResult(
+            (correlation, result, snapshot, directory) => new WorkbookExportClientResult(
                 true,
                 OperationCompletion.FromCompletedItems(
                     correlation,
-                    [OperationItemStatus.ProcessedSuccessfully("workbook-publication")]),
-                new WorkbookExportSummary(
+                    [OperationItemStatus.ProcessedSuccessfully("workbook-batch-publication")]),
+                new WorkbookExportBatchSummary(
                     correlation.OperationId,
                     result.OperationId,
-                    target,
-                    snapshot.IncludedOutputColumnCount,
-                    dataRowCount: 2),
+                    directory,
+                    [new WorkbookExportFileSummary(
+                        workbookId,
+                        Path.Combine(directory, "captured-export.xlsx"),
+                        1,
+                        [new WorkbookExportWorksheetSummary(
+                            worksheetId,
+                            dataset.SourceSetId,
+                            "Results",
+                            1,
+                            dataset.RowCount,
+                            snapshot.CreateIncludedOutputColumns(dataset.SourceSetId).Count)])]),
                 FailureCode: null,
                 FailureDescription: null));
         var coordinator = new WorkbookExportCoordinator(
@@ -356,13 +389,12 @@ public sealed class ExtractionCoordinatorTests
             exportClient,
             NullLogger<WorkbookExportCoordinator>.Instance);
 
-        var result = await coordinator.ExportAsync(targetPath, configuration);
+        var result = await coordinator.ExportAsync(outputDirectory, configuration);
 
-        Assert.IsFalse(result.Accepted);
-        Assert.AreEqual(WorkflowRejectionCode.ExtractionNotCurrent, result.Rejection?.Code);
-        StringAssert.Contains(result.Rejection?.Reason, "SPR-141");
-        Assert.AreEqual(0, exportClient.CallCount);
-        Assert.IsNull(coordinator.LastWorkbook);
+        Assert.IsTrue(result.Accepted);
+        Assert.AreEqual(1, exportClient.CallCount);
+        Assert.IsNotNull(coordinator.LastBatch);
+        Assert.AreEqual(extractionResult.OperationId, coordinator.LastBatch.ExtractionResultId);
         Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
     }
 
@@ -426,7 +458,7 @@ public sealed class ExtractionCoordinatorTests
         var configuration = new ExportConfigurationSnapshot([], []);
 
         var unavailable = await coordinator.ExportAsync(
-            Path.GetFullPath("unavailable.xlsx"),
+            Path.GetFullPath("."),
             configuration);
 
         Assert.IsFalse(unavailable.Accepted);
@@ -437,7 +469,7 @@ public sealed class ExtractionCoordinatorTests
         Assert.IsTrue(context.Workflow.RecordDiscoveryConfigurationChanged().Accepted);
 
         var stale = await coordinator.ExportAsync(
-            Path.GetFullPath("stale.xlsx"),
+            Path.GetFullPath("."),
             configuration);
 
         Assert.IsFalse(stale.Accepted);
@@ -581,7 +613,7 @@ public sealed class ExtractionCoordinatorTests
 
         public ExportConfigurationSnapshot? Configuration { get; private set; }
 
-        public string? TargetPath { get; private set; }
+        public string? OutputDirectory { get; private set; }
 
         public int CallCount { get; private set; }
 
@@ -589,18 +621,18 @@ public sealed class ExtractionCoordinatorTests
             OperationCorrelation correlation,
             ExtractionResultSummary extractionResult,
             ExportConfigurationSnapshot configuration,
-            string targetPath,
+            string outputDirectory,
             CancellationToken cancellationToken = default)
         {
             CallCount++;
             ExtractionResult = extractionResult;
             Configuration = configuration;
-            TargetPath = targetPath;
+            OutputDirectory = outputDirectory;
             return Task.FromResult(_export(
                 correlation,
                 extractionResult,
                 configuration,
-                targetPath));
+                outputDirectory));
         }
     }
 

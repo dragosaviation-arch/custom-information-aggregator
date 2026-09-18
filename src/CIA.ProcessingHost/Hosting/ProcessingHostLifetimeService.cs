@@ -475,7 +475,7 @@ public sealed class ProcessingHostLifetimeService(
                 command.Correlation,
                 command.ExtractionResult,
                 command.Configuration,
-                command.TargetPath,
+                command.OutputDirectory,
                 cancellationToken)
             .ConfigureAwait(false);
         var response = new RunWorkbookExportResponse(
@@ -486,7 +486,7 @@ public sealed class ProcessingHostLifetimeService(
                 ? CommandAcceptance.Accepted
                 : CommandAcceptance.Rejected,
             result.Completion,
-            result.Workbook,
+            result.Batch,
             result.Failure);
 
         await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);

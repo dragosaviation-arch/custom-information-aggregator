@@ -10,13 +10,13 @@ public interface IWorkbookExportClient
         OperationCorrelation correlation,
         ExtractionResultSummary extractionResult,
         ExportConfigurationSnapshot configuration,
-        string targetPath,
+        string outputDirectory,
         CancellationToken cancellationToken = default);
 }
 
 public sealed record WorkbookExportClientResult(
     bool Accepted,
     OperationCompletion Completion,
-    WorkbookExportSummary? Workbook,
+    WorkbookExportBatchSummary? Batch,
     string? FailureCode,
     string? FailureDescription);

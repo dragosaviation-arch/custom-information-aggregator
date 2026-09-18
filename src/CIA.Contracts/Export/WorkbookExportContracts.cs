@@ -1,4 +1,7 @@
+using System.Collections.ObjectModel;
+using System.Text.Json.Serialization;
 using CIA.Contracts.Operations;
+using CIA.Contracts.Sources;
 
 namespace CIA.Contracts.Export;
 
@@ -10,68 +13,144 @@ public static class ExcelWorkbookLimits
     public const int MaximumCellTextLength = 32_767;
 }
 
-public sealed record WorkbookExportSummary
+public sealed record WorkbookExportWorksheetSummary
 {
-    public WorkbookExportSummary(
+    [JsonConstructor]
+    public WorkbookExportWorksheetSummary(
+        WorksheetDefinitionId worksheetDefinitionId,
+        SourceSetId sourceSetId,
+        string name,
+        int order,
+        int rowCount,
+        int columnCount)
+    {
+        if (!WorksheetDefinitionId.IsValid(worksheetDefinitionId.Value)
+            || !SourceSetId.IsValid(sourceSetId.Value))
+        {
+            throw new ArgumentException(
+                "An exported worksheet requires stable worksheet and Source Set identities.");
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        if (!ExportConfigurationValidator.IsValidWorksheetName(name)
+            || order < 1
+            || rowCount is < 0 or > ExcelWorkbookLimits.MaximumDataRows
+            || columnCount is < 1 or > ExcelWorkbookLimits.MaximumColumns)
+        {
+            throw new ArgumentException("An exported worksheet summary is invalid.");
+        }
+
+        WorksheetDefinitionId = worksheetDefinitionId;
+        SourceSetId = sourceSetId;
+        Name = name;
+        Order = order;
+        RowCount = rowCount;
+        ColumnCount = columnCount;
+    }
+
+    public WorksheetDefinitionId WorksheetDefinitionId { get; }
+    public SourceSetId SourceSetId { get; }
+    public string Name { get; }
+    public int Order { get; }
+    public int RowCount { get; }
+    public int ColumnCount { get; }
+}
+
+public sealed record WorkbookExportFileSummary
+{
+    [JsonConstructor]
+    public WorkbookExportFileSummary(
+        WorkbookDefinitionId workbookDefinitionId,
+        string finalPath,
+        int order,
+        IReadOnlyList<WorkbookExportWorksheetSummary> worksheets)
+    {
+        if (!WorkbookDefinitionId.IsValid(workbookDefinitionId.Value))
+        {
+            throw new ArgumentException(
+                "An exported workbook requires a stable workbook identity.",
+                nameof(workbookDefinitionId));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(finalPath);
+        ArgumentNullException.ThrowIfNull(worksheets);
+        var worksheetArray = worksheets.ToArray();
+        if (!Path.IsPathFullyQualified(finalPath)
+            || !string.Equals(Path.GetExtension(finalPath), ".xlsx", StringComparison.OrdinalIgnoreCase)
+            || order < 1
+            || worksheetArray.Length == 0
+            || worksheetArray.Any(worksheet => worksheet is null)
+            || worksheetArray.Select(worksheet => worksheet.WorksheetDefinitionId).Distinct().Count()
+                != worksheetArray.Length
+            || worksheetArray.Select(worksheet => worksheet.Order).Distinct().Count()
+                != worksheetArray.Length
+            || !worksheetArray.Select(worksheet => worksheet.Order)
+                .SequenceEqual(worksheetArray.Select(worksheet => worksheet.Order).Order()))
+        {
+            throw new ArgumentException("An exported workbook summary is invalid.");
+        }
+
+        WorkbookDefinitionId = workbookDefinitionId;
+        FinalPath = Path.GetFullPath(finalPath);
+        Order = order;
+        Worksheets = new ReadOnlyCollection<WorkbookExportWorksheetSummary>(worksheetArray);
+    }
+
+    public WorkbookDefinitionId WorkbookDefinitionId { get; }
+    public string FinalPath { get; }
+    public int Order { get; }
+    public IReadOnlyList<WorkbookExportWorksheetSummary> Worksheets { get; }
+}
+
+public sealed record WorkbookExportBatchSummary
+{
+    [JsonConstructor]
+    public WorkbookExportBatchSummary(
         OperationId operationId,
         OperationId extractionResultId,
-        string targetPath,
-        int columnCount,
-        int dataRowCount)
+        string outputDirectory,
+        IReadOnlyList<WorkbookExportFileSummary> workbooks)
     {
-        if (!OperationId.IsValid(operationId.Value))
+        if (!OperationId.IsValid(operationId.Value)
+            || !OperationId.IsValid(extractionResultId.Value)
+            || operationId == extractionResultId)
         {
             throw new ArgumentException(
-                "A workbook export requires a UUIDv7 Operation ID.",
-                nameof(operationId));
+                "A workbook export batch requires distinct UUIDv7 operation identities.");
         }
 
-        if (!OperationId.IsValid(extractionResultId.Value))
+        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        ArgumentNullException.ThrowIfNull(workbooks);
+        var workbookArray = workbooks.ToArray();
+        var resolvedDirectory = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(outputDirectory));
+        if (!Path.IsPathFullyQualified(outputDirectory)
+            || workbookArray.Length == 0
+            || workbookArray.Any(workbook => workbook is null
+                || !string.Equals(
+                    Path.GetDirectoryName(workbook.FinalPath),
+                    resolvedDirectory,
+                    StringComparison.OrdinalIgnoreCase))
+            || workbookArray.Select(workbook => workbook.WorkbookDefinitionId).Distinct().Count()
+                != workbookArray.Length
+            || workbookArray.Select(workbook => workbook.FinalPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() != workbookArray.Length
+            || workbookArray.Select(workbook => workbook.Order).Distinct().Count()
+                != workbookArray.Length
+            || !workbookArray.Select(workbook => workbook.Order)
+                .SequenceEqual(workbookArray.Select(workbook => workbook.Order).Order()))
         {
-            throw new ArgumentException(
-                "A workbook export requires a UUIDv7 Extraction Result ID.",
-                nameof(extractionResultId));
-        }
-
-        if (operationId == extractionResultId)
-        {
-            throw new ArgumentException(
-                "A workbook export and its Extraction Result require distinct identities.",
-                nameof(extractionResultId));
-        }
-
-        ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
-        if (!Path.IsPathFullyQualified(targetPath))
-        {
-            throw new ArgumentException(
-                "A workbook export target path must be fully qualified.",
-                nameof(targetPath));
-        }
-
-        if (columnCount is < 1 or > ExcelWorkbookLimits.MaximumColumns)
-        {
-            throw new ArgumentOutOfRangeException(nameof(columnCount));
-        }
-
-        if (dataRowCount is < 0 or > ExcelWorkbookLimits.MaximumDataRows)
-        {
-            throw new ArgumentOutOfRangeException(nameof(dataRowCount));
+            throw new ArgumentException("A workbook export batch summary is invalid.");
         }
 
         OperationId = operationId;
         ExtractionResultId = extractionResultId;
-        TargetPath = targetPath;
-        ColumnCount = columnCount;
-        DataRowCount = dataRowCount;
+        OutputDirectory = resolvedDirectory;
+        Workbooks = new ReadOnlyCollection<WorkbookExportFileSummary>(workbookArray);
     }
 
     public OperationId OperationId { get; }
-
     public OperationId ExtractionResultId { get; }
-
-    public string TargetPath { get; }
-
-    public int ColumnCount { get; }
-
-    public int DataRowCount { get; }
+    public string OutputDirectory { get; }
+    public IReadOnlyList<WorkbookExportFileSummary> Workbooks { get; }
 }

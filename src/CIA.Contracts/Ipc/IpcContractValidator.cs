@@ -433,16 +433,12 @@ public static class IpcContractValidator
         ValidateOperationCorrelation(command.Correlation);
         ValidateExtractionResult(command.ExtractionResult);
         ValidateExportConfiguration(command.Configuration, command.ExtractionResult);
-        ValidatePath(command.TargetPath);
+        ValidatePath(command.OutputDirectory);
 
-        if (!string.Equals(
-                Path.GetExtension(command.TargetPath),
-                ".xlsx",
-                StringComparison.OrdinalIgnoreCase)
-            || command.Correlation.OperationId == command.ExtractionResult.OperationId)
+        if (command.Correlation.OperationId == command.ExtractionResult.OperationId)
         {
             throw InvalidContract(
-                "A workbook export requires a distinct operation and a fully qualified .xlsx target.");
+                "A workbook export requires a distinct operation and a fully qualified output directory.");
         }
     }
 
@@ -708,8 +704,8 @@ public static class IpcContractValidator
         if (response.Acceptance == CommandAcceptance.Accepted)
         {
             if (response.Failure is not null
-                || response.Workbook is null
-                || response.Workbook.OperationId
+                || response.Batch is null
+                || response.Batch.OperationId
                     != response.Completion.Correlation.OperationId
                 || response.Completion.Outcome is not (
                     OperationOutcome.CompletedSuccessfully
@@ -719,11 +715,11 @@ public static class IpcContractValidator
                     "An accepted workbook export response requires a matching workbook and completed outcome.");
             }
 
-            ValidateWorkbookExportSummary(response.Workbook);
+            ValidateWorkbookExportBatchSummary(response.Batch);
             return;
         }
 
-        if (response.Workbook is not null
+        if (response.Batch is not null
             || response.Failure is null
             || response.Completion.Outcome is not (
                 OperationOutcome.Failed
@@ -754,21 +750,53 @@ public static class IpcContractValidator
         }
     }
 
-    private static void ValidateWorkbookExportSummary(WorkbookExportSummary workbook)
+    private static void ValidateWorkbookExportBatchSummary(WorkbookExportBatchSummary batch)
     {
-        ValidateOperationId(workbook.OperationId, "Workbook exports");
-        ValidateOperationId(workbook.ExtractionResultId, "Workbook exports");
-        ValidatePath(workbook.TargetPath);
-
-        if (workbook.OperationId == workbook.ExtractionResultId
-            || !string.Equals(
-                Path.GetExtension(workbook.TargetPath),
-                ".xlsx",
-                StringComparison.OrdinalIgnoreCase)
-            || workbook.ColumnCount is < 1 or > ExcelWorkbookLimits.MaximumColumns
-            || workbook.DataRowCount is < 0 or > ExcelWorkbookLimits.MaximumDataRows)
+        ValidateOperationId(batch.OperationId, "Workbook exports");
+        ValidateOperationId(batch.ExtractionResultId, "Workbook exports");
+        ValidatePath(batch.OutputDirectory);
+        if (batch.OperationId == batch.ExtractionResultId
+            || batch.Workbooks is null
+            || batch.Workbooks.Count == 0
+            || batch.Workbooks.Select(workbook => workbook.WorkbookDefinitionId).Distinct().Count()
+                != batch.Workbooks.Count
+            || batch.Workbooks.Select(workbook => workbook.FinalPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() != batch.Workbooks.Count)
         {
-            throw InvalidContract("A workbook export summary is invalid.");
+            throw InvalidContract("A workbook export batch summary is invalid.");
+        }
+
+        foreach (var workbook in batch.Workbooks)
+        {
+            ValidatePath(workbook.FinalPath);
+            if (!WorkbookDefinitionId.IsValid(workbook.WorkbookDefinitionId.Value)
+                || workbook.Order < 1
+                || !string.Equals(
+                    Path.GetExtension(workbook.FinalPath),
+                    ".xlsx",
+                    StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(
+                    Path.GetDirectoryName(workbook.FinalPath),
+                    batch.OutputDirectory,
+                    StringComparison.OrdinalIgnoreCase)
+                || workbook.Worksheets is null
+                || workbook.Worksheets.Count == 0)
+            {
+                throw InvalidContract("An exported workbook summary is invalid.");
+            }
+
+            foreach (var worksheet in workbook.Worksheets)
+            {
+                if (!WorksheetDefinitionId.IsValid(worksheet.WorksheetDefinitionId.Value)
+                    || !SourceSetId.IsValid(worksheet.SourceSetId.Value)
+                    || !ExportConfigurationValidator.IsValidWorksheetName(worksheet.Name)
+                    || worksheet.Order < 1
+                    || worksheet.RowCount is < 0 or > ExcelWorkbookLimits.MaximumDataRows
+                    || worksheet.ColumnCount is < 1 or > ExcelWorkbookLimits.MaximumColumns)
+                {
+                    throw InvalidContract("An exported worksheet summary is invalid.");
+                }
+            }
         }
     }
 

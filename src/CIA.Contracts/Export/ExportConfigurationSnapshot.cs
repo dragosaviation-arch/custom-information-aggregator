@@ -392,6 +392,7 @@ public static class ExportConfigurationValidator
             configuration,
             extractionResult.Datasets.Select(dataset => new DatasetShape(
                 dataset.SourceSetId,
+                dataset.RowCount,
                 dataset.Columns)).ToArray());
     }
 
@@ -404,6 +405,7 @@ public static class ExportConfigurationValidator
             configuration,
             databaseGeneration.Datasets.Select(dataset => new DatasetShape(
                 dataset.SourceSetId,
+                dataset.RowCount,
                 dataset.Columns)).ToArray());
     }
 
@@ -490,6 +492,14 @@ public static class ExportConfigurationValidator
                 failures.Add(new ExportConfigurationValidationFailure(
                     "missing-extraction-dataset",
                     "The enabled Source Set does not exist in the Extraction Result.",
+                    setConfiguration.SourceSetId));
+            }
+
+            else if (dataset.RowCount > ExcelWorkbookLimits.MaximumDataRows)
+            {
+                failures.Add(new ExportConfigurationValidationFailure(
+                    "export-row-limit-exceeded",
+                    "The enabled Source Set exceeds Excel's worksheet row limit.",
                     setConfiguration.SourceSetId));
             }
 
@@ -694,6 +704,7 @@ public static class ExportConfigurationValidator
 
     private sealed record DatasetShape(
         SourceSetId SourceSetId,
+        int RowCount,
         IReadOnlyList<DatabaseColumnDefinition> Columns);
 }
 

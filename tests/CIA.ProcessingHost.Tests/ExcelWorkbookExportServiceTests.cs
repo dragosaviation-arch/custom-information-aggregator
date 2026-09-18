@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using CIA.Contracts.Database;
 using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Discovery;
@@ -10,10 +11,12 @@ using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
 using CIA.ProcessingHost.Export;
 using CIA.ProcessingHost.Hosting;
+using CIA.ProcessingHost.Operations;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.ProcessingHost.Tests;
 
@@ -21,97 +24,359 @@ namespace CIA.ProcessingHost.Tests;
 public sealed class ExcelWorkbookExportServiceTests
 {
     [TestMethod]
-    public async Task HierarchyExtractionIsRejectedWithoutFlatProjectionOrWorkbook()
+    public async Task RoutedBatchStreamsSemanticRowsAcrossWorkbooksAndWorksheets()
     {
         using var workspace = new ExportWorkspace();
-        var extraction = CreateHierarchyExtraction();
-        var target = Path.Combine(workspace.Root, "guarded.xlsx");
-        var configuration = CreateConfiguration(extraction);
+        var first = DatasetFixture.Create("Set A", 1, twoColumns: true);
+        var second = DatasetFixture.Create("Set B", 2);
+        var third = DatasetFixture.Create(
+            "Set C",
+            3,
+            repeatCoordinates: new DatabaseRepeatCoordinatePath([2, 1]));
+        var disabled = DatasetFixture.Create("Disabled", 4);
+        first.AddRow(
+            first.Cell("  value one  ", "second"),
+            first.CellForColumn(1, "other one"));
+        first.AddRow(first.CellForColumn(1, "other two"));
+        second.AddRow(second.Cell("  =SUM(A1:A2)  "));
+        third.AddRow(third.Cell("third"));
+        disabled.AddRow(disabled.Cell("disabled"));
+        var extraction = CreateExtraction(first, second, third, disabled);
+        var configuration = CreateConfiguration(first, second, third, disabled);
+        workspace.Source.Set(extraction, first, second, third, disabled);
+
+        var correlation = OperationCorrelation.CreateNew();
+        var result = await workspace.Service.ExportAsync(
+            correlation,
+            extraction,
+            configuration,
+            workspace.Root);
+
+        Assert.IsTrue(result.Accepted, result.Failure?.Description);
+        Assert.AreEqual(OperationOutcome.CompletedSuccessfully, result.Completion.Outcome);
+        Assert.IsNotNull(result.Batch);
+        Assert.AreEqual(correlation.OperationId, result.Batch.OperationId);
+        Assert.AreEqual(extraction.OperationId, result.Batch.ExtractionResultId);
+        Assert.HasCount(2, result.Batch.Workbooks);
+        Assert.IsFalse(File.Exists(Path.Combine(workspace.Root, "Disabled.xlsx")));
+        CollectionAssert.AreEqual(
+            new[] { second.SourceSetId, first.SourceSetId, third.SourceSetId },
+            workspace.Source.StreamedSourceSets.ToArray());
+
+        var combinedPath = Path.Combine(workspace.Root, "Combined.xlsx");
+        var separatePath = Path.Combine(workspace.Root, "Separate.xlsx");
+        Assert.IsTrue(File.Exists(combinedPath));
+        Assert.IsTrue(File.Exists(separatePath));
+        using var combined = SpreadsheetDocument.Open(combinedPath, isEditable: false);
+        CollectionAssert.AreEqual(
+            new[] { "Set B", "Set A" },
+            SheetNames(combined).ToArray());
+
+        var secondCells = ReadCells(combined, "Set B");
+        Assert.AreEqual("Shared", secondCells["A1"]);
+        Assert.AreEqual("  =SUM(A1:A2)  ", secondCells["A2"]);
+        Assert.AreEqual(CellValues.InlineString, ReadCell(combined, "Set B", "A2").DataType?.Value);
+        Assert.IsNull(ReadCell(combined, "Set B", "A2").CellFormula);
+        Assert.AreEqual(
+            SpaceProcessingModeValues.Preserve,
+            ReadCell(combined, "Set B", "A2").InlineString?.Text?.Space?.Value);
+
+        var firstCells = ReadCells(combined, "Set A");
+        Assert.AreEqual("Shared", firstCells["A1"]);
+        Assert.AreEqual("Shared SourceId", firstCells["B1"]);
+        Assert.AreEqual("Other", firstCells["C1"]);
+        Assert.AreEqual("Source File", firstCells["D1"]);
+        Assert.AreEqual("Record Hierarchy", firstCells["E1"]);
+        Assert.AreEqual("  value one   | second", firstCells["A2"]);
+        Assert.AreEqual(first.Rows[0].Source.SourceId.ToString(), firstCells["B2"]);
+        Assert.AreEqual("other one", firstCells["C2"]);
+        Assert.AreEqual(first.Rows[0].Source.SourceFileName, firstCells["D2"]);
+        Assert.AreEqual(
+            DatabaseRowMetadataProjection.GetValue(
+                first.Rows[0].Source,
+                DatabaseRowMetadataProjection.CreateRecordHierarchy(
+                    first.Rows[0].Cells.SelectMany(cell => cell.Values)
+                        .Select(value => value.Lineage)),
+                first.Rows[0].Cells.SelectMany(cell => cell.Values).Select(value =>
+                    new DatabaseRowMetadataValue(value.DetailedIdentity, value.Lineage)),
+                DatabaseMetadataField.RecordHierarchy),
+            firstCells["E2"]);
+        Assert.IsFalse(firstCells.ContainsKey("A3"));
+        Assert.IsFalse(firstCells.ContainsKey("B3"));
+        Assert.AreEqual("other two", firstCells["C3"]);
+
+        var combinedSummary = result.Batch.Workbooks[0];
+        Assert.HasCount(2, combinedSummary.Worksheets);
+        Assert.AreEqual(1, combinedSummary.Worksheets[0].RowCount);
+        Assert.AreEqual(2, combinedSummary.Worksheets[1].RowCount);
+        Assert.AreEqual(5, combinedSummary.Worksheets[1].ColumnCount);
+    }
+
+    [TestMethod]
+    public async Task CandidateFailureAndCancellationPublishNoWorkbook()
+    {
+        using var failedWorkspace = new ExportWorkspace();
+        var first = DatasetFixture.Create("First", 1);
+        var second = DatasetFixture.Create("Second", 2);
+        first.AddRow(first.Cell("valid"));
+        second.AddRow(second.Cell(new string('x', ExcelWorkbookLimits.MaximumCellTextLength + 1)));
+        var extraction = CreateExtraction(first, second);
+        var configuration = CreateSeparateWorkbookConfiguration(first, second);
+        failedWorkspace.Source.Set(extraction, first, second);
+
+        var failed = await failedWorkspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            configuration,
+            failedWorkspace.Root);
+
+        Assert.IsFalse(failed.Accepted);
+        Assert.AreEqual("export-cell-limit-exceeded", failed.Failure?.Code);
+        Assert.IsEmpty(Directory.GetFiles(failedWorkspace.Root, "*.xlsx"));
+        Assert.IsEmpty(Directory.GetFiles(failedWorkspace.Root, "*.incomplete"));
+
+        using var cancelledWorkspace = new ExportWorkspace();
+        var cancellable = DatasetFixture.Create("Cancellable", 1);
+        cancellable.AddRow(cancellable.Cell("value"));
+        var cancellableExtraction = CreateExtraction(cancellable);
+        var cancellableConfiguration = CreateSeparateWorkbookConfiguration(cancellable);
+        using var cancellation = new CancellationTokenSource();
+        cancelledWorkspace.Source.Set(cancellableExtraction, cancellable);
+        cancelledWorkspace.Source.BeforeYield = cancellation.Cancel;
+
+        var cancelled = await cancelledWorkspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            cancellableExtraction,
+            cancellableConfiguration,
+            cancelledWorkspace.Root,
+            cancellation.Token);
+
+        Assert.IsFalse(cancelled.Accepted);
+        Assert.AreEqual(OperationOutcome.Cancelled, cancelled.Completion.Outcome);
+        Assert.IsEmpty(Directory.GetFiles(cancelledWorkspace.Root, "*.xlsx"));
+        Assert.IsEmpty(Directory.GetFiles(cancelledWorkspace.Root, "*.incomplete"));
+    }
+
+    [TestMethod]
+    public async Task ExistingTargetIsNeverOverwritten()
+    {
+        using var workspace = new ExportWorkspace();
+        var dataset = DatasetFixture.Create("Set", 1);
+        dataset.AddRow(dataset.Cell("value"));
+        var extraction = CreateExtraction(dataset);
+        var configuration = CreateSeparateWorkbookConfiguration(dataset);
+        workspace.Source.Set(extraction, dataset);
+        var target = Path.Combine(workspace.Root, "Set.xlsx");
+        await File.WriteAllTextAsync(target, "existing");
 
         var result = await workspace.Service.ExportAsync(
             OperationCorrelation.CreateNew(),
             extraction,
             configuration,
-            target);
+            workspace.Root);
 
         Assert.IsFalse(result.Accepted);
-        Assert.AreEqual(OperationOutcome.Failed, result.Completion.Outcome);
-        Assert.AreEqual("set-aware-workbook-generation-not-supported", result.Failure?.Code);
-        Assert.IsFalse(File.Exists(target));
+        Assert.AreEqual("export-target-exists", result.Failure?.Code);
+        Assert.AreEqual("existing", await File.ReadAllTextAsync(target));
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.incomplete"));
+        Assert.IsEmpty(workspace.Source.StreamedSourceSets);
+    }
+
+    [TestMethod]
+    public async Task ShortStreamCannotPublishCapturedExtractionDataset()
+    {
+        using var workspace = new ExportWorkspace();
+        var dataset = DatasetFixture.Create("Set", 1);
+        dataset.AddRow(dataset.Cell("first"));
+        dataset.AddRow(dataset.Cell("second"));
+        var extraction = CreateExtraction(dataset);
+        workspace.Source.Set(extraction, dataset);
+        workspace.Source.SetRows(dataset.SourceSetId, dataset.Rows.Take(1).ToArray());
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            CreateSeparateWorkbookConfiguration(dataset),
+            workspace.Root);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("extraction-row-count-mismatch", result.Failure?.Code);
+        AssertNoExportArtifacts(workspace.Root);
+    }
+
+    [TestMethod]
+    public async Task ExtraStreamCannotPublishCapturedExtractionDataset()
+    {
+        using var workspace = new ExportWorkspace();
+        var dataset = DatasetFixture.Create("Set", 1);
+        dataset.AddRow(dataset.Cell("captured"));
+        var extraction = CreateExtraction(dataset);
+        dataset.AddRow(dataset.Cell("unexpected"));
+        workspace.Source.Set(extraction, dataset);
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            CreateSeparateWorkbookConfiguration(dataset),
+            workspace.Root);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("extraction-row-count-mismatch", result.Failure?.Code);
+        AssertNoExportArtifacts(workspace.Root);
+    }
+
+    [TestMethod]
+    public async Task PublicationChangeDuringWorksheetGenerationPublishesNothing()
+    {
+        using var workspace = new ExportWorkspace();
+        var dataset = DatasetFixture.Create("Set", 1);
+        dataset.AddRow(dataset.Cell("first"));
+        dataset.AddRow(dataset.Cell("second"));
+        var captured = CreateExtraction(dataset);
+        var replacement = CreateExtraction(dataset);
+        workspace.Source.Set(captured, dataset);
+        workspace.Source.BeforeYield = () =>
+        {
+            workspace.Source.ChangePublishedResult(replacement);
+            workspace.Source.BeforeYield = null;
+        };
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            captured,
+            CreateSeparateWorkbookConfiguration(dataset),
+            workspace.Root);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("extraction-result-changed-during-export", result.Failure?.Code);
+        AssertNoExportArtifacts(workspace.Root);
+    }
+
+    [TestMethod]
+    public async Task PublicationChangeAfterCandidatesBeforeBatchPublicationPublishesNothing()
+    {
+        using var workspace = new ExportWorkspace();
+        var dataset = DatasetFixture.Create("Set", 1);
+        dataset.AddRow(dataset.Cell("value"));
+        var captured = CreateExtraction(dataset);
+        var replacement = CreateExtraction(dataset);
+        workspace.Source.Set(captured, dataset);
+        workspace.Source.BeforePublishedResultRead = readNumber =>
+        {
+            if (readNumber == 2)
+            {
+                workspace.Source.ChangePublishedResult(replacement);
+            }
+        };
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            captured,
+            CreateSeparateWorkbookConfiguration(dataset),
+            workspace.Root);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("extraction-result-changed-during-export", result.Failure?.Code);
+        Assert.AreEqual(2, workspace.Source.PublishedResultReadCount);
+        AssertNoExportArtifacts(workspace.Root);
+    }
+
+    [TestMethod]
+    public void BatchPublicationRollsBackFilesMovedBeforeARace()
+    {
+        using var workspace = new ExportWorkspace();
+        var firstPath = Path.Combine(workspace.Root, "first.xlsx");
+        var secondPath = Path.Combine(workspace.Root, "second.xlsx");
+        using (var publication = WorkbookBatchPublicationScope.Create(
+                   [(WorkbookDefinitionId.CreateNew(), firstPath),
+                    (WorkbookDefinitionId.CreateNew(), secondPath)]))
+        {
+            foreach (var candidate in publication.Candidates)
+            {
+                File.WriteAllText(candidate.TemporaryPath, "candidate");
+            }
+
+            var moves = 0;
+            var failure = Assert.ThrowsExactly<WorkbookExportException>(() =>
+                publication.Publish(
+                    () => true,
+                    moveFile: (source, destination) =>
+                    {
+                        moves++;
+                        if (moves == 2)
+                        {
+                            File.WriteAllText(destination, "raced file");
+                        }
+
+                        File.Move(source, destination, overwrite: false);
+                    }));
+            Assert.AreEqual("export-target-exists", failure.Code);
+        }
+
+        Assert.IsFalse(File.Exists(firstPath));
+        Assert.AreEqual("raced file", File.ReadAllText(secondPath));
         Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.incomplete"));
     }
 
     [TestMethod]
-    public async Task SetAwareWorkbookIpcIsTypedAndProductionServiceRetainsSpr141Guard()
+    public async Task BatchContractsRoundTripThroughTypedIpc()
     {
         using var workspace = new ExportWorkspace();
-        var extraction = CreateHierarchyExtraction();
+        var dataset = DatasetFixture.Create("Set", 1);
+        dataset.AddRow(dataset.Cell("value"));
+        var extraction = CreateExtraction(dataset);
+        var configuration = CreateSeparateWorkbookConfiguration(dataset);
         var command = new RunWorkbookExportCommand(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             OperationCorrelation.CreateNew(),
             extraction,
-            CreateConfiguration(extraction),
-            Path.Combine(workspace.Root, "guarded.xlsx"));
+            configuration,
+            workspace.Root);
         await using var stream = new MemoryStream();
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
+        stream.Position = 0;
+        var roundTrip = await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
 
-        Assert.IsGreaterThan(4, stream.Length);
+        Assert.IsInstanceOfType<RunWorkbookExportCommand>(roundTrip);
+        Assert.AreEqual(workspace.Root, ((RunWorkbookExportCommand)roundTrip).OutputDirectory);
+        var correlation = command.Correlation;
+        var workbook = configuration.Workbooks.Single();
+        var worksheet = workbook.Worksheets.Single();
+        var response = new RunWorkbookExportResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            command.MessageId,
+            CommandAcceptance.Accepted,
+            OperationCompletion.FromCompletedItems(
+                correlation,
+                [OperationItemStatus.ProcessedSuccessfully("workbook-batch-publication")]),
+            new WorkbookExportBatchSummary(
+                correlation.OperationId,
+                extraction.OperationId,
+                workspace.Root,
+                [new WorkbookExportFileSummary(
+                    workbook.WorkbookDefinitionId,
+                    Path.Combine(workspace.Root, workbook.FileName),
+                    workbook.Order,
+                    [new WorkbookExportWorksheetSummary(
+                        worksheet.WorksheetDefinitionId,
+                        worksheet.SourceSetId,
+                        worksheet.Name,
+                        worksheet.Order,
+                        dataset.Rows.Count,
+                        configuration.CreateIncludedOutputColumns(dataset.SourceSetId).Count)])]),
+            null);
+        await using var responseStream = new MemoryStream();
+        await LengthPrefixedJsonMessageFramer.WriteAsync(responseStream, response);
+        responseStream.Position = 0;
+        var responseRoundTrip = await LengthPrefixedJsonMessageFramer.ReadAsync(responseStream);
+        Assert.IsInstanceOfType<RunWorkbookExportResponse>(responseRoundTrip);
+        Assert.HasCount(1, ((RunWorkbookExportResponse)responseRoundTrip).Batch!.Workbooks);
         using var host = ProcessingHostApplicationHost.Create(
             [$"--{ApplicationLogPaths.DirectoryConfigurationKey}={workspace.Root}"]);
         Assert.IsNotNull(host.Services.GetRequiredService<ExcelWorkbookExportService>());
-    }
-
-    [TestMethod]
-    public async Task StreamingFoundationWritesLiteralWhitespaceSafeOpenXml()
-    {
-        using var workspace = new ExportWorkspace();
-        var target = Path.Combine(workspace.Root, "foundation.xlsx");
-        using (var publication = WorkbookPublicationScope.Create(target))
-        {
-            await ExcelWorkbookExportFoundation.WriteTemporaryWorkbookAsync(
-                publication.TemporaryPath,
-                [new ExcelWorksheetWritePlan(
-                    "Results",
-                    (writer, _) =>
-                    {
-                        writer.WriteStartElement(new Row { RowIndex = 1U });
-                        ExcelWorkbookExportFoundation.WriteTextCell(writer, 1, 1, "Header");
-                        writer.WriteEndElement();
-                        writer.WriteStartElement(new Row { RowIndex = 2U });
-                        ExcelWorkbookExportFoundation.WriteTextCell(
-                            writer,
-                            1,
-                            2,
-                            "  =SUM(A1:A2)  ");
-                        ExcelWorkbookExportFoundation.WriteBlankCell(writer, 2, 2);
-                        writer.WriteEndElement();
-                        return ValueTask.CompletedTask;
-                    })]);
-            publication.Publish(() => true);
-        }
-
-        using var document = SpreadsheetDocument.Open(target, isEditable: false);
-        var workbookPart = document.WorkbookPart!;
-        var workbook = workbookPart.Workbook
-            ?? throw new AssertFailedException("The workbook part requires a workbook.");
-        var sheets = workbook.Sheets
-            ?? throw new AssertFailedException("The workbook requires a Sheets collection.");
-        var sheet = sheets.Elements<Sheet>().Single();
-        Assert.AreEqual("Results", sheet.Name?.Value);
-        var sheetId = sheet.Id?.Value
-            ?? throw new AssertFailedException("The worksheet requires a relationship ID.");
-        var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheetId);
-        var worksheet = worksheetPart.Worksheet
-            ?? throw new AssertFailedException("The worksheet part requires a worksheet.");
-        var cells = worksheet.Descendants<Cell>().ToArray();
-        Assert.HasCount(3, cells);
-        Assert.AreEqual(CellValues.InlineString, cells[1].DataType?.Value);
-        Assert.IsNull(cells[1].CellFormula);
-        Assert.AreEqual("  =SUM(A1:A2)  ", cells[1].InlineString?.Text?.Text);
-        Assert.AreEqual(SpaceProcessingModeValues.Preserve, cells[1].InlineString?.Text?.Space?.Value);
-        Assert.AreEqual("B2", cells[2].CellReference?.Value);
     }
 
     [TestMethod]
@@ -122,191 +387,188 @@ public sealed class ExcelWorkbookExportServiceTests
             ExcelWorkbookExportFoundation.CreateCellReference(
                 ExcelWorkbookLimits.MaximumColumns,
                 ExcelWorkbookLimits.MaximumRows));
-        var columnFailure = Assert.ThrowsExactly<WorkbookExportException>(() =>
-            ExcelWorkbookExportFoundation.CreateCellReference(
-                ExcelWorkbookLimits.MaximumColumns + 1,
-                1));
-        Assert.AreEqual("export-column-limit-exceeded", columnFailure.Code);
-        var rowFailure = Assert.ThrowsExactly<WorkbookExportException>(() =>
-            ExcelWorkbookExportFoundation.CreateCellReference(
-                1,
-                ExcelWorkbookLimits.MaximumRows + 1));
-        Assert.AreEqual("export-row-limit-exceeded", rowFailure.Code);
-        var textFailure = Assert.ThrowsExactly<WorkbookExportException>(() =>
-            ExcelWorkbookExportFoundation.ValidateCellText(
-                new string('x', ExcelWorkbookLimits.MaximumCellTextLength + 1),
-                "value"));
-        Assert.AreEqual("export-cell-limit-exceeded", textFailure.Code);
-        var xmlFailure = Assert.ThrowsExactly<WorkbookExportException>(() =>
-            ExcelWorkbookExportFoundation.ValidateCellText("invalid\u0001text", "value"));
-        Assert.AreEqual("invalid-export-text", xmlFailure.Code);
+        Assert.AreEqual(
+            "export-column-limit-exceeded",
+            Assert.ThrowsExactly<WorkbookExportException>(() =>
+                ExcelWorkbookExportFoundation.CreateCellReference(
+                    ExcelWorkbookLimits.MaximumColumns + 1,
+                    1)).Code);
+        Assert.AreEqual(
+            "export-row-limit-exceeded",
+            Assert.ThrowsExactly<WorkbookExportException>(() =>
+                ExcelWorkbookExportFoundation.CreateCellReference(
+                    1,
+                    ExcelWorkbookLimits.MaximumRows + 1)).Code);
+        Assert.AreEqual(
+            "invalid-export-text",
+            Assert.ThrowsExactly<WorkbookExportException>(() =>
+                ExcelWorkbookExportFoundation.ValidateCellText("invalid\u0001text", "value")).Code);
     }
 
     [TestMethod]
-    public void PublicationScopePublishesAtomicallyAndNeverOverwrites()
+    public void ServiceExposesNoLegacyFlatOrSingleWorkbookEntryPoint()
     {
-        using var workspace = new ExportWorkspace();
-        var publishedTarget = Path.Combine(workspace.Root, "published.xlsx");
-        string publishedTemporaryPath;
-        using (var publication = WorkbookPublicationScope.Create(publishedTarget))
-        {
-            publishedTemporaryPath = publication.TemporaryPath;
-            File.WriteAllText(publication.TemporaryPath, "complete workbook");
-            publication.Publish(() => true);
-        }
+        var methods = typeof(ExcelWorkbookExportService).GetMethods(
+            System.Reflection.BindingFlags.Public
+            | System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.DeclaredOnly);
 
-        Assert.IsTrue(File.Exists(publishedTarget));
-        Assert.IsFalse(File.Exists(publishedTemporaryPath));
-
-        var racedTarget = Path.Combine(workspace.Root, "raced.xlsx");
-        string racedTemporaryPath;
-        using (var publication = WorkbookPublicationScope.Create(racedTarget))
-        {
-            racedTemporaryPath = publication.TemporaryPath;
-            File.WriteAllText(publication.TemporaryPath, "candidate");
-            File.WriteAllText(racedTarget, "existing");
-            var failure = Assert.ThrowsExactly<WorkbookExportException>(() =>
-                publication.Publish(() => true));
-            Assert.AreEqual("export-target-exists", failure.Code);
-            Assert.AreEqual("existing", File.ReadAllText(racedTarget));
-        }
-
-        Assert.IsFalse(File.Exists(racedTemporaryPath));
+        Assert.HasCount(1, methods);
+        Assert.AreEqual(nameof(ExcelWorkbookExportService.ExportAsync), methods[0].Name);
+        Assert.IsFalse(methods[0].GetParameters().Any(parameter =>
+            parameter.ParameterType == typeof(DatabaseMappingSnapshot)));
+        Assert.IsFalse(methods[0].GetParameters().Any(parameter =>
+            parameter.Name?.Contains("targetPath", StringComparison.OrdinalIgnoreCase) == true));
     }
 
-    [TestMethod]
-    public void PublicationScopeCleansTemporaryOutputOnFailureAndCancellation()
+    private static ExtractionResultSummary CreateExtraction(params DatasetFixture[] fixtures)
     {
-        using var workspace = new ExportWorkspace();
-        var failedTarget = Path.Combine(workspace.Root, "failed.xlsx");
-        string failedTemporaryPath;
-        using (var publication = WorkbookPublicationScope.Create(failedTarget))
-        {
-            failedTemporaryPath = publication.TemporaryPath;
-            File.WriteAllText(publication.TemporaryPath, "incomplete");
-        }
-
-        Assert.IsFalse(File.Exists(failedTemporaryPath));
-        Assert.IsFalse(File.Exists(failedTarget));
-
-        var cancelledTarget = Path.Combine(workspace.Root, "cancelled.xlsx");
-        string cancelledTemporaryPath;
-        var boundaryEntered = false;
-        using (var publication = WorkbookPublicationScope.Create(cancelledTarget))
-        {
-            cancelledTemporaryPath = publication.TemporaryPath;
-            File.WriteAllText(publication.TemporaryPath, "incomplete");
-            using var cancellation = new CancellationTokenSource();
-            cancellation.Cancel();
-            Assert.ThrowsExactly<OperationCanceledException>(() => publication.Publish(
-                () => boundaryEntered = true,
-                cancellation.Token));
-        }
-
-        Assert.IsFalse(boundaryEntered);
-        Assert.IsFalse(File.Exists(cancelledTemporaryPath));
-        Assert.IsFalse(File.Exists(cancelledTarget));
-
-        var boundaryTarget = Path.Combine(workspace.Root, "boundary-rejected.xlsx");
-        string boundaryTemporaryPath;
-        using (var publication = WorkbookPublicationScope.Create(boundaryTarget))
-        {
-            boundaryTemporaryPath = publication.TemporaryPath;
-            File.WriteAllText(publication.TemporaryPath, "incomplete");
-            Assert.ThrowsExactly<OperationCanceledException>(() =>
-                publication.Publish(() => false));
-        }
-
-        Assert.IsFalse(File.Exists(boundaryTemporaryPath));
-        Assert.IsFalse(File.Exists(boundaryTarget));
-    }
-
-    [TestMethod]
-    public void ServiceExposesNoLegacyFlatWorkbookEntryPoint()
-    {
-        var publicDeclaredMethods = typeof(ExcelWorkbookExportService)
-            .GetMethods(System.Reflection.BindingFlags.Public
-                | System.Reflection.BindingFlags.Instance
-                | System.Reflection.BindingFlags.DeclaredOnly);
-
-        Assert.HasCount(1, publicDeclaredMethods);
-        Assert.AreEqual(nameof(ExcelWorkbookExportService.ExportAsync), publicDeclaredMethods[0].Name);
-        Assert.IsFalse(publicDeclaredMethods.Any(method =>
-            method.GetParameters().Any(parameter =>
-                parameter.ParameterType == typeof(DatabaseMappingSnapshot))));
-    }
-
-    private static ExtractionResultSummary CreateHierarchyExtraction()
-    {
-        var sourceSetId = SourceSetId.CreateNew();
-        var identity = new DiscoveryInformationIdentity(
-            sourceSetId,
-            "/root/tag",
-            "tag",
-            SourceValueCandidateKind.Element,
-            "/root/tag");
-        var mapping = new DatabaseFieldMapping(
-            DatabaseLogicalFieldIdentity.Create(identity),
-            "Tag",
-            false,
-            [identity]);
-        var column = new DatabaseColumnDefinition(
-            new DatabaseColumnIdentity(
-                sourceSetId,
-                mapping.FieldKey,
-                DatabaseRepeatCoordinatePath.Empty),
-            "Tag",
-            1);
-        var dataset = new DatabaseDatasetSummary(
-            sourceSetId,
-            "Set 1",
-            1,
-            RepeatedDataLayout.StructuralRows,
-            1,
-            1,
-            [column],
-            [mapping]);
-        var database = new DatabaseGenerationSummary(OperationId.CreateNew(), [dataset]);
+        var database = new DatabaseGenerationSummary(
+            OperationId.CreateNew(),
+            fixtures.Select(fixture => fixture.DatabaseSummary()).ToArray());
         return new ExtractionResultSummary(
             OperationId.CreateNew(),
             database,
-            [new ExtractionDatasetSummary(
-                sourceSetId,
-                "Set 1",
-                1,
-                RepeatedDataLayout.StructuralRows,
-                1,
-                1,
-                [column])]);
+            fixtures.Select(fixture => fixture.ExtractionSummary()).ToArray());
+    }
+
+    private static void AssertNoExportArtifacts(string directory)
+    {
+        Assert.IsEmpty(Directory.GetFiles(directory, "*.xlsx"));
+        Assert.IsEmpty(Directory.GetFiles(directory, "*.incomplete"));
     }
 
     private static ExportConfigurationSnapshot CreateConfiguration(
-        ExtractionResultSummary extraction)
+        DatasetFixture first,
+        DatasetFixture second,
+        DatasetFixture third,
+        DatasetFixture disabled)
     {
-        var dataset = extraction.Datasets.Single();
-        var workbookId = WorkbookDefinitionId.CreateNew();
-        var worksheetId = WorksheetDefinitionId.CreateNew();
+        var combinedId = WorkbookDefinitionId.CreateNew();
+        var separateId = WorkbookDefinitionId.CreateNew();
+        var disabledId = WorkbookDefinitionId.CreateNew();
+        var firstSheetId = WorksheetDefinitionId.CreateNew();
+        var secondSheetId = WorksheetDefinitionId.CreateNew();
+        var thirdSheetId = WorksheetDefinitionId.CreateNew();
+        var disabledSheetId = WorksheetDefinitionId.CreateNew();
         return new ExportConfigurationSnapshot(
             [new WorkbookDefinition(
-                workbookId,
-                "CIA Export.xlsx",
+                combinedId,
+                "Combined.xlsx",
                 1,
+                [new WorksheetDefinition(secondSheetId, combinedId, second.SourceSetId, "Set B", 1),
+                 new WorksheetDefinition(firstSheetId, combinedId, first.SourceSetId, "Set A", 2)]),
+             new WorkbookDefinition(
+                separateId,
+                "Separate.xlsx",
+                2,
+                [new WorksheetDefinition(thirdSheetId, separateId, third.SourceSetId, "Set C", 1)]),
+             new WorkbookDefinition(
+                disabledId,
+                "Disabled.xlsx",
+                3,
+                [new WorksheetDefinition(
+                    disabledSheetId,
+                    disabledId,
+                    disabled.SourceSetId,
+                    "Disabled",
+                    1)])],
+            [SourceConfiguration(first, firstSheetId, includeSourceId: true, includeMetadata: true),
+             SourceConfiguration(second, secondSheetId),
+             SourceConfiguration(third, thirdSheetId),
+             SourceConfiguration(disabled, disabledSheetId, enabled: false)]);
+    }
+
+    private static ExportConfigurationSnapshot CreateSeparateWorkbookConfiguration(
+        params DatasetFixture[] fixtures)
+    {
+        var workbooks = new List<WorkbookDefinition>();
+        var sourceSets = new List<SourceSetExportConfiguration>();
+        for (var index = 0; index < fixtures.Length; index++)
+        {
+            var workbookId = WorkbookDefinitionId.CreateNew();
+            var worksheetId = WorksheetDefinitionId.CreateNew();
+            workbooks.Add(new WorkbookDefinition(
+                workbookId,
+                $"{fixtures[index].DisplayName}.xlsx",
+                index + 1,
                 [new WorksheetDefinition(
                     worksheetId,
                     workbookId,
-                    dataset.SourceSetId,
-                    dataset.DisplayName,
-                    1)])],
-            [new SourceSetExportConfiguration(
-                dataset.SourceSetId,
+                    fixtures[index].SourceSetId,
+                    fixtures[index].DisplayName,
+                    1)]));
+            sourceSets.Add(SourceConfiguration(fixtures[index], worksheetId));
+        }
+
+        return new ExportConfigurationSnapshot(workbooks, sourceSets);
+    }
+
+    private static SourceSetExportConfiguration SourceConfiguration(
+        DatasetFixture fixture,
+        WorksheetDefinitionId worksheetId,
+        bool includeSourceId = false,
+        bool includeMetadata = false,
+        bool enabled = true) =>
+        new(
+            fixture.SourceSetId,
+            enabled,
+            worksheetId,
+            fixture.Columns.Select((column, index) => new ExportFieldConfiguration(
+                column.Identity,
                 true,
-                worksheetId,
-                dataset.Columns.Select(column => new ExportFieldConfiguration(
-                    column.Identity,
-                    true,
-                    column.EffectiveName,
-                    false)).ToArray(),
-                [])]);
+                index == 0 ? "Shared" : column.EffectiveName,
+                includeSourceId && index == 0)).ToArray(),
+            includeMetadata
+                ? [new ExportMetadataFieldConfiguration(
+                       DatabaseMetadataField.SourceFile,
+                       true,
+                       "Source File"),
+                   new ExportMetadataFieldConfiguration(
+                       DatabaseMetadataField.RecordHierarchy,
+                       true,
+                       "Record Hierarchy")]
+                : []);
+
+    private static IReadOnlyList<string> SheetNames(SpreadsheetDocument document)
+    {
+        var sheets = document.WorkbookPart?.Workbook?.Sheets
+            ?? throw new AssertFailedException("The workbook requires sheets.");
+        return sheets.Elements<Sheet>().Select(sheet =>
+            sheet.Name?.Value
+            ?? throw new AssertFailedException("A worksheet requires a name.")).ToArray();
+    }
+
+    private static IReadOnlyDictionary<string, string> ReadCells(
+        SpreadsheetDocument document,
+        string sheetName)
+    {
+        var worksheet = GetWorksheet(document, sheetName);
+        return worksheet.Descendants<Cell>().Where(cell => cell.InlineString?.Text is not null)
+            .ToDictionary(
+                cell => cell.CellReference!.Value!,
+                cell => cell.InlineString!.Text!.Text);
+    }
+
+    private static Cell ReadCell(
+        SpreadsheetDocument document,
+        string sheetName,
+        string cellReference) =>
+        GetWorksheet(document, sheetName).Descendants<Cell>().Single(cell =>
+            string.Equals(cell.CellReference?.Value, cellReference, StringComparison.Ordinal));
+
+    private static Worksheet GetWorksheet(SpreadsheetDocument document, string sheetName)
+    {
+        var workbookPart = document.WorkbookPart
+            ?? throw new AssertFailedException("The document requires a workbook part.");
+        var sheets = workbookPart.Workbook?.Sheets
+            ?? throw new AssertFailedException("The workbook requires sheets.");
+        var sheet = sheets.Elements<Sheet>().Single(candidate =>
+            string.Equals(candidate.Name?.Value, sheetName, StringComparison.Ordinal));
+        var relationshipId = sheet.Id?.Value
+            ?? throw new AssertFailedException("A worksheet requires a relationship ID.");
+        return ((WorksheetPart)workbookPart.GetPartById(relationshipId)).Worksheet
+            ?? throw new AssertFailedException("The worksheet part requires content.");
     }
 
     private sealed class ExportWorkspace : IDisposable
@@ -315,14 +577,18 @@ public sealed class ExcelWorkbookExportServiceTests
         {
             Root = Path.Combine(
                 Path.GetTempPath(),
-                "CIA.SPR139.ExportGuard.Tests",
+                "CIA.SPR141.Tests",
                 Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Root);
-            Service = new ExcelWorkbookExportService();
+            Source = new FakeExtractionExportRowSource();
+            Service = new ExcelWorkbookExportService(
+                Source,
+                new CooperativeOperationCancellation(new NullHistory()),
+                NullLogger<ExcelWorkbookExportService>.Instance);
         }
 
         public string Root { get; }
-
+        public FakeExtractionExportRowSource Source { get; }
         public ExcelWorkbookExportService Service { get; }
 
         public void Dispose()
@@ -334,4 +600,209 @@ public sealed class ExcelWorkbookExportServiceTests
         }
     }
 
+    private sealed class FakeExtractionExportRowSource : IExtractionExportRowSource
+    {
+        private readonly Dictionary<SourceSetId, IReadOnlyList<ExtractionResultRow>> _rows = [];
+
+        internal ExtractionResultSummary? Result { get; private set; }
+        internal List<SourceSetId> StreamedSourceSets { get; } = [];
+        internal Action? BeforeYield { get; set; }
+        internal Action<int>? BeforePublishedResultRead { get; set; }
+        internal int PublishedResultReadCount { get; private set; }
+
+        internal void Set(ExtractionResultSummary result, params DatasetFixture[] fixtures)
+        {
+            Result = result;
+            foreach (var fixture in fixtures)
+            {
+                _rows[fixture.SourceSetId] = fixture.Rows;
+            }
+        }
+
+        internal void SetRows(
+            SourceSetId sourceSetId,
+            IReadOnlyList<ExtractionResultRow> rows) => _rows[sourceSetId] = rows;
+
+        internal void ChangePublishedResult(ExtractionResultSummary result) => Result = result;
+
+        public Task<ExtractionResultSummary?> ReadPublishedResultAsync(
+            CancellationToken cancellationToken = default)
+        {
+            PublishedResultReadCount++;
+            BeforePublishedResultRead?.Invoke(PublishedResultReadCount);
+            return Task.FromResult(Result);
+        }
+
+        public async IAsyncEnumerable<ExtractionResultRow> StreamRowsAsync(
+            OperationId extractionResultId,
+            SourceSetId sourceSetId,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            StreamedSourceSets.Add(sourceSetId);
+            foreach (var row in _rows[sourceSetId])
+            {
+                BeforeYield?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.Yield();
+                yield return row;
+            }
+        }
+    }
+
+    private sealed class DatasetFixture
+    {
+        private readonly IReadOnlyList<DatabaseFieldMapping> _mappings;
+        private SourceId? _pendingSourceId;
+
+        private DatasetFixture(
+            SourceSetId sourceSetId,
+            string displayName,
+            int ordinal,
+            IReadOnlyList<DatabaseColumnDefinition> columns,
+            IReadOnlyList<DatabaseFieldMapping> mappings)
+        {
+            SourceSetId = sourceSetId;
+            DisplayName = displayName;
+            Ordinal = ordinal;
+            Columns = columns;
+            _mappings = mappings;
+        }
+
+        internal SourceSetId SourceSetId { get; }
+        internal string DisplayName { get; }
+        internal int Ordinal { get; }
+        internal IReadOnlyList<DatabaseColumnDefinition> Columns { get; }
+        internal List<ExtractionResultRow> Rows { get; } = [];
+
+        internal static DatasetFixture Create(
+            string displayName,
+            int ordinal,
+            bool twoColumns = false,
+            DatabaseRepeatCoordinatePath? repeatCoordinates = null)
+        {
+            var sourceSetId = SourceSetId.CreateNew();
+            var names = twoColumns ? new[] { "tag", "other" } : ["tag"];
+            var mappings = names.Select(name =>
+            {
+                var identity = new DiscoveryInformationIdentity(
+                    sourceSetId,
+                    $"/root/record/{name}",
+                    name,
+                    SourceValueCandidateKind.Element,
+                    $"/root/record/{name}");
+                return new DatabaseFieldMapping(
+                    DatabaseLogicalFieldIdentity.Create(identity),
+                    name == "tag" ? "Shared" : "Other",
+                    false,
+                    [identity]);
+            }).ToArray();
+            var columns = mappings.Select((mapping, index) => new DatabaseColumnDefinition(
+                new DatabaseColumnIdentity(
+                    sourceSetId,
+                    mapping.FieldKey,
+                    repeatCoordinates ?? DatabaseRepeatCoordinatePath.Empty),
+                mapping.EffectiveName,
+                index + 1)).ToArray();
+            return new DatasetFixture(sourceSetId, displayName, ordinal, columns, mappings);
+        }
+
+        internal ExtractionResultCell Cell(params string[] values) =>
+            CellForColumn(0, values);
+
+        internal ExtractionResultCell CellForColumn(int columnIndex, params string[] values)
+        {
+            var mapping = _mappings[columnIndex];
+            var identity = mapping.DetailedIdentities.Single();
+            var sourceId = _pendingSourceId ??= SourceId.CreateNew();
+            var lineage = CreateLineage(identity, Rows.Count + 1, columnIndex + 1);
+            return new ExtractionResultCell(
+                Columns[columnIndex].Identity,
+                Columns[columnIndex].EffectiveName,
+                values.Distinct(StringComparer.Ordinal).Skip(1).Any(),
+                values.Select((value, index) => new ExtractionResultValue(
+                    index + 1,
+                    value,
+                    identity,
+                    sourceId,
+                    lineage,
+                    Columns[columnIndex].Identity.RepeatCoordinates)).ToArray());
+        }
+
+        internal void AddRow(params ExtractionResultCell[] cells)
+        {
+            var ordinal = Rows.Count + 1;
+            var sourceId = cells.SelectMany(cell => cell.Values).First().SourceId;
+            var source = new DatabaseSourceMetadata(
+                SourceSetId,
+                DisplayName,
+                sourceId,
+                $"source-{ordinal}.xml",
+                $"C:\\input\\{DisplayName}\\source-{ordinal}.xml",
+                LoadedSourceKind.XmlFile,
+                null,
+                null,
+                new DateTimeOffset(2026, 9, 18, 10, ordinal, 0, TimeSpan.Zero));
+            Rows.Add(new ExtractionResultRow(
+                ordinal,
+                ordinal,
+                ordinal,
+                $"record-{ordinal}",
+                source,
+                cells));
+            _pendingSourceId = null;
+        }
+
+        internal DatabaseDatasetSummary DatabaseSummary() => new(
+            SourceSetId,
+            DisplayName,
+            Ordinal,
+            RepeatedDataLayout.StructuralRows,
+            Rows.Count,
+            Rows.SelectMany(row => row.Cells).SelectMany(cell => cell.Values).Count(),
+            Columns,
+            _mappings);
+
+        internal ExtractionDatasetSummary ExtractionSummary() => new(
+            SourceSetId,
+            DisplayName,
+            Ordinal,
+            RepeatedDataLayout.StructuralRows,
+            Rows.Count,
+            Rows.SelectMany(row => row.Cells).SelectMany(cell => cell.Values).Count(),
+            Columns);
+
+        private static DatabaseLineageEvidence CreateLineage(
+            DiscoveryInformationIdentity identity,
+            int recordOrdinal,
+            int fieldOrdinal) => new(
+                identity.StructuralPath,
+                recordOrdinal * 10L + fieldOrdinal,
+                recordOrdinal,
+                [1, recordOrdinal],
+                recordOrdinal * 10L + fieldOrdinal,
+                [new DatabaseSourceElementEvidence("root", string.Empty, "root", 1, 1),
+                 new DatabaseSourceElementEvidence(
+                    "record",
+                    string.Empty,
+                    "record",
+                    recordOrdinal,
+                    recordOrdinal),
+                 new DatabaseSourceElementEvidence(
+                    identity.InformationType,
+                    string.Empty,
+                    identity.InformationType,
+                    recordOrdinal * 10L + fieldOrdinal,
+                    fieldOrdinal)]);
+    }
+
+    private sealed class NullHistory : IProcessingHistoryRecorder
+    {
+        public void RecordAttempt(ProcessingAttemptRecord record)
+        {
+        }
+
+        public void RecordDiagnostic(ProcessingDiagnosticRecord record)
+        {
+        }
+    }
 }
