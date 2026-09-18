@@ -9,6 +9,7 @@ using CIA.Contracts.Operations;
 using CIA.Core.Database;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
+using CIA.Desktop.Export;
 using CIA.Desktop.Extraction;
 using CIA.Desktop.Workflow;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -24,12 +25,13 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private readonly IDatabaseReviewClient? _databaseReviewClient;
     private readonly ExtractionCoordinator? _extractionCoordinator;
     private readonly SynchronizationContext? _uiSynchronizationContext;
+    private readonly ExportRoutingConfigurationPresentation _exportRouting = new();
     private readonly Dictionary<string, DatabaseColumnPresentation> _columnCache = new(
         StringComparer.Ordinal);
     private readonly List<string> _publishedColumnOrder = [];
-    private readonly List<string> _canonicalExportOrder = [];
     private readonly ObservableCollection<DatabaseColumnPresentation> _columns = [];
-    private readonly ObservableCollection<DatabaseColumnPresentation> _exportColumns = [];
+    private readonly ObservableCollection<ExportFieldPresentation> _exportColumns = [];
+    private readonly ObservableCollection<ExportMetadataFieldPresentation> _exportMetadataFields = [];
     private readonly ObservableCollection<DatabaseColumnPresentation> _visibleColumns = [];
     private readonly ObservableCollection<DatabaseReviewRowPresentation> _records = [];
     private readonly ObservableCollection<DatabaseDatasetPresentation> _datasets = [];
@@ -69,8 +71,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _extractionCoordinator = extractionCoordinator;
         _uiSynchronizationContext = SynchronizationContext.Current;
         Columns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(_columns);
-        ExportColumns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(
+        ExportColumns = new ReadOnlyObservableCollection<ExportFieldPresentation>(
             _exportColumns);
+        ExportMetadataFields = new ReadOnlyObservableCollection<ExportMetadataFieldPresentation>(
+            _exportMetadataFields);
+        WorkbookDefinitions = _exportRouting.Workbooks;
+        _exportRouting.Changed += OnExportRoutingChanged;
         VisibleColumns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(
             _visibleColumns);
         Records = new ReadOnlyObservableCollection<DatabaseReviewRowPresentation>(_records);
@@ -95,15 +101,22 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         MoveColumnDownCommand = new RelayCommand<DatabaseColumnPresentation>(
             MoveColumnDown,
             CanMoveColumnDown);
-        MoveExportFieldUpCommand = new RelayCommand<DatabaseColumnPresentation>(
+        MoveExportFieldUpCommand = new RelayCommand<ExportFieldPresentation>(
             MoveExportFieldUp,
             CanMoveExportFieldUp);
-        MoveExportFieldDownCommand = new RelayCommand<DatabaseColumnPresentation>(
+        MoveExportFieldDownCommand = new RelayCommand<ExportFieldPresentation>(
             MoveExportFieldDown,
             CanMoveExportFieldDown);
+        CreateExportWorkbookCommand = new RelayCommand(CreateExportWorkbook, HasSelectedDataset);
+        MoveWorksheetUpCommand = new RelayCommand(
+            () => MoveWorksheet(-1),
+            () => CanMoveWorksheet(-1));
+        MoveWorksheetDownCommand = new RelayCommand(
+            () => MoveWorksheet(1),
+            () => CanMoveWorksheet(1));
         ResetColumnLayoutCommand = new RelayCommand(ResetColumnLayout, HasColumns);
-        ResetHeadersCommand = new RelayCommand(ResetHeaders, HasColumns);
-        ResetExportCommand = new RelayCommand(ResetExport, HasColumns);
+        ResetHeadersCommand = new RelayCommand(ResetHeaders, HasSelectedDataset);
+        ResetExportCommand = new RelayCommand(ResetExport, HasSelectedDataset);
         PreviousReviewPageCommand = new AsyncRelayCommand(
             PreviousReviewPageAsync,
             CanMoveToPreviousReviewPage);
@@ -146,7 +159,11 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     public ReadOnlyObservableCollection<DatabaseColumnPresentation> Columns { get; }
 
-    public ReadOnlyObservableCollection<DatabaseColumnPresentation> ExportColumns { get; }
+    public ReadOnlyObservableCollection<ExportFieldPresentation> ExportColumns { get; }
+
+    public ReadOnlyObservableCollection<ExportMetadataFieldPresentation> ExportMetadataFields { get; }
+
+    public ReadOnlyObservableCollection<ExportWorkbookPresentation> WorkbookDefinitions { get; }
 
     public ReadOnlyObservableCollection<DatabaseColumnPresentation> VisibleColumns { get; }
 
@@ -162,9 +179,15 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     public IRelayCommand<DatabaseColumnPresentation> MoveColumnDownCommand { get; }
 
-    public IRelayCommand<DatabaseColumnPresentation> MoveExportFieldUpCommand { get; }
+    public IRelayCommand<ExportFieldPresentation> MoveExportFieldUpCommand { get; }
 
-    public IRelayCommand<DatabaseColumnPresentation> MoveExportFieldDownCommand { get; }
+    public IRelayCommand<ExportFieldPresentation> MoveExportFieldDownCommand { get; }
+
+    public IRelayCommand CreateExportWorkbookCommand { get; }
+
+    public IRelayCommand MoveWorksheetUpCommand { get; }
+
+    public IRelayCommand MoveWorksheetDownCommand { get; }
 
     public IRelayCommand ResetColumnLayoutCommand { get; }
 
@@ -194,6 +217,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 return;
             }
             ApplyDataset(value.Summary);
+            ApplyExportDataset(value.Summary);
             OnPropertyChanged(nameof(RecordCountText));
             _ = LoadReviewPageAsync(_publishedGeneration.OperationId, 1);
         }
@@ -359,7 +383,81 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         $"{ExportColumns.Count(column => column.IsExported)} / {ExportColumns.Count} fields";
 
     public string WorkbookExportFieldCountText =>
-        $"{CaptureExportConfiguration().CreateIncludedOutputColumns().Count} selected";
+        SelectedDataset is null
+            ? "0 selected"
+            : $"{CaptureExportConfiguration().CreateIncludedOutputColumns(SelectedDataset.Summary.SourceSetId).Count} selected";
+
+    public bool IsSelectedSetExportEnabled
+    {
+        get => SelectedExportSet?.IsEnabled == true;
+        set
+        {
+            if (SelectedExportSet is not { } set || set.IsEnabled == value)
+            {
+                return;
+            }
+
+            set.IsEnabled = value;
+            NotifyExportRoutingPropertiesChanged();
+        }
+    }
+
+    public ExportWorkbookPresentation? SelectedExportWorkbook
+    {
+        get => SelectedExportSet is { } set
+            ? WorkbookDefinitions.SingleOrDefault(workbook =>
+                workbook.WorkbookDefinitionId == set.WorkbookDefinitionId)
+            : null;
+        set
+        {
+            if (SelectedExportSet is not { } set || value is null
+                || set.WorkbookDefinitionId == value.WorkbookDefinitionId)
+            {
+                return;
+            }
+
+            _exportRouting.AssignWorkbook(set.SourceSetId, value.WorkbookDefinitionId);
+            NotifyExportRoutingPropertiesChanged();
+        }
+    }
+
+    public string SelectedWorksheetName
+    {
+        get => SelectedExportSet?.WorksheetName ?? string.Empty;
+        set
+        {
+            if (SelectedExportSet is not { } set
+                || string.Equals(set.WorksheetName, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            set.WorksheetName = value;
+            NotifyExportRoutingPropertiesChanged();
+        }
+    }
+
+    public string WorksheetOrderText => SelectedExportSet is { } set
+        ? $"Worksheet {set.WorksheetOrder:N0}"
+        : "No worksheet";
+
+    public bool IsExportConfigurationValid => CurrentExportValidation.IsValid;
+
+    public string ExportConfigurationValidationText
+    {
+        get
+        {
+            var validation = CurrentExportValidation;
+            if (!validation.IsValid)
+            {
+                return validation.Failures[0].Description;
+            }
+
+            return validation.RunnableWorkbooks.Count == 0
+                ? "No Source Sets are enabled for export."
+                : $"Ready for SPR-141 routing · {validation.RunnableWorkbooks.Count:N0} workbook definition(s).";
+        }
+    }
 
     public bool IsExportAvailable => false;
 
@@ -477,13 +575,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     public ExportConfigurationSnapshot CaptureExportConfiguration()
     {
-        return new ExportConfigurationSnapshot(_exportColumns
-            .Select(column => new ExportFieldConfiguration(
-                column.DatabaseField,
-                column.IsExported,
-                column.ExcelHeader,
-                column.IsSourceIdExported))
-            .ToArray());
+        return _exportRouting.Capture();
     }
 
     public string OutputFolder { get; set; } = Path.Combine(
@@ -493,12 +585,6 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     public bool AlwaysAskWhereToExport { get; set; } = true;
 
-    public string ExportFileName { get; set; } = "CIA_Export_YYYY-MM-DD_HHmm.xlsx";
-
-    public bool AutoFitColumns { get; set; } = true;
-
-    public bool FreezeHeaderRow { get; set; } = true;
-
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -507,6 +593,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         _workflowCoordinator.StateChanged -= OnWorkflowStateChanged;
+        _exportRouting.Changed -= OnExportRoutingChanged;
         if (_databaseBuildCoordinator is not null)
         {
             _databaseBuildCoordinator.PublishedGenerationChanged -=
@@ -530,6 +617,22 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     {
         return Columns.Count > 0;
     }
+
+    private bool HasSelectedDataset() => SelectedDataset is not null;
+
+    private ExportSourceSetPresentation? SelectedExportSet => SelectedDataset is null
+        ? null
+        : _exportRouting.SourceSets.SingleOrDefault(set =>
+            set.SourceSetId == SelectedDataset.Summary.SourceSetId);
+
+    private ExportConfigurationValidationResult CurrentExportValidation =>
+        _publishedGeneration is { IsHierarchyAware: true } generation
+            ? ExportConfigurationValidator.Validate(CaptureExportConfiguration(), generation)
+            : new ExportConfigurationValidationResult(
+                [new ExportConfigurationValidationFailure(
+                    "missing-hierarchy-database",
+                    "A hierarchy-aware Database is required before export can be configured.")],
+                []);
 
     private bool CanMoveColumnUp(DatabaseColumnPresentation? column)
     {
@@ -573,12 +676,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         UpdatePositionsAndPresentation();
     }
 
-    private bool CanMoveExportFieldUp(DatabaseColumnPresentation? column)
+    private bool CanMoveExportFieldUp(ExportFieldPresentation? column)
     {
         return column is not null && _exportColumns.IndexOf(column) > 0;
     }
 
-    private bool CanMoveExportFieldDown(DatabaseColumnPresentation? column)
+    private bool CanMoveExportFieldDown(ExportFieldPresentation? column)
     {
         return column is not null
             && _exportColumns.IndexOf(column) is var index
@@ -586,17 +689,17 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             && index < _exportColumns.Count - 1;
     }
 
-    private void MoveExportFieldUp(DatabaseColumnPresentation? column)
+    private void MoveExportFieldUp(ExportFieldPresentation? column)
     {
         MoveExportField(column, -1);
     }
 
-    private void MoveExportFieldDown(DatabaseColumnPresentation? column)
+    private void MoveExportFieldDown(ExportFieldPresentation? column)
     {
         MoveExportField(column, 1);
     }
 
-    private void MoveExportField(DatabaseColumnPresentation? column, int offset)
+    private void MoveExportField(ExportFieldPresentation? column, int offset)
     {
         if (column is null)
         {
@@ -610,8 +713,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
-        _exportColumns.Move(currentIndex, nextIndex);
-        UpdateExportPositionsAndSnapshot();
+        SelectedExportSet?.MoveField(column, offset);
     }
 
     private void ResetColumnLayout()
@@ -627,21 +729,43 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private void ResetHeaders()
     {
-        foreach (var column in _columns)
-        {
-            column.ResetExcelHeader();
-        }
+        SelectedExportSet?.ResetHeaders();
     }
 
     private void ResetExport()
     {
-        foreach (var column in _exportColumns)
+        SelectedExportSet?.ResetFields();
+    }
+
+    private void CreateExportWorkbook()
+    {
+        if (SelectedExportSet is { } set)
         {
-            column.ResetExport();
+            _exportRouting.CreateWorkbookFor(set.SourceSetId);
+        }
+    }
+
+    private bool CanMoveWorksheet(int offset)
+    {
+        if (SelectedExportSet is not { } set)
+        {
+            return false;
         }
 
-        ReorderExportColumns(_canonicalExportOrder);
-        UpdateExportPositionsAndSnapshot();
+        var workbookSets = _exportRouting.SourceSets
+            .Where(candidate => candidate.WorkbookDefinitionId == set.WorkbookDefinitionId)
+            .OrderBy(candidate => candidate.WorksheetOrder)
+            .ToArray();
+        var index = Array.IndexOf(workbookSets, set);
+        return index >= 0 && index + offset >= 0 && index + offset < workbookSets.Length;
+    }
+
+    private void MoveWorksheet(int offset)
+    {
+        if (SelectedExportSet is { } set)
+        {
+            _exportRouting.MoveWorksheet(set.SourceSetId, offset);
+        }
     }
 
     private IReadOnlyList<DatabaseColumnMapping> CapturePublishedColumns()
@@ -702,26 +826,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             .Where(identity => !retainedPresentationOrder.Contains(
                 identity,
                 StringComparer.Ordinal)));
-        var retainedExportOrder = _exportColumns
-            .Where(column => publishedIds.Contains(column.MappingIdentity))
-            .Select(column => column.MappingIdentity)
-            .ToList();
-        retainedExportOrder.AddRange(publishedColumns
-            .Select(column => CreateColumnIdentity(column.SourceInformationTypes))
-            .Where(identity => !retainedExportOrder.Contains(
-                identity,
-                StringComparer.Ordinal)));
-
         _publishedColumnOrder.Clear();
         _publishedColumnOrder.AddRange(
             publishedColumns.Select(column => CreateColumnIdentity(
                 column.SourceInformationTypes)));
-        _canonicalExportOrder.Clear();
-        _canonicalExportOrder.AddRange(_publishedColumnOrder);
         ReorderColumns(retainedPresentationOrder);
-        ReorderExportColumns(retainedExportOrder);
         UpdatePositionsAndPresentation();
-        UpdateExportPositionsAndSnapshot();
     }
 
     private void ReorderColumns(IEnumerable<string> orderedColumnIdentities)
@@ -732,18 +842,6 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             if (_columnCache.TryGetValue(columnIdentity, out var column))
             {
                 _columns.Add(column);
-            }
-        }
-    }
-
-    private void ReorderExportColumns(IEnumerable<string> orderedColumnIdentities)
-    {
-        _exportColumns.Clear();
-        foreach (var columnIdentity in orderedColumnIdentities)
-        {
-            if (_columnCache.TryGetValue(columnIdentity, out var column))
-            {
-                _exportColumns.Add(column);
             }
         }
     }
@@ -762,18 +860,6 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         ResetColumnLayoutCommand.NotifyCanExecuteChanged();
         ResetHeadersCommand.NotifyCanExecuteChanged();
         ResetExportCommand.NotifyCanExecuteChanged();
-    }
-
-    private void UpdateExportPositionsAndSnapshot()
-    {
-        for (var index = 0; index < _exportColumns.Count; index++)
-        {
-            _exportColumns[index].SetExportPosition(index + 1);
-        }
-
-        NotifyExportConfigurationChanged();
-        MoveExportFieldUpCommand.NotifyCanExecuteChanged();
-        MoveExportFieldDownCommand.NotifyCanExecuteChanged();
     }
 
     private void RebuildVisibleColumns()
@@ -799,6 +885,39 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     {
         OnPropertyChanged(nameof(ExportFieldCountText));
         OnPropertyChanged(nameof(WorkbookExportFieldCountText));
+        OnPropertyChanged(nameof(IsExportConfigurationValid));
+        OnPropertyChanged(nameof(ExportConfigurationValidationText));
+    }
+
+    private void OnExportRoutingChanged(object? sender, EventArgs e)
+    {
+        DispatchToUi(() =>
+        {
+            if (SelectedDataset is { } selectedDataset)
+            {
+                ApplyExportDataset(selectedDataset.Summary);
+            }
+            else
+            {
+                NotifyExportRoutingPropertiesChanged();
+            }
+        });
+    }
+
+    private void NotifyExportRoutingPropertiesChanged()
+    {
+        NotifyExportConfigurationChanged();
+        OnPropertyChanged(nameof(IsSelectedSetExportEnabled));
+        OnPropertyChanged(nameof(SelectedExportWorkbook));
+        OnPropertyChanged(nameof(SelectedWorksheetName));
+        OnPropertyChanged(nameof(WorksheetOrderText));
+        CreateExportWorkbookCommand.NotifyCanExecuteChanged();
+        MoveWorksheetUpCommand.NotifyCanExecuteChanged();
+        MoveWorksheetDownCommand.NotifyCanExecuteChanged();
+        MoveExportFieldUpCommand.NotifyCanExecuteChanged();
+        MoveExportFieldDownCommand.NotifyCanExecuteChanged();
+        ResetHeadersCommand.NotifyCanExecuteChanged();
+        ResetExportCommand.NotifyCanExecuteChanged();
     }
 
     private void OnColumnPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -808,12 +927,6 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             RebuildVisibleColumns();
         }
 
-        if (e.PropertyName is nameof(DatabaseColumnPresentation.IsExported)
-            or nameof(DatabaseColumnPresentation.IsSourceIdExported)
-            or nameof(DatabaseColumnPresentation.ExcelHeader))
-        {
-            NotifyExportConfigurationChanged();
-        }
     }
 
     private void OnWorkflowStateChanged(object? sender, WorkflowStateSnapshot e)
@@ -866,6 +979,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _datasets.Clear();
         if (generation.IsHierarchyAware)
         {
+            _exportRouting.Synchronize(generation);
             foreach (var dataset in generation.Datasets.OrderBy(dataset => dataset.Ordinal))
             {
                 _datasets.Add(new DatabaseDatasetPresentation(dataset));
@@ -934,6 +1048,27 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     .Distinct(StringComparer.Ordinal).ToArray());
         }).ToArray();
         PublishDatabaseGeneration(columns, dataset.Columns.Select(CreateColumnIdentity).ToArray());
+    }
+
+    private void ApplyExportDataset(DatabaseDatasetSummary dataset)
+    {
+        _exportColumns.Clear();
+        _exportMetadataFields.Clear();
+        var set = _exportRouting.SourceSets.SingleOrDefault(candidate =>
+            candidate.SourceSetId == dataset.SourceSetId);
+        if (set is not null)
+        {
+            foreach (var field in set.Fields)
+            {
+                _exportColumns.Add(field);
+            }
+            foreach (var field in set.MetadataFields)
+            {
+                _exportMetadataFields.Add(field);
+            }
+        }
+
+        NotifyExportRoutingPropertiesChanged();
     }
 
     private async Task PreviousReviewPageAsync()
@@ -1247,12 +1382,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             .ToArray();
         _publishedColumnOrder.Clear();
         _publishedColumnOrder.AddRange(identities);
-        _canonicalExportOrder.Clear();
-        _canonicalExportOrder.AddRange(identities);
         ReorderColumns(order);
-        ReorderExportColumns(order);
         UpdatePositionsAndPresentation();
-        UpdateExportPositionsAndSnapshot();
     }
 
     private async Task SetRowIncludedAsync(DatabaseReviewRowPresentation? row)
@@ -1460,13 +1591,9 @@ public sealed class DatabaseColumnPresentation : ObservableObject
     private const double MinimumWidth = 60;
     private const double MaximumWidth = 500;
     private string _databaseField;
-    private string _excelHeader;
     private bool _isVisible = true;
     private double _width = DefaultWidth;
     private int _position;
-    private int _exportPosition;
-    private bool _isExported = true;
-    private bool _isSourceIdExported;
 
     internal DatabaseColumnPresentation(
         string mappingIdentity,
@@ -1478,7 +1605,6 @@ public sealed class DatabaseColumnPresentation : ObservableObject
         MappingIdentity = mappingIdentity;
         SourceInformationTypes = mapping.SourceInformationTypes;
         _databaseField = mapping.DatabaseTagName;
-        _excelHeader = mapping.DatabaseTagName;
     }
 
     internal string MappingIdentity { get; }
@@ -1492,27 +1618,6 @@ public sealed class DatabaseColumnPresentation : ObservableObject
         get => _databaseField;
         private set => SetProperty(ref _databaseField, value);
     }
-
-    public string ExcelHeader
-    {
-        get => _excelHeader;
-        set
-        {
-            var normalized = string.IsNullOrWhiteSpace(value)
-                ? DatabaseField
-                : value.Trim();
-            if (SetProperty(ref _excelHeader, normalized))
-            {
-                OnPropertyChanged(nameof(HasExcelHeaderOverride));
-                OnPropertyChanged(nameof(SourceIdExportHeader));
-            }
-        }
-    }
-
-    public bool HasExcelHeaderOverride => !string.Equals(
-        ExcelHeader,
-        DatabaseField,
-        StringComparison.Ordinal);
 
     public bool IsVisible
     {
@@ -1532,40 +1637,6 @@ public sealed class DatabaseColumnPresentation : ObservableObject
         private set => SetProperty(ref _position, value);
     }
 
-    public int ExportPosition
-    {
-        get => _exportPosition;
-        private set => SetProperty(ref _exportPosition, value);
-    }
-
-    public bool IsExported
-    {
-        get => _isExported;
-        set
-        {
-            if (SetProperty(ref _isExported, value) && !value)
-            {
-                IsSourceIdExported = false;
-            }
-        }
-    }
-
-    public bool IsSourceIdExported
-    {
-        get => _isSourceIdExported;
-        set
-        {
-            if (value && !IsExported)
-            {
-                return;
-            }
-
-            SetProperty(ref _isSourceIdExported, value);
-        }
-    }
-
-    public string SourceIdExportHeader => $"{ExcelHeader} SourceId";
-
     internal void UpdateMapping(DatabaseColumnMapping mapping)
     {
         ArgumentNullException.ThrowIfNull(mapping);
@@ -1578,26 +1649,12 @@ public sealed class DatabaseColumnPresentation : ObservableObject
                 "A published Database column cannot change its source information identities.");
         }
 
-        var followsDatabaseField = !HasExcelHeaderOverride;
         DatabaseField = mapping.DatabaseTagName;
-        if (followsDatabaseField)
-        {
-            ExcelHeader = mapping.DatabaseTagName;
-        }
-        else
-        {
-            OnPropertyChanged(nameof(HasExcelHeaderOverride));
-        }
     }
 
     internal void SetPosition(int position)
     {
         Position = position;
-    }
-
-    internal void SetExportPosition(int position)
-    {
-        ExportPosition = position;
     }
 
     internal void ResetPresentation()
@@ -1606,14 +1663,4 @@ public sealed class DatabaseColumnPresentation : ObservableObject
         Width = DefaultWidth;
     }
 
-    internal void ResetExcelHeader()
-    {
-        ExcelHeader = DatabaseField;
-    }
-
-    internal void ResetExport()
-    {
-        IsExported = true;
-        IsSourceIdExported = false;
-    }
 }

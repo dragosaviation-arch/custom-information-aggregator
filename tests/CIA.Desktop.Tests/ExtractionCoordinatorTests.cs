@@ -334,10 +334,7 @@ public sealed class ExtractionCoordinatorTests
             Success(correlation, basis));
         var extraction = context.CreateExtractionCoordinator(extractionClient);
         Assert.IsTrue((await extraction.ExtractAsync()).Accepted);
-        var configuration = new ExportConfigurationSnapshot(
-        [
-            new ExportFieldConfiguration("Database Field", true, "Header", true)
-        ]);
+        var configuration = new ExportConfigurationSnapshot([], []);
         var targetPath = Path.GetFullPath("captured-export.xlsx");
         var exportClient = new RecordingWorkbookExportClient(
             (correlation, result, snapshot, target) => new WorkbookExportClientResult(
@@ -349,7 +346,7 @@ public sealed class ExtractionCoordinatorTests
                     correlation.OperationId,
                     result.OperationId,
                     target,
-                    snapshot.CreateIncludedOutputColumns().Count,
+                    snapshot.IncludedOutputColumnCount,
                     dataRowCount: 2),
                 FailureCode: null,
                 FailureDescription: null));
@@ -363,7 +360,7 @@ public sealed class ExtractionCoordinatorTests
 
         Assert.IsFalse(result.Accepted);
         Assert.AreEqual(WorkflowRejectionCode.ExtractionNotCurrent, result.Rejection?.Code);
-        StringAssert.Contains(result.Rejection?.Reason, "SPR-140/141");
+        StringAssert.Contains(result.Rejection?.Reason, "SPR-141");
         Assert.AreEqual(0, exportClient.CallCount);
         Assert.IsNull(coordinator.LastWorkbook);
         Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
@@ -426,10 +423,7 @@ public sealed class ExtractionCoordinatorTests
             context.Workflow,
             exportClient,
             NullLogger<WorkbookExportCoordinator>.Instance);
-        var configuration = new ExportConfigurationSnapshot(
-        [
-            new ExportFieldConfiguration("Database Field", true, "Header", false)
-        ]);
+        var configuration = new ExportConfigurationSnapshot([], []);
 
         var unavailable = await coordinator.ExportAsync(
             Path.GetFullPath("unavailable.xlsx"),

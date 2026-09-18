@@ -27,10 +27,7 @@ public sealed class ExcelWorkbookExportServiceTests
         using var workspace = new ExportWorkspace();
         var extraction = CreateHierarchyExtraction();
         var target = Path.Combine(workspace.Root, "guarded.xlsx");
-        var configuration = new ExportConfigurationSnapshot(
-        [
-            new ExportFieldConfiguration("logical:1:tag", true, "Tag", false)
-        ]);
+        var configuration = CreateConfiguration(extraction);
 
         var result = await workspace.Service.ExportAsync(
             OperationCorrelation.CreateNew(),
@@ -40,13 +37,13 @@ public sealed class ExcelWorkbookExportServiceTests
 
         Assert.IsFalse(result.Accepted);
         Assert.AreEqual(OperationOutcome.Failed, result.Completion.Outcome);
-        Assert.AreEqual("hierarchy-aware-export-not-supported", result.Failure?.Code);
+        Assert.AreEqual("set-aware-workbook-generation-not-supported", result.Failure?.Code);
         Assert.IsFalse(File.Exists(target));
         Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.incomplete"));
     }
 
     [TestMethod]
-    public async Task HierarchyWorkbookIpcIsGuardedAndProductionCompositionRetainsExporter()
+    public async Task SetAwareWorkbookIpcIsTypedAndProductionServiceRetainsSpr141Guard()
     {
         using var workspace = new ExportWorkspace();
         var extraction = CreateHierarchyExtraction();
@@ -55,17 +52,13 @@ public sealed class ExcelWorkbookExportServiceTests
             DateTimeOffset.UtcNow,
             OperationCorrelation.CreateNew(),
             extraction,
-            new ExportConfigurationSnapshot(
-            [
-                new ExportFieldConfiguration("logical:1:tag", true, "Tag", false)
-            ]),
+            CreateConfiguration(extraction),
             Path.Combine(workspace.Root, "guarded.xlsx"));
         await using var stream = new MemoryStream();
 
-        var exception = await Assert.ThrowsExactlyAsync<IpcProtocolException>(async () =>
-            await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command));
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
 
-        Assert.AreEqual(IpcProtocolError.InvalidContract, exception.Error);
+        Assert.IsGreaterThan(4, stream.Length);
         using var host = ProcessingHostApplicationHost.Create(
             [$"--{ApplicationLogPaths.DirectoryConfigurationKey}={workspace.Root}"]);
         Assert.IsNotNull(host.Services.GetRequiredService<ExcelWorkbookExportService>());
@@ -115,6 +108,35 @@ public sealed class ExcelWorkbookExportServiceTests
                 [column])]);
     }
 
+    private static ExportConfigurationSnapshot CreateConfiguration(
+        ExtractionResultSummary extraction)
+    {
+        var dataset = extraction.Datasets.Single();
+        var workbookId = WorkbookDefinitionId.CreateNew();
+        var worksheetId = WorksheetDefinitionId.CreateNew();
+        return new ExportConfigurationSnapshot(
+            [new WorkbookDefinition(
+                workbookId,
+                "CIA Export.xlsx",
+                1,
+                [new WorksheetDefinition(
+                    worksheetId,
+                    workbookId,
+                    dataset.SourceSetId,
+                    dataset.DisplayName,
+                    1)])],
+            [new SourceSetExportConfiguration(
+                dataset.SourceSetId,
+                true,
+                worksheetId,
+                dataset.Columns.Select(column => new ExportFieldConfiguration(
+                    column.Identity,
+                    true,
+                    column.EffectiveName,
+                    false)).ToArray(),
+                [])]);
+    }
+
     private sealed class ExportWorkspace : IDisposable
     {
         public ExportWorkspace()
@@ -126,10 +148,7 @@ public sealed class ExcelWorkbookExportServiceTests
             Directory.CreateDirectory(Root);
             Repository = new StructuredInformationRepository(
                 ApplicationPaths.FromLocalApplicationData(Path.Combine(Root, "LocalAppData")));
-            Service = new ExcelWorkbookExportService(
-                Repository,
-                new CooperativeOperationCancellation(new NullHistory()),
-                NullLogger<ExcelWorkbookExportService>.Instance);
+            Service = new ExcelWorkbookExportService();
         }
 
         public string Root { get; }
