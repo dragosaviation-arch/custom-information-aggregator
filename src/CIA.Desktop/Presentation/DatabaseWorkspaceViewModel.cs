@@ -24,6 +24,9 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private readonly DatabaseBuildCoordinator? _databaseBuildCoordinator;
     private readonly IDatabaseReviewClient? _databaseReviewClient;
     private readonly ExtractionCoordinator? _extractionCoordinator;
+    private readonly WorkbookExportCoordinator? _workbookExportCoordinator;
+    private readonly IExportFolderPicker? _exportFolderPicker;
+    private readonly IWorkbookCollisionResolver? _workbookCollisionResolver;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly ExportRoutingConfigurationPresentation _exportRouting = new();
     private readonly Dictionary<string, DatabaseColumnPresentation> _columnCache = new(
@@ -52,6 +55,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private bool _synchronizingMetadataVisibility;
     private WorkflowArtifactStatus _extractionStatus;
     private WorkflowOperationStatus? _latestExtractionAttempt;
+    private string _outputFolder = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+        "CIA",
+        "Exports");
+    private bool _alwaysAskWhereToExport = true;
+    private string _workbookExportStatusText = "Choose an output folder to export the prepared workbook batch.";
     private int _disposed;
 
     public DatabaseWorkspaceViewModel(
@@ -59,7 +68,10 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         IApplicationWorkflowCoordinator workflowCoordinator,
         DatabaseBuildCoordinator? databaseBuildCoordinator = null,
         IDatabaseReviewClient? databaseReviewClient = null,
-        ExtractionCoordinator? extractionCoordinator = null)
+        ExtractionCoordinator? extractionCoordinator = null,
+        WorkbookExportCoordinator? workbookExportCoordinator = null,
+        IExportFolderPicker? exportFolderPicker = null,
+        IWorkbookCollisionResolver? workbookCollisionResolver = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryConfiguration);
         ArgumentNullException.ThrowIfNull(workflowCoordinator);
@@ -69,6 +81,9 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _databaseBuildCoordinator = databaseBuildCoordinator;
         _databaseReviewClient = databaseReviewClient;
         _extractionCoordinator = extractionCoordinator;
+        _workbookExportCoordinator = workbookExportCoordinator;
+        _exportFolderPicker = exportFolderPicker;
+        _workbookCollisionResolver = workbookCollisionResolver;
         _uiSynchronizationContext = SynchronizationContext.Current;
         Columns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(_columns);
         ExportColumns = new ReadOnlyObservableCollection<ExportFieldPresentation>(
@@ -126,6 +141,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         PrepareForExportCommand = new AsyncRelayCommand(
             PrepareForExportAsync,
             CanPrepareForExport);
+        BrowseOutputFolderCommand = new RelayCommand(
+            BrowseOutputFolder,
+            () => _exportFolderPicker is not null);
+        ExportToExcelCommand = new AsyncRelayCommand(
+            ExportToExcelAsync,
+            () => IsExportAvailable);
         SetRowIncludedCommand = new AsyncRelayCommand<DatabaseReviewRowPresentation>(
             SetRowIncludedAsync,
             CanSetRowIncluded);
@@ -200,6 +221,10 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     public IAsyncRelayCommand NextReviewPageCommand { get; }
 
     public IAsyncRelayCommand PrepareForExportCommand { get; }
+
+    public IRelayCommand BrowseOutputFolderCommand { get; }
+
+    public IAsyncRelayCommand ExportToExcelCommand { get; }
 
     public IAsyncRelayCommand<DatabaseReviewRowPresentation> SetRowIncludedCommand { get; }
 
@@ -459,7 +484,27 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    public bool IsExportAvailable => false;
+    public bool IsExportAvailable
+    {
+        get
+        {
+            if (_workbookExportCoordinator?.CanExport() != true
+                || _extractionCoordinator?.CurrentResult is not { } extractionResult
+                || !Directory.Exists(OutputFolder))
+            {
+                return false;
+            }
+
+            var configuration = CaptureExportConfiguration();
+            var validation = ExportConfigurationValidator.Validate(
+                configuration,
+                extractionResult);
+            return validation.IsValid
+                && validation.RunnableWorkbooks.Count > 0
+                && configuration.SourceSets.Any(set =>
+                    set.IsEnabled && set.Fields.Any(exportField => exportField.IsValueIncluded));
+        }
+    }
 
     public ExtractionReviewState ExtractionReviewState
     {
@@ -578,12 +623,29 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         return _exportRouting.Capture();
     }
 
-    public string OutputFolder { get; set; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-        "CIA",
-        "Exports");
+    public string OutputFolder
+    {
+        get => _outputFolder;
+        set
+        {
+            if (SetProperty(ref _outputFolder, value ?? string.Empty))
+            {
+                NotifyExportReadinessChanged();
+            }
+        }
+    }
 
-    public bool AlwaysAskWhereToExport { get; set; } = true;
+    public bool AlwaysAskWhereToExport
+    {
+        get => _alwaysAskWhereToExport;
+        set => SetProperty(ref _alwaysAskWhereToExport, value);
+    }
+
+    public string WorkbookExportStatusText
+    {
+        get => _workbookExportStatusText;
+        private set => SetProperty(ref _workbookExportStatusText, value);
+    }
 
     public void Dispose()
     {
@@ -887,6 +949,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(WorkbookExportFieldCountText));
         OnPropertyChanged(nameof(IsExportConfigurationValid));
         OnPropertyChanged(nameof(ExportConfigurationValidationText));
+        NotifyExportReadinessChanged();
     }
 
     private void OnExportRoutingChanged(object? sender, EventArgs e)
@@ -947,6 +1010,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             CaptureLatestExtractionAttempt(e);
             NotifyExtractionReviewChanged();
             NotifyRowInclusionCommandsChanged();
+            NotifyExportReadinessChanged();
         });
     }
 
@@ -1109,6 +1173,188 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void BrowseOutputFolder()
+    {
+        var selected = _exportFolderPicker?.Browse(OutputFolder);
+        if (!string.IsNullOrWhiteSpace(selected))
+        {
+            OutputFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selected));
+            WorkbookExportStatusText = "Output folder selected for this session.";
+        }
+    }
+
+    private async Task ExportToExcelAsync()
+    {
+        if (_workbookExportCoordinator is null
+            || _workbookCollisionResolver is null
+            || _extractionCoordinator?.CurrentResult is not { } extractionResult)
+        {
+            return;
+        }
+
+        if (AlwaysAskWhereToExport)
+        {
+            var selected = _exportFolderPicker?.Browse(OutputFolder);
+            if (string.IsNullOrWhiteSpace(selected))
+            {
+                WorkbookExportStatusText = "Export cancelled before processing started.";
+                return;
+            }
+
+            OutputFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selected));
+        }
+
+        if (!IsExportAvailable)
+        {
+            WorkbookExportStatusText = "The prepared Extraction Result, export configuration, and output folder must all be ready.";
+            return;
+        }
+
+        var resolvedDirectory = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(OutputFolder));
+        var overwriteAuthorizations = new Dictionary<WorkbookDefinitionId, string>();
+        WorkbookPublicationPlan publicationPlan;
+        ExportConfigurationSnapshot configuration;
+        while (true)
+        {
+            configuration = CaptureExportConfiguration();
+            var validation = ExportConfigurationValidator.Validate(configuration, extractionResult);
+            if (!validation.IsValid
+                || validation.RunnableWorkbooks.Count == 0
+                || !configuration.SourceSets.Any(set =>
+                    set.IsEnabled && set.Fields.Any(field => field.IsValueIncluded)))
+            {
+                WorkbookExportStatusText = validation.Failures.FirstOrDefault()?.Description
+                    ?? "At least one value field must be included for export.";
+                return;
+            }
+
+            var targets = validation.RunnableWorkbooks.Select(runnable =>
+            {
+                var finalPath = Path.Combine(
+                    resolvedDirectory,
+                    runnable.Workbook.FileName);
+                return new WorkbookCollisionTarget(
+                    runnable.Workbook.WorkbookDefinitionId,
+                    runnable.Workbook.FileName,
+                    finalPath,
+                    File.Exists(finalPath));
+            }).ToArray();
+            var unresolvedCollisions = targets.Where(target =>
+                target.Exists
+                && (!overwriteAuthorizations.TryGetValue(
+                        target.WorkbookDefinitionId,
+                        out var authorizedPath)
+                    || !string.Equals(
+                        authorizedPath,
+                        target.FinalPath,
+                        StringComparison.OrdinalIgnoreCase))).ToArray();
+            if (unresolvedCollisions.Length == 0)
+            {
+                publicationPlan = new WorkbookPublicationPlan(
+                    resolvedDirectory,
+                    targets.Select(target => new WorkbookPublicationTarget(
+                        target.WorkbookDefinitionId,
+                        target.FinalPath,
+                        overwriteAuthorizations.TryGetValue(
+                                target.WorkbookDefinitionId,
+                                out var authorizedPath)
+                            && string.Equals(
+                                authorizedPath,
+                                target.FinalPath,
+                                StringComparison.OrdinalIgnoreCase)
+                                ? WorkbookPublicationDisposition.OverwriteExisting
+                                : WorkbookPublicationDisposition.CreateNew)).ToArray());
+                break;
+            }
+
+            var resolution = _workbookCollisionResolver.Resolve(
+                new WorkbookCollisionResolutionRequest(
+                    resolvedDirectory,
+                    targets,
+                    configuration.Workbooks
+                        .Where(workbook => targets.All(target =>
+                            target.WorkbookDefinitionId != workbook.WorkbookDefinitionId))
+                        .Select(workbook => workbook.FileName)
+                        .ToArray()));
+            if (resolution is null
+                || resolution.Decisions.Any(decision =>
+                    decision.Action == WorkbookCollisionAction.Cancel))
+            {
+                WorkbookExportStatusText = "Export cancelled before processing started.";
+                return;
+            }
+
+            var decisionsById = resolution.Decisions.ToDictionary(decision =>
+                decision.WorkbookDefinitionId);
+            if (decisionsById.Count != unresolvedCollisions.Length
+                || unresolvedCollisions.Any(target =>
+                    !decisionsById.ContainsKey(target.WorkbookDefinitionId)))
+            {
+                WorkbookExportStatusText = "Every colliding workbook requires an explicit decision.";
+                return;
+            }
+
+            var renamed = false;
+            foreach (var collision in unresolvedCollisions)
+            {
+                var decision = decisionsById[collision.WorkbookDefinitionId];
+                if (decision.Action == WorkbookCollisionAction.Overwrite)
+                {
+                    overwriteAuthorizations[collision.WorkbookDefinitionId] = collision.FinalPath;
+                    continue;
+                }
+
+                if (decision.Action != WorkbookCollisionAction.DifferentName
+                    || !ExportConfigurationValidator.IsValidWorkbookFileName(
+                        decision.DifferentFileName ?? string.Empty)
+                    || string.Equals(
+                        decision.DifferentFileName,
+                        collision.FileName,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    WorkbookExportStatusText = "A different workbook name must be valid, unique, and changed.";
+                    return;
+                }
+
+                WorkbookDefinitions.Single(workbook =>
+                    workbook.WorkbookDefinitionId == collision.WorkbookDefinitionId).FileName =
+                    decision.DifferentFileName!;
+                overwriteAuthorizations.Remove(collision.WorkbookDefinitionId);
+                renamed = true;
+            }
+
+            if (!renamed)
+            {
+                continue;
+            }
+
+            var renamedValidation = ExportConfigurationValidator.Validate(
+                CaptureExportConfiguration(),
+                extractionResult);
+            if (!renamedValidation.IsValid)
+            {
+                WorkbookExportStatusText = renamedValidation.Failures[0].Description;
+                return;
+            }
+        }
+
+        WorkbookExportStatusText = "Exporting workbook batch...";
+        NotifyExportReadinessChanged();
+        var result = await _workbookExportCoordinator.ExportAsync(
+                publicationPlan,
+                configuration)
+            .ConfigureAwait(false);
+        DispatchToUi(() =>
+        {
+            var batch = _workbookExportCoordinator.LastBatch;
+            WorkbookExportStatusText = result.Accepted && batch is not null
+                ? $"Published {batch.Workbooks.Count:N0} workbook(s): {string.Join(", ", batch.Workbooks.Select(workbook => workbook.FinalPath))}"
+                : result.Rejection?.Reason ?? "The workbook batch was not published.";
+            NotifyExportReadinessChanged();
+        });
+    }
+
     private bool CanMoveToPreviousReviewPage()
     {
         return !IsReviewLoading && _reviewPage?.StartRowOrdinal > 1;
@@ -1262,6 +1508,13 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(ExtractionReviewContext));
         OnPropertyChanged(nameof(ExtractionBasisMatchesReviewedDatabase));
         PrepareForExportCommand.NotifyCanExecuteChanged();
+        NotifyExportReadinessChanged();
+    }
+
+    private void NotifyExportReadinessChanged()
+    {
+        OnPropertyChanged(nameof(IsExportAvailable));
+        ExportToExcelCommand.NotifyCanExecuteChanged();
     }
 
     private void CaptureLatestExtractionAttempt(WorkflowStateSnapshot state)

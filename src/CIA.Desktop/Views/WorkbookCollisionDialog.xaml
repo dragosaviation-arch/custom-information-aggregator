@@ -1,0 +1,92 @@
+<Window x:Class="CIA.Desktop.Views.WorkbookCollisionDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Resolve workbook collisions"
+        Width="680"
+        Height="420"
+        MinWidth="560"
+        MinHeight="320"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResize"
+        Background="{StaticResource CiaBackgroundBrush}"
+        Foreground="{StaticResource CiaTextPrimaryBrush}">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Margin="0,0,0,12">
+            <TextBlock Style="{StaticResource CiaPanelTitleTextStyle}"
+                       Text="EXISTING WORKBOOKS" />
+            <TextBlock Margin="0,5,0,0"
+                       Style="{StaticResource CiaSecondaryTextStyle}"
+                       Text="Choose an explicit result for every existing workbook in this batch."
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Rows}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Margin="0,0,0,8"
+                                Padding="10"
+                                Style="{StaticResource CiaPanelStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="2*" />
+                                    <ColumnDefinition Width="150" />
+                                    <ColumnDefinition Width="2*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Margin="0,0,10,0">
+                                    <TextBlock FontWeight="Bold"
+                                               Text="{Binding OriginalFileName}" />
+                                    <TextBlock Margin="0,3,0,0"
+                                               Style="{StaticResource CiaSecondaryTextStyle}"
+                                               Text="{Binding FinalPath}"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding FinalPath}" />
+                                </StackPanel>
+                                <ComboBox Grid.Column="1"
+                                          Margin="0,0,10,0"
+                                          VerticalAlignment="Center"
+                                          DisplayMemberPath="Label"
+                                          ItemsSource="{Binding Options}"
+                                          SelectedItem="{Binding SelectedOption, Mode=TwoWay}" />
+                                <TextBox Grid.Column="2"
+                                         VerticalAlignment="Center"
+                                         AutomationProperties.Name="Different workbook name"
+                                         Style="{StaticResource CiaTextInputStyle}"
+                                         Text="{Binding DifferentFileName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                         ToolTip="Used only when Different name is selected" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <TextBlock Grid.Row="2"
+                   Margin="0,8,0,0"
+                   Foreground="{StaticResource CiaDangerBrush}"
+                   Text="{Binding ValidationMessage}"
+                   TextWrapping="Wrap" />
+
+        <StackPanel Grid.Row="3"
+                    Margin="0,14,0,0"
+                    HorizontalAlignment="Right"
+                    Orientation="Horizontal">
+            <Button Margin="0,0,8,0"
+                    Click="OnCancelClick"
+                    Content="Cancel batch"
+                    IsCancel="True"
+                    Style="{StaticResource CiaGhostButtonStyle}" />
+            <Button Click="OnContinueClick"
+                    Content="Continue"
+                    IsDefault="True"
+                    Style="{StaticResource CiaPrimaryButtonStyle}" />
+        </StackPanel>
+    </Grid>
+</Window>
