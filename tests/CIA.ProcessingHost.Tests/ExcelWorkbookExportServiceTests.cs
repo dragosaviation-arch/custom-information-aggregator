@@ -183,6 +183,105 @@ public sealed class ExcelWorkbookExportServiceTests
     }
 
     [TestMethod]
+    public async Task ShortStreamCannotPublishCapturedExtractionDataset()
+    {
+        using var workspace = new ExportWorkspace();
+        var dataset = DatasetFixture.Create("Set", 1);
+        dataset.AddRow(dataset.Cell("first"));
+        dataset.AddRow(dataset.Cell("second"));
+        var extraction = CreateExtraction(dataset);
+        workspace.Source.Set(extraction, dataset);
+        workspace.Source.SetRows(dataset.SourceSetId, dataset.Rows.Take(1).ToArray());
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            CreateSeparateWorkbookConfiguration(dataset),
+            workspace.Root);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("extraction-row-count-mismatch", result.Failure?.Code);
+        AssertNoExportArtifacts(workspace.Root);
+    }
+
+    [TestMethod]
+    public async Task ExtraStreamCannotPublishCapturedExtractionDataset()
+    {
+        using var workspace = new ExportWorkspace();
+        var dataset = DatasetFixture.Create("Set", 1);
+        dataset.AddRow(dataset.Cell("captured"));
+        var extraction = CreateExtraction(dataset);
+        dataset.AddRow(dataset.Cell("unexpected"));
+        workspace.Source.Set(extraction, dataset);
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            CreateSeparateWorkbookConfiguration(dataset),
+            workspace.Root);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("extraction-row-count-mismatch", result.Failure?.Code);
+        AssertNoExportArtifacts(workspace.Root);
+    }
+
+    [TestMethod]
+    public async Task PublicationChangeDuringWorksheetGenerationPublishesNothing()
+    {
+        using var workspace = new ExportWorkspace();
+        var dataset = DatasetFixture.Create("Set", 1);
+        dataset.AddRow(dataset.Cell("first"));
+        dataset.AddRow(dataset.Cell("second"));
+        var captured = CreateExtraction(dataset);
+        var replacement = CreateExtraction(dataset);
+        workspace.Source.Set(captured, dataset);
+        workspace.Source.BeforeYield = () =>
+        {
+            workspace.Source.ChangePublishedResult(replacement);
+            workspace.Source.BeforeYield = null;
+        };
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            captured,
+            CreateSeparateWorkbookConfiguration(dataset),
+            workspace.Root);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("extraction-result-changed-during-export", result.Failure?.Code);
+        AssertNoExportArtifacts(workspace.Root);
+    }
+
+    [TestMethod]
+    public async Task PublicationChangeAfterCandidatesBeforeBatchPublicationPublishesNothing()
+    {
+        using var workspace = new ExportWorkspace();
+        var dataset = DatasetFixture.Create("Set", 1);
+        dataset.AddRow(dataset.Cell("value"));
+        var captured = CreateExtraction(dataset);
+        var replacement = CreateExtraction(dataset);
+        workspace.Source.Set(captured, dataset);
+        workspace.Source.BeforePublishedResultRead = readNumber =>
+        {
+            if (readNumber == 2)
+            {
+                workspace.Source.ChangePublishedResult(replacement);
+            }
+        };
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            captured,
+            CreateSeparateWorkbookConfiguration(dataset),
+            workspace.Root);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("extraction-result-changed-during-export", result.Failure?.Code);
+        Assert.AreEqual(2, workspace.Source.PublishedResultReadCount);
+        AssertNoExportArtifacts(workspace.Root);
+    }
+
+    [TestMethod]
     public void BatchPublicationRollsBackFilesMovedBeforeARace()
     {
         using var workspace = new ExportWorkspace();
@@ -331,6 +430,12 @@ public sealed class ExcelWorkbookExportServiceTests
             OperationId.CreateNew(),
             database,
             fixtures.Select(fixture => fixture.ExtractionSummary()).ToArray());
+    }
+
+    private static void AssertNoExportArtifacts(string directory)
+    {
+        Assert.IsEmpty(Directory.GetFiles(directory, "*.xlsx"));
+        Assert.IsEmpty(Directory.GetFiles(directory, "*.incomplete"));
     }
 
     private static ExportConfigurationSnapshot CreateConfiguration(
@@ -502,6 +607,8 @@ public sealed class ExcelWorkbookExportServiceTests
         internal ExtractionResultSummary? Result { get; private set; }
         internal List<SourceSetId> StreamedSourceSets { get; } = [];
         internal Action? BeforeYield { get; set; }
+        internal Action<int>? BeforePublishedResultRead { get; set; }
+        internal int PublishedResultReadCount { get; private set; }
 
         internal void Set(ExtractionResultSummary result, params DatasetFixture[] fixtures)
         {
@@ -512,15 +619,25 @@ public sealed class ExcelWorkbookExportServiceTests
             }
         }
 
+        internal void SetRows(
+            SourceSetId sourceSetId,
+            IReadOnlyList<ExtractionResultRow> rows) => _rows[sourceSetId] = rows;
+
+        internal void ChangePublishedResult(ExtractionResultSummary result) => Result = result;
+
         public Task<ExtractionResultSummary?> ReadPublishedResultAsync(
-            CancellationToken cancellationToken = default) => Task.FromResult(Result);
+            CancellationToken cancellationToken = default)
+        {
+            PublishedResultReadCount++;
+            BeforePublishedResultRead?.Invoke(PublishedResultReadCount);
+            return Task.FromResult(Result);
+        }
 
         public async IAsyncEnumerable<ExtractionResultRow> StreamRowsAsync(
             OperationId extractionResultId,
             SourceSetId sourceSetId,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            Assert.AreEqual(Result?.OperationId, extractionResultId);
             StreamedSourceSets.Add(sourceSetId);
             foreach (var row in _rows[sourceSetId])
             {

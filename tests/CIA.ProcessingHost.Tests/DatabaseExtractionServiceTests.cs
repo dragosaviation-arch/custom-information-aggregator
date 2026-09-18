@@ -278,6 +278,35 @@ public sealed class DatabaseExtractionServiceTests
             method.Name.Contains("ExtractionValuesForExport", StringComparison.Ordinal)));
     }
 
+    [TestMethod]
+    public async Task SupersededExtractionRowStreamFailsInsteadOfYieldingAnEmptyDataset()
+    {
+        using var workspace = new ExtractionWorkspace();
+        var set = SourceSetId.CreateNew();
+        var source = workspace.Source(
+            set,
+            "source.xml",
+            "<records><record><tag>value</tag></record></records>");
+        var database = await workspace.BuildDatabaseAsync(
+            (set, "Set", RepeatedDataLayout.StructuralRows, new[] { source }));
+        var first = await workspace.ExtractAsync(database);
+        Assert.IsTrue(first.Accepted);
+        var replacement = await workspace.ExtractAsync(database);
+        Assert.IsTrue(replacement.Accepted);
+
+        var exception = await Assert.ThrowsExactlyAsync<StructuredInformationRepositoryException>(
+            async () =>
+            {
+                await foreach (var _ in workspace.Repository.StreamPublishedExtractionRowsAsync(
+                                   first.PublishedResult!.OperationId,
+                                   set))
+                {
+                }
+            });
+
+        StringAssert.Contains(exception.Message, "no longer the active published result");
+    }
+
     private static IReadOnlyList<string> Values(DatabaseReviewRow row) =>
         row.Cells.SelectMany(cell => cell.Values).Select(value => value.Value).ToArray();
 

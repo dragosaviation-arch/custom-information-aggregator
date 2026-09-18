@@ -215,7 +215,8 @@ public sealed partial class StructuredInformationRepository
             StringComparison.Ordinal))
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            yield break;
+            throw new StructuredInformationRepositoryException(
+                "The requested Extraction Result is no longer the active published result.");
         }
 
         var lastRowOrdinal = 0;

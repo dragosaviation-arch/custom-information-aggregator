@@ -107,6 +107,7 @@ public sealed class ExcelWorkbookExportService
                 using var publication = WorkbookBatchPublicationScope.Create(targets);
                 var workbookSummaries = new List<WorkbookExportFileSummary>(
                     validation.RunnableWorkbooks.Count);
+                var allWorksheetCounters = new List<WorksheetWriteCounter>();
 
                 foreach (var runnableWorkbook in validation.RunnableWorkbooks)
                 {
@@ -115,7 +116,12 @@ public sealed class ExcelWorkbookExportService
                         candidate.WorkbookDefinitionId
                             == runnableWorkbook.Workbook.WorkbookDefinitionId);
                     var worksheetCounters = runnableWorkbook.Worksheets.Select(worksheet =>
-                        new WorksheetWriteCounter(worksheet)).ToArray();
+                        new WorksheetWriteCounter(
+                            worksheet,
+                            extractionResult.Datasets.Single(dataset =>
+                                dataset.SourceSetId == worksheet.Worksheet.SourceSetId).RowCount))
+                        .ToArray();
+                    allWorksheetCounters.AddRange(worksheetCounters);
                     var plans = worksheetCounters.Select(counter => new ExcelWorksheetWritePlan(
                         counter.Definition.Worksheet.Name,
                         (writer, token) => WriteWorksheetAsync(
@@ -145,11 +151,22 @@ public sealed class ExcelWorkbookExportService
                                 counter.ColumnCount)).ToArray()));
                 }
 
+                ValidateWorksheetRowCounts(allWorksheetCounters);
                 var batch = new WorkbookExportBatchSummary(
                     correlation.OperationId,
                     extractionResult.OperationId,
                     resolvedOutputDirectory,
                     workbookSummaries);
+                var resultBeforePublication = await _rowSource.ReadPublishedResultAsync(
+                        exportCancellation.Token)
+                    .ConfigureAwait(false);
+                if (!ExtractionResultsMatch(extractionResult, resultBeforePublication))
+                {
+                    throw new WorkbookExportException(
+                        "extraction-result-changed-during-export",
+                        "The published Extraction Result changed while workbook candidates were generated.");
+                }
+
                 publication.Publish(
                     operation.TryEnterNonCancellableCommitBoundary,
                     exportCancellation.Token);
@@ -223,6 +240,13 @@ public sealed class ExcelWorkbookExportService
                            cancellationToken).ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (counter.RowCount >= counter.ExpectedRowCount)
+            {
+                throw new WorkbookExportException(
+                    "extraction-row-count-mismatch",
+                    $"Worksheet '{counter.Definition.Worksheet.Name}' received more semantic rows than its captured Extraction dataset.");
+            }
+
             if (rowIndex >= ExcelWorkbookLimits.MaximumRows)
             {
                 throw new WorkbookExportException(
@@ -254,6 +278,19 @@ public sealed class ExcelWorkbookExportService
 
             writer.WriteEndElement();
             counter.RowCount++;
+        }
+    }
+
+    private static void ValidateWorksheetRowCounts(
+        IEnumerable<WorksheetWriteCounter> counters)
+    {
+        var mismatch = counters.FirstOrDefault(counter =>
+            counter.RowCount != counter.ExpectedRowCount);
+        if (mismatch is not null)
+        {
+            throw new WorkbookExportException(
+                "extraction-row-count-mismatch",
+                $"Worksheet '{mismatch.Definition.Worksheet.Name}' contains {mismatch.RowCount:N0} rows but its captured Extraction dataset requires {mismatch.ExpectedRowCount:N0}.");
         }
     }
 
@@ -326,9 +363,12 @@ public sealed class ExcelWorkbookExportService
                 pair.First.Columns,
                 pair.Second.Columns));
 
-    private sealed class WorksheetWriteCounter(RunnableWorksheetDefinition definition)
+    private sealed class WorksheetWriteCounter(
+        RunnableWorksheetDefinition definition,
+        int expectedRowCount)
     {
         internal RunnableWorksheetDefinition Definition { get; } = definition;
+        internal int ExpectedRowCount { get; } = expectedRowCount;
         internal int RowCount { get; set; }
         internal int ColumnCount { get; set; }
     }
