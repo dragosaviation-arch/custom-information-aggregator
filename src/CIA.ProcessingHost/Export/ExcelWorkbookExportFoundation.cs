@@ -240,7 +240,7 @@ internal sealed class WorkbookPublicationScope : IDisposable
         }
     }
 
-    internal static string ValidateTarget(string finalPath)
+    internal static string ValidateTarget(string finalPath, bool allowExisting = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(finalPath);
         if (!Path.IsPathFullyQualified(finalPath)
@@ -255,7 +255,7 @@ internal sealed class WorkbookPublicationScope : IDisposable
         }
 
         var resolvedPath = Path.GetFullPath(finalPath);
-        if (File.Exists(resolvedPath))
+        if (!allowExisting && File.Exists(resolvedPath))
         {
             throw new WorkbookExportException(
                 "export-target-exists",
@@ -277,20 +277,26 @@ internal sealed class WorkbookPublicationScope : IDisposable
 internal sealed record WorkbookPublicationCandidate(
     WorkbookDefinitionId WorkbookDefinitionId,
     string FinalPath,
-    string TemporaryPath);
+    string TemporaryPath,
+    string BackupPath,
+    WorkbookPublicationDisposition Disposition);
 
 internal sealed class WorkbookBatchPublicationScope : IDisposable
 {
     private readonly IReadOnlyList<WorkbookPublicationCandidate> _candidates;
     private bool _published;
+    private bool _preserveBackups;
     private bool _disposed;
 
     private WorkbookBatchPublicationScope(
-        IEnumerable<(WorkbookDefinitionId WorkbookDefinitionId, string FinalPath)> targets)
+        IEnumerable<WorkbookPublicationTarget> targets)
     {
         var resolved = targets.Select(target => (
             target.WorkbookDefinitionId,
-            FinalPath: WorkbookPublicationScope.ValidateTarget(target.FinalPath))).ToArray();
+            FinalPath: WorkbookPublicationScope.ValidateTarget(
+                target.FinalPath,
+                target.Disposition == WorkbookPublicationDisposition.OverwriteExisting),
+            target.Disposition)).ToArray();
         if (resolved.Length == 0
             || resolved.Select(target => target.WorkbookDefinitionId).Distinct().Count()
                 != resolved.Length
@@ -307,13 +313,17 @@ internal sealed class WorkbookBatchPublicationScope : IDisposable
             target.FinalPath,
             Path.Combine(
                 Path.GetDirectoryName(target.FinalPath)!,
-                $".cia-export-{Guid.NewGuid():N}.incomplete"))).ToArray();
+                $".cia-export-{Guid.NewGuid():N}.incomplete"),
+            Path.Combine(
+                Path.GetDirectoryName(target.FinalPath)!,
+                $".cia-export-{Guid.NewGuid():N}.backup"),
+            target.Disposition)).ToArray();
     }
 
     internal IReadOnlyList<WorkbookPublicationCandidate> Candidates => _candidates;
 
     internal static WorkbookBatchPublicationScope Create(
-        IEnumerable<(WorkbookDefinitionId WorkbookDefinitionId, string FinalPath)> targets)
+        IEnumerable<WorkbookPublicationTarget> targets)
     {
         ArgumentNullException.ThrowIfNull(targets);
         return new WorkbookBatchPublicationScope(targets);
@@ -322,7 +332,8 @@ internal sealed class WorkbookBatchPublicationScope : IDisposable
     internal void Publish(
         Func<bool> tryEnterNonCancellablePublicationBoundary,
         CancellationToken cancellationToken = default,
-        Action<string, string>? moveFile = null)
+        Action<string, string>? moveFile = null,
+        Action<string, string, string>? replaceFile = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(tryEnterNonCancellablePublicationBoundary);
@@ -334,11 +345,13 @@ internal sealed class WorkbookBatchPublicationScope : IDisposable
                 "One or more temporary workbooks are unavailable for batch publication.");
         }
 
-        if (_candidates.Any(candidate => File.Exists(candidate.FinalPath)))
+        if (_candidates.Any(candidate =>
+                candidate.Disposition == WorkbookPublicationDisposition.CreateNew
+                && File.Exists(candidate.FinalPath)))
         {
             throw new WorkbookExportException(
                 "export-target-exists",
-                "An export target already exists and no workbook was published.");
+                "An export target appeared without overwrite authorization and no workbook was published.");
         }
 
         if (!tryEnterNonCancellablePublicationBoundary())
@@ -349,27 +362,68 @@ internal sealed class WorkbookBatchPublicationScope : IDisposable
         }
 
         moveFile ??= static (source, destination) => File.Move(source, destination, overwrite: false);
-        var publishedPaths = new List<string>();
+        replaceFile ??= static (source, destination, backup) =>
+            File.Replace(source, destination, backup, ignoreMetadataErrors: true);
+        var published = new List<(WorkbookPublicationCandidate Candidate, bool Replaced)>();
         try
         {
             foreach (var candidate in _candidates)
             {
-                moveFile(candidate.TemporaryPath, candidate.FinalPath);
-                publishedPaths.Add(candidate.FinalPath);
+                var replaceExisting = candidate.Disposition
+                        == WorkbookPublicationDisposition.OverwriteExisting
+                    && File.Exists(candidate.FinalPath);
+                if (replaceExisting)
+                {
+                    replaceFile(
+                        candidate.TemporaryPath,
+                        candidate.FinalPath,
+                        candidate.BackupPath);
+                }
+                else
+                {
+                    moveFile(candidate.TemporaryPath, candidate.FinalPath);
+                }
+
+                published.Add((candidate, replaceExisting));
             }
 
             _published = true;
+            CleanupBackups();
         }
         catch (Exception exception)
         {
             var rollbackFailures = new List<Exception>();
-            foreach (var path in publishedPaths.AsEnumerable().Reverse())
+            foreach (var publication in published.AsEnumerable().Reverse())
             {
                 try
                 {
-                    if (File.Exists(path))
+                    if (publication.Replaced)
                     {
-                        File.Delete(path);
+                        if (!File.Exists(publication.Candidate.BackupPath))
+                        {
+                            throw new IOException(
+                                $"The backup for '{publication.Candidate.FinalPath}' is unavailable.");
+                        }
+
+                        if (File.Exists(publication.Candidate.FinalPath))
+                        {
+                            File.Replace(
+                                publication.Candidate.BackupPath,
+                                publication.Candidate.FinalPath,
+                                destinationBackupFileName: null,
+                                ignoreMetadataErrors: true);
+                        }
+                        else
+                        {
+                            File.Move(
+                                publication.Candidate.BackupPath,
+                                publication.Candidate.FinalPath,
+                                overwrite: false);
+                        }
+                    }
+                    else if (File.Exists(publication.Candidate.FinalPath))
+                    {
+                        File.Delete(publication.Candidate.FinalPath);
                     }
                 }
                 catch (Exception rollbackFailure)
@@ -380,18 +434,21 @@ internal sealed class WorkbookBatchPublicationScope : IDisposable
 
             if (rollbackFailures.Count != 0)
             {
+                _preserveBackups = true;
                 throw new WorkbookExportException(
                     "export-batch-rollback-failed",
-                    "Workbook batch publication failed and rollback could not remove every file published by this operation.",
+                    "Workbook batch publication failed and rollback could not restore every replaced original or remove every new file.",
                     new AggregateException([exception, .. rollbackFailures]));
             }
 
+            CleanupBackups();
             throw new WorkbookExportException(
                 File.Exists(_candidates.FirstOrDefault(candidate =>
-                    !publishedPaths.Contains(candidate.FinalPath, StringComparer.OrdinalIgnoreCase))?.FinalPath ?? string.Empty)
+                    !published.Any(item => item.Candidate.WorkbookDefinitionId
+                        == candidate.WorkbookDefinitionId))?.FinalPath ?? string.Empty)
                     ? "export-target-exists"
                     : "export-batch-publication-failed",
-                "Workbook batch publication failed; files published by this operation were rolled back.",
+                "Workbook batch publication failed; new files were removed and replaced originals were restored.",
                 exception);
         }
     }
@@ -404,16 +461,39 @@ internal sealed class WorkbookBatchPublicationScope : IDisposable
         }
 
         _disposed = true;
-        if (_published)
-        {
-            return;
-        }
-
         foreach (var candidate in _candidates)
         {
-            if (File.Exists(candidate.TemporaryPath))
+            if (!_published && File.Exists(candidate.TemporaryPath))
             {
                 File.Delete(candidate.TemporaryPath);
+            }
+
+        }
+
+        if (!_preserveBackups)
+        {
+            CleanupBackups();
+        }
+    }
+
+    private void CleanupBackups()
+    {
+        foreach (var candidate in _candidates)
+        {
+            try
+            {
+                if (File.Exists(candidate.BackupPath))
+                {
+                    File.Delete(candidate.BackupPath);
+                }
+            }
+            catch (IOException)
+            {
+                // The completed workbook remains authoritative; Dispose retries cleanup.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // The completed workbook remains authoritative; Dispose retries cleanup.
             }
         }
     }

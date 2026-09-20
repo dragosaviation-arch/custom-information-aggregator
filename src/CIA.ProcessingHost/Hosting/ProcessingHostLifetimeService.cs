@@ -475,7 +475,7 @@ public sealed class ProcessingHostLifetimeService(
                 command.Correlation,
                 command.ExtractionResult,
                 command.Configuration,
-                command.OutputDirectory,
+                command.PublicationPlan,
                 cancellationToken)
             .ConfigureAwait(false);
         var response = new RunWorkbookExportResponse(

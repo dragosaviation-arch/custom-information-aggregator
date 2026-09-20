@@ -672,13 +672,13 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         OperationCorrelation correlation,
         ExtractionResultSummary extractionResult,
         ExportConfigurationSnapshot configuration,
-        string outputDirectory,
+        WorkbookPublicationPlan publicationPlan,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(extractionResult);
         ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        ArgumentNullException.ThrowIfNull(publicationPlan);
         ThrowIfDisposed();
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -701,7 +701,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                     correlation,
                     extractionResult,
                     configuration,
-                    outputDirectory);
+                    publicationPlan);
                 await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
                 lock (_stateGate)
                 {

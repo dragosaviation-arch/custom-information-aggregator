@@ -50,7 +50,7 @@ public sealed class ExcelWorkbookExportServiceTests
             correlation,
             extraction,
             configuration,
-            workspace.Root);
+            CreatePublicationPlan(configuration, extraction, workspace.Root));
 
         Assert.IsTrue(result.Accepted, result.Failure?.Description);
         Assert.AreEqual(OperationOutcome.CompletedSuccessfully, result.Completion.Outcome);
@@ -128,7 +128,7 @@ public sealed class ExcelWorkbookExportServiceTests
             OperationCorrelation.CreateNew(),
             extraction,
             configuration,
-            failedWorkspace.Root);
+            CreatePublicationPlan(configuration, extraction, failedWorkspace.Root));
 
         Assert.IsFalse(failed.Accepted);
         Assert.AreEqual("export-cell-limit-exceeded", failed.Failure?.Code);
@@ -148,7 +148,10 @@ public sealed class ExcelWorkbookExportServiceTests
             OperationCorrelation.CreateNew(),
             cancellableExtraction,
             cancellableConfiguration,
-            cancelledWorkspace.Root,
+            CreatePublicationPlan(
+                cancellableConfiguration,
+                cancellableExtraction,
+                cancelledWorkspace.Root),
             cancellation.Token);
 
         Assert.IsFalse(cancelled.Accepted);
@@ -158,7 +161,7 @@ public sealed class ExcelWorkbookExportServiceTests
     }
 
     [TestMethod]
-    public async Task ExistingTargetIsNeverOverwritten()
+    public async Task ExistingTargetIsRejectedWithoutPerWorkbookOverwriteAuthorization()
     {
         using var workspace = new ExportWorkspace();
         var dataset = DatasetFixture.Create("Set", 1);
@@ -173,13 +176,100 @@ public sealed class ExcelWorkbookExportServiceTests
             OperationCorrelation.CreateNew(),
             extraction,
             configuration,
-            workspace.Root);
+            CreatePublicationPlan(configuration, extraction, workspace.Root));
 
         Assert.IsFalse(result.Accepted);
-        Assert.AreEqual("export-target-exists", result.Failure?.Code);
+        Assert.AreEqual("export-overwrite-not-authorized", result.Failure?.Code);
         Assert.AreEqual("existing", await File.ReadAllTextAsync(target));
         Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.incomplete"));
         Assert.IsEmpty(workspace.Source.StreamedSourceSets);
+    }
+
+    [TestMethod]
+    public async Task MixedAuthorizedOverwriteRenamedTargetAndNewTargetPublishTogether()
+    {
+        using var workspace = new ExportWorkspace();
+        var overwritten = DatasetFixture.Create("Overwrite", 1);
+        var renamed = DatasetFixture.Create("Renamed", 2);
+        var created = DatasetFixture.Create("Created", 3);
+        overwritten.AddRow(overwritten.Cell("replacement"));
+        renamed.AddRow(renamed.Cell("renamed"));
+        created.AddRow(created.Cell("new"));
+        var extraction = CreateExtraction(overwritten, renamed, created);
+        var configuration = CreateSeparateWorkbookConfiguration(overwritten, renamed, created);
+        var renamedWorkbook = configuration.Workbooks[1];
+        configuration = new ExportConfigurationSnapshot(
+            [configuration.Workbooks[0],
+             new WorkbookDefinition(
+                 renamedWorkbook.WorkbookDefinitionId,
+                 "Different name.xlsx",
+                 renamedWorkbook.Order,
+                 renamedWorkbook.Worksheets),
+             configuration.Workbooks[2]],
+            configuration.SourceSets);
+        workspace.Source.Set(extraction, overwritten, renamed, created);
+        var overwrittenPath = Path.Combine(workspace.Root, "Overwrite.xlsx");
+        var unrelatedOriginalPath = Path.Combine(workspace.Root, "Renamed.xlsx");
+        await File.WriteAllTextAsync(overwrittenPath, "original overwrite");
+        await File.WriteAllTextAsync(unrelatedOriginalPath, "original renamed collision");
+        var overwriteIds = new HashSet<WorkbookDefinitionId>
+        {
+            configuration.Workbooks[0].WorkbookDefinitionId
+        };
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            configuration,
+            CreatePublicationPlan(
+                configuration,
+                extraction,
+                workspace.Root,
+                overwriteIds));
+
+        Assert.IsTrue(result.Accepted, result.Failure?.Description);
+        Assert.AreEqual("original renamed collision", await File.ReadAllTextAsync(unrelatedOriginalPath));
+        Assert.IsTrue(File.Exists(overwrittenPath));
+        Assert.IsTrue(File.Exists(Path.Combine(workspace.Root, "Different name.xlsx")));
+        Assert.IsTrue(File.Exists(Path.Combine(workspace.Root, "Created.xlsx")));
+        Assert.HasCount(3, result.Batch!.Workbooks);
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.incomplete"));
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.backup"));
+    }
+
+    [TestMethod]
+    public async Task CandidateFailurePreservesEveryAuthorizedExistingTarget()
+    {
+        using var workspace = new ExportWorkspace();
+        var existing = DatasetFixture.Create("Existing", 1);
+        var failing = DatasetFixture.Create("Failing", 2);
+        existing.AddRow(existing.Cell("replacement"));
+        failing.AddRow(failing.Cell(new string('x', ExcelWorkbookLimits.MaximumCellTextLength + 1)));
+        var extraction = CreateExtraction(existing, failing);
+        var configuration = CreateSeparateWorkbookConfiguration(existing, failing);
+        workspace.Source.Set(extraction, existing, failing);
+        var existingPath = Path.Combine(workspace.Root, "Existing.xlsx");
+        await File.WriteAllTextAsync(existingPath, "original");
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            configuration,
+            CreatePublicationPlan(
+                configuration,
+                extraction,
+                workspace.Root,
+                new HashSet<WorkbookDefinitionId>
+                {
+                    configuration.Workbooks[0].WorkbookDefinitionId
+                }));
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("export-cell-limit-exceeded", result.Failure?.Code);
+        Assert.AreEqual("original", await File.ReadAllTextAsync(existingPath));
+        Assert.IsFalse(File.Exists(Path.Combine(workspace.Root, "Failing.xlsx")));
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.incomplete"));
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.backup"));
     }
 
     [TestMethod]
@@ -190,14 +280,15 @@ public sealed class ExcelWorkbookExportServiceTests
         dataset.AddRow(dataset.Cell("first"));
         dataset.AddRow(dataset.Cell("second"));
         var extraction = CreateExtraction(dataset);
+        var configuration = CreateSeparateWorkbookConfiguration(dataset);
         workspace.Source.Set(extraction, dataset);
         workspace.Source.SetRows(dataset.SourceSetId, dataset.Rows.Take(1).ToArray());
 
         var result = await workspace.Service.ExportAsync(
             OperationCorrelation.CreateNew(),
             extraction,
-            CreateSeparateWorkbookConfiguration(dataset),
-            workspace.Root);
+            configuration,
+            CreatePublicationPlan(configuration, extraction, workspace.Root));
 
         Assert.IsFalse(result.Accepted);
         Assert.AreEqual("extraction-row-count-mismatch", result.Failure?.Code);
@@ -211,14 +302,15 @@ public sealed class ExcelWorkbookExportServiceTests
         var dataset = DatasetFixture.Create("Set", 1);
         dataset.AddRow(dataset.Cell("captured"));
         var extraction = CreateExtraction(dataset);
+        var configuration = CreateSeparateWorkbookConfiguration(dataset);
         dataset.AddRow(dataset.Cell("unexpected"));
         workspace.Source.Set(extraction, dataset);
 
         var result = await workspace.Service.ExportAsync(
             OperationCorrelation.CreateNew(),
             extraction,
-            CreateSeparateWorkbookConfiguration(dataset),
-            workspace.Root);
+            configuration,
+            CreatePublicationPlan(configuration, extraction, workspace.Root));
 
         Assert.IsFalse(result.Accepted);
         Assert.AreEqual("extraction-row-count-mismatch", result.Failure?.Code);
@@ -234,6 +326,7 @@ public sealed class ExcelWorkbookExportServiceTests
         dataset.AddRow(dataset.Cell("second"));
         var captured = CreateExtraction(dataset);
         var replacement = CreateExtraction(dataset);
+        var configuration = CreateSeparateWorkbookConfiguration(dataset);
         workspace.Source.Set(captured, dataset);
         workspace.Source.BeforeYield = () =>
         {
@@ -244,8 +337,8 @@ public sealed class ExcelWorkbookExportServiceTests
         var result = await workspace.Service.ExportAsync(
             OperationCorrelation.CreateNew(),
             captured,
-            CreateSeparateWorkbookConfiguration(dataset),
-            workspace.Root);
+            configuration,
+            CreatePublicationPlan(configuration, captured, workspace.Root));
 
         Assert.IsFalse(result.Accepted);
         Assert.AreEqual("extraction-result-changed-during-export", result.Failure?.Code);
@@ -260,6 +353,7 @@ public sealed class ExcelWorkbookExportServiceTests
         dataset.AddRow(dataset.Cell("value"));
         var captured = CreateExtraction(dataset);
         var replacement = CreateExtraction(dataset);
+        var configuration = CreateSeparateWorkbookConfiguration(dataset);
         workspace.Source.Set(captured, dataset);
         workspace.Source.BeforePublishedResultRead = readNumber =>
         {
@@ -272,8 +366,8 @@ public sealed class ExcelWorkbookExportServiceTests
         var result = await workspace.Service.ExportAsync(
             OperationCorrelation.CreateNew(),
             captured,
-            CreateSeparateWorkbookConfiguration(dataset),
-            workspace.Root);
+            configuration,
+            CreatePublicationPlan(configuration, captured, workspace.Root));
 
         Assert.IsFalse(result.Accepted);
         Assert.AreEqual("extraction-result-changed-during-export", result.Failure?.Code);
@@ -288,8 +382,14 @@ public sealed class ExcelWorkbookExportServiceTests
         var firstPath = Path.Combine(workspace.Root, "first.xlsx");
         var secondPath = Path.Combine(workspace.Root, "second.xlsx");
         using (var publication = WorkbookBatchPublicationScope.Create(
-                   [(WorkbookDefinitionId.CreateNew(), firstPath),
-                    (WorkbookDefinitionId.CreateNew(), secondPath)]))
+                   [new WorkbookPublicationTarget(
+                        WorkbookDefinitionId.CreateNew(),
+                        firstPath,
+                        WorkbookPublicationDisposition.CreateNew),
+                    new WorkbookPublicationTarget(
+                        WorkbookDefinitionId.CreateNew(),
+                        secondPath,
+                        WorkbookPublicationDisposition.CreateNew)]))
         {
             foreach (var candidate in publication.Candidates)
             {
@@ -319,6 +419,128 @@ public sealed class ExcelWorkbookExportServiceTests
     }
 
     [TestMethod]
+    public void AuthorizedOverwriteWaitsUntilEveryCandidateExists()
+    {
+        using var workspace = new ExportWorkspace();
+        var existingPath = Path.Combine(workspace.Root, "existing.xlsx");
+        var missingCandidatePath = Path.Combine(workspace.Root, "new.xlsx");
+        File.WriteAllText(existingPath, "original");
+        using (var publication = WorkbookBatchPublicationScope.Create(
+                   [new WorkbookPublicationTarget(
+                        WorkbookDefinitionId.CreateNew(),
+                        existingPath,
+                        WorkbookPublicationDisposition.OverwriteExisting),
+                    new WorkbookPublicationTarget(
+                        WorkbookDefinitionId.CreateNew(),
+                        missingCandidatePath,
+                        WorkbookPublicationDisposition.CreateNew)]))
+        {
+            File.WriteAllText(publication.Candidates[0].TemporaryPath, "replacement");
+
+            var failure = Assert.ThrowsExactly<WorkbookExportException>(() =>
+                publication.Publish(() => true));
+
+            Assert.AreEqual("export-temporary-file-missing", failure.Code);
+            Assert.AreEqual("original", File.ReadAllText(existingPath));
+            Assert.IsFalse(File.Exists(missingCandidatePath));
+        }
+
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.incomplete"));
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.backup"));
+    }
+
+    [TestMethod]
+    public void PublicationFailureRestoresOriginalAndRemovesNewFiles()
+    {
+        using var workspace = new ExportWorkspace();
+        var overwrittenPath = Path.Combine(workspace.Root, "overwritten.xlsx");
+        var newPath = Path.Combine(workspace.Root, "new.xlsx");
+        var racedPath = Path.Combine(workspace.Root, "raced.xlsx");
+        File.WriteAllText(overwrittenPath, "original");
+        using (var publication = WorkbookBatchPublicationScope.Create(
+                   [new WorkbookPublicationTarget(
+                        WorkbookDefinitionId.CreateNew(),
+                        overwrittenPath,
+                        WorkbookPublicationDisposition.OverwriteExisting),
+                    new WorkbookPublicationTarget(
+                        WorkbookDefinitionId.CreateNew(),
+                        newPath,
+                        WorkbookPublicationDisposition.CreateNew),
+                    new WorkbookPublicationTarget(
+                        WorkbookDefinitionId.CreateNew(),
+                        racedPath,
+                        WorkbookPublicationDisposition.CreateNew)]))
+        {
+            foreach (var candidate in publication.Candidates)
+            {
+                File.WriteAllText(candidate.TemporaryPath, "candidate");
+            }
+
+            var moves = 0;
+            var failure = Assert.ThrowsExactly<WorkbookExportException>(() =>
+                publication.Publish(
+                    () => true,
+                    moveFile: (source, destination) =>
+                    {
+                        moves++;
+                        if (moves == 2)
+                        {
+                            File.WriteAllText(destination, "unrelated late collision");
+                        }
+
+                        File.Move(source, destination, overwrite: false);
+                    }));
+
+            Assert.AreEqual("export-target-exists", failure.Code);
+        }
+
+        Assert.AreEqual("original", File.ReadAllText(overwrittenPath));
+        Assert.IsFalse(File.Exists(newPath));
+        Assert.AreEqual("unrelated late collision", File.ReadAllText(racedPath));
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.incomplete"));
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.backup"));
+    }
+
+    [TestMethod]
+    public void IrrecoverableReplacementRollbackIsReportedTruthfully()
+    {
+        using var workspace = new ExportWorkspace();
+        var overwrittenPath = Path.Combine(workspace.Root, "overwritten.xlsx");
+        var racedPath = Path.Combine(workspace.Root, "raced.xlsx");
+        File.WriteAllText(overwrittenPath, "original");
+        using var publication = WorkbookBatchPublicationScope.Create(
+            [new WorkbookPublicationTarget(
+                 WorkbookDefinitionId.CreateNew(),
+                 overwrittenPath,
+                 WorkbookPublicationDisposition.OverwriteExisting),
+             new WorkbookPublicationTarget(
+                 WorkbookDefinitionId.CreateNew(),
+                 racedPath,
+                 WorkbookPublicationDisposition.CreateNew)]);
+        foreach (var candidate in publication.Candidates)
+        {
+            File.WriteAllText(candidate.TemporaryPath, "candidate");
+        }
+
+        var failure = Assert.ThrowsExactly<WorkbookExportException>(() => publication.Publish(
+            () => true,
+            moveFile: (source, destination) =>
+            {
+                File.WriteAllText(destination, "unrelated late collision");
+                File.Move(source, destination, overwrite: false);
+            },
+            replaceFile: (source, destination, backup) =>
+            {
+                File.Replace(source, destination, backup, ignoreMetadataErrors: true);
+                File.Delete(backup);
+            }));
+
+        Assert.AreEqual("export-batch-rollback-failed", failure.Code);
+        Assert.AreEqual("candidate", File.ReadAllText(overwrittenPath));
+        Assert.AreEqual("unrelated late collision", File.ReadAllText(racedPath));
+    }
+
+    [TestMethod]
     public async Task BatchContractsRoundTripThroughTypedIpc()
     {
         using var workspace = new ExportWorkspace();
@@ -332,7 +554,7 @@ public sealed class ExcelWorkbookExportServiceTests
             OperationCorrelation.CreateNew(),
             extraction,
             configuration,
-            workspace.Root);
+            CreatePublicationPlan(configuration, extraction, workspace.Root));
         await using var stream = new MemoryStream();
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
@@ -340,7 +562,9 @@ public sealed class ExcelWorkbookExportServiceTests
         var roundTrip = await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
 
         Assert.IsInstanceOfType<RunWorkbookExportCommand>(roundTrip);
-        Assert.AreEqual(workspace.Root, ((RunWorkbookExportCommand)roundTrip).OutputDirectory);
+        Assert.AreEqual(
+            workspace.Root,
+            ((RunWorkbookExportCommand)roundTrip).PublicationPlan.OutputDirectory);
         var correlation = command.Correlation;
         var workbook = configuration.Workbooks.Single();
         var worksheet = workbook.Worksheets.Single();
@@ -436,6 +660,25 @@ public sealed class ExcelWorkbookExportServiceTests
     {
         Assert.IsEmpty(Directory.GetFiles(directory, "*.xlsx"));
         Assert.IsEmpty(Directory.GetFiles(directory, "*.incomplete"));
+        Assert.IsEmpty(Directory.GetFiles(directory, "*.backup"));
+    }
+
+    private static WorkbookPublicationPlan CreatePublicationPlan(
+        ExportConfigurationSnapshot configuration,
+        ExtractionResultSummary extraction,
+        string outputDirectory,
+        IReadOnlySet<WorkbookDefinitionId>? overwrite = null)
+    {
+        var validation = ExportConfigurationValidator.Validate(configuration, extraction);
+        Assert.IsTrue(validation.IsValid);
+        return new WorkbookPublicationPlan(
+            outputDirectory,
+            validation.RunnableWorkbooks.Select(workbook => new WorkbookPublicationTarget(
+                workbook.Workbook.WorkbookDefinitionId,
+                Path.Combine(outputDirectory, workbook.Workbook.FileName),
+                overwrite?.Contains(workbook.Workbook.WorkbookDefinitionId) == true
+                    ? WorkbookPublicationDisposition.OverwriteExisting
+                    : WorkbookPublicationDisposition.CreateNew)).ToArray());
     }
 
     private static ExportConfigurationSnapshot CreateConfiguration(

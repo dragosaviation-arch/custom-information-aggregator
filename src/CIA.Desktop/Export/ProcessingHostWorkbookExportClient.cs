@@ -16,13 +16,13 @@ public sealed class ProcessingHostWorkbookExportClient(
         OperationCorrelation correlation,
         ExtractionResultSummary extractionResult,
         ExportConfigurationSnapshot configuration,
-        string outputDirectory,
+        WorkbookPublicationPlan publicationPlan,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(extractionResult);
         ArgumentNullException.ThrowIfNull(configuration);
-        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        ArgumentNullException.ThrowIfNull(publicationPlan);
 
         try
         {
@@ -37,7 +37,7 @@ public sealed class ProcessingHostWorkbookExportClient(
                     correlation,
                     extractionResult,
                     configuration,
-                    outputDirectory,
+                    publicationPlan,
                     cancellationToken)
                 .ConfigureAwait(false);
             return new WorkbookExportClientResult(

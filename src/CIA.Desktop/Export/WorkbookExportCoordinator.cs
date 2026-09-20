@@ -36,11 +36,11 @@ public sealed class WorkbookExportCoordinator(
     }
 
     public async Task<WorkflowCommandResult> ExportAsync(
-        string outputDirectory,
+        WorkbookPublicationPlan publicationPlan,
         ExportConfigurationSnapshot configuration,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(outputDirectory);
+        ArgumentNullException.ThrowIfNull(publicationPlan);
         ArgumentNullException.ThrowIfNull(configuration);
 
         var extractionResult = extractionCoordinator.CurrentResult;
@@ -66,7 +66,7 @@ public sealed class WorkbookExportCoordinator(
                     begin.Operation,
                     extractionResult,
                     configuration,
-                    outputDirectory,
+                    publicationPlan,
                     cancellationToken)
                 .ConfigureAwait(false);
             if (result.Accepted
@@ -76,7 +76,7 @@ public sealed class WorkbookExportCoordinator(
                         begin.Operation.OperationId,
                         extractionResult,
                         configuration,
-                        outputDirectory)))
+                        publicationPlan)))
             {
                 workflowCoordinator.CompleteOperation(
                     begin.Operation.OperationId,
@@ -133,7 +133,7 @@ public sealed class WorkbookExportCoordinator(
         OperationId operationId,
         ExtractionResultSummary extractionResult,
         ExportConfigurationSnapshot configuration,
-        string outputDirectory)
+        WorkbookPublicationPlan publicationPlan)
     {
         var validation = ExportConfigurationValidator.Validate(configuration, extractionResult);
         if (!validation.IsValid
@@ -141,20 +141,20 @@ public sealed class WorkbookExportCoordinator(
             || batch.ExtractionResultId != extractionResult.OperationId
             || !string.Equals(
                 Path.TrimEndingDirectorySeparator(Path.GetFullPath(batch.OutputDirectory)),
-                Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputDirectory)),
+                publicationPlan.OutputDirectory,
                 StringComparison.OrdinalIgnoreCase)
             || batch.Workbooks.Count != validation.RunnableWorkbooks.Count)
         {
             return false;
         }
 
+        var targetsById = publicationPlan.Targets.ToDictionary(target =>
+            target.WorkbookDefinitionId);
         return validation.RunnableWorkbooks.Zip(batch.Workbooks).All(pair =>
             pair.First.Workbook.WorkbookDefinitionId == pair.Second.WorkbookDefinitionId
             && pair.First.Workbook.Order == pair.Second.Order
-            && string.Equals(
-                Path.GetFileName(pair.Second.FinalPath),
-                pair.First.Workbook.FileName,
-                StringComparison.Ordinal)
+            && targetsById.TryGetValue(pair.First.Workbook.WorkbookDefinitionId, out var target)
+            && string.Equals(pair.Second.FinalPath, target.FinalPath, StringComparison.OrdinalIgnoreCase)
             && pair.First.Worksheets.Count == pair.Second.Worksheets.Count
             && pair.First.Worksheets.Zip(pair.Second.Worksheets).All(worksheetPair =>
             {
