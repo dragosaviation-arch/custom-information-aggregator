@@ -145,6 +145,7 @@ public sealed class ProductionXmlSourceAdapterTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task MalformedAndProhibitedEntityXmlFailWithoutResolvingExternalContent()
     {
         using var workspace = new TemporaryXmlDirectory();

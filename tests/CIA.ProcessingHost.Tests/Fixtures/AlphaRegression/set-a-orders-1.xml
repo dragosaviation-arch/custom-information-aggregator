@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<alphaOrders>
+  <order id="A-100">
+    <buyer><name>Buyer Alpha</name></buyer>
+    <seller><name>Seller Alpha</name></seller>
+    <line code="ATTR-A">
+      <code>ELEMENT-A</code>
+      <qty>2</qty>
+      <note>same-content</note>
+      <components>
+        <component><serial>S-A1</serial><measure>10</measure></component>
+        <component><serial>S-A2</serial><measure>20</measure></component>
+      </components>
+    </line>
+    <line code="ATTR-B">
+      <code>ELEMENT-B</code>
+      <qty>5</qty>
+      <note>same-content</note>
+      <components>
+        <component><serial>S-A3</serial><measure>30</measure></component>
+      </components>
+    </line>
+  </order>
+</alphaOrders>

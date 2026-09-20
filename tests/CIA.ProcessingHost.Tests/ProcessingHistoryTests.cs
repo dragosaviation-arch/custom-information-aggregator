@@ -212,6 +212,7 @@ public sealed class ProcessingHistoryTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public void DesktopAndProcessingHostWriteCorrelatedStructuredClefRecords()
     {
         using var logs = new TemporaryLogDirectory();

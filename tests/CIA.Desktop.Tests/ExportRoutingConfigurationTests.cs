@@ -148,6 +148,7 @@ public sealed class ExportRoutingConfigurationTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public void DisabledSetRetainsRoutingFieldsHeadersAndMetadataButProducesNoOutput()
     {
         var generation = CreateGeneration();
@@ -239,6 +240,7 @@ public sealed class ExportRoutingConfigurationTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public void RoutingAndFieldChangesDoNotMutateDatabaseGeneration()
     {
         var generation = CreateGeneration();

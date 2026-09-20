@@ -65,6 +65,7 @@ public sealed class ApplicationWorkflowCoordinatorTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task SuccessfulWorkflowTracksCurrentAndCascadingStaleState()
     {
         var coordinator = CreateCoordinator(new StubProcessingHostSupervisor());

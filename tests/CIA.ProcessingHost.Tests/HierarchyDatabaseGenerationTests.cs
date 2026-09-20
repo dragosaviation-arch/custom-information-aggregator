@@ -144,6 +144,7 @@ public sealed class HierarchyDatabaseGenerationTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task InclusionAndValueOrMetadataSearchAreAppliedBeforePaging()
     {
         using var workspace = new Workspace();
@@ -428,6 +429,7 @@ public sealed class HierarchyDatabaseGenerationTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task CancelledCandidatePreservesPreviousPublishedGeneration()
     {
         using var workspace = new Workspace();

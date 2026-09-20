@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<betaOrders xmlns="urn:cia:alpha:beta">
+  <order id="B-100">
+    <buyer><name>Buyer Gamma</name></buyer>
+    <seller><name>Seller Gamma</name></seller>
+    <line code="ATTR-D">
+      <code>ELEMENT-D</code>
+      <formula>=SUM(A1:A2)</formula>
+      <qty>11</qty>
+      <note>  preserved whitespace  </note>
+      <components>
+        <component><serial>S-B1</serial><measure>50</measure></component>
+        <component><serial>S-B2</serial><measure>60</measure></component>
+        <component><serial>S-B3</serial><measure>70</measure></component>
+      </components>
+    </line>
+  </order>
+</betaOrders>

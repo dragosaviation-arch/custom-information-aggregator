@@ -311,6 +311,7 @@ public sealed class DiscoveryServiceTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task FreshServiceRetrievesOccurrenceWithoutPriorDiscoveryRun()
     {
         using var workspace = new DiscoveryWorkspace();
@@ -442,6 +443,7 @@ public sealed class DiscoveryServiceTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task ProblematicSourceDoesNotPreventIndependentSourcesFromAggregating()
     {
         using var workspace = new DiscoveryWorkspace();
