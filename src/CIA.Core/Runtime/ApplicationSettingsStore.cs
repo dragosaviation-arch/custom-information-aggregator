@@ -444,6 +444,10 @@ public sealed class ApplicationSettingsService
 
     public ApplicationPaths RuntimePaths => Startup.RuntimePaths;
 
+    public string CurrentSettingsFilePath => Path.Combine(
+        Current.SettingsDirectory,
+        ApplicationSettingsStore.SettingsFileName);
+
     public bool IsRestartRequired =>
         !PathsEqual(Current.TemporaryDirectory, RuntimePaths.TempDirectory)
         || !PathsEqual(Current.WorkingDirectory, RuntimePaths.WorkingDirectory)

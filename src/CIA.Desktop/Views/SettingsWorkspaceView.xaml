@@ -606,9 +606,10 @@
                                                 </Grid.ColumnDefinitions>
                                                 <TextBox Style="{StaticResource CiaTextInputStyle}"
                                                          Text="{Binding PersistentArchiveExtractionDirectory, UpdateSourceTrigger=PropertyChanged}" />
-                                                <Button Grid.Column="1" Margin="5,0,0,0"
+                                                <Button x:Name="BrowsePersistentExtractionDirectoryButton"
+                                                        Grid.Column="1" Margin="5,0,0,0"
                                                         Command="{Binding BrowsePersistentExtractionDirectoryCommand}"
-                                                        Content="Browseâ€¦"
+                                                        Content="Browse..."
                                                         Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
                                             <TextBlock Grid.Row="8" VerticalAlignment="Center" Style="{StaticResource CiaSecondaryTextStyle}" Text="After export" />
@@ -640,25 +641,25 @@
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                 <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Temporary" />
                                                 <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding TemporaryDirectory, UpdateSourceTrigger=PropertyChanged}" />
-                                                <Button Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseTemporaryDirectoryCommand}" Content="Browseâ€¦" Style="{StaticResource SettingsCompactButtonStyle}" />
+                                                <Button x:Name="BrowseTemporaryDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseTemporaryDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
                                             <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                 <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Working" />
                                                 <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding WorkingDirectory, UpdateSourceTrigger=PropertyChanged}" />
-                                                <Button Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseWorkingDirectoryCommand}" Content="Browseâ€¦" Style="{StaticResource SettingsCompactButtonStyle}" />
+                                                <Button x:Name="BrowseWorkingDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseWorkingDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
                                             <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                 <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Profiles" />
                                                 <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding ProfilesDirectory, UpdateSourceTrigger=PropertyChanged}" />
-                                                <Button Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseProfilesDirectoryCommand}" Content="Browseâ€¦" Style="{StaticResource SettingsCompactButtonStyle}" />
+                                                <Button x:Name="BrowseProfilesDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseProfilesDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
                                             <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                 <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Settings" />
                                                 <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding SettingsDirectory, UpdateSourceTrigger=PropertyChanged}" />
-                                                <Button Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseSettingsDirectoryCommand}" Content="Browseâ€¦" Style="{StaticResource SettingsCompactButtonStyle}" />
+                                                <Button x:Name="BrowseSettingsDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseSettingsDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
                                             <ItemsControl Margin="0,4,0,0" ItemsSource="{Binding ManagedStoragePaths}">
                                             <ItemsControl.ItemTemplate>

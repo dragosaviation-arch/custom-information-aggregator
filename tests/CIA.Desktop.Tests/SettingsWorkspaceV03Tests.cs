@@ -189,6 +189,11 @@ public sealed class SettingsWorkspaceV03Tests
             CreateReader(),
             runtimePaths,
             service);
+        var startupSettingsDirectory = service.RuntimePaths.SettingsDirectory;
+        Assert.AreEqual(service.Startup.SettingsFilePath, viewModel.ConfiguredSettingsFilePath);
+        StringAssert.Contains(
+            viewModel.SettingsPersistenceText,
+            service.Startup.SettingsFilePath);
         var configuredSettingsDirectory = Path.Combine(root.Path, "Configured", "Settings");
         viewModel.TemporaryDirectory = Path.Combine(root.Path, "Configured", "Temp");
         viewModel.WorkingDirectory = Path.Combine(root.Path, "Configured", "Working");
@@ -208,8 +213,16 @@ public sealed class SettingsWorkspaceV03Tests
 
         StringAssert.Contains(viewModel.SettingsStatusText, "Restart CIA");
         Assert.IsTrue(viewModel.IsSettingsRestartRequired);
+        var relocatedSettingsFile = Path.Combine(
+            configuredSettingsDirectory,
+            ApplicationSettingsStore.SettingsFileName);
+        Assert.AreEqual(relocatedSettingsFile, viewModel.ConfiguredSettingsFilePath);
+        StringAssert.Contains(viewModel.SettingsPersistenceText, relocatedSettingsFile);
+        StringAssert.Contains(viewModel.SettingsPersistenceText, startupSettingsDirectory);
+        Assert.AreEqual(startupSettingsDirectory, service.RuntimePaths.SettingsDirectory);
         var reopened = new ApplicationSettingsService(new ApplicationSettingsStore(localAppData));
         Assert.AreEqual(configuredSettingsDirectory, reopened.Current.SettingsDirectory);
+        Assert.AreEqual(configuredSettingsDirectory, reopened.RuntimePaths.SettingsDirectory);
         Assert.IsFalse(reopened.Current.TraverseSubfolders);
         Assert.AreEqual(8, reopened.Current.MaximumArchiveNestingDepth.Value);
         Assert.IsTrue(reopened.Current.PersistentArchiveExtractionEnabled);
@@ -400,6 +413,14 @@ public sealed class SettingsWorkspaceV03InteractionTests
             var cleanTemporary = (Button)view.FindName("CleanTemporaryDataButton");
             var selectedFailureCode = (TextBlock)view.FindName("SelectedFailureCode");
             var saveSettings = (Button)view.FindName("SavePersistentSettingsButton");
+            var browseButtons = new[]
+            {
+                (Button)view.FindName("BrowseTemporaryDirectoryButton"),
+                (Button)view.FindName("BrowseWorkingDirectoryButton"),
+                (Button)view.FindName("BrowseProfilesDirectoryButton"),
+                (Button)view.FindName("BrowseSettingsDirectoryButton"),
+                (Button)view.FindName("BrowsePersistentExtractionDirectoryButton")
+            };
 
             Assert.AreEqual(Visibility.Collapsed, internalSwitch.Visibility);
             Assert.AreEqual(Visibility.Visible, logSide.Visibility);
@@ -411,6 +432,7 @@ public sealed class SettingsWorkspaceV03InteractionTests
             Assert.IsFalse(saveState.IsEnabled);
             Assert.IsFalse(cleanTemporary.IsEnabled);
             Assert.IsTrue(saveSettings.IsEnabled);
+            Assert.IsTrue(browseButtons.All(button => Equals(button.Content, "Browse...")));
             Assert.AreEqual("Failure code: parse-failed", selectedFailureCode.Text);
             Assert.AreEqual(Visibility.Visible, selectedFailureCode.Visibility);
 

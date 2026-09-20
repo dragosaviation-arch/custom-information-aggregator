@@ -381,8 +381,11 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         : "No entries match the current filters.";
 
     public string SettingsPersistenceText =>
-        $"Persistent settings are stored in {_settingsService.Startup.SettingsFilePath}. " +
+        $"Persistent settings file: {ConfiguredSettingsFilePath}. " +
+        $"Current runtime Settings directory: {_settingsService.RuntimePaths.SettingsDirectory}. " +
         "Managed-storage path changes take effect after CIA restarts.";
+
+    public string ConfiguredSettingsFilePath => _settingsService.CurrentSettingsFilePath;
 
     public string TemporaryDirectory
     {
@@ -592,6 +595,11 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
                     : "Settings saved. New sessions will use the updated configuration."
                 : result.FailureDescription ?? "Settings could not be saved.";
             OnPropertyChanged(nameof(IsSettingsRestartRequired));
+            if (result.Succeeded)
+            {
+                OnPropertyChanged(nameof(ConfiguredSettingsFilePath));
+                OnPropertyChanged(nameof(SettingsPersistenceText));
+            }
         }
         catch (Exception exception) when (exception is ArgumentException
                                           or InvalidOperationException)
