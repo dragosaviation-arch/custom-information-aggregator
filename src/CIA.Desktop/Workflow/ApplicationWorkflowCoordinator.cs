@@ -123,6 +123,36 @@ public sealed class ApplicationWorkflowCoordinator :
         return WorkflowCommandResult.Accept();
     }
 
+    public WorkflowCommandResult RecordWorkingStateRestored(
+        bool hasValidSourceSelection,
+        bool hasPublishedDatabase)
+    {
+        WorkflowStateSnapshot changedState;
+        lock (_stateGate)
+        {
+            if (_current.ActiveOperation?.Kind != WorkflowOperationKind.WorkingStateRestore)
+            {
+                return WorkflowCommandResult.Reject(
+                    WorkflowRejectionCode.OperationMismatch,
+                    "Working-state restoration must match the active restore operation.");
+            }
+
+            _current = _current with
+            {
+                HasValidSourceSelection = hasValidSourceSelection,
+                Discovery = WorkflowArtifactStatus.Unavailable,
+                Database = hasPublishedDatabase
+                    ? WorkflowArtifactStatus.Current
+                    : WorkflowArtifactStatus.Unavailable,
+                Extraction = WorkflowArtifactStatus.Unavailable
+            };
+            changedState = _current;
+        }
+
+        PublishStateChanged(changedState);
+        return WorkflowCommandResult.Accept();
+    }
+
     public async Task<WorkflowCommandResult> BeginOperationAsync(
         WorkflowOperationKind operationKind,
         CancellationToken cancellationToken = default)
@@ -424,6 +454,8 @@ public sealed class ApplicationWorkflowCoordinator :
                     WorkflowRejectionCode.ExtractionNotCurrent,
                     "Export requires current extracted results."),
             WorkflowOperationKind.Export => null,
+            WorkflowOperationKind.WorkingStateSave => null,
+            WorkflowOperationKind.WorkingStateRestore => null,
             _ => WorkflowCommandResult.Reject(
                 WorkflowRejectionCode.UnsupportedOperation,
                 "The requested workflow operation is not supported.")
@@ -655,6 +687,8 @@ public sealed class ApplicationWorkflowCoordinator :
                 Extraction = WorkflowArtifactStatus.Current
             },
             WorkflowOperationKind.Export => current,
+            WorkflowOperationKind.WorkingStateSave => current,
+            WorkflowOperationKind.WorkingStateRestore => current,
             _ => current
         };
     }

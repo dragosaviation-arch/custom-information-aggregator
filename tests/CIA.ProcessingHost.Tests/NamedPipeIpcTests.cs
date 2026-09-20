@@ -5,6 +5,7 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Contracts.WorkingState;
 using CIA.Desktop.Database;
 using CIA.Desktop.Ipc;
 using CIA.ProcessingHost.Ipc;
@@ -14,6 +15,63 @@ namespace CIA.ProcessingHost.Tests;
 [TestClass]
 public sealed class NamedPipeIpcTests
 {
+    [TestMethod]
+    public async Task WorkingStateSaveAndRestoreRoundTripAsTypedContracts()
+    {
+        var correlation = OperationCorrelation.CreateNew();
+        var snapshot = new WorkingStateSnapshot(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            databaseGeneration: null,
+            sourceSets: [],
+            activeSourceSetId: null,
+            sources: [],
+            new DiscoveryConfigurationSnapshot([], []),
+            databaseTagOverrides: []);
+        var manifest = new WorkingStateManifest(
+            WorkingStatePackageFormat.CurrentSchemaVersion,
+            5,
+            new string('a', 64),
+            snapshot);
+        var save = new SaveWorkingStateCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            correlation,
+            Path.GetFullPath("state.cia"),
+            snapshot);
+        var restore = new RestoreWorkingStateCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            correlation,
+            Path.GetFullPath("state.cia"));
+        var completion = new OperationCompletion(
+            correlation,
+            OperationOutcome.CompletedSuccessfully,
+            []);
+        var response = new RestoreWorkingStateResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            restore.MessageId,
+            CommandAcceptance.Accepted,
+            completion,
+            manifest,
+            Failure: null);
+        await using var stream = new MemoryStream();
+
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, save);
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, restore);
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
+        stream.Position = 0;
+
+        var saved = (SaveWorkingStateCommand)await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
+        var restored = (RestoreWorkingStateCommand)await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
+        var restoredResponse = (RestoreWorkingStateResponse)await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
+        Assert.AreEqual(snapshot.PackageId, saved.Snapshot.PackageId);
+        Assert.AreEqual(correlation, saved.Correlation);
+        Assert.AreEqual(correlation, restored.Correlation);
+        Assert.AreEqual(manifest.DatabaseSha256, restoredResponse.Manifest?.DatabaseSha256);
+    }
+
     [TestMethod]
     public async Task DatabaseBuildCommandAndPublicationResponseRoundTripAsTypedContracts()
     {

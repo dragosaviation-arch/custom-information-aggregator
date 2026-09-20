@@ -14,6 +14,10 @@ public interface IApplicationWorkflowCoordinator
 
     WorkflowCommandResult RecordDatabaseReviewChanged();
 
+    WorkflowCommandResult RecordWorkingStateRestored(
+        bool hasValidSourceSelection,
+        bool hasPublishedDatabase);
+
     Task<WorkflowCommandResult> BeginOperationAsync(
         WorkflowOperationKind operationKind,
         CancellationToken cancellationToken = default);

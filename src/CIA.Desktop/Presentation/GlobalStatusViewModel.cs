@@ -133,6 +133,8 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
             WorkflowOperationKind.DatabaseBuild => "Database build",
             WorkflowOperationKind.Extraction => "Extraction",
             WorkflowOperationKind.Export => "Export",
+            WorkflowOperationKind.WorkingStateSave => "Save state",
+            WorkflowOperationKind.WorkingStateRestore => "Restore state",
             _ => "Operation"
         };
         var state = operation.State switch

@@ -29,7 +29,24 @@ public sealed class DatabaseBuildCoordinator(
         }
     }
 
-    public event EventHandler<DatabaseGenerationSummary>? PublishedGenerationChanged;
+    public event EventHandler<DatabaseGenerationSummary?>? PublishedGenerationChanged;
+
+    public void AdoptRestoredGeneration(DatabaseGenerationSummary? restoredGeneration)
+    {
+        if (restoredGeneration is { IsHierarchyAware: false })
+        {
+            throw new ArgumentException(
+                "Only hierarchy-aware Database generations can be restored.",
+                nameof(restoredGeneration));
+        }
+
+        lock (_stateGate)
+        {
+            _currentGeneration = restoredGeneration;
+        }
+
+        PublishedGenerationChanged?.Invoke(this, restoredGeneration);
+    }
 
     public bool CanBuild()
     {

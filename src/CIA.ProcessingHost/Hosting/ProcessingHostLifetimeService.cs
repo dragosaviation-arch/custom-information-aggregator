@@ -10,6 +10,7 @@ using CIA.ProcessingHost.Export;
 using CIA.ProcessingHost.Ipc;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.SourceIntake;
+using CIA.ProcessingHost.WorkingState;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -25,6 +26,7 @@ public sealed class ProcessingHostLifetimeService(
     DatabaseReviewService databaseReview,
     DatabaseExtractionService databaseExtraction,
     ExcelWorkbookExportService workbookExport,
+    WorkingStatePackageService workingState,
     IHostApplicationLifetime applicationLifetime,
     ILogger<ProcessingHostLifetimeService> logger) : BackgroundService
 {
@@ -184,6 +186,46 @@ public sealed class ProcessingHostLifetimeService(
                         command,
                         processingResponseSendGate,
                         cancellationToken);
+                    break;
+
+                case SaveWorkingStateCommand command
+                    when established && activeProcessingRequest is null:
+                    activeProcessingRequest = ProcessWorkingStateSaveAsync(
+                        connection,
+                        command,
+                        processingResponseSendGate,
+                        cancellationToken);
+                    break;
+
+                case SaveWorkingStateCommand command when established:
+                    await SendRejectedSerializedAsync(
+                            connection,
+                            command.MessageId,
+                            "working-state-operation-active",
+                            "A processing operation is already active in the Processing Host.",
+                            processingResponseSendGate,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+
+                case RestoreWorkingStateCommand command
+                    when established && activeProcessingRequest is null:
+                    activeProcessingRequest = ProcessWorkingStateRestoreAsync(
+                        connection,
+                        command,
+                        processingResponseSendGate,
+                        cancellationToken);
+                    break;
+
+                case RestoreWorkingStateCommand command when established:
+                    await SendRejectedSerializedAsync(
+                            connection,
+                            command.MessageId,
+                            "working-state-operation-active",
+                            "A processing operation is already active in the Processing Host.",
+                            processingResponseSendGate,
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     break;
 
                 case BuildDatabaseCommand command when established:
@@ -423,6 +465,71 @@ public sealed class ProcessingHostLifetimeService(
         try
         {
             await connection.SendAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            sendGate.Release();
+        }
+    }
+
+    private async Task ProcessWorkingStateSaveAsync(
+        NamedPipeIpcConnection connection,
+        SaveWorkingStateCommand command,
+        SemaphoreSlim sendGate,
+        CancellationToken cancellationToken)
+    {
+        var result = await workingState.SaveAsync(
+                command.Correlation,
+                command.TargetPath,
+                command.Snapshot,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await connection.SendAsync(
+                    new SaveWorkingStateResponse(
+                        Guid.CreateVersion7(),
+                        DateTimeOffset.UtcNow,
+                        command.MessageId,
+                        result.Accepted ? CommandAcceptance.Accepted : CommandAcceptance.Rejected,
+                        result.Completion,
+                        result.Manifest,
+                        result.Failure),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            sendGate.Release();
+        }
+    }
+
+    private async Task ProcessWorkingStateRestoreAsync(
+        NamedPipeIpcConnection connection,
+        RestoreWorkingStateCommand command,
+        SemaphoreSlim sendGate,
+        CancellationToken cancellationToken)
+    {
+        var result = await workingState.RestoreAsync(
+                command.Correlation,
+                command.PackagePath,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await connection.SendAsync(
+                    new RestoreWorkingStateResponse(
+                        Guid.CreateVersion7(),
+                        DateTimeOffset.UtcNow,
+                        command.MessageId,
+                        result.Accepted ? CommandAcceptance.Accepted : CommandAcceptance.Rejected,
+                        result.Completion,
+                        result.Manifest,
+                        result.Failure),
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {

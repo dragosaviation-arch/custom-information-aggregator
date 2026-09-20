@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using CIA.Contracts.Sources;
+using CIA.Contracts.WorkingState;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace CIA.Desktop.Sources;
@@ -42,6 +43,86 @@ public sealed class ActiveLoadedSourceSet
             })
             .ToArray();
     }
+
+    public IReadOnlyList<LoadedSourceContract> CreateWorkingStateSourceSnapshot()
+    {
+        return _items.Select(CreateContract).ToArray();
+    }
+
+    public IReadOnlyList<WorkingStateSourceSet> CreateWorkingStateSourceSetSnapshot()
+    {
+        return _sourceSets.Select((sourceSet, index) => new WorkingStateSourceSet(
+            sourceSet.SourceSetId,
+            sourceSet.Name,
+            index + 1)).ToArray();
+    }
+
+    internal void RestoreWorkingState(
+        IReadOnlyList<WorkingStateSourceSet> sourceSets,
+        SourceSetId? activeSourceSetId,
+        IReadOnlyList<LoadedSourceContract> sources)
+    {
+        ArgumentNullException.ThrowIfNull(sourceSets);
+        ArgumentNullException.ThrowIfNull(sources);
+        var definitions = sourceSets
+            .OrderBy(sourceSet => sourceSet.Ordinal)
+            .Select(sourceSet => new SourceSetDefinition(sourceSet.SourceSetId, sourceSet.Name))
+            .ToArray();
+        var definitionsById = definitions.ToDictionary(definition => definition.SourceSetId);
+        if (activeSourceSetId is { } active && !definitionsById.ContainsKey(active))
+        {
+            throw new ArgumentException("The restored active Source Set does not exist.", nameof(activeSourceSetId));
+        }
+
+        var restoredItems = sources.Select(source =>
+        {
+            if (!definitionsById.TryGetValue(source.SourceSetId, out var sourceSet))
+            {
+                throw new ArgumentException("A restored source references an unknown Source Set.", nameof(sources));
+            }
+
+            var restoredSource = File.Exists(source.Path)
+                ? source
+                : source with { Status = LoadedSourceStatus.Unavailable };
+            return new LoadedSourceItem(restoredSource, sourceSet.Name);
+        }).ToArray();
+
+        _items.Clear();
+        _sourceSets.Clear();
+        foreach (var definition in definitions)
+        {
+            _sourceSets.Add(definition);
+        }
+
+        foreach (var item in restoredItems)
+        {
+            _items.Add(item);
+        }
+
+        ActiveSourceSet = activeSourceSetId is { } activeId
+            ? definitionsById[activeId]
+            : definitions.FirstOrDefault();
+        _nextDefaultSetNumber = 1;
+        while (_sourceSets.Any(sourceSet => string.Equals(
+                   sourceSet.Name,
+                   $"Set {_nextDefaultSetNumber}",
+                   StringComparison.OrdinalIgnoreCase)))
+        {
+            _nextDefaultSetNumber++;
+        }
+    }
+
+    private static LoadedSourceContract CreateContract(LoadedSourceItem source) =>
+        new(
+            source.SourceId,
+            source.SourceSetId,
+            source.Path,
+            source.IsIncluded,
+            source.Status,
+            source.Kind)
+        {
+            ArchiveProvenance = source.ArchiveProvenance
+        };
 
     internal bool Contains(string path)
     {

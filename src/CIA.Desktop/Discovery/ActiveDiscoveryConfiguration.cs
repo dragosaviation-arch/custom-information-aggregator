@@ -236,6 +236,34 @@ public sealed class ActiveDiscoveryConfiguration
         }
     }
 
+    internal void RestoreWorkingState(
+        DiscoveryConfigurationSnapshot configuration,
+        IReadOnlyList<CIA.Contracts.WorkingState.WorkingStateDatabaseTagOverride> overrides)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(overrides);
+        var items = configuration.Items.ToDictionary(item => item.Identity, item => item.Disposition);
+        var restoredOverrides = overrides.ToDictionary(
+            item => item.Identity,
+            item => item.DatabaseTagName);
+        if (restoredOverrides.Keys.Any(identity => !items.ContainsKey(identity)))
+        {
+            throw new ArgumentException(
+                "A restored Database Tag Name Override references unknown Discovery information.",
+                nameof(overrides));
+        }
+
+        lock (_stateGate)
+        {
+            _items = items;
+            _databaseTagOverrides = restoredOverrides;
+            _sourceSetOrder = configuration.SourceSets.Select(item => item.SourceSetId).ToList();
+            _repeatedDataLayouts = configuration.SourceSets.ToDictionary(
+                item => item.SourceSetId,
+                item => item.RepeatedDataLayout);
+        }
+    }
+
     private bool SetDatabaseTagOverrideCore(
         DiscoveryInformationIdentity identity,
         string? databaseTagOverride)

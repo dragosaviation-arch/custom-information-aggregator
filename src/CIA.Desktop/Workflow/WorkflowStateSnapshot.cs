@@ -14,7 +14,9 @@ public enum WorkflowOperationKind
     Discovery = 1,
     DatabaseBuild = 2,
     Extraction = 3,
-    Export = 4
+    Export = 4,
+    WorkingStateSave = 5,
+    WorkingStateRestore = 6
 }
 
 public enum WorkflowOperationState

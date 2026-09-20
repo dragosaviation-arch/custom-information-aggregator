@@ -9,6 +9,7 @@ using CIA.Desktop.Export;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
+using CIA.Desktop.WorkingState;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -71,6 +72,8 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ExtractionCoordinator>();
         builder.Services.AddSingleton<IWorkbookExportClient, ProcessingHostWorkbookExportClient>();
         builder.Services.AddSingleton<WorkbookExportCoordinator>();
+        builder.Services.AddSingleton<IWorkingStateClient, ProcessingHostWorkingStateClient>();
+        builder.Services.AddSingleton<WorkingStateCoordinator>();
         builder.Services.AddSingleton<IExportFolderPicker, WindowsExportFolderPicker>();
         builder.Services.AddSingleton<IWorkbookCollisionResolver, WindowsWorkbookCollisionResolver>();
         builder.Services.AddSingleton<ISettingsFolderPicker, WindowsSettingsFolderPicker>();

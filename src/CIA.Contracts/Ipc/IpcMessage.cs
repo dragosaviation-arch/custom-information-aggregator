@@ -5,6 +5,7 @@ using CIA.Contracts.Export;
 using CIA.Contracts.Extraction;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Contracts.WorkingState;
 
 namespace CIA.Contracts.Ipc;
 
@@ -23,6 +24,8 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RunWorkbookExportCommand), "runWorkbookExportCommand")]
 [JsonDerivedType(typeof(GetDatabaseReviewPageCommand), "getDatabaseReviewPageCommand")]
 [JsonDerivedType(typeof(SetDatabaseRowsIncludedCommand), "setDatabaseRowsIncludedCommand")]
+[JsonDerivedType(typeof(SaveWorkingStateCommand), "saveWorkingStateCommand")]
+[JsonDerivedType(typeof(RestoreWorkingStateCommand), "restoreWorkingStateCommand")]
 [JsonDerivedType(typeof(StopProcessingHostCommand), "stopProcessingHostCommand")]
 [JsonDerivedType(typeof(CommandAcknowledgement), "commandAcknowledgement")]
 [JsonDerivedType(typeof(LoadSourcesResponse), "loadSourcesResponse")]
@@ -34,6 +37,8 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RunWorkbookExportResponse), "runWorkbookExportResponse")]
 [JsonDerivedType(typeof(GetDatabaseReviewPageResponse), "getDatabaseReviewPageResponse")]
 [JsonDerivedType(typeof(SetDatabaseRowsIncludedResponse), "setDatabaseRowsIncludedResponse")]
+[JsonDerivedType(typeof(SaveWorkingStateResponse), "saveWorkingStateResponse")]
+[JsonDerivedType(typeof(RestoreWorkingStateResponse), "restoreWorkingStateResponse")]
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 [JsonDerivedType(typeof(SourceIntakeProgressEvent), "sourceIntakeProgressEvent")]
 public abstract record IpcMessage(Guid MessageId, DateTimeOffset TimestampUtc);
@@ -158,6 +163,21 @@ public sealed record SetDatabaseRowsIncludedCommand(
     DatabaseRowInclusionChange Change)
     : IpcCommand(MessageId, TimestampUtc);
 
+public sealed record SaveWorkingStateCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    OperationCorrelation Correlation,
+    string TargetPath,
+    WorkingStateSnapshot Snapshot)
+    : IpcCommand(MessageId, TimestampUtc);
+
+public sealed record RestoreWorkingStateCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    OperationCorrelation Correlation,
+    string PackagePath)
+    : IpcCommand(MessageId, TimestampUtc);
+
 public sealed record StopProcessingHostCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc)
@@ -260,6 +280,26 @@ public sealed record SetDatabaseRowsIncludedResponse(
     OperationId GenerationId,
     CommandAcceptance Acceptance,
     int ChangedRowCount,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record SaveWorkingStateResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    CommandAcceptance Acceptance,
+    OperationCompletion Completion,
+    WorkingStateManifest? Manifest,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record RestoreWorkingStateResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    CommandAcceptance Acceptance,
+    OperationCompletion Completion,
+    WorkingStateManifest? Manifest,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 
