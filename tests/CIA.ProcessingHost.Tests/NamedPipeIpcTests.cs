@@ -170,6 +170,7 @@ public sealed class NamedPipeIpcTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task DesktopAndProcessingHostExchangeTypedContractsOverNamedPipe()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -727,6 +728,7 @@ public sealed class NamedPipeIpcTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task FramerRejectsStructurallyInvalidTypedContract()
     {
         var invalidContract = $$"""

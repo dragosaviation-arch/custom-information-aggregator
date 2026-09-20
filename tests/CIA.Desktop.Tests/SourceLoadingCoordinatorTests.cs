@@ -39,6 +39,7 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task FirstSuccessfulLoadCreatesSetOneAndCarriesItsIdentityDownstream()
     {
         var path = Path.GetFullPath("first.xml");
@@ -64,6 +65,7 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task ExistingAndNewSetLoadingPreserveNormalActiveSetBehavior()
     {
         var firstPath = Path.GetFullPath("first.xml");
@@ -104,6 +106,7 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task LoadSettingsCreateAndRenameKeepTheInternalSetIdentityStable()
     {
         var path = Path.GetFullPath("source.xml");
@@ -155,6 +158,7 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task SingleAndBatchReassignmentPreserveSourcesAndInvalidateDownstream()
     {
         var first = CreateXml(Path.GetFullPath("first.xml"));

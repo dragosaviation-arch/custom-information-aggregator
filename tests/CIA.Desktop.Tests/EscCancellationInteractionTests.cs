@@ -24,6 +24,7 @@ public sealed class EscCancellationInteractionTests
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(20);
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task EscapeFromAWorkspaceCancelsOnlyTheCurrentActiveOperation()
     {
         await WpfTestApplication.RunAsync(VerifyEscapeCancellationAsync).WaitAsync(TestTimeout);

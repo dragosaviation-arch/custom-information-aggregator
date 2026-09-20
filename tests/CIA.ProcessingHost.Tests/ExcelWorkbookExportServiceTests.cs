@@ -24,6 +24,7 @@ namespace CIA.ProcessingHost.Tests;
 public sealed class ExcelWorkbookExportServiceTests
 {
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task RoutedBatchStreamsSemanticRowsAcrossWorkbooksAndWorksheets()
     {
         using var workspace = new ExportWorkspace();
@@ -113,6 +114,7 @@ public sealed class ExcelWorkbookExportServiceTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task CandidateFailureAndCancellationPublishNoWorkbook()
     {
         using var failedWorkspace = new ExportWorkspace();
@@ -186,6 +188,7 @@ public sealed class ExcelWorkbookExportServiceTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task MixedAuthorizedOverwriteRenamedTargetAndNewTargetPublishTogether()
     {
         using var workspace = new ExportWorkspace();
@@ -376,6 +379,7 @@ public sealed class ExcelWorkbookExportServiceTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public void BatchPublicationRollsBackFilesMovedBeforeARace()
     {
         using var workspace = new ExportWorkspace();
@@ -450,6 +454,7 @@ public sealed class ExcelWorkbookExportServiceTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public void PublicationFailureRestoresOriginalAndRemovesNewFiles()
     {
         using var workspace = new ExportWorkspace();
@@ -541,6 +546,7 @@ public sealed class ExcelWorkbookExportServiceTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task BatchContractsRoundTripThroughTypedIpc()
     {
         using var workspace = new ExportWorkspace();
@@ -630,6 +636,7 @@ public sealed class ExcelWorkbookExportServiceTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public void ServiceExposesNoLegacyFlatOrSingleWorkbookEntryPoint()
     {
         var methods = typeof(ExcelWorkbookExportService).GetMethods(

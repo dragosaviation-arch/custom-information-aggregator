@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<alphaOrders>
+  <order id="A-200">
+    <buyer><name>Buyer Beta</name></buyer>
+    <seller><name>Seller Beta</name></seller>
+    <line code="ATTR-C">
+      <code>ELEMENT-C</code>
+      <qty>7</qty>
+      <note>second-file</note>
+      <components>
+        <component><serial>S-A4</serial><measure>40</measure></component>
+      </components>
+    </line>
+  </order>
+</alphaOrders>

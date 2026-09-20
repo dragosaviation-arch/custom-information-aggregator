@@ -23,6 +23,7 @@ namespace CIA.ProcessingHost.Tests;
 public sealed class DatabaseExtractionServiceTests
 {
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task IncludedHierarchyRowsAreSnapshottedAcrossSetsWithoutRereadingXml()
     {
         using var workspace = new ExtractionWorkspace();
@@ -170,6 +171,7 @@ public sealed class DatabaseExtractionServiceTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task FailedCancelledAndIncompleteReplacementRetainPriorPublishedResult()
     {
         using var workspace = new ExtractionWorkspace();
@@ -254,6 +256,7 @@ public sealed class DatabaseExtractionServiceTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task LegacyFlatGenerationIsRejectedAndNoLegacyExportStreamIsExposed()
     {
         using var workspace = new ExtractionWorkspace();

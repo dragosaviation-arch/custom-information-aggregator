@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gammaOrders>
+  <order id="C-100">
+    <buyer><name>Buyer Delta</name></buyer>
+    <seller><name>Seller Delta</name></seller>
+    <line code="ATTR-E">
+      <code>ELEMENT-E</code>
+      <qty>13</qty>
+      <note>third-set</note>
+      <components>
+        <component><serial>S-C1</serial><measure>80</measure></component>
+      </components>
+    </line>
+  </order>
+</gammaOrders>

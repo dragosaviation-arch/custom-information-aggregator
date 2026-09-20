@@ -561,6 +561,7 @@ public sealed class ExtractionCoordinatorTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task CancellingCollisionResolutionStartsNoExportAndChangesNoFile()
     {
         var context = await ExtractionContext.CreateAsync();
@@ -602,6 +603,7 @@ public sealed class ExtractionCoordinatorTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task DifferentNameUpdatesSessionDefinitionAndPublishesResolvedPath()
     {
         var context = await ExtractionContext.CreateAsync();

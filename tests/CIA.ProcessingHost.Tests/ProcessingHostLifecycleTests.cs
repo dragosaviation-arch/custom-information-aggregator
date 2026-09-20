@@ -621,6 +621,7 @@ public sealed class ProcessingHostLifecycleTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task UnexpectedHostTerminationCreatesOneNewCleanReadyHostWithoutWorkloadArguments()
     {
         await using var fixture = new SupervisorFixture();

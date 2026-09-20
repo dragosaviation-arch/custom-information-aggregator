@@ -76,6 +76,7 @@ public sealed class HierarchyFlatteningEngineTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task AlignByPositionUsesBlanksAndDiscardsNoUnequalGroupValues()
     {
         using var workspace = new FlatteningWorkspace();
@@ -100,6 +101,7 @@ public sealed class HierarchyFlatteningEngineTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task StructuralRowsDoNotPositionallyAssociateIndependentBranches()
     {
         using var workspace = new FlatteningWorkspace();
@@ -429,6 +431,7 @@ public sealed class HierarchyFlatteningEngineTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task OversizeAllCombinationsFailsBeforeReturningAnyPartialResult()
     {
         using var workspace = new FlatteningWorkspace();
@@ -448,6 +451,7 @@ public sealed class HierarchyFlatteningEngineTests
     }
 
     [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
     public async Task AllCombinationsHonorsCancellationDuringGeneration()
     {
         using var workspace = new FlatteningWorkspace();
