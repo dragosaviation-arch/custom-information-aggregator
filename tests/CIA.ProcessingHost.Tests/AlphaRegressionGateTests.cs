@@ -248,6 +248,25 @@ public sealed class AlphaRegressionGateTests
         Assert.IsEmpty(Directory.GetFiles(exportDirectory, "*.incomplete"));
     }
 
+    [TestMethod]
+    [TestCategory(GateCategory)]
+    public void EvidencePreservationAssertionRejectsMissingPhysicalOccurrence()
+    {
+        var evidence = new ValueEvidence(
+            SourceId.CreateNew(),
+            SourceSetId.CreateNew(),
+            SourceValueCandidateKind.Element,
+            "/records/record/value",
+            "same-content",
+            NodeInstanceId: 17,
+            TraversalOrder: 23);
+        var expected = new[] { evidence, evidence };
+        var actualWithOneOccurrenceMissing = new[] { evidence };
+
+        Assert.ThrowsExactly<AssertFailedException>(() =>
+            AssertEvidencePreserved(expected, actualWithOneOccurrenceMissing));
+    }
+
     private static IReadOnlyList<string> RowValues(DatabaseReviewRow row) =>
         row.Cells.SelectMany(cell => cell.Values).Select(value => value.Value).ToArray();
 
@@ -262,7 +281,11 @@ public sealed class AlphaRegressionGateTests
         foreach (var item in expectedCounts)
         {
             Assert.IsTrue(actualCounts.TryGetValue(item.Key, out var actualCount), item.Key.ToString());
-            Assert.IsGreaterThanOrEqualTo(item.Value, actualCount, item.Key.ToString());
+            if (actualCount < item.Value)
+            {
+                Assert.Fail(
+                    $"Physical evidence was lost. Expected at least {item.Value}, actual {actualCount}: {item.Key}");
+            }
         }
     }
 
