@@ -6,7 +6,9 @@ public sealed class ApplicationPaths
 {
     public const string ApplicationDirectoryName = "Custom Information Aggregator";
 
-    private ApplicationPaths(string localApplicationDataDirectory)
+    private ApplicationPaths(
+        string localApplicationDataDirectory,
+        ApplicationSettings settings)
     {
         LocalApplicationDataDirectory = localApplicationDataDirectory;
         InstalledBinaryDirectory = Path.Combine(
@@ -16,12 +18,12 @@ public sealed class ApplicationPaths
         ApplicationDataDirectory = Path.Combine(
             LocalApplicationDataDirectory,
             ApplicationDirectoryName);
-        SettingsDirectory = Path.Combine(ApplicationDataDirectory, "Settings");
-        ProfilesDirectory = Path.Combine(ApplicationDataDirectory, "Profiles");
-        WorkingDirectory = Path.Combine(ApplicationDataDirectory, "Working");
+        SettingsDirectory = settings.SettingsDirectory;
+        ProfilesDirectory = settings.ProfilesDirectory;
+        WorkingDirectory = settings.WorkingDirectory;
         DatabaseDirectory = Path.Combine(ApplicationDataDirectory, "Database");
         LogsDirectory = Path.Combine(ApplicationDataDirectory, "Logs");
-        TempDirectory = Path.Combine(ApplicationDataDirectory, "Temp");
+        TempDirectory = settings.TemporaryDirectory;
         WritableDirectories = new ReadOnlyCollection<string>(
             [
                 SettingsDirectory,
@@ -77,7 +79,26 @@ public sealed class ApplicationPaths
                 nameof(localApplicationDataDirectory));
         }
 
-        return new ApplicationPaths(Path.GetFullPath(localApplicationDataDirectory));
+        var resolvedLocalApplicationDataDirectory = Path.GetFullPath(localApplicationDataDirectory);
+        return new ApplicationPaths(
+            resolvedLocalApplicationDataDirectory,
+            ApplicationSettings.CreateDefault(resolvedLocalApplicationDataDirectory));
+    }
+
+    public static ApplicationPaths FromSettings(
+        string localApplicationDataDirectory,
+        ApplicationSettings settings)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localApplicationDataDirectory);
+        ArgumentNullException.ThrowIfNull(settings);
+        if (!Path.IsPathFullyQualified(localApplicationDataDirectory))
+        {
+            throw new ArgumentException(
+                "The LocalAppData directory must be an absolute path.",
+                nameof(localApplicationDataDirectory));
+        }
+
+        return new ApplicationPaths(Path.GetFullPath(localApplicationDataDirectory), settings);
     }
 
     public void EnsureWritableDirectoriesExist()

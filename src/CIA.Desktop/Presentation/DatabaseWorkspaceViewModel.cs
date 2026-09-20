@@ -7,6 +7,7 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
 using CIA.Core.Database;
+using CIA.Core.Runtime;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Export;
@@ -27,6 +28,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private readonly WorkbookExportCoordinator? _workbookExportCoordinator;
     private readonly IExportFolderPicker? _exportFolderPicker;
     private readonly IWorkbookCollisionResolver? _workbookCollisionResolver;
+    private readonly ApplicationSettingsService? _settingsService;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly ExportRoutingConfigurationPresentation _exportRouting = new();
     private readonly Dictionary<string, DatabaseColumnPresentation> _columnCache = new(
@@ -71,7 +73,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         ExtractionCoordinator? extractionCoordinator = null,
         WorkbookExportCoordinator? workbookExportCoordinator = null,
         IExportFolderPicker? exportFolderPicker = null,
-        IWorkbookCollisionResolver? workbookCollisionResolver = null)
+        IWorkbookCollisionResolver? workbookCollisionResolver = null,
+        ApplicationSettingsService? settingsService = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryConfiguration);
         ArgumentNullException.ThrowIfNull(workflowCoordinator);
@@ -84,6 +87,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _workbookExportCoordinator = workbookExportCoordinator;
         _exportFolderPicker = exportFolderPicker;
         _workbookCollisionResolver = workbookCollisionResolver;
+        _settingsService = settingsService;
+        if (settingsService?.Startup.Settings.LastUsedOutputDirectory is { } rememberedOutput
+            && Directory.Exists(rememberedOutput))
+        {
+            _outputFolder = rememberedOutput;
+        }
         _uiSynchronizationContext = SynchronizationContext.Current;
         Columns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(_columns);
         ExportColumns = new ReadOnlyObservableCollection<ExportFieldPresentation>(
@@ -1179,7 +1188,9 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         if (!string.IsNullOrWhiteSpace(selected))
         {
             OutputFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selected));
-            WorkbookExportStatusText = "Output folder selected for this session.";
+            WorkbookExportStatusText = RememberOutputFolder()
+                ? "Output folder selected and remembered."
+                : "Output folder selected for this session.";
         }
     }
 
@@ -1202,6 +1213,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             }
 
             OutputFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selected));
+            RememberOutputFolder();
         }
 
         if (!IsExportAvailable)
@@ -1353,6 +1365,18 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 : result.Rejection?.Reason ?? "The workbook batch was not published.";
             NotifyExportReadinessChanged();
         });
+    }
+
+    private bool RememberOutputFolder()
+    {
+        if (_settingsService is null || !Directory.Exists(OutputFolder))
+        {
+            return false;
+        }
+
+        var result = _settingsService.Save(
+            _settingsService.Current with { LastUsedOutputDirectory = OutputFolder });
+        return result.Succeeded;
     }
 
     private bool CanMoveToPreviousReviewPage()

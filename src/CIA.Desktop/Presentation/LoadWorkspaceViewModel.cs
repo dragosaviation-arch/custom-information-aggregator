@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Windows.Data;
 using CIA.Contracts.Sources;
+using CIA.Core.Runtime;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -22,6 +23,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private readonly ActiveLoadedSourceSet _sourceSet;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly MainWindowViewModel _shell;
+    private readonly ApplicationSettings _startupSettings;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly RelayCommand<LoadedSourceItem> _toggleSourceInclusionCommand;
     private readonly RelayCommand _includeVisibleCommand;
@@ -69,7 +71,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         SourceLoadingCoordinator loadingCoordinator,
         ActiveLoadedSourceSet sourceSet,
         IApplicationWorkflowCoordinator workflowCoordinator,
-        MainWindowViewModel shell)
+        MainWindowViewModel shell,
+        ApplicationSettingsService? settingsService = null)
     {
         ArgumentNullException.ThrowIfNull(pathPicker);
         ArgumentNullException.ThrowIfNull(loadingCoordinator);
@@ -82,6 +85,10 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _sourceSet = sourceSet;
         _workflowCoordinator = workflowCoordinator;
         _shell = shell;
+        _startupSettings = settingsService?.Startup.Settings
+            ?? ApplicationSettings.CreateDefault(
+                ApplicationPaths.ForCurrentUser().LocalApplicationDataDirectory);
+        _searchSubfolders = _startupSettings.TraverseSubfolders;
         _uiSynchronizationContext = SynchronizationContext.Current;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
 
@@ -481,9 +488,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
         try
         {
-            var settings = selectionKind == SourceSelectionKind.Folder
-                ? new SourceLoadSettings(IncludeXmlFiles, IncludeArchives, SearchSubfolders)
-                : SourceLoadSettings.Default;
+            var settings = CreateLoadSettings(selectionKind);
             var progress = new InlineProgress<SourceIntakeProgressSnapshot>(snapshot =>
                 DispatchToUi(() => ApplyProgress(snapshot, progressGeneration)));
             var result = createNewSourceSet
@@ -554,6 +559,24 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
             IsBusy = false;
         }
+    }
+
+    private SourceLoadSettings CreateLoadSettings(SourceSelectionKind selectionKind)
+    {
+        var settings = selectionKind == SourceSelectionKind.Folder
+            ? new SourceLoadSettings(IncludeXmlFiles, IncludeArchives, SearchSubfolders)
+            : SourceLoadSettings.Default;
+        return settings with
+        {
+            TraverseSubfolders = selectionKind == SourceSelectionKind.Folder
+                ? SearchSubfolders
+                : _startupSettings.TraverseSubfolders,
+            MaximumArchiveNestingDepth = _startupSettings.MaximumArchiveNestingDepth,
+            PersistentArchiveExtractionEnabled =
+                _startupSettings.PersistentArchiveExtractionEnabled,
+            PersistentArchiveExtractionDirectory =
+                _startupSettings.PersistentArchiveExtractionDirectory
+        };
     }
 
     private void ApplyProgress(SourceIntakeProgressSnapshot progress, int generation)

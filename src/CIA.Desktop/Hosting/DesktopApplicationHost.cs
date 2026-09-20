@@ -32,9 +32,13 @@ public static class DesktopApplicationHost
                 ApplicationName = typeof(DesktopApplicationHost).Assembly.GetName().Name,
                 ContentRootPath = AppContext.BaseDirectory
             });
+        var settingsService = ApplicationSettingsService.ForCurrentUser();
+        var applicationPaths = settingsService.RuntimePaths;
         var logDirectory = ApplicationLogPaths.ResolveDirectory(
             builder.Configuration[ApplicationLogPaths.DirectoryConfigurationKey]);
 
+        builder.Services.AddSingleton(settingsService);
+        builder.Services.AddSingleton(applicationPaths);
         builder.Services.AddSingleton<ApplicationSession>();
         builder.Services.AddSingleton<GlobalStatusViewModel>();
         builder.Services.AddSingleton<MainWindowViewModel>();
@@ -69,12 +73,13 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<WorkbookExportCoordinator>();
         builder.Services.AddSingleton<IExportFolderPicker, WindowsExportFolderPicker>();
         builder.Services.AddSingleton<IWorkbookCollisionResolver, WindowsWorkbookCollisionResolver>();
+        builder.Services.AddSingleton<ISettingsFolderPicker, WindowsSettingsFolderPicker>();
         builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
         builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();
         builder.Services.AddSingleton<IProcessingHistoryReader>(
             _ => new ClefProcessingHistoryReader(logDirectory));
         builder.Services.AddSingleton(
-            new SettingsWorkspaceRuntimePaths(ApplicationPaths.ForCurrentUser(), logDirectory));
+            new SettingsWorkspaceRuntimePaths(applicationPaths, logDirectory));
         builder.Services.AddSingleton<SettingsWorkspaceViewModel>();
 
         ConfigureLogging(builder, logDirectory);

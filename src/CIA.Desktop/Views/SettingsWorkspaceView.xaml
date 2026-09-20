@@ -565,7 +565,7 @@
                                                         Content="Reset to Defaults"
                                                         IsEnabled="{Binding AreFutureSettingsActionsAvailable}"
                                                         Style="{StaticResource CiaGhostButtonStyle}"
-                                                        ToolTip="Persistent Settings and reset behavior are not available yet." />
+                                                        ToolTip="Reset to Defaults is owned by SPR-97 and is not available yet." />
                                             </Grid>
                                         </Border>
                                         <Grid Grid.Row="1" Margin="8,6">
@@ -577,18 +577,46 @@
                                                 <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="5" />
                                                 <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="5" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="5" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="5" />
+                                                <RowDefinition Height="Auto" />
                                             </Grid.RowDefinitions>
                                             <TextBlock VerticalAlignment="Center" Style="{StaticResource CiaSecondaryTextStyle}" Text="Archive nesting depth" />
                                             <TextBox Grid.Column="1"
-                                                     IsEnabled="False"
                                                      Style="{StaticResource CiaTextInputStyle}"
-                                                     Text="{Binding DefaultArchiveNestingDepth, Mode=OneWay}" />
-                                            <TextBlock Grid.Row="2" VerticalAlignment="Center" Style="{StaticResource CiaSecondaryTextStyle}" Text="Default blacklist" />
-                                            <TextBox Grid.Row="2"
-                                                     Grid.Column="1"
-                                                     IsEnabled="False"
-                                                     Style="{StaticResource CiaTextInputStyle}"
-                                                     Text="{Binding DefaultBlacklistText, Mode=OneWay}" />
+                                                     Text="{Binding MaximumArchiveNestingDepth, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBlock Grid.Row="2" VerticalAlignment="Center" Style="{StaticResource CiaSecondaryTextStyle}" Text="Folder traversal" />
+                                            <CheckBox Grid.Row="2" Grid.Column="1"
+                                                      VerticalAlignment="Center"
+                                                      Content="Search subfolders recursively"
+                                                      IsChecked="{Binding TraverseSubfolders}" />
+                                            <TextBlock Grid.Row="4" VerticalAlignment="Center" Style="{StaticResource CiaSecondaryTextStyle}" Text="Archive retention" />
+                                            <CheckBox Grid.Row="4" Grid.Column="1"
+                                                      VerticalAlignment="Center"
+                                                      Content="Keep extracted archive content"
+                                                      IsChecked="{Binding PersistentArchiveExtractionEnabled}" />
+                                            <TextBlock Grid.Row="6" VerticalAlignment="Center" Style="{StaticResource CiaSecondaryTextStyle}" Text="Extraction folder" />
+                                            <Grid Grid.Row="6" Grid.Column="1">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBox Style="{StaticResource CiaTextInputStyle}"
+                                                         Text="{Binding PersistentArchiveExtractionDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                                                <Button x:Name="BrowsePersistentExtractionDirectoryButton"
+                                                        Grid.Column="1" Margin="5,0,0,0"
+                                                        Command="{Binding BrowsePersistentExtractionDirectoryCommand}"
+                                                        Content="Browse..."
+                                                        Style="{StaticResource SettingsCompactButtonStyle}" />
+                                            </Grid>
+                                            <TextBlock Grid.Row="8" VerticalAlignment="Center" Style="{StaticResource CiaSecondaryTextStyle}" Text="After export" />
+                                            <ComboBox Grid.Row="8" Grid.Column="1"
+                                                      DisplayMemberPath="DisplayName"
+                                                      ItemsSource="{Binding PostExportBehaviorOptions}"
+                                                      SelectedItem="{Binding SelectedPostExportBehavior}" />
                                         </Grid>
                                     </Grid>
                                 </Border>
@@ -608,7 +636,32 @@
                                                         Style="{StaticResource CiaGhostButtonStyle}" />
                                             </Grid>
                                         </Border>
-                                        <ItemsControl Grid.Row="1" Margin="8,6" ItemsSource="{Binding ManagedStoragePaths}">
+                                        <StackPanel Grid.Row="1" Margin="8,6">
+                                            <Grid Margin="0,2">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Temporary" />
+                                                <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding TemporaryDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                                                <Button x:Name="BrowseTemporaryDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseTemporaryDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
+                                            </Grid>
+                                            <Grid Margin="0,2">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Working" />
+                                                <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding WorkingDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                                                <Button x:Name="BrowseWorkingDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseWorkingDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
+                                            </Grid>
+                                            <Grid Margin="0,2">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Profiles" />
+                                                <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding ProfilesDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                                                <Button x:Name="BrowseProfilesDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseProfilesDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
+                                            </Grid>
+                                            <Grid Margin="0,2">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Settings" />
+                                                <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding SettingsDirectory, UpdateSourceTrigger=PropertyChanged}" />
+                                                <Button x:Name="BrowseSettingsDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseSettingsDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
+                                            </Grid>
+                                            <ItemsControl Margin="0,4,0,0" ItemsSource="{Binding ManagedStoragePaths}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
                                                     <Grid Margin="0,2">
@@ -642,7 +695,19 @@
                                                     </Grid>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
+                                            </ItemsControl>
+                                            <TextBlock Margin="0,5,0,0"
+                                                       Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                                       FontSize="9.4"
+                                                       Text="{Binding SettingsStatusText}"
+                                                       TextWrapping="Wrap" />
+                                            <Button x:Name="SavePersistentSettingsButton"
+                                                    Margin="0,6,0,0"
+                                                    HorizontalAlignment="Right"
+                                                    Command="{Binding SaveSettingsCommand}"
+                                                    Content="Save Settings"
+                                                    Style="{StaticResource CiaPrimaryButtonStyle}" />
+                                        </StackPanel>
                                     </Grid>
                                 </Border>
 

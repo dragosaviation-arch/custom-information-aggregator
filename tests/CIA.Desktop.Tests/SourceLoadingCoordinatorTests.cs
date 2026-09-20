@@ -1,6 +1,7 @@
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core;
+using CIA.Core.Runtime;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
@@ -275,6 +276,53 @@ public sealed class SourceLoadingCoordinatorTests
         await archiveViewModel.AddArchiveCommand.ExecuteAsync(null);
 
         Assert.AreEqual(SourceLoadSettings.Default, archiveClient.LastSettings);
+    }
+
+    [TestMethod]
+    public async Task NewLoadSessionUsesPersistedTraversalAndArchiveSettings()
+    {
+        var root = Directory.CreateTempSubdirectory("CIA.SPR96.Load.");
+        try
+        {
+            var settingsService = new ApplicationSettingsService(
+                new ApplicationSettingsStore(Path.Combine(root.FullName, "LocalAppData")));
+            var extractionDirectory = Path.Combine(root.FullName, "PersistentArchive");
+            Assert.IsTrue(settingsService.Save(settingsService.Current with
+            {
+                TraverseSubfolders = false,
+                MaximumArchiveNestingDepth = ArchiveNestingDepth.From(6),
+                PersistentArchiveExtractionEnabled = true,
+                PersistentArchiveExtractionDirectory = extractionDirectory
+            }).Succeeded);
+            var nextSession = new ApplicationSettingsService(
+                new ApplicationSettingsStore(Path.Combine(root.FullName, "LocalAppData")));
+            var path = Path.GetFullPath("persistent-settings-folder");
+            var client = new StubSourceIntakeClient(Accept(CreateXml(Path.GetFullPath("loaded.xml"))));
+            var sourceSet = new ActiveLoadedSourceSet();
+            using var workflow = CreateWorkflowCoordinator();
+            using var viewModel = new LoadWorkspaceViewModel(
+                new StubSourcePathPicker(path),
+                new SourceLoadingCoordinator(client, sourceSet, workflow),
+                sourceSet,
+                workflow,
+                new MainWindowViewModel(new ApplicationSession()),
+                nextSession);
+
+            Assert.IsFalse(viewModel.SearchSubfolders);
+            await viewModel.AddFolderCommand.ExecuteAsync(null);
+
+            Assert.IsNotNull(client.LastSettings);
+            Assert.IsFalse(client.LastSettings.TraverseSubfolders);
+            Assert.AreEqual(6, client.LastSettings.MaximumArchiveNestingDepth.Value);
+            Assert.IsTrue(client.LastSettings.PersistentArchiveExtractionEnabled);
+            Assert.AreEqual(
+                extractionDirectory,
+                client.LastSettings.PersistentArchiveExtractionDirectory);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
     }
 
     [TestMethod]
