@@ -6,6 +6,7 @@ using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Diagnostics;
+using CIA.Core.Runtime;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Extraction;
@@ -558,6 +559,63 @@ public sealed class ExtractionCoordinatorTests
             context.Workflow);
         Assert.AreEqual(originalDefault, nextSession.OutputFolder);
         Assert.AreNotEqual(first.OutputFolder, nextSession.OutputFolder);
+    }
+
+    [TestMethod]
+    public async Task ValidOutputFolderIsRememberedButAlwaysAskRemainsSessionOnly()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        using var root = new TemporaryDirectory("CIA.SPR96.Output.Tests");
+        var localAppData = Path.Combine(root.Path, "LocalAppData");
+        var output = Path.Combine(root.Path, "Exports");
+        Directory.CreateDirectory(output);
+        var firstSettings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(localAppData));
+        using (var first = new DatabaseWorkspaceViewModel(
+                   context.Configuration,
+                   context.Workflow,
+                   exportFolderPicker: new StaticExportFolderPicker(output),
+                   settingsService: firstSettings))
+        {
+            first.AlwaysAskWhereToExport = false;
+            first.BrowseOutputFolderCommand.Execute(null);
+            Assert.AreEqual(output, first.OutputFolder);
+        }
+
+        var nextSettings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(localAppData));
+        using var next = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            settingsService: nextSettings);
+
+        Assert.AreEqual(output, next.OutputFolder);
+        Assert.IsTrue(next.AlwaysAskWhereToExport);
+    }
+
+    [TestMethod]
+    public async Task UnavailableRememberedOutputFolderUsesNormalSessionFallback()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        using var root = new TemporaryDirectory("CIA.SPR96.OutputUnavailable.Tests");
+        var localAppData = Path.Combine(root.Path, "LocalAppData");
+        var missingOutput = Path.Combine(root.Path, "NoLongerAvailable");
+        var firstSettings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(localAppData));
+        Assert.IsTrue(firstSettings.Save(firstSettings.Current with
+        {
+            LastUsedOutputDirectory = missingOutput
+        }).Succeeded);
+        var nextSettings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(localAppData));
+
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            settingsService: nextSettings);
+
+        Assert.AreNotEqual(missingOutput, viewModel.OutputFolder);
+        StringAssert.Contains(viewModel.OutputFolder, "Exports");
     }
 
     [TestMethod]

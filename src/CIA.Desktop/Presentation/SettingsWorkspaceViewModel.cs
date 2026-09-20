@@ -26,6 +26,8 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public const string AllStreams = "All streams";
     private readonly IProcessingHistoryReader _historyReader;
     private readonly string _logDirectory;
+    private readonly ApplicationSettingsService _settingsService;
+    private readonly ISettingsFolderPicker? _settingsFolderPicker;
     private IReadOnlyList<ProcessingAttemptPresentation> _attempts = [];
     private IReadOnlyList<ProcessingIssuePresentation> _issues = [];
     private IReadOnlyList<SettingsLogEntryPresentation> _entries = [];
@@ -45,10 +47,22 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     private string _selectedStream = AllStreams;
     private bool _wrapLongMessages;
     private bool _compactRows = true;
+    private string _temporaryDirectory;
+    private string _workingDirectory;
+    private string _profilesDirectory;
+    private string _settingsDirectory;
+    private bool _traverseSubfolders;
+    private int _maximumArchiveNestingDepth;
+    private bool _persistentArchiveExtractionEnabled;
+    private string _persistentArchiveExtractionDirectory;
+    private PostExportBehaviorPresentation _selectedPostExportBehavior;
+    private string _settingsStatusText;
 
     public SettingsWorkspaceViewModel(
         IProcessingHistoryReader historyReader,
-        SettingsWorkspaceRuntimePaths runtimePaths)
+        SettingsWorkspaceRuntimePaths runtimePaths,
+        ApplicationSettingsService? settingsService = null,
+        ISettingsFolderPicker? settingsFolderPicker = null)
     {
         _historyReader = historyReader ?? throw new ArgumentNullException(nameof(historyReader));
         ArgumentNullException.ThrowIfNull(runtimePaths);
@@ -56,11 +70,56 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         ArgumentException.ThrowIfNullOrWhiteSpace(runtimePaths.LogDirectory);
 
         _logDirectory = Path.GetFullPath(runtimePaths.LogDirectory);
+        _settingsService = settingsService ?? new ApplicationSettingsService(
+            new ApplicationSettingsStore(
+                runtimePaths.ApplicationPaths.LocalApplicationDataDirectory));
+        _settingsFolderPicker = settingsFolderPicker;
+        var settings = _settingsService.Current;
+        _temporaryDirectory = settings.TemporaryDirectory;
+        _workingDirectory = settings.WorkingDirectory;
+        _profilesDirectory = settings.ProfilesDirectory;
+        _settingsDirectory = settings.SettingsDirectory;
+        _traverseSubfolders = settings.TraverseSubfolders;
+        _maximumArchiveNestingDepth = settings.MaximumArchiveNestingDepth.Value;
+        _persistentArchiveExtractionEnabled = settings.PersistentArchiveExtractionEnabled;
+        _persistentArchiveExtractionDirectory =
+            settings.PersistentArchiveExtractionDirectory ?? string.Empty;
+        PostExportBehaviorOptions =
+        [
+            new(PostExportBehavior.StatusOnly, "Show success/status only"),
+            new(PostExportBehavior.OpenExportedFile, "Open exported file"),
+            new(PostExportBehavior.OpenContainingFolder, "Open containing folder"),
+            new(PostExportBehavior.AskEachTime, "Ask each time")
+        ];
+        _selectedPostExportBehavior = PostExportBehaviorOptions.Single(option =>
+            option.Value == settings.PostExportBehavior);
+        _settingsStatusText = CreateInitialSettingsStatus(_settingsService.Startup);
         ManagedStoragePaths = CreateManagedStoragePaths(
             runtimePaths.ApplicationPaths,
             _logDirectory);
         RefreshCommand = new RelayCommand(Refresh);
         OpenLogsFolderCommand = new RelayCommand(OpenLogsFolder);
+        SaveSettingsCommand = new RelayCommand(SaveSettings);
+        BrowseTemporaryDirectoryCommand = CreateBrowseCommand(
+            "Choose CIA Temporary directory",
+            () => TemporaryDirectory,
+            value => TemporaryDirectory = value);
+        BrowseWorkingDirectoryCommand = CreateBrowseCommand(
+            "Choose CIA Working directory",
+            () => WorkingDirectory,
+            value => WorkingDirectory = value);
+        BrowseProfilesDirectoryCommand = CreateBrowseCommand(
+            "Choose CIA Profiles directory",
+            () => ProfilesDirectory,
+            value => ProfilesDirectory = value);
+        BrowseSettingsDirectoryCommand = CreateBrowseCommand(
+            "Choose CIA Settings directory",
+            () => SettingsDirectory,
+            value => SettingsDirectory = value);
+        BrowsePersistentExtractionDirectoryCommand = CreateBrowseCommand(
+            "Choose persistent archive extraction directory",
+            () => PersistentArchiveExtractionDirectory,
+            value => PersistentArchiveExtractionDirectory = value);
         EntryTypeOptions =
         [
             AllEntryTypes,
@@ -85,11 +144,25 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
 
     public IRelayCommand OpenLogsFolderCommand { get; }
 
+    public IRelayCommand SaveSettingsCommand { get; }
+
+    public IRelayCommand BrowseTemporaryDirectoryCommand { get; }
+
+    public IRelayCommand BrowseWorkingDirectoryCommand { get; }
+
+    public IRelayCommand BrowseProfilesDirectoryCommand { get; }
+
+    public IRelayCommand BrowseSettingsDirectoryCommand { get; }
+
+    public IRelayCommand BrowsePersistentExtractionDirectoryCommand { get; }
+
     public IReadOnlyList<string> EntryTypeOptions { get; }
 
     public IReadOnlyList<string> SeverityOptions { get; }
 
     public IReadOnlyList<string> StreamOptions { get; }
+
+    public IReadOnlyList<PostExportBehaviorPresentation> PostExportBehaviorOptions { get; }
 
     public IReadOnlyList<string> AreaOptions
     {
@@ -288,7 +361,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
 
     public bool IsExportVisibleAvailable => false;
 
-    public bool IsPersistentSettingsAvailable => false;
+    public bool IsPersistentSettingsAvailable => true;
 
     public bool AreFutureSettingsActionsAvailable => false;
 
@@ -308,7 +381,70 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         : "No entries match the current filters.";
 
     public string SettingsPersistenceText =>
-        "Settings shown here use current application defaults. Persistent Settings are not available yet.";
+        $"Persistent settings are stored in {_settingsService.Startup.SettingsFilePath}. " +
+        "Managed-storage path changes take effect after CIA restarts.";
+
+    public string TemporaryDirectory
+    {
+        get => _temporaryDirectory;
+        set => SetProperty(ref _temporaryDirectory, value ?? string.Empty);
+    }
+
+    public string WorkingDirectory
+    {
+        get => _workingDirectory;
+        set => SetProperty(ref _workingDirectory, value ?? string.Empty);
+    }
+
+    public string ProfilesDirectory
+    {
+        get => _profilesDirectory;
+        set => SetProperty(ref _profilesDirectory, value ?? string.Empty);
+    }
+
+    public string SettingsDirectory
+    {
+        get => _settingsDirectory;
+        set => SetProperty(ref _settingsDirectory, value ?? string.Empty);
+    }
+
+    public bool TraverseSubfolders
+    {
+        get => _traverseSubfolders;
+        set => SetProperty(ref _traverseSubfolders, value);
+    }
+
+    public int MaximumArchiveNestingDepth
+    {
+        get => _maximumArchiveNestingDepth;
+        set => SetProperty(ref _maximumArchiveNestingDepth, value);
+    }
+
+    public bool PersistentArchiveExtractionEnabled
+    {
+        get => _persistentArchiveExtractionEnabled;
+        set => SetProperty(ref _persistentArchiveExtractionEnabled, value);
+    }
+
+    public string PersistentArchiveExtractionDirectory
+    {
+        get => _persistentArchiveExtractionDirectory;
+        set => SetProperty(ref _persistentArchiveExtractionDirectory, value ?? string.Empty);
+    }
+
+    public PostExportBehaviorPresentation SelectedPostExportBehavior
+    {
+        get => _selectedPostExportBehavior;
+        set => SetProperty(ref _selectedPostExportBehavior, value);
+    }
+
+    public string SettingsStatusText
+    {
+        get => _settingsStatusText;
+        private set => SetProperty(ref _settingsStatusText, value);
+    }
+
+    public bool IsSettingsRestartRequired => _settingsService.IsRestartRequired;
 
     public string VersionText { get; }
 
@@ -411,6 +547,71 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         }
     }
 
+    private RelayCommand CreateBrowseCommand(
+        string title,
+        Func<string> getCurrentValue,
+        Action<string> setValue)
+    {
+        return new RelayCommand(
+            () =>
+            {
+                var selected = _settingsFolderPicker?.Browse(title, getCurrentValue());
+                if (!string.IsNullOrWhiteSpace(selected))
+                {
+                    setValue(Path.TrimEndingDirectorySeparator(Path.GetFullPath(selected)));
+                }
+            },
+            () => _settingsFolderPicker is not null);
+    }
+
+    private void SaveSettings()
+    {
+        try
+        {
+            var candidate = _settingsService.Current with
+            {
+                SchemaVersion = ApplicationSettings.CurrentSchemaVersion,
+                TemporaryDirectory = TemporaryDirectory,
+                WorkingDirectory = WorkingDirectory,
+                ProfilesDirectory = ProfilesDirectory,
+                SettingsDirectory = SettingsDirectory,
+                TraverseSubfolders = TraverseSubfolders,
+                MaximumArchiveNestingDepth = ArchiveNestingDepth.From(
+                    MaximumArchiveNestingDepth),
+                PersistentArchiveExtractionEnabled = PersistentArchiveExtractionEnabled,
+                PersistentArchiveExtractionDirectory =
+                    string.IsNullOrWhiteSpace(PersistentArchiveExtractionDirectory)
+                        ? null
+                        : PersistentArchiveExtractionDirectory,
+                PostExportBehavior = SelectedPostExportBehavior.Value
+            };
+            var result = _settingsService.Save(candidate);
+            SettingsStatusText = result.Succeeded
+                ? _settingsService.IsRestartRequired
+                    ? "Settings saved. Restart CIA to apply managed-storage path changes."
+                    : "Settings saved. New sessions will use the updated configuration."
+                : result.FailureDescription ?? "Settings could not be saved.";
+            OnPropertyChanged(nameof(IsSettingsRestartRequired));
+        }
+        catch (Exception exception) when (exception is ArgumentException
+                                          or InvalidOperationException)
+        {
+            SettingsStatusText = exception.Message;
+        }
+    }
+
+    private static string CreateInitialSettingsStatus(ApplicationSettingsLoadResult result)
+    {
+        if (result.Diagnostic is not null)
+        {
+            return result.Diagnostic;
+        }
+
+        return result.State == ApplicationSettingsReadState.DefaultsBecauseFileMissing
+            ? "No saved settings were found. Controlled defaults are active until you save."
+            : "Persistent settings loaded.";
+    }
+
     private static IReadOnlyList<string> CreateFilterOptions(
         string allLabel,
         IEnumerable<string> values)
@@ -449,6 +650,10 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
 }
 
 public sealed record ManagedStoragePathPresentation(string Name, string Path, bool CanOpen);
+
+public sealed record PostExportBehaviorPresentation(
+    PostExportBehavior Value,
+    string DisplayName);
 
 public sealed class SettingsLogEntryPresentation
 {

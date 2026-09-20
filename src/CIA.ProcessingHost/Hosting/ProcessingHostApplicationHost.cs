@@ -34,10 +34,12 @@ public static class ProcessingHostApplicationHost
             });
 
         var runtimeOptions = ProcessingHostRuntimeOptions.FromConfiguration(builder.Configuration);
+        var settingsService = ApplicationSettingsService.ForCurrentUser();
 
+        builder.Services.AddSingleton(settingsService);
         builder.Services.AddSingleton<IProcessingHistoryRecorder, ClefProcessingHistoryRecorder>();
         builder.Services.AddSingleton<CooperativeOperationCancellation>();
-        builder.Services.AddSingleton(_ => ApplicationPaths.ForCurrentUser());
+        builder.Services.AddSingleton(settingsService.RuntimePaths);
         builder.Services.AddSingleton<ArchiveExtractionService>();
         builder.Services.AddSingleton<SourceIntakeService>();
         builder.Services.AddSingleton<IGenericXmlSourceAdapter, GenericXmlElementValueSourceAdapter>();

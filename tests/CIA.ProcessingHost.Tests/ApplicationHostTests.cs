@@ -3,6 +3,7 @@ using System.Text.Json;
 using CIA.Contracts.Operations;
 using CIA.Core;
 using CIA.Core.Diagnostics;
+using CIA.Core.Runtime;
 using CIA.Desktop;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Export;
@@ -93,6 +94,12 @@ public sealed class ApplicationHostTests
         Assert.AreEqual(
             expectedValue,
             processingHost.Services.GetRequiredService<IConfiguration>()[VerificationConfigurationKey]);
+        var desktopSettings = desktopHost.Services.GetRequiredService<ApplicationSettingsService>();
+        var processingSettings = processingHost.Services.GetRequiredService<ApplicationSettingsService>();
+        Assert.AreEqual(desktopSettings.Current, processingSettings.Current);
+        CollectionAssert.AreEqual(
+            desktopSettings.RuntimePaths.WritableDirectories.ToArray(),
+            processingSettings.RuntimePaths.WritableDirectories.ToArray());
     }
 
     [TestMethod]
