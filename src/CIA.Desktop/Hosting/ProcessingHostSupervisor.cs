@@ -7,6 +7,7 @@ using CIA.Contracts.Extraction;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Contracts.WorkingState;
 using CIA.Core.Diagnostics;
 using CIA.Desktop.Ipc;
 using Microsoft.Extensions.Logging;
@@ -585,6 +586,119 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
             }
             finally
             {
+                _requestGate.Release();
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    public async Task<SaveWorkingStateResponse> RequestWorkingStateSaveAsync(
+        OperationCorrelation correlation,
+        string targetPath,
+        WorkingStateSnapshot snapshot,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(correlation);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var command = new SaveWorkingStateCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            correlation,
+            targetPath,
+            snapshot);
+        return await RequestWorkingStateAsync<SaveWorkingStateResponse>(
+                command,
+                correlation,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<RestoreWorkingStateResponse> RequestWorkingStateRestoreAsync(
+        OperationCorrelation correlation,
+        string packagePath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(correlation);
+        var command = new RestoreWorkingStateCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            correlation,
+            packagePath);
+        return await RequestWorkingStateAsync<RestoreWorkingStateResponse>(
+                command,
+                correlation,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<TResponse> RequestWorkingStateAsync<TResponse>(
+        IpcCommand command,
+        OperationCorrelation correlation,
+        CancellationToken cancellationToken)
+        where TResponse : IpcResponse
+    {
+        ThrowIfDisposed();
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!IsCurrentHostReady())
+            {
+                throw new InvalidOperationException(
+                    "The Processing Host is not ready for working-state requests.");
+            }
+
+            var connection = _connection!;
+            await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+                lock (_stateGate)
+                {
+                    _activeProcessingOperationId = correlation.OperationId;
+                }
+
+                while (true)
+                {
+                    var response = await connection.ReceiveAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                    if (response is TResponse typed
+                        && response switch
+                        {
+                            SaveWorkingStateResponse saved =>
+                                saved.CommandMessageId == command.MessageId
+                                && saved.Completion.Correlation == correlation,
+                            RestoreWorkingStateResponse restored =>
+                                restored.CommandMessageId == command.MessageId
+                                && restored.Completion.Correlation == correlation,
+                            _ => false
+                        })
+                    {
+                        return typed;
+                    }
+
+                    if (response is CommandAcknowledgement)
+                    {
+                        continue;
+                    }
+
+                    throw new IpcProtocolException(
+                        IpcProtocolError.InvalidContract,
+                        "The Processing Host returned an invalid working-state response.");
+                }
+            }
+            finally
+            {
+                lock (_stateGate)
+                {
+                    if (_activeProcessingOperationId == correlation.OperationId)
+                    {
+                        _activeProcessingOperationId = null;
+                    }
+                }
+
                 _requestGate.Release();
             }
         }

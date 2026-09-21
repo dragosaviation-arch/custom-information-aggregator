@@ -1506,7 +1506,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     private void OnPublishedDatabaseGenerationChanged(
         object? sender,
-        CIA.Contracts.Database.DatabaseGenerationSummary generation)
+        CIA.Contracts.Database.DatabaseGenerationSummary? generation)
     {
         DispatchToUi(() =>
         {

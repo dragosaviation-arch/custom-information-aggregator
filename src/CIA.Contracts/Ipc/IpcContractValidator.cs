@@ -6,6 +6,7 @@ using CIA.Contracts.Export;
 using CIA.Contracts.Extraction;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Contracts.WorkingState;
 
 public static class IpcContractValidator
 {
@@ -65,6 +66,13 @@ public static class IpcContractValidator
             case SetDatabaseRowsIncludedCommand command:
                 ValidateDatabaseRowInclusionChange(command.Change);
                 break;
+            case SaveWorkingStateCommand command:
+                ValidateWorkingStateCommand(command.Correlation, command.TargetPath, command.Snapshot);
+                break;
+            case RestoreWorkingStateCommand command:
+                ValidateOperationCorrelation(command.Correlation);
+                ValidatePath(command.PackagePath);
+                break;
             case CommandAcknowledgement acknowledgement:
                 ValidateCommandAcknowledgement(acknowledgement);
                 break;
@@ -105,6 +113,22 @@ public static class IpcContractValidator
                 {
                     ValidateFailure(response.Failure);
                 }
+                break;
+            case SaveWorkingStateResponse response:
+                ValidateWorkingStateResponse(
+                    response.CommandMessageId,
+                    response.Acceptance,
+                    response.Completion,
+                    response.Manifest,
+                    response.Failure);
+                break;
+            case RestoreWorkingStateResponse response:
+                ValidateWorkingStateResponse(
+                    response.CommandMessageId,
+                    response.Acceptance,
+                    response.Completion,
+                    response.Manifest,
+                    response.Failure);
                 break;
             case ProcessingHostAvailabilityEvent availabilityEvent:
                 ValidateProcessingHostAvailabilityEvent(availabilityEvent);
@@ -1244,6 +1268,70 @@ public static class IpcContractValidator
             throw InvalidContract(
                 "Operation correlation requires a UUIDv7 Operation ID and UTC initiation time.");
         }
+    }
+
+    private static void ValidateWorkingStateCommand(
+        OperationCorrelation correlation,
+        string path,
+        WorkingStateSnapshot snapshot)
+    {
+        ValidateOperationCorrelation(correlation);
+        ValidatePath(path);
+        if (!string.Equals(Path.GetExtension(path), ".cia", StringComparison.OrdinalIgnoreCase)
+            || snapshot is null)
+        {
+            throw InvalidContract("A working-state command requires a .cia path and typed snapshot.");
+        }
+
+        try
+        {
+            WorkingStateContractValidator.Validate(snapshot);
+        }
+        catch (ArgumentException exception)
+        {
+            throw InvalidContract(exception.Message);
+        }
+    }
+
+    private static void ValidateWorkingStateResponse(
+        Guid commandMessageId,
+        CommandAcceptance acceptance,
+        OperationCompletion completion,
+        WorkingStateManifest? manifest,
+        IpcFailure? failure)
+    {
+        ValidateVersionSevenId(commandMessageId, nameof(commandMessageId));
+        if (!Enum.IsDefined(acceptance) || completion is null)
+        {
+            throw InvalidContract("The working-state response is incomplete or unsupported.");
+        }
+
+        ValidateOperationCorrelation(completion.Correlation);
+        if (acceptance == CommandAcceptance.Accepted)
+        {
+            if (manifest is null
+                || failure is not null
+                || completion.Outcome is not (
+                    OperationOutcome.CompletedSuccessfully or OperationOutcome.CompletedWithIssues))
+            {
+                throw InvalidContract("An accepted working-state response requires a manifest and completed outcome.");
+            }
+
+            WorkingStateContractValidator.Validate(manifest.Snapshot);
+            return;
+        }
+
+        if (manifest is not null
+            || failure is null
+            || completion.Outcome is not (
+                OperationOutcome.Failed
+                or OperationOutcome.Cancelled
+                or OperationOutcome.InterruptedIncomplete))
+        {
+            throw InvalidContract("An unsuccessful working-state response requires controlled failure context.");
+        }
+
+        ValidateFailure(failure);
     }
 
     private static void ValidateOperationId(OperationId operationId, string contractName)

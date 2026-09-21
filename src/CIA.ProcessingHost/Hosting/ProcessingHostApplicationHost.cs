@@ -9,6 +9,7 @@ using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceIntake;
 using CIA.ProcessingHost.SourceInterpretation;
+using CIA.ProcessingHost.WorkingState;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -59,6 +60,7 @@ public static class ProcessingHostApplicationHost
         builder.Services.AddSingleton<DatabaseReviewService>();
         builder.Services.AddSingleton<DatabaseExtractionService>();
         builder.Services.AddSingleton<ExcelWorkbookExportService>();
+        builder.Services.AddSingleton<WorkingStatePackageService>();
 
         if (runtimeOptions is not null)
         {

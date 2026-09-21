@@ -1025,13 +1025,33 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private void OnPublishedGenerationChanged(
         object? sender,
-        DatabaseGenerationSummary generation)
+        DatabaseGenerationSummary? generation)
     {
         DispatchToUi(() =>
         {
-            ApplyPublishedGeneration(generation);
+            if (generation is null)
+            {
+                ClearPublishedGeneration();
+            }
+            else
+            {
+                ApplyPublishedGeneration(generation);
+            }
             NotifyExtractionReviewChanged();
         });
+    }
+
+    private void ClearPublishedGeneration()
+    {
+        _publishedGeneration = null;
+        _publishedGenerationId = null;
+        _publishedValueCount = 0;
+        _reviewPage = null;
+        _reviewFailureDescription = null;
+        _records.Clear();
+        _datasets.Clear();
+        SelectedDataset = null;
+        NotifyReviewChanged();
     }
 
     private void OnPublishedExtractionChanged(
