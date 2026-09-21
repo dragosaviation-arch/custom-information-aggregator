@@ -16,6 +16,8 @@ public sealed class WorkbookExportCoordinator(
 {
     private readonly object _stateGate = new();
     private WorkbookExportBatchSummary? _lastBatch;
+    private ExportConfigurationSnapshot? _readinessConfiguration;
+    private string? _readinessOutputDirectory;
 
     public WorkbookExportBatchSummary? LastBatch
     {
@@ -28,11 +30,120 @@ public sealed class WorkbookExportCoordinator(
         }
     }
 
+    public event EventHandler? ReadinessChanged;
+
+    public void UpdateReadinessContext(
+        ExportConfigurationSnapshot? configuration,
+        string? outputDirectory)
+    {
+        lock (_stateGate)
+        {
+            _readinessConfiguration = configuration;
+            _readinessOutputDirectory = outputDirectory;
+        }
+
+        ReadinessChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     public bool CanExport()
     {
-        return workflowCoordinator.Current.Extraction == WorkflowArtifactStatus.Current
-            && workflowCoordinator.Current.ActiveOperation is null
-            && extractionCoordinator.CurrentResult is { IsHierarchyAware: true };
+        return EvaluateReadiness().NormalOperationReady;
+    }
+
+    public WorkflowOperationReadiness EvaluateReadiness()
+    {
+        ExportConfigurationSnapshot? configuration;
+        string? outputDirectory;
+        lock (_stateGate)
+        {
+            configuration = _readinessConfiguration;
+            outputDirectory = _readinessOutputDirectory;
+        }
+
+        return EvaluateReadiness(configuration, outputDirectory);
+    }
+
+    public WorkflowOperationReadiness EvaluateReadiness(
+        ExportConfigurationSnapshot? configuration,
+        string? outputDirectory)
+    {
+        return EvaluateReadiness(configuration, outputDirectory, publicationPlan: null);
+    }
+
+    private WorkflowOperationReadiness EvaluateReadiness(
+        ExportConfigurationSnapshot? configuration,
+        string? outputDirectory,
+        WorkbookPublicationPlan? publicationPlan)
+    {
+        var workflowReadiness = WorkflowOperationReadiness.FromWorkflow(
+            workflowCoordinator.EvaluateOperationPrerequisites(
+                WorkflowOperationKind.Export));
+        if (!workflowReadiness.NormalOperationReady)
+        {
+            return workflowReadiness;
+        }
+
+        if (extractionCoordinator.CurrentResult is not { IsHierarchyAware: true } extractionResult)
+        {
+            return WorkflowOperationReadiness.Unavailable(
+                workflowPrerequisitesSatisfied: true,
+                WorkflowRejectionCode.OperationFailed,
+                "Export requires the active prepared Extraction Result to be current.");
+        }
+
+        if (configuration is null)
+        {
+            return WorkflowOperationReadiness.Unavailable(
+                workflowPrerequisitesSatisfied: true,
+                WorkflowRejectionCode.OperationFailed,
+                "Configure workbook routing before exporting.");
+        }
+
+        if (string.IsNullOrWhiteSpace(outputDirectory)
+            || !Path.IsPathFullyQualified(outputDirectory)
+            || !Directory.Exists(outputDirectory))
+        {
+            return WorkflowOperationReadiness.Unavailable(
+                workflowPrerequisitesSatisfied: true,
+                WorkflowRejectionCode.OperationFailed,
+                "Choose a valid export destination folder before exporting.");
+        }
+
+        var validation = ExportConfigurationValidator.Validate(
+            configuration,
+            extractionResult);
+        if (!validation.IsValid
+            || validation.RunnableWorkbooks.Count == 0
+            || !configuration.SourceSets.Any(set =>
+                set.IsEnabled && set.Fields.Any(field => field.IsValueIncluded)))
+        {
+            return WorkflowOperationReadiness.Unavailable(
+                workflowPrerequisitesSatisfied: true,
+                WorkflowRejectionCode.OperationFailed,
+                validation.Failures.FirstOrDefault()?.Description
+                    ?? "Enable at least one valid value field and workbook route before exporting.");
+        }
+
+        var conflictingWorkbook = validation.RunnableWorkbooks.FirstOrDefault(workbook =>
+        {
+            var finalPath = Path.Combine(outputDirectory, workbook.Workbook.FileName);
+            if (!File.Exists(finalPath) && !Directory.Exists(finalPath))
+            {
+                return false;
+            }
+
+            return publicationPlan?.Targets.SingleOrDefault(target =>
+                    target.WorkbookDefinitionId == workbook.Workbook.WorkbookDefinitionId)
+                is not
+                {
+                    Disposition: WorkbookPublicationDisposition.OverwriteExisting
+                } target
+                || !string.Equals(target.FinalPath, finalPath, StringComparison.OrdinalIgnoreCase);
+        });
+        return conflictingWorkbook is null
+            ? WorkflowOperationReadiness.Ready()
+            : WorkflowOperationReadiness.RequiresUserInput(
+                $"Resolve the existing workbook '{conflictingWorkbook.Workbook.FileName}' before exporting.");
     }
 
     public async Task<WorkflowCommandResult> ExportAsync(
@@ -44,11 +155,13 @@ public sealed class WorkbookExportCoordinator(
         ArgumentNullException.ThrowIfNull(configuration);
 
         var extractionResult = extractionCoordinator.CurrentResult;
-        if (!CanExport() || extractionResult is null)
+        var readiness = EvaluateReadiness(
+            configuration,
+            publicationPlan.OutputDirectory,
+            publicationPlan);
+        if (!readiness.NormalOperationReady || extractionResult is null)
         {
-            return WorkflowCommandResult.Reject(
-                WorkflowRejectionCode.ExtractionNotCurrent,
-                "Export requires the active prepared Extraction Result to be current.");
+            return readiness.ToCommandResult();
         }
 
         var begin = await workflowCoordinator

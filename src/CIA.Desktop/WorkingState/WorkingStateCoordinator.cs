@@ -16,10 +16,46 @@ public sealed class WorkingStateCoordinator(
     IWorkingStateClient client,
     ILogger<WorkingStateCoordinator> logger)
 {
+    public WorkflowOperationReadiness EvaluateSaveReadiness()
+    {
+        var workflowReadiness = WorkflowOperationReadiness.FromWorkflow(
+            workflowCoordinator.EvaluateOperationPrerequisites(
+                WorkflowOperationKind.WorkingStateSave));
+        if (!workflowReadiness.NormalOperationReady)
+        {
+            return workflowReadiness;
+        }
+
+        return EvaluateDatabaseSaveCoherence();
+    }
+
+    public WorkflowOperationReadiness EvaluateRestoreReadiness(string? packagePath)
+    {
+        var workflowReadiness = WorkflowOperationReadiness.FromWorkflow(
+            workflowCoordinator.EvaluateOperationPrerequisites(
+                WorkflowOperationKind.WorkingStateRestore));
+        if (!workflowReadiness.NormalOperationReady)
+        {
+            return workflowReadiness;
+        }
+
+        return string.IsNullOrWhiteSpace(packagePath)
+            ? WorkflowOperationReadiness.RequiresUserInput(
+                "Select a .cia working-state package before restoring working state.")
+            : WorkflowOperationReadiness.Ready();
+    }
+
     public async Task<WorkingStateCoordinatorResult> SaveAsync(
         string targetPath,
         CancellationToken cancellationToken = default)
     {
+        var readiness = EvaluateSaveReadiness();
+        if (!readiness.NormalOperationReady)
+        {
+            return WorkingStateCoordinatorResult.Reject(
+                readiness.UnavailableReason ?? "Working-state save is not currently ready.");
+        }
+
         var begin = await workflowCoordinator.BeginOperationAsync(
                 WorkflowOperationKind.WorkingStateSave,
                 cancellationToken)
@@ -32,14 +68,15 @@ public sealed class WorkingStateCoordinator(
 
         try
         {
-            if (databaseBuildCoordinator.CurrentGeneration is not null
-                && workflowCoordinator.Current.Database != WorkflowArtifactStatus.Current)
+            var coherence = EvaluateDatabaseSaveCoherence();
+            if (!coherence.NormalOperationReady)
             {
                 workflowCoordinator.CompleteOperation(
                     begin.Operation.OperationId,
                     OperationOutcome.Failed);
                 return WorkingStateCoordinatorResult.Reject(
-                    "The published Database is out of date. Update or rebuild the Database before saving working state, or remove the published Database to save without one.");
+                    coherence.UnavailableReason
+                        ?? "Working-state save is not currently ready.");
             }
 
             var snapshot = CaptureSnapshot();
@@ -76,6 +113,13 @@ public sealed class WorkingStateCoordinator(
         string packagePath,
         CancellationToken cancellationToken = default)
     {
+        var readiness = EvaluateRestoreReadiness(packagePath);
+        if (!readiness.NormalOperationReady)
+        {
+            return WorkingStateCoordinatorResult.Reject(
+                readiness.UnavailableReason ?? "Working-state restore is not currently ready.");
+        }
+
         var begin = await workflowCoordinator.BeginOperationAsync(
                 WorkflowOperationKind.WorkingStateRestore,
                 cancellationToken)
@@ -173,6 +217,17 @@ public sealed class WorkingStateCoordinator(
                 .ThenBy(item => item.Key.InformationType, StringComparer.Ordinal)
                 .Select(item => new WorkingStateDatabaseTagOverride(item.Key, item.Value))
                 .ToArray());
+    }
+
+    private WorkflowOperationReadiness EvaluateDatabaseSaveCoherence()
+    {
+        return databaseBuildCoordinator.CurrentGeneration is not null
+            && workflowCoordinator.Current.Database != WorkflowArtifactStatus.Current
+                ? WorkflowOperationReadiness.Unavailable(
+                    workflowPrerequisitesSatisfied: true,
+                    WorkflowRejectionCode.OperationFailed,
+                    "The published Database is out of date. Update or rebuild the Database before saving working state, or remove the published Database to save without one.")
+                : WorkflowOperationReadiness.Ready();
     }
 }
 

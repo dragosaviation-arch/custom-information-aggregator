@@ -50,31 +50,52 @@ public sealed class DatabaseBuildCoordinator(
 
     public bool CanBuild()
     {
-        if (workflowCoordinator.Current.Discovery != WorkflowArtifactStatus.Current
-            || workflowCoordinator.Current.ActiveOperation is not null
-            || sourceSet.CreateIncludedReadySnapshot().Count == 0)
+        return EvaluateReadiness().NormalOperationReady;
+    }
+
+    public WorkflowOperationReadiness EvaluateReadiness()
+    {
+        var workflowReadiness = WorkflowOperationReadiness.FromWorkflow(
+            workflowCoordinator.EvaluateOperationPrerequisites(
+                WorkflowOperationKind.DatabaseBuild));
+        if (!workflowReadiness.NormalOperationReady)
         {
-            return false;
+            return workflowReadiness;
+        }
+
+        if (sourceSet.CreateIncludedReadySnapshot().Count == 0)
+        {
+            return WorkflowOperationReadiness.Unavailable(
+                workflowPrerequisitesSatisfied: true,
+                WorkflowRejectionCode.OperationFailed,
+                "Database generation requires at least one included, ready source.");
         }
 
         try
         {
-            return CreateBuildSpecification().Datasets.Count > 0;
+            return CreateBuildSpecification().Datasets.Count > 0
+                ? WorkflowOperationReadiness.Ready()
+                : WorkflowOperationReadiness.Unavailable(
+                    workflowPrerequisitesSatisfied: true,
+                    WorkflowRejectionCode.OperationFailed,
+                    "Database generation requires a non-empty valid build specification.");
         }
         catch (ArgumentException)
         {
-            return false;
+            return WorkflowOperationReadiness.Unavailable(
+                workflowPrerequisitesSatisfied: true,
+                WorkflowRejectionCode.OperationFailed,
+                "Database generation requires a non-empty valid build specification.");
         }
     }
 
     public async Task<WorkflowCommandResult> BuildAsync(
         CancellationToken cancellationToken = default)
     {
-        if (!CanBuild())
+        var readiness = EvaluateReadiness();
+        if (!readiness.NormalOperationReady)
         {
-            return WorkflowCommandResult.Reject(
-                WorkflowRejectionCode.DiscoveryNotCurrent,
-                "Database generation requires current Discovery results, selected information, and ready sources.");
+            return readiness.ToCommandResult();
         }
 
         var specification = CreateBuildSpecification();

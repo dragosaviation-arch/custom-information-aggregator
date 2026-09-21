@@ -1,8 +1,21 @@
 using CIA.Contracts.Diagnostics;
+using CIA.Contracts.Database;
+using CIA.Contracts.Discovery;
+using CIA.Contracts.Export;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Operations;
+using CIA.Contracts.Sources;
+using CIA.Contracts.WorkingState;
 using CIA.Core.Diagnostics;
+using CIA.Desktop.Database;
+using CIA.Desktop.Discovery;
+using CIA.Desktop.Export;
+using CIA.Desktop.Extraction;
 using CIA.Desktop.Hosting;
+using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
+using CIA.Desktop.WorkingState;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.Desktop.Tests;
 
@@ -48,7 +61,8 @@ public sealed class InterruptedOperationRecoveryTests
         using var recovery = new InterruptedOperationRecoveryCoordinator(
             history,
             history,
-            restartedWorkflow);
+            restartedWorkflow,
+            new WorkflowOnlyOperationReadiness(restartedWorkflow));
         recovery.ReconcileStartupHistory();
 
         Assert.HasCount(1, history.Attempts);
@@ -75,7 +89,8 @@ public sealed class InterruptedOperationRecoveryTests
             using var recovery = new InterruptedOperationRecoveryCoordinator(
                 history,
                 history,
-                workflow);
+                workflow,
+                new WorkflowOnlyOperationReadiness(workflow));
 
             recovery.ReconcileStartupHistory();
         }
@@ -121,7 +136,8 @@ public sealed class InterruptedOperationRecoveryTests
         using var recovery = new InterruptedOperationRecoveryCoordinator(
             history,
             history,
-            workflow);
+            workflow,
+            new WorkflowOnlyOperationReadiness(workflow));
         workflow.RecordSourceSelectionChanged(true);
         var accepted = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
 
@@ -150,7 +166,8 @@ public sealed class InterruptedOperationRecoveryTests
         using var recovery = new InterruptedOperationRecoveryCoordinator(
             history,
             history,
-            workflow);
+            workflow,
+            new WorkflowOnlyOperationReadiness(workflow));
 
         recovery.ReconcileStartupHistory();
 
@@ -176,35 +193,113 @@ public sealed class InterruptedOperationRecoveryTests
     }
 
     [TestMethod]
-    [DataRow(WorkflowOperationKind.DatabaseBuild)]
-    [DataRow(WorkflowOperationKind.Extraction)]
-    [DataRow(WorkflowOperationKind.Export)]
-    [DataRow(WorkflowOperationKind.WorkingStateSave)]
-    [DataRow(WorkflowOperationKind.WorkingStateRestore)]
-    public async Task RecoveryAvailabilityUsesTheExistingOperationPrerequisites(
-        WorkflowOperationKind operationKind)
+    public async Task RecoveryUsesTheOwningCoordinatorReadinessWithoutStartingWork()
     {
-        var start = CreateStart(operationKind);
+        var start = CreateStart(WorkflowOperationKind.DatabaseBuild);
         var history = new MutableHistoryStore(starts: [start]);
-        using var workflow = new ApplicationWorkflowCoordinator(
-            new StubProcessingHostSupervisor(),
-            history);
-        await EstablishPrerequisitesAsync(workflow, operationKind);
+        var supervisor = new StubProcessingHostSupervisor();
+        using var workflow = new ApplicationWorkflowCoordinator(supervisor, history);
+        workflow.RecordSourceSelectionChanged(true);
+        await CompleteAsync(workflow, WorkflowOperationKind.Discovery);
+        var sources = new ActiveLoadedSourceSet();
+        var configuration = new ActiveDiscoveryConfiguration();
+        var database = new DatabaseBuildCoordinator(
+            configuration,
+            sources,
+            workflow,
+            new RejectUnexpectedDatabaseClient(),
+            NullLogger<DatabaseBuildCoordinator>.Instance);
+        var extraction = new ExtractionCoordinator(
+            database,
+            workflow,
+            new RejectUnexpectedExtractionClient(),
+            NullLogger<ExtractionCoordinator>.Instance);
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            workflow,
+            new RejectUnexpectedExportClient(),
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        var workingState = new WorkingStateCoordinator(
+            sources,
+            configuration,
+            database,
+            workflow,
+            new RejectUnexpectedWorkingStateClient(),
+            NullLogger<WorkingStateCoordinator>.Instance);
+        using var readiness = new WorkflowOperationReadinessProvider(
+            workflow,
+            database,
+            extraction,
+            export,
+            workingState);
         using var recovery = new InterruptedOperationRecoveryCoordinator(
             history,
             history,
-            workflow);
+            workflow,
+            readiness);
+        var hostCallsBeforeEvaluation = supervisor.EnsureAvailableCallCount;
 
         recovery.ReconcileStartupHistory();
 
-        var normalEligibility = workflow.EvaluateOperationPrerequisites(operationKind);
-        Assert.AreEqual(
-            normalEligibility.Accepted,
-            recovery.Current?.ReinitiationPrerequisitesSatisfied);
-        Assert.AreEqual(
-            normalEligibility.Rejection?.Reason,
-            recovery.Current?.UnavailableReason);
+        Assert.IsTrue(workflow.EvaluateOperationPrerequisites(
+            WorkflowOperationKind.DatabaseBuild).Accepted);
+        Assert.IsFalse(database.CanBuild());
+        Assert.IsTrue(recovery.Current?.WorkflowPrerequisitesSatisfied);
+        Assert.IsFalse(recovery.Current?.NormalOperationReady);
+        Assert.IsFalse(recovery.Current?.ReinitiationPrerequisitesSatisfied);
+        Assert.AreEqual(hostCallsBeforeEvaluation, supervisor.EnsureAvailableCallCount);
         Assert.IsNull(workflow.Current.ActiveOperation);
+
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            Path.GetFullPath("recovery-source.xml"),
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
+        var loading = new SourceLoadingCoordinator(
+            new StaticSourceIntakeClient(source),
+            sources,
+            workflow);
+        Assert.IsTrue((await loading.AddAsync(SourceSelectionKind.XmlFile, source.Path)).Accepted);
+        var identity = new DiscoveryInformationIdentity(
+            sources.SourceSets.Single().SourceSetId,
+            "/root/tag",
+            "tag");
+        configuration.Synchronize([identity]);
+        configuration.SetSelection([identity], isSelected: true);
+        await CompleteAsync(workflow, WorkflowOperationKind.Discovery);
+        var hostCallsAfterNormalSetup = supervisor.EnsureAvailableCallCount;
+
+        Assert.IsTrue(database.CanBuild());
+        Assert.IsTrue(recovery.Current?.NormalOperationReady);
+        Assert.IsTrue(recovery.Current?.ReinitiationPrerequisitesSatisfied);
+        Assert.AreEqual(hostCallsAfterNormalSetup, supervisor.EnsureAvailableCallCount);
+        Assert.IsNull(workflow.Current.ActiveOperation);
+    }
+
+    [TestMethod]
+    public void RecoveryReportsWorkingStateRestoreAsRequiringPackageSelection()
+    {
+        var history = new MutableHistoryStore(
+            starts: [CreateStart(WorkflowOperationKind.WorkingStateRestore)]);
+        using var workflow = new ApplicationWorkflowCoordinator(
+            new StubProcessingHostSupervisor(),
+            history);
+        var readiness = new FixedOperationReadiness(
+            WorkflowOperationReadiness.RequiresUserInput(
+                "Select a .cia working-state package before restoring working state."));
+        using var recovery = new InterruptedOperationRecoveryCoordinator(
+            history,
+            history,
+            workflow,
+            readiness);
+
+        recovery.ReconcileStartupHistory();
+
+        Assert.IsTrue(recovery.Current?.WorkflowPrerequisitesSatisfied);
+        Assert.IsFalse(recovery.Current?.NormalOperationReady);
+        Assert.IsTrue(recovery.Current?.AdditionalUserInputRequired);
+        Assert.IsFalse(recovery.Current?.ReinitiationPrerequisitesSatisfied);
     }
 
     [TestMethod]
@@ -220,7 +315,8 @@ public sealed class InterruptedOperationRecoveryTests
         using var recovery = new InterruptedOperationRecoveryCoordinator(
             history,
             history,
-            workflow);
+            workflow,
+            new WorkflowOnlyOperationReadiness(workflow));
 
         recovery.ReconcileStartupHistory();
 
@@ -252,7 +348,8 @@ public sealed class InterruptedOperationRecoveryTests
         using var recovery = new InterruptedOperationRecoveryCoordinator(
             history,
             history,
-            workflow);
+            workflow,
+            new WorkflowOnlyOperationReadiness(workflow));
 
         recovery.ReconcileStartupHistory();
 
@@ -276,7 +373,8 @@ public sealed class InterruptedOperationRecoveryTests
         using var recovery = new InterruptedOperationRecoveryCoordinator(
             history,
             history,
-            workflow);
+            workflow,
+            new WorkflowOnlyOperationReadiness(workflow));
 
         recovery.ReconcileStartupHistory();
 
@@ -296,7 +394,8 @@ public sealed class InterruptedOperationRecoveryTests
         using var recovery = new InterruptedOperationRecoveryCoordinator(
             history,
             history,
-            workflow);
+            workflow,
+            new WorkflowOnlyOperationReadiness(workflow));
         recovery.ReconcileStartupHistory();
         workflow.RecordSourceSelectionChanged(true);
 
@@ -320,32 +419,6 @@ public sealed class InterruptedOperationRecoveryTests
     private static OperationCorrelation CreateCorrelation()
     {
         return OperationCorrelation.CreateNew(DateTimeOffset.UtcNow.AddMinutes(-5));
-    }
-
-    private static async Task EstablishPrerequisitesAsync(
-        IApplicationWorkflowCoordinator workflow,
-        WorkflowOperationKind operationKind)
-    {
-        if (operationKind is WorkflowOperationKind.WorkingStateSave
-            or WorkflowOperationKind.WorkingStateRestore)
-        {
-            return;
-        }
-
-        workflow.RecordSourceSelectionChanged(true);
-        await CompleteAsync(workflow, WorkflowOperationKind.Discovery);
-        if (operationKind == WorkflowOperationKind.DatabaseBuild)
-        {
-            return;
-        }
-
-        await CompleteAsync(workflow, WorkflowOperationKind.DatabaseBuild);
-        if (operationKind == WorkflowOperationKind.Extraction)
-        {
-            return;
-        }
-
-        await CompleteAsync(workflow, WorkflowOperationKind.Extraction);
     }
 
     private static async Task CompleteAsync(
@@ -406,6 +479,101 @@ public sealed class InterruptedOperationRecoveryTests
         {
             Diagnostics.Add(record);
         }
+    }
+
+    private sealed class WorkflowOnlyOperationReadiness(
+        IApplicationWorkflowCoordinator workflowCoordinator) :
+        IWorkflowOperationReadiness
+    {
+        public event EventHandler? ReadinessChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public WorkflowOperationReadiness Evaluate(WorkflowOperationKind operationKind)
+        {
+            return WorkflowOperationReadiness.FromWorkflow(
+                workflowCoordinator.EvaluateOperationPrerequisites(operationKind));
+        }
+    }
+
+    private sealed class FixedOperationReadiness(WorkflowOperationReadiness readiness) :
+        IWorkflowOperationReadiness
+    {
+        public event EventHandler? ReadinessChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public WorkflowOperationReadiness Evaluate(WorkflowOperationKind operationKind) =>
+            readiness;
+    }
+
+    private sealed class RejectUnexpectedDatabaseClient : IDatabaseClient
+    {
+        public Task<DatabaseClientResult> BuildAsync(
+            OperationCorrelation correlation,
+            DatabaseBuildSpecification specification,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Readiness evaluation must not build a Database.");
+    }
+
+    private sealed class StaticSourceIntakeClient(LoadedSourceContract source) :
+        ISourceIntakeClient
+    {
+        public Task<SourceIntakeClientResult> LoadAsync(
+            SourceSelectionKind selectionKind,
+            string path,
+            SourceLoadSettings settings,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new SourceIntakeClientResult(
+                true,
+                [source],
+                FailureCode: null,
+                FailureDescription: null));
+
+        public Task<SourceRefreshClientResult> RefreshAsync(
+            LoadedSourceContract refreshedSource,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Readiness evaluation must not refresh sources.");
+    }
+
+    private sealed class RejectUnexpectedExtractionClient : IExtractionClient
+    {
+        public Task<ExtractionClientResult> ExtractAsync(
+            OperationCorrelation correlation,
+            DatabaseGenerationSummary databaseGeneration,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Readiness evaluation must not run Extraction.");
+    }
+
+    private sealed class RejectUnexpectedExportClient : IWorkbookExportClient
+    {
+        public Task<WorkbookExportClientResult> ExportAsync(
+            OperationCorrelation correlation,
+            ExtractionResultSummary extractionResult,
+            ExportConfigurationSnapshot configuration,
+            WorkbookPublicationPlan publicationPlan,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Readiness evaluation must not export workbooks.");
+    }
+
+    private sealed class RejectUnexpectedWorkingStateClient : IWorkingStateClient
+    {
+        public Task<WorkingStateClientResult> SaveAsync(
+            OperationCorrelation correlation,
+            string targetPath,
+            WorkingStateSnapshot snapshot,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Readiness evaluation must not save working state.");
+
+        public Task<WorkingStateClientResult> RestoreAsync(
+            OperationCorrelation correlation,
+            string packagePath,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Readiness evaluation must not restore working state.");
     }
 
     private sealed class StubProcessingHostSupervisor : IProcessingHostSupervisor

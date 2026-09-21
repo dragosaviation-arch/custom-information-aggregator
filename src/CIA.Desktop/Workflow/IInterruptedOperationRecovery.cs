@@ -8,10 +8,14 @@ public sealed record InterruptedOperationRecoveryAvailability(
     WorkflowOperationKind? OperationKind,
     DateTimeOffset InterruptedAtUtc,
     string InterruptionContext,
-    bool ReinitiationPrerequisitesSatisfied,
+    bool WorkflowPrerequisitesSatisfied,
+    bool NormalOperationReady,
+    bool AdditionalUserInputRequired,
     string? UnavailableReason)
 {
     public OperationId OriginalOperationId => OriginalCorrelation.OperationId;
+
+    public bool ReinitiationPrerequisitesSatisfied => NormalOperationReady;
 }
 
 public interface IInterruptedOperationRecovery

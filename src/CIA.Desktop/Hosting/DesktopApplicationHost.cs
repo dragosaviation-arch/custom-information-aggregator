@@ -74,6 +74,8 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<WorkbookExportCoordinator>();
         builder.Services.AddSingleton<IWorkingStateClient, ProcessingHostWorkingStateClient>();
         builder.Services.AddSingleton<WorkingStateCoordinator>();
+        builder.Services.AddSingleton<IWorkflowOperationReadiness,
+            WorkflowOperationReadinessProvider>();
         builder.Services.AddSingleton<IExportFolderPicker, WindowsExportFolderPicker>();
         builder.Services.AddSingleton<IWorkbookCollisionResolver, WindowsWorkbookCollisionResolver>();
         builder.Services.AddSingleton<ISettingsFolderPicker, WindowsSettingsFolderPicker>();

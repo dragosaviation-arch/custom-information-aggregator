@@ -18,6 +18,31 @@ namespace CIA.Desktop.Tests;
 public sealed class DatabaseBuildCoordinatorTests
 {
     [TestMethod]
+    public async Task BuildReadinessRequiresUsableSourcesAndNonEmptySpecificationBeyondCurrentDiscovery()
+    {
+        var context = await BuildContext.CreateAsync();
+        var coordinator = context.CreateCoordinator(new RecordingDatabaseClient(
+            (Func<OperationCorrelation, DatabaseBuildSpecification, DatabaseClientResult>)((_, _) =>
+                throw new AssertFailedException("An unavailable build must not reach the client."))));
+
+        Assert.IsTrue(coordinator.EvaluateReadiness().NormalOperationReady);
+        Assert.IsTrue(coordinator.CanBuild());
+
+        var selectedIdentity = context.Configuration.Current.Items.Single().Identity;
+        Assert.AreEqual(1, context.Configuration.SetSelection([selectedIdentity], false));
+        var invalidSpecification = coordinator.EvaluateReadiness();
+
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Discovery);
+        Assert.IsTrue(invalidSpecification.WorkflowPrerequisitesSatisfied);
+        Assert.IsFalse(invalidSpecification.NormalOperationReady);
+        Assert.IsFalse(coordinator.CanBuild());
+        Assert.IsFalse((await coordinator.BuildAsync()).Accepted);
+
+        Assert.AreEqual(1, context.Configuration.SetSelection([selectedIdentity], true));
+        Assert.IsTrue(coordinator.EvaluateReadiness().NormalOperationReady);
+    }
+
+    [TestMethod]
     public async Task FirstSuccessfulBuildPublishesCapturedGenerationAndWorkspaceState()
     {
         var context = await BuildContext.CreateAsync();

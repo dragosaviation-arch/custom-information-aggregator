@@ -16,6 +16,7 @@ public sealed class InterruptedOperationRecoveryCoordinator :
     private readonly IProcessingHistoryReader _historyReader;
     private readonly IProcessingHistoryRecorder _historyRecorder;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
+    private readonly IWorkflowOperationReadiness _operationReadiness;
     private readonly object _stateGate = new();
     private readonly HashSet<OperationId> _reconciledOperationIds = [];
     private readonly HashSet<OperationId> _diagnosedOperationIds = [];
@@ -26,22 +27,27 @@ public sealed class InterruptedOperationRecoveryCoordinator :
     public InterruptedOperationRecoveryCoordinator(
         IProcessingHistoryReader historyReader,
         IProcessingHistoryRecorder historyRecorder,
-        IApplicationWorkflowCoordinator workflowCoordinator)
+        IApplicationWorkflowCoordinator workflowCoordinator,
+        IWorkflowOperationReadiness operationReadiness)
     {
         ArgumentNullException.ThrowIfNull(historyReader);
         ArgumentNullException.ThrowIfNull(historyRecorder);
         ArgumentNullException.ThrowIfNull(workflowCoordinator);
+        ArgumentNullException.ThrowIfNull(operationReadiness);
 
         _historyReader = historyReader;
         _historyRecorder = historyRecorder;
         _workflowCoordinator = workflowCoordinator;
+        _operationReadiness = operationReadiness;
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
+        _operationReadiness.ReadinessChanged += OnOperationReadinessChanged;
     }
 
     public InterruptedOperationRecoveryAvailability? Current
     {
         get
         {
+            RefreshAvailability();
             lock (_stateGate)
             {
                 return _current;
@@ -168,6 +174,7 @@ public sealed class InterruptedOperationRecoveryCoordinator :
         }
 
         _workflowCoordinator.StateChanged -= OnWorkflowStateChanged;
+        _operationReadiness.ReadinessChanged -= OnOperationReadinessChanged;
     }
 
     private void EnsureInterruptedAttemptsHaveDiagnostics(
@@ -247,6 +254,11 @@ public sealed class InterruptedOperationRecoveryCoordinator :
         RefreshAvailability();
     }
 
+    private void OnOperationReadinessChanged(object? sender, EventArgs e)
+    {
+        RefreshAvailability();
+    }
+
     private void SetRecoverySubject(RecoverySubject subject)
     {
         lock (_stateGate)
@@ -271,11 +283,11 @@ public sealed class InterruptedOperationRecoveryCoordinator :
         }
 
         WorkflowOperationKind? operationKind = null;
-        WorkflowCommandResult? prerequisiteResult = null;
+        WorkflowOperationReadiness? readiness = null;
         if (TryParseOperationKind(subject.OperationName, out var parsedKind))
         {
             operationKind = parsedKind;
-            prerequisiteResult = _workflowCoordinator.EvaluateOperationPrerequisites(parsedKind);
+            readiness = _operationReadiness.Evaluate(parsedKind);
         }
 
         var current = new InterruptedOperationRecoveryAvailability(
@@ -284,10 +296,12 @@ public sealed class InterruptedOperationRecoveryCoordinator :
             operationKind,
             subject.InterruptedAtUtc,
             subject.Context,
-            prerequisiteResult?.Accepted == true,
+            readiness?.WorkflowPrerequisitesSatisfied == true,
+            readiness?.NormalOperationReady == true,
+            readiness?.AdditionalUserInputRequired == true,
             operationKind is null
                 ? "The recorded operation kind is not recognized by this version of CIA."
-                : prerequisiteResult!.Rejection?.Reason);
+                : readiness!.UnavailableReason);
 
         lock (_stateGate)
         {
