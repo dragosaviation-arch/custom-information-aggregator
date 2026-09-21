@@ -262,6 +262,79 @@ public sealed class WorkingStatePackageTests
     }
 
     [TestMethod]
+    public async Task PublishedDatabaseCannotBeSavedAsDatabaseLessWorkingState()
+    {
+        using var workspace = new Workspace();
+        var state = await workspace.CreatePublishedStateAsync();
+        var databaseLess = new WorkingStateSnapshot(
+            state.Snapshot.PackageId,
+            state.Snapshot.SavedAtUtc,
+            databaseGeneration: null,
+            state.Snapshot.SourceSets,
+            state.Snapshot.ActiveSourceSetId,
+            state.Snapshot.Sources,
+            state.Snapshot.DiscoveryConfiguration,
+            state.Snapshot.DatabaseTagOverrides);
+        var path = Path.Combine(workspace.Root, "false-database-less.cia");
+
+        var result = await workspace.PackageService.SaveAsync(
+            OperationCorrelation.CreateNew(),
+            path,
+            databaseLess);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.IsFalse(File.Exists(path));
+    }
+
+    [TestMethod]
+    [DataRow("layout")]
+    [DataRow("override")]
+    [DataRow("membership")]
+    public async Task IncoherentManifestRecoveryContextIsRejectedForDirectSaveAndRestore(
+        string mismatchKind)
+    {
+        using var workspace = new Workspace();
+        var state = await workspace.CreatePublishedStateAsync();
+        var validPath = Path.Combine(workspace.Root, "coherent.cia");
+        var saved = await workspace.PackageService.SaveAsync(
+            OperationCorrelation.CreateNew(),
+            validPath,
+            state.Snapshot);
+        Assert.IsTrue(saved.Accepted, saved.Failure?.Description);
+        var incoherent = CreateIncoherentSnapshot(state.Snapshot, mismatchKind);
+
+        var directPath = Path.Combine(workspace.Root, $"direct-{mismatchKind}.cia");
+        var direct = await workspace.PackageService.SaveAsync(
+            OperationCorrelation.CreateNew(),
+            directPath,
+            incoherent);
+
+        var tamperedPath = Path.Combine(workspace.Root, $"tampered-{mismatchKind}.cia");
+        File.Copy(validPath, tamperedPath);
+        var tamperedManifest = new WorkingStateManifest(
+            saved.Manifest!.PackageSchemaVersion,
+            saved.Manifest.RepositorySchemaVersion,
+            saved.Manifest.DatabaseSha256,
+            incoherent);
+        ReplaceEntry(
+            tamperedPath,
+            WorkingStatePackageFormat.ManifestEntryName,
+            _ => JsonSerializer.SerializeToUtf8Bytes(
+                tamperedManifest,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var before = await workspace.Repository.ReadPublishedHierarchyDatabaseGenerationAsync();
+        var restored = await workspace.PackageService.RestoreAsync(
+            OperationCorrelation.CreateNew(),
+            tamperedPath);
+        var after = await workspace.Repository.ReadPublishedHierarchyDatabaseGenerationAsync();
+
+        Assert.IsFalse(direct.Accepted);
+        Assert.IsFalse(File.Exists(directPath));
+        Assert.IsFalse(restored.Accepted);
+        Assert.IsTrue(DatabaseGenerationSnapshotComparer.AreEquivalent(before, after));
+    }
+
+    [TestMethod]
     public async Task EmptyRepositoryRoundTripsWithNoPublishedDatabase()
     {
         using var workspace = new Workspace();
@@ -406,6 +479,54 @@ public sealed class WorkingStatePackageTests
             source.Sources,
             source.DiscoveryConfiguration,
             source.DatabaseTagOverrides);
+
+    private static WorkingStateSnapshot CreateIncoherentSnapshot(
+        WorkingStateSnapshot source,
+        string mismatchKind)
+    {
+        var discovery = source.DiscoveryConfiguration;
+        var overrides = source.DatabaseTagOverrides;
+        var sources = source.Sources;
+        switch (mismatchKind)
+        {
+            case "layout":
+                discovery = new DiscoveryConfigurationSnapshot(
+                    discovery.Items,
+                    discovery.SourceSets.Select((configuration, index) =>
+                        index == 0
+                            ? new SourceSetDiscoveryConfiguration(
+                                configuration.SourceSetId,
+                                RepeatedDataLayout.AlignRepeatedGroupsByPosition)
+                            : configuration).ToArray());
+                break;
+            case "override":
+                overrides =
+                [
+                    new WorkingStateDatabaseTagOverride(
+                        source.DatabaseTagOverrides.Single().Identity,
+                        "TamperedName")
+                ];
+                break;
+            case "membership":
+                sources = source.Sources.Select((item, index) =>
+                    index == 0
+                        ? item with { SourceSetId = source.SourceSets[1].SourceSetId }
+                        : item).ToArray();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mismatchKind));
+        }
+
+        return new WorkingStateSnapshot(
+            source.PackageId,
+            source.SavedAtUtc,
+            source.DatabaseGeneration,
+            source.SourceSets,
+            source.ActiveSourceSetId,
+            sources,
+            discovery,
+            overrides);
+    }
 
     private sealed class Workspace : IDisposable
     {

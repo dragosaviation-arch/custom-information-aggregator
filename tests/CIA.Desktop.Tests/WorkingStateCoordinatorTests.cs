@@ -3,6 +3,7 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Contracts.WorkingState;
+using CIA.Core.Database;
 using CIA.Core.Diagnostics;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
@@ -17,6 +18,103 @@ namespace CIA.Desktop.Tests;
 [TestClass]
 public sealed class WorkingStateCoordinatorTests
 {
+    [TestMethod]
+    public async Task CurrentDatabaseSaveSendsCoherentSnapshotToHost()
+    {
+        var prepared = await CreateCurrentDatabaseContextAsync();
+
+        var result = await prepared.Context.Coordinator.SaveAsync("C:\\saved\\current.cia");
+
+        Assert.IsTrue(result.Accepted, result.FailureDescription);
+        Assert.AreEqual(1, prepared.Context.Client.SaveCallCount);
+        Assert.IsNotNull(prepared.Context.Client.LastSavedSnapshot?.DatabaseGeneration);
+        Assert.AreEqual(
+            WorkflowArtifactStatus.Current,
+            prepared.Context.Workflow.Current.Database);
+    }
+
+    [TestMethod]
+    public async Task NoPublishedDatabaseSaveSendsDatabaseLessSnapshotToHost()
+    {
+        var context = CreateContext();
+
+        var result = await context.Coordinator.SaveAsync("C:\\saved\\empty.cia");
+
+        Assert.IsTrue(result.Accepted, result.FailureDescription);
+        Assert.AreEqual(1, context.Client.SaveCallCount);
+        Assert.IsNull(context.Client.LastSavedSnapshot?.DatabaseGeneration);
+    }
+
+    [TestMethod]
+    public async Task DatabaseReviewChangeLeavesCurrentDatabaseSaveable()
+    {
+        var prepared = await CreateCurrentDatabaseContextAsync();
+
+        Assert.IsTrue(prepared.Context.Workflow.RecordDatabaseReviewChanged().Accepted);
+        var result = await prepared.Context.Coordinator.SaveAsync("C:\\saved\\reviewed.cia");
+
+        Assert.AreEqual(WorkflowArtifactStatus.Current, prepared.Context.Workflow.Current.Database);
+        Assert.IsTrue(result.Accepted, result.FailureDescription);
+        Assert.AreEqual(1, prepared.Context.Client.SaveCallCount);
+    }
+
+    [TestMethod]
+    public async Task SourceInclusionChangeMakesDatabaseStaleAndRejectsSaveBeforeHostRequest()
+    {
+        var prepared = await CreateCurrentDatabaseContextAsync();
+        using var target = new TemporaryPackageFile();
+        var original = await File.ReadAllBytesAsync(target.Path);
+
+        var change = prepared.Loading.SetInclusion(
+            [prepared.Context.Sources.Items.Single()],
+            false);
+        var result = await prepared.Context.Coordinator.SaveAsync(target.Path);
+
+        Assert.IsTrue(change.Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, prepared.Context.Workflow.Current.Database);
+        Assert.IsFalse(result.Accepted);
+        StringAssert.Contains(result.FailureDescription, "Update or rebuild");
+        Assert.AreEqual(0, prepared.Context.Client.SaveCallCount);
+        CollectionAssert.AreEqual(original, await File.ReadAllBytesAsync(target.Path));
+    }
+
+    [TestMethod]
+    [DataRow("selection")]
+    [DataRow("override")]
+    [DataRow("layout")]
+    public async Task DiscoveryConfigurationChangeMakesDatabaseStaleAndRejectsSaveBeforeHostRequest(
+        string changeKind)
+    {
+        var prepared = await CreateCurrentDatabaseContextAsync();
+
+        Assert.IsTrue(prepared.Context.Workflow.RecordDiscoveryConfigurationChanged().Accepted);
+        switch (changeKind)
+        {
+            case "selection":
+                Assert.AreEqual(1, prepared.Context.Configuration.SetSelection([prepared.Identity], false));
+                break;
+            case "override":
+                Assert.IsTrue(prepared.Context.Configuration.SetDatabaseTagOverride(
+                    prepared.Identity,
+                    "ChangedCode"));
+                break;
+            case "layout":
+                Assert.IsTrue(prepared.Context.Configuration.SetRepeatedDataLayout(
+                    prepared.Identity.SourceSetId,
+                    RepeatedDataLayout.StructuralRows));
+                break;
+            default:
+                Assert.Fail($"Unsupported test change {changeKind}.");
+                break;
+        }
+
+        var result = await prepared.Context.Coordinator.SaveAsync("C:\\saved\\stale.cia");
+
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, prepared.Context.Workflow.Current.Database);
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual(0, prepared.Context.Client.SaveCallCount);
+    }
+
     [TestMethod]
     public async Task RestoreRehydratesStableIdentityAndTruthfulWorkflowState()
     {
@@ -126,6 +224,59 @@ public sealed class WorkingStateCoordinatorTests
         return new TestContext(sources, configuration, workflow, database, client, coordinator);
     }
 
+    private static async Task<PreparedContext> CreateCurrentDatabaseContextAsync()
+    {
+        var context = CreateContext();
+        var sourcePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "source.xml");
+        var loading = new SourceLoadingCoordinator(
+            new StaticSourceClient(sourcePath),
+            context.Sources,
+            context.Workflow);
+        Assert.IsTrue((await loading.AddAsync(SourceSelectionKind.XmlFile, sourcePath)).Accepted);
+        var sourceSet = context.Sources.ActiveSourceSet!;
+        var identity = new DiscoveryInformationIdentity(
+            sourceSet.SourceSetId,
+            "/records/code",
+            "code");
+        context.Configuration.Synchronize([identity]);
+        Assert.AreEqual(1, context.Configuration.SetSelection([identity], true));
+
+        var discovery = await context.Workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
+        Assert.IsTrue(discovery.Accepted);
+        Assert.IsTrue(context.Workflow.CompleteOperation(
+            discovery.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully).Accepted);
+
+        var mapping = DatabaseTagMapper.CreateFieldMappings(
+            sourceSet.SourceSetId,
+            context.Configuration.Current.Items,
+            context.Configuration.DatabaseTagOverridesByIdentity).Single();
+        var generation = new DatabaseGenerationSummary(
+            OperationId.CreateNew(),
+            [new DatabaseDatasetSummary(
+                sourceSet.SourceSetId,
+                sourceSet.Name,
+                1,
+                RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+                1,
+                1,
+                [new DatabaseColumnDefinition(
+                    new DatabaseColumnIdentity(
+                        sourceSet.SourceSetId,
+                        mapping.FieldKey,
+                        DatabaseRepeatCoordinatePath.Empty),
+                    mapping.EffectiveName,
+                    1)],
+                [mapping])]);
+        var build = await context.Workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
+        Assert.IsTrue(build.Accepted);
+        Assert.IsTrue(context.Workflow.CompleteOperation(
+            build.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully).Accepted);
+        context.Database.AdoptRestoredGeneration(generation);
+        return new PreparedContext(context, loading, identity);
+    }
+
     private static DatabaseGenerationSummary CreateGeneration(
         SourceSetId sourceSetId,
         DiscoveryInformationIdentity identity)
@@ -170,23 +321,36 @@ public sealed class WorkingStateCoordinatorTests
         StubWorkingStateClient Client,
         WorkingStateCoordinator Coordinator);
 
+    private sealed record PreparedContext(
+        TestContext Context,
+        SourceLoadingCoordinator Loading,
+        DiscoveryInformationIdentity Identity);
+
     private sealed class StubWorkingStateClient : IWorkingStateClient
     {
         public WorkingStateManifest? RestoreManifest { get; set; }
 
+        public int SaveCallCount { get; private set; }
+
         public int RestoreCallCount { get; private set; }
+
+        public WorkingStateSnapshot? LastSavedSnapshot { get; private set; }
 
         public Task<WorkingStateClientResult> SaveAsync(
             OperationCorrelation correlation,
             string targetPath,
             WorkingStateSnapshot snapshot,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(new WorkingStateClientResult(
+            CancellationToken cancellationToken = default)
+        {
+            SaveCallCount++;
+            LastSavedSnapshot = snapshot;
+            return Task.FromResult(new WorkingStateClientResult(
                 true,
                 new OperationCompletion(correlation, OperationOutcome.CompletedSuccessfully, []),
                 CreateManifest(snapshot),
                 null,
                 null));
+        }
 
         public Task<WorkingStateClientResult> RestoreAsync(
             OperationCorrelation correlation,
@@ -258,5 +422,30 @@ public sealed class WorkingStateCoordinatorTests
             LoadedSourceContract source,
             CancellationToken cancellationToken = default) =>
             throw new AssertFailedException("Snapshot capture must not refresh sources.");
+    }
+
+    private sealed class TemporaryPackageFile : IDisposable
+    {
+        private readonly string _directory = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "CIA.SPR166.Tests",
+            Guid.NewGuid().ToString("N"));
+
+        public TemporaryPackageFile()
+        {
+            Directory.CreateDirectory(_directory);
+            Path = System.IO.Path.Combine(_directory, "existing.cia");
+            File.WriteAllBytes(Path, [1, 2, 3, 4]);
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(_directory))
+            {
+                Directory.Delete(_directory, recursive: true);
+            }
+        }
     }
 }

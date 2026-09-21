@@ -5,6 +5,7 @@ using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.WorkingState;
 using CIA.Core.Runtime;
+using CIA.Core.WorkingState;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
 using Microsoft.Extensions.Logging;
@@ -56,6 +57,7 @@ public sealed class WorkingStatePackageService(
             var temporaryDirectory = CreateTemporaryDirectory();
             try
             {
+                WorkingStateDatabaseCoherenceValidator.Validate(snapshot);
                 Directory.CreateDirectory(Path.GetDirectoryName(fullTargetPath)!);
                 DeleteIfExists(candidatePath);
                 var databasePath = Path.Combine(
@@ -262,6 +264,7 @@ public sealed class WorkingStatePackageService(
         }
 
         WorkingStateContractValidator.Validate(manifest.Snapshot);
+        WorkingStateDatabaseCoherenceValidator.Validate(manifest.Snapshot);
         var databasePath = Path.Combine(
             temporaryDirectory,
             Guid.CreateVersion7().ToString("N") + ".sqlite3");

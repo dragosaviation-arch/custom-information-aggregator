@@ -95,7 +95,9 @@ public sealed class DatabaseBuildCoordinator(
             if (result.Accepted
                 && (result.PublishedGeneration is null
                     || result.PublishedGeneration.OperationId != begin.Operation.OperationId
-                    || !SpecificationMatches(specification, result.PublishedGeneration)))
+                    || !DatabaseGenerationContextComparer.Matches(
+                        specification,
+                        result.PublishedGeneration)))
             {
                 workflowCoordinator.CompleteOperation(
                     begin.Operation.OperationId,
@@ -150,68 +152,14 @@ public sealed class DatabaseBuildCoordinator(
 
     public DatabaseBuildSpecification CreateBuildSpecification()
     {
-        var configuration = discoveryConfiguration.Current;
-        var overrides = discoveryConfiguration.DatabaseTagOverridesByIdentity;
-        var includedSources = sourceSet.CreateIncludedReadySnapshot();
         var sourceSetNames = sourceSet.SourceSets.ToDictionary(
             definition => definition.SourceSetId,
             definition => definition.Name);
-        var datasets = new List<DatabaseDatasetBuildSpecification>();
-
-        foreach (var setConfiguration in configuration.SourceSets)
-        {
-            var fields = DatabaseTagMapper.CreateFieldMappings(
-                setConfiguration.SourceSetId,
-                configuration.Items,
-                overrides);
-            var sources = includedSources
-                .Where(source => source.SourceSetId == setConfiguration.SourceSetId)
-                .ToArray();
-            if (fields.Count == 0 || sources.Length == 0)
-            {
-                continue;
-            }
-
-            datasets.Add(new DatabaseDatasetBuildSpecification(
-                setConfiguration.SourceSetId,
-                sourceSetNames.GetValueOrDefault(
-                    setConfiguration.SourceSetId,
-                    $"Set {datasets.Count + 1}"),
-                datasets.Count + 1,
-                setConfiguration.RepeatedDataLayout,
-                sources,
-                fields));
-        }
-
-        return new DatabaseBuildSpecification(datasets);
+        return DatabaseBuildSpecificationFactory.Create(
+            discoveryConfiguration.Current,
+            discoveryConfiguration.DatabaseTagOverridesByIdentity,
+            sourceSet.CreateIncludedReadySnapshot(),
+            sourceSetNames);
     }
 
-    private static bool SpecificationMatches(
-        DatabaseBuildSpecification expected,
-        DatabaseGenerationSummary actual)
-    {
-        return actual.IsHierarchyAware
-            && expected.Datasets.Count == actual.Datasets.Count
-            && expected.Datasets.Zip(actual.Datasets).All(pair =>
-                pair.First.SourceSetId == pair.Second.SourceSetId
-                && string.Equals(pair.First.DisplayName, pair.Second.DisplayName, StringComparison.Ordinal)
-                && pair.First.Ordinal == pair.Second.Ordinal
-                && pair.First.RepeatedDataLayout == pair.Second.RepeatedDataLayout
-                && FieldMappingsMatch(pair.First.Fields, pair.Second.Mappings));
-    }
-
-    private static bool FieldMappingsMatch(
-        IReadOnlyList<DatabaseFieldMapping> expected,
-        IReadOnlyList<DatabaseFieldMapping> actual)
-    {
-        return expected.Count == actual.Count
-            && expected.Zip(actual).All(pair =>
-                pair.First.LogicalIdentity == pair.Second.LogicalIdentity
-                && string.Equals(
-                    pair.First.EffectiveName,
-                    pair.Second.EffectiveName,
-                    StringComparison.Ordinal)
-                && pair.First.IsExplicitOverride == pair.Second.IsExplicitOverride
-                && pair.First.DetailedIdentities.SequenceEqual(pair.Second.DetailedIdentities));
-    }
 }

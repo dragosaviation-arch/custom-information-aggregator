@@ -32,6 +32,16 @@ public sealed class WorkingStateCoordinator(
 
         try
         {
+            if (databaseBuildCoordinator.CurrentGeneration is not null
+                && workflowCoordinator.Current.Database != WorkflowArtifactStatus.Current)
+            {
+                workflowCoordinator.CompleteOperation(
+                    begin.Operation.OperationId,
+                    OperationOutcome.Failed);
+                return WorkingStateCoordinatorResult.Reject(
+                    "The published Database is out of date. Update or rebuild the Database before saving working state, or remove the published Database to save without one.");
+            }
+
             var snapshot = CaptureSnapshot();
             var result = await client.SaveAsync(
                     begin.Operation,

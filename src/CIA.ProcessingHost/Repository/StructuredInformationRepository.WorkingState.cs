@@ -291,14 +291,29 @@ public sealed partial class StructuredInformationRepository
         IReadOnlyList<LoadedSourceContract> expectedSources,
         CancellationToken cancellationToken)
     {
-        var sources = expectedSources.ToDictionary(
-            source => (source.SourceSetId, source.SourceId));
+        var publishedSourceSetIds = generation.Datasets
+            .Select(dataset => dataset.SourceSetId)
+            .ToHashSet();
+        var sources = expectedSources
+            .Where(source => publishedSourceSetIds.Contains(source.SourceSetId)
+                && source.IsIncluded
+                && source.Status == LoadedSourceStatus.Ready)
+            .GroupBy(source => source.SourceSetId)
+            .SelectMany(group => group.Select((source, index) => new
+            {
+                Key = (source.SourceSetId, source.SourceId),
+                Source = source,
+                Ordinal = index + 1
+            }))
+            .ToDictionary(item => item.Key);
+        var seen = new HashSet<(SourceSetId SourceSetId, SourceId SourceId)>();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT source_set_id, source_id, full_source_path, source_kind,
+            SELECT source_set_id, source_id, source_ordinal, full_source_path, source_kind,
                    archive_path, archive_member_path
             FROM hierarchy_database_sources
-            WHERE generation_id = $generationId;
+            WHERE generation_id = $generationId
+            ORDER BY source_set_id, source_ordinal;
             """;
         command.Parameters.AddWithValue("$generationId", generation.OperationId.ToString());
         await using var reader = await command.ExecuteReaderAsync(cancellationToken)
@@ -308,23 +323,31 @@ public sealed partial class StructuredInformationRepository
             var sourceSetId = SourceSetId.From(Guid.Parse(reader.GetString(0)));
             var sourceId = SourceId.From(Guid.Parse(reader.GetString(1)));
             if (!sources.TryGetValue((sourceSetId, sourceId), out var expected)
+                || expected.Ordinal != reader.GetInt32(2)
                 || !string.Equals(
-                    Path.GetFullPath(expected.Path),
-                    Path.GetFullPath(reader.GetString(2)),
+                    Path.GetFullPath(expected.Source.Path),
+                    Path.GetFullPath(reader.GetString(3)),
                     StringComparison.OrdinalIgnoreCase)
-                || (int)expected.Kind != reader.GetInt32(3)
+                || (int)expected.Source.Kind != reader.GetInt32(4)
                 || !string.Equals(
-                    expected.ArchiveProvenance?.OriginalArchivePath,
-                    reader.IsDBNull(4) ? null : reader.GetString(4),
-                    StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(
-                    expected.ArchiveProvenance?.ArchiveMemberPath,
+                    expected.Source.ArchiveProvenance?.OriginalArchivePath,
                     reader.IsDBNull(5) ? null : reader.GetString(5),
-                    StringComparison.Ordinal))
+                    StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(
+                    expected.Source.ArchiveProvenance?.ArchiveMemberPath,
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    StringComparison.Ordinal)
+                || !seen.Add((sourceSetId, sourceId)))
             {
                 throw new StructuredInformationRepositoryException(
                     "The working-state manifest source references do not match the published Database snapshot.");
             }
+        }
+
+        if (seen.Count != sources.Count)
+        {
+            throw new StructuredInformationRepositoryException(
+                "The working-state manifest source membership does not match the published Database snapshot.");
         }
     }
 

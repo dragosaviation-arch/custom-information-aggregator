@@ -216,8 +216,7 @@ public static class WorkingStateContractValidator
             .ToHashSet();
         if (!snapshot.DiscoveryConfiguration.SourceSets
                 .Select(configuration => configuration.SourceSetId)
-                .ToHashSet()
-                .SetEquals(sourceSetIds)
+                .SequenceEqual(sourceSets.Select(sourceSet => sourceSet.SourceSetId))
             || snapshot.DatabaseTagOverrides.Any(overridden =>
                 overridden is null || !configuredIdentities.Contains(overridden.Identity))
             || snapshot.DatabaseTagOverrides.Select(overridden => overridden.Identity)
