@@ -10,6 +10,18 @@ public sealed class ClefProcessingHistoryRecorder(
     private readonly ILogger<ClefProcessingHistoryRecorder> _logger =
         logger ?? throw new ArgumentNullException(nameof(logger));
 
+    public void RecordStart(ProcessingOperationStartRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+
+        using (_logger.BeginScope(CreateStartScope(record)))
+        {
+            _logger.LogInformation(
+                "Processing operation {OperationName} accepted with durable start evidence",
+                record.OperationName);
+        }
+    }
+
     public void RecordAttempt(ProcessingAttemptRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
@@ -63,6 +75,18 @@ public sealed class ClefProcessingHistoryRecorder(
             ["OperationInitiatedAtUtc"] = record.Correlation.InitiatedAtUtc,
             ["HistoryRecordedAtUtc"] = record.RecordedAtUtc,
             ["ProcessingStage"] = record.FinalStage
+        };
+    }
+
+    private static Dictionary<string, object?> CreateStartScope(
+        ProcessingOperationStartRecord record)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["RecordType"] = "ProcessingOperationStart",
+            ["OperationId"] = record.Correlation.OperationId.ToString(),
+            ["OperationInitiatedAtUtc"] = record.Correlation.InitiatedAtUtc,
+            ["OperationStartRecordedAtUtc"] = record.RecordedAtUtc
         };
     }
 

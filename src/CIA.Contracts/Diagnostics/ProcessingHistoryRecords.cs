@@ -3,6 +3,33 @@ using CIA.Contracts.Operations;
 
 namespace CIA.Contracts.Diagnostics;
 
+public sealed record ProcessingOperationStartRecord
+{
+    [JsonConstructor]
+    public ProcessingOperationStartRecord(
+        OperationCorrelation correlation,
+        string operationName,
+        DateTimeOffset recordedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(correlation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+        ProcessingAttemptRecord.ValidateRecordTimestamp(
+            recordedAtUtc,
+            correlation,
+            nameof(recordedAtUtc));
+
+        Correlation = correlation;
+        OperationName = operationName;
+        RecordedAtUtc = recordedAtUtc;
+    }
+
+    public OperationCorrelation Correlation { get; }
+
+    public string OperationName { get; }
+
+    public DateTimeOffset RecordedAtUtc { get; }
+}
+
 public sealed record ProcessingAttemptRecord
 {
     [JsonConstructor]

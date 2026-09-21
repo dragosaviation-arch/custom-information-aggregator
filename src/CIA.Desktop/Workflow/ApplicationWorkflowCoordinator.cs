@@ -207,6 +207,12 @@ public sealed class ApplicationWorkflowCoordinator :
                     "The operation was interrupted before it could start.");
             }
 
+            _processingHistoryRecorder.RecordStart(
+                new ProcessingOperationStartRecord(
+                    correlation,
+                    operationKind.ToString(),
+                    UtcNowNotBefore(correlation.InitiatedAtUtc)));
+
             return WorkflowCommandResult.Accept(correlation);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -228,6 +234,16 @@ public sealed class ApplicationWorkflowCoordinator :
             return WorkflowCommandResult.Reject(
                 WorkflowRejectionCode.ProcessingHostUnavailable,
                 "The Processing Host is not available for this operation.");
+        }
+    }
+
+    public WorkflowCommandResult EvaluateOperationPrerequisites(
+        WorkflowOperationKind operationKind)
+    {
+        lock (_stateGate)
+        {
+            return ValidateOperation(operationKind)
+                ?? WorkflowCommandResult.Accept();
         }
     }
 
@@ -362,6 +378,44 @@ public sealed class ApplicationWorkflowCoordinator :
             completion.Correlation.OperationId,
             completion.Outcome,
             completion);
+    }
+
+    public void RestoreInterruptedOperationStatus(
+        WorkflowOperationKind operationKind,
+        OperationCorrelation correlation,
+        string detail)
+    {
+        ArgumentNullException.ThrowIfNull(correlation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(detail);
+
+        WorkflowStateSnapshot? changedState = null;
+        lock (_stateGate)
+        {
+            if (_current.ActiveOperation is not null)
+            {
+                return;
+            }
+
+            _current = _current with
+            {
+                LatestOperation = new WorkflowOperationStatus(
+                    operationKind,
+                    correlation,
+                    WorkflowOperationState.InterruptedIncomplete,
+                    detail)
+            };
+            changedState = _current;
+        }
+
+        PublishStateChanged(changedState);
+    }
+
+    public void InterruptActiveOperationForShutdown()
+    {
+        MarkActiveOperationTerminal(
+            operationId: null,
+            WorkflowOperationState.InterruptedIncomplete,
+            "CIA Desktop shut down before the operation reached a controlled terminal state.");
     }
 
     private WorkflowCommandResult CompleteOperation(
@@ -699,5 +753,11 @@ public sealed class ApplicationWorkflowCoordinator :
         return status == WorkflowArtifactStatus.Unavailable
             ? WorkflowArtifactStatus.Unavailable
             : WorkflowArtifactStatus.Stale;
+    }
+
+    private static DateTimeOffset UtcNowNotBefore(DateTimeOffset minimum)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return now < minimum ? minimum : now;
     }
 }

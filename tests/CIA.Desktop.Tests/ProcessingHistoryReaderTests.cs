@@ -5,6 +5,7 @@ using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
+using CIA.Desktop.Workflow;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CIA.Desktop.Tests;
@@ -28,6 +29,10 @@ public sealed class ProcessingHistoryReaderTests
             "Source interpretation",
             correlation.InitiatedAtUtc.AddMinutes(1),
             completion);
+        var start = new ProcessingOperationStartRecord(
+            correlation,
+            "Discovery",
+            correlation.InitiatedAtUtc);
         var diagnostic = new ProcessingDiagnosticRecord(
             DiagnosticRecordId.CreateNew(),
             correlation,
@@ -45,6 +50,7 @@ public sealed class ProcessingHistoryReaderTests
         using var host = DesktopApplicationHost.Create(
             [$"--{ApplicationLogPaths.DirectoryConfigurationKey}={logs.Path}"]);
         var recorder = host.Services.GetRequiredService<IProcessingHistoryRecorder>();
+        recorder.RecordStart(start);
         recorder.RecordAttempt(attempt);
         recorder.RecordDiagnostic(diagnostic);
 
@@ -52,6 +58,8 @@ public sealed class ProcessingHistoryReaderTests
 
         Assert.HasCount(1, snapshot.Attempts);
         Assert.HasCount(1, snapshot.Diagnostics);
+        Assert.HasCount(1, snapshot.Starts);
+        Assert.AreEqual(correlation.OperationId, snapshot.Starts[0].Correlation.OperationId);
         Assert.AreEqual(correlation.OperationId, snapshot.Attempts[0].Correlation.OperationId);
         Assert.AreEqual(diagnostic.DiagnosticId, snapshot.Diagnostics[0].DiagnosticId);
     }
@@ -139,6 +147,53 @@ public sealed class ProcessingHistoryReaderTests
         Assert.HasCount(1, contained.Attempts);
         Assert.IsEmpty(contained.Diagnostics);
         Assert.IsNull(contained.ReadProblem);
+        Assert.IsFalse(contained.RecoveryEvidenceComplete);
+    }
+
+    [TestMethod]
+    public async Task ClefStartupReconciliationPersistsOneInterruptionAcrossRestarts()
+    {
+        using var logs = new TemporaryHistoryDirectory();
+        var correlation = OperationCorrelation.CreateNew(DateTimeOffset.UtcNow.AddMinutes(-1));
+
+        using (var firstContext = DesktopApplicationHost.Create(
+                   [$"--{ApplicationLogPaths.DirectoryConfigurationKey}={logs.Path}"]))
+        {
+            firstContext.Services
+                .GetRequiredService<IProcessingHistoryRecorder>()
+                .RecordStart(
+                    new ProcessingOperationStartRecord(
+                        correlation,
+                        WorkflowOperationKind.Discovery.ToString(),
+                        correlation.InitiatedAtUtc));
+        }
+
+        using (var secondContext = DesktopApplicationHost.Create(
+                   [$"--{ApplicationLogPaths.DirectoryConfigurationKey}={logs.Path}"]))
+        {
+            await secondContext.StartAsync();
+            var afterReconciliation = secondContext.Services
+                .GetRequiredService<IProcessingHistoryReader>()
+                .Read();
+            Assert.HasCount(1, afterReconciliation.Attempts);
+            Assert.AreEqual(
+                OperationOutcome.InterruptedIncomplete,
+                afterReconciliation.Attempts[0].TerminalOutcome);
+            Assert.HasCount(1, afterReconciliation.Diagnostics);
+            await secondContext.StopAsync();
+        }
+
+        using (var thirdContext = DesktopApplicationHost.Create(
+                   [$"--{ApplicationLogPaths.DirectoryConfigurationKey}={logs.Path}"]))
+        {
+            await thirdContext.StartAsync();
+            var afterAnotherRestart = thirdContext.Services
+                .GetRequiredService<IProcessingHistoryReader>()
+                .Read();
+            Assert.HasCount(1, afterAnotherRestart.Attempts);
+            Assert.HasCount(1, afterAnotherRestart.Diagnostics);
+            await thirdContext.StopAsync();
+        }
     }
 
     [TestMethod]

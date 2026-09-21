@@ -81,6 +81,11 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();
         builder.Services.AddSingleton<IProcessingHistoryReader>(
             _ => new ClefProcessingHistoryReader(logDirectory));
+        builder.Services.AddSingleton<InterruptedOperationRecoveryCoordinator>();
+        builder.Services.AddSingleton<IInterruptedOperationRecovery>(
+            services => services.GetRequiredService<InterruptedOperationRecoveryCoordinator>());
+        builder.Services.AddSingleton<IHostedService>(
+            services => services.GetRequiredService<InterruptedOperationRecoveryCoordinator>());
         builder.Services.AddSingleton(
             new SettingsWorkspaceRuntimePaths(applicationPaths, logDirectory));
         builder.Services.AddSingleton<SettingsWorkspaceViewModel>();
