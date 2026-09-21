@@ -43,20 +43,35 @@ public sealed class ExtractionCoordinator(
 
     public bool CanExtract()
     {
-        return workflowCoordinator.Current.Database == WorkflowArtifactStatus.Current
-            && workflowCoordinator.Current.ActiveOperation is null
-            && databaseBuildCoordinator.CurrentGeneration is { IsHierarchyAware: true };
+        return EvaluateReadiness().NormalOperationReady;
+    }
+
+    public WorkflowOperationReadiness EvaluateReadiness()
+    {
+        var workflowReadiness = WorkflowOperationReadiness.FromWorkflow(
+            workflowCoordinator.EvaluateOperationPrerequisites(
+                WorkflowOperationKind.Extraction));
+        if (!workflowReadiness.NormalOperationReady)
+        {
+            return workflowReadiness;
+        }
+
+        return databaseBuildCoordinator.CurrentGeneration is { IsHierarchyAware: true }
+            ? WorkflowOperationReadiness.Ready()
+            : WorkflowOperationReadiness.Unavailable(
+                workflowPrerequisitesSatisfied: true,
+                WorkflowRejectionCode.OperationFailed,
+                "Extraction requires the active hierarchy-aware published Database to be current.");
     }
 
     public async Task<WorkflowCommandResult> ExtractAsync(
         CancellationToken cancellationToken = default)
     {
         var databaseGeneration = databaseBuildCoordinator.CurrentGeneration;
-        if (!CanExtract() || databaseGeneration is null)
+        var readiness = EvaluateReadiness();
+        if (!readiness.NormalOperationReady || databaseGeneration is null)
         {
-            return WorkflowCommandResult.Reject(
-                WorkflowRejectionCode.DatabaseNotCurrent,
-                "Extraction requires the active hierarchy-aware published Database to be current.");
+            return readiness.ToCommandResult();
         }
 
         var begin = await workflowCoordinator

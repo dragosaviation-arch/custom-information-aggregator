@@ -10,4 +10,16 @@ public interface IProcessingHistoryReader
 public sealed record ProcessingHistorySnapshot(
     IReadOnlyList<ProcessingAttemptRecord> Attempts,
     IReadOnlyList<ProcessingDiagnosticRecord> Diagnostics,
-    string? ReadProblem);
+    IReadOnlyList<ProcessingOperationStartRecord> Starts,
+    string? ReadProblem)
+{
+    public bool RecoveryEvidenceComplete { get; init; } = true;
+
+    public ProcessingHistorySnapshot(
+        IReadOnlyList<ProcessingAttemptRecord> Attempts,
+        IReadOnlyList<ProcessingDiagnosticRecord> Diagnostics,
+        string? ReadProblem)
+        : this(Attempts, Diagnostics, [], ReadProblem)
+    {
+    }
+}

@@ -46,11 +46,16 @@ public sealed class ClefProcessingHistoryReader : IProcessingHistoryReader
             _maximumRecordsPerCategory,
             record => record.RecordedAtUtc,
             CreateAttemptKey);
+        var starts = new BoundedNewestSet<ProcessingOperationStartRecord>(
+            _maximumRecordsPerCategory,
+            record => record.RecordedAtUtc,
+            record => record.Correlation.OperationId.ToString());
         var diagnostics = new BoundedNewestSet<ProcessingDiagnosticRecord>(
             _maximumRecordsPerCategory,
             record => record.RecordedAtUtc,
             record => record.DiagnosticId.ToString());
         var readProblem = false;
+        var recoveryEvidenceComplete = true;
 
         try
         {
@@ -58,23 +63,33 @@ public sealed class ClefProcessingHistoryReader : IProcessingHistoryReader
             {
                 try
                 {
-                    ReadFile(filePath, attempts, diagnostics);
+                    recoveryEvidenceComplete &= ReadFile(
+                        filePath,
+                        starts,
+                        attempts,
+                        diagnostics);
                 }
                 catch (Exception exception) when (IsContainedReadFailure(exception))
                 {
                     readProblem = true;
+                    recoveryEvidenceComplete = false;
                 }
             }
         }
         catch (Exception exception) when (IsContainedReadFailure(exception))
         {
             readProblem = true;
+            recoveryEvidenceComplete = false;
         }
 
         return new ProcessingHistorySnapshot(
             attempts.Items,
             diagnostics.Items,
-            readProblem ? "Some processing history could not be read." : null);
+            starts.Items,
+            readProblem ? "Some processing history could not be read." : null)
+        {
+            RecoveryEvidenceComplete = recoveryEvidenceComplete
+        };
     }
 
     private IEnumerable<string> EnumerateHistoryFiles()
@@ -89,11 +104,13 @@ public sealed class ClefProcessingHistoryReader : IProcessingHistoryReader
                 SearchOption.TopDirectoryOnly));
     }
 
-    private static void ReadFile(
+    private static bool ReadFile(
         string filePath,
+        BoundedNewestSet<ProcessingOperationStartRecord> starts,
         BoundedNewestSet<ProcessingAttemptRecord> attempts,
         BoundedNewestSet<ProcessingDiagnosticRecord> diagnostics)
     {
+        var recoveryEvidenceComplete = true;
         using var stream = new FileStream(
             filePath,
             FileMode.Open,
@@ -103,17 +120,30 @@ public sealed class ClefProcessingHistoryReader : IProcessingHistoryReader
 
         while (reader.ReadLine() is { } line)
         {
-            if (line.Length == 0 || line.Length > MaximumClefLineLength)
+            if (line.Length == 0)
             {
                 continue;
             }
 
-            TryReadLine(line, attempts, diagnostics);
+            if (line.Length > MaximumClefLineLength)
+            {
+                recoveryEvidenceComplete = false;
+                continue;
+            }
+
+            recoveryEvidenceComplete &= TryReadLine(
+                line,
+                starts,
+                attempts,
+                diagnostics);
         }
+
+        return recoveryEvidenceComplete;
     }
 
-    private static void TryReadLine(
+    private static bool TryReadLine(
         string line,
+        BoundedNewestSet<ProcessingOperationStartRecord> starts,
         BoundedNewestSet<ProcessingAttemptRecord> attempts,
         BoundedNewestSet<ProcessingDiagnosticRecord> diagnostics)
     {
@@ -123,19 +153,32 @@ public sealed class ClefProcessingHistoryReader : IProcessingHistoryReader
             var root = document.RootElement;
             if (!TryGetString(root, "RecordType", out var recordType))
             {
-                return;
+                return true;
             }
 
-            if (recordType == "ProcessingAttempt"
+            if (recordType == "ProcessingOperationStart"
+                && TryReadStart(root, out var start))
+            {
+                starts.Add(start);
+                return true;
+            }
+            else if (recordType == "ProcessingAttempt"
                 && TryReadAttempt(root, out var attempt))
             {
                 attempts.Add(attempt);
+                return true;
             }
             else if (recordType == "ProcessingDiagnostic"
                      && TryReadDiagnostic(root, out var diagnostic))
             {
                 diagnostics.Add(diagnostic);
+                return true;
             }
+
+            return recordType is not (
+                "ProcessingOperationStart" or
+                "ProcessingAttempt" or
+                "ProcessingDiagnostic");
         }
         catch (Exception exception) when (exception is JsonException
                                           or ArgumentException
@@ -144,7 +187,30 @@ public sealed class ClefProcessingHistoryReader : IProcessingHistoryReader
                                           or FormatException)
         {
             // A malformed, partially written, unrelated, or obsolete CLEF event is contained.
+            return false;
         }
+    }
+
+    private static bool TryReadStart(
+        JsonElement root,
+        out ProcessingOperationStartRecord record)
+    {
+        record = null!;
+        if (!TryReadCorrelation(root, out var correlation)
+            || !TryGetString(root, "OperationName", out var operationName)
+            || !TryGetUtcTimestamp(
+                root,
+                "OperationStartRecordedAtUtc",
+                out var recordedAtUtc))
+        {
+            return false;
+        }
+
+        record = new ProcessingOperationStartRecord(
+            correlation,
+            operationName,
+            recordedAtUtc);
+        return true;
     }
 
     private static bool TryReadAttempt(
@@ -380,7 +446,7 @@ public sealed class ClefProcessingHistoryReader : IProcessingHistoryReader
 
     private static ProcessingHistorySnapshot EmptySnapshot()
     {
-        return new ProcessingHistorySnapshot([], [], ReadProblem: null);
+        return new ProcessingHistorySnapshot([], [], [], ReadProblem: null);
     }
 
     private static bool IsContainedReadFailure(Exception exception)

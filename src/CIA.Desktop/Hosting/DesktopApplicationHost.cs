@@ -74,6 +74,8 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<WorkbookExportCoordinator>();
         builder.Services.AddSingleton<IWorkingStateClient, ProcessingHostWorkingStateClient>();
         builder.Services.AddSingleton<WorkingStateCoordinator>();
+        builder.Services.AddSingleton<IWorkflowOperationReadiness,
+            WorkflowOperationReadinessProvider>();
         builder.Services.AddSingleton<IExportFolderPicker, WindowsExportFolderPicker>();
         builder.Services.AddSingleton<IWorkbookCollisionResolver, WindowsWorkbookCollisionResolver>();
         builder.Services.AddSingleton<ISettingsFolderPicker, WindowsSettingsFolderPicker>();
@@ -81,6 +83,11 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();
         builder.Services.AddSingleton<IProcessingHistoryReader>(
             _ => new ClefProcessingHistoryReader(logDirectory));
+        builder.Services.AddSingleton<InterruptedOperationRecoveryCoordinator>();
+        builder.Services.AddSingleton<IInterruptedOperationRecovery>(
+            services => services.GetRequiredService<InterruptedOperationRecoveryCoordinator>());
+        builder.Services.AddSingleton<IHostedService>(
+            services => services.GetRequiredService<InterruptedOperationRecoveryCoordinator>());
         builder.Services.AddSingleton(
             new SettingsWorkspaceRuntimePaths(applicationPaths, logDirectory));
         builder.Services.AddSingleton<SettingsWorkspaceViewModel>();

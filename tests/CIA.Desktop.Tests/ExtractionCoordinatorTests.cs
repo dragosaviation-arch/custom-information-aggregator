@@ -5,6 +5,7 @@ using CIA.Contracts.Extraction;
 using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Contracts.WorkingState;
 using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
 using CIA.Desktop.Database;
@@ -15,6 +16,7 @@ using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
+using CIA.Desktop.WorkingState;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.Desktop.Tests;
@@ -22,6 +24,50 @@ namespace CIA.Desktop.Tests;
 [TestClass]
 public sealed class ExtractionCoordinatorTests
 {
+    [TestMethod]
+    public async Task ExtractionReadinessUsesTheSameCurrentPublishedDatabaseGateAsTheCommand()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        var coordinator = context.CreateExtractionCoordinator(
+            new RecordingExtractionClient((correlation, basis) => Success(correlation, basis)));
+        var export = new WorkbookExportCoordinator(
+            coordinator,
+            context.Workflow,
+            new RecordingWorkbookExportClient((_, _, _, _) =>
+                throw new AssertFailedException("Extraction readiness must not export.")),
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        var workingState = new WorkingStateCoordinator(
+            context.Sources,
+            context.Configuration,
+            context.DatabaseCoordinator,
+            context.Workflow,
+            new RejectUnexpectedWorkingStateClient(),
+            NullLogger<WorkingStateCoordinator>.Instance);
+        using var readiness = new WorkflowOperationReadinessProvider(
+            context.Workflow,
+            context.DatabaseCoordinator,
+            coordinator,
+            export,
+            workingState);
+        var recoveryHistory = new RecoveryHistoryStore(WorkflowOperationKind.Extraction);
+        using var recovery = new InterruptedOperationRecoveryCoordinator(
+            recoveryHistory,
+            recoveryHistory,
+            context.Workflow,
+            readiness);
+        recovery.ReconcileStartupHistory();
+
+        Assert.IsFalse(coordinator.EvaluateReadiness().NormalOperationReady);
+        Assert.IsFalse(coordinator.CanExtract());
+        Assert.IsFalse(recovery.Current?.NormalOperationReady);
+
+        await context.BuildCurrentDatabaseAsync();
+
+        Assert.IsTrue(coordinator.EvaluateReadiness().NormalOperationReady);
+        Assert.IsTrue(coordinator.CanExtract());
+        Assert.IsTrue(recovery.Current?.NormalOperationReady);
+    }
+
     [TestMethod]
     public async Task SuccessfulExtractionUsesCapturedDatabaseAndBecomesCurrent()
     {
@@ -516,16 +562,56 @@ public sealed class ExtractionCoordinatorTests
             exportFolderPicker: new StaticExportFolderPicker(null),
             workbookCollisionResolver: collisionResolver);
         using var directory = new TemporaryDirectory("CIA.SPR88.Desktop.Tests");
+        var workingState = new WorkingStateCoordinator(
+            context.Sources,
+            context.Configuration,
+            context.DatabaseCoordinator,
+            context.Workflow,
+            new RejectUnexpectedWorkingStateClient(),
+            NullLogger<WorkingStateCoordinator>.Instance);
+        using var readiness = new WorkflowOperationReadinessProvider(
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extraction,
+            export,
+            workingState);
+        var recoveryHistory = new RecoveryHistoryStore(WorkflowOperationKind.Export);
+        using var recovery = new InterruptedOperationRecoveryCoordinator(
+            recoveryHistory,
+            recoveryHistory,
+            context.Workflow,
+            readiness);
+        recovery.ReconcileStartupHistory();
 
         viewModel.OutputFolder = Path.Combine(directory.Path, "missing");
         Assert.IsFalse(viewModel.IsExportAvailable);
+        Assert.IsFalse(export.EvaluateReadiness().NormalOperationReady);
+        Assert.IsFalse(recovery.Current?.NormalOperationReady);
         viewModel.OutputFolder = directory.Path;
         Assert.IsTrue(viewModel.IsExportAvailable);
+        Assert.IsTrue(export.EvaluateReadiness().NormalOperationReady);
+        Assert.IsTrue(recovery.Current?.NormalOperationReady);
+
+        var conflictingPath = Path.Combine(
+            directory.Path,
+            viewModel.WorkbookDefinitions.Single().FileName);
+        await File.WriteAllTextAsync(conflictingPath, "existing workbook placeholder");
+        var conflictReadiness = export.EvaluateReadiness();
+        Assert.IsFalse(conflictReadiness.NormalOperationReady);
+        Assert.IsTrue(conflictReadiness.AdditionalUserInputRequired);
+        Assert.IsFalse(recovery.Current?.NormalOperationReady);
+        Assert.IsTrue(recovery.Current?.AdditionalUserInputRequired);
+        Assert.IsTrue(viewModel.IsExportAvailable);
+        File.Delete(conflictingPath);
+        Assert.IsTrue(export.EvaluateReadiness().NormalOperationReady);
 
         viewModel.ExportColumns.Single().IsExported = false;
         Assert.IsFalse(viewModel.IsExportAvailable);
+        Assert.IsFalse(export.EvaluateReadiness().NormalOperationReady);
+        Assert.IsFalse(recovery.Current?.NormalOperationReady);
         viewModel.ExportColumns.Single().IsExported = true;
         Assert.IsTrue(viewModel.IsExportAvailable);
+        Assert.IsTrue(export.EvaluateReadiness().NormalOperationReady);
 
         viewModel.IsSelectedSetExportEnabled = false;
         Assert.IsFalse(viewModel.IsExportAvailable);
@@ -535,6 +621,7 @@ public sealed class ExtractionCoordinatorTests
         viewModel.CreateExportWorkbookCommand.Execute(null);
         viewModel.WorkbookDefinitions[^1].FileName = viewModel.WorkbookDefinitions[0].FileName;
         Assert.IsFalse(viewModel.IsExportAvailable);
+        Assert.IsFalse(export.EvaluateReadiness().NormalOperationReady);
         Assert.AreEqual(0, exportClient.CallCount);
     }
 
@@ -1235,5 +1322,58 @@ public sealed class ExtractionCoordinatorTests
         public void RecordDiagnostic(ProcessingDiagnosticRecord record)
         {
         }
+    }
+
+    private sealed class RecoveryHistoryStore :
+        IProcessingHistoryReader,
+        IProcessingHistoryRecorder
+    {
+        private readonly ProcessingOperationStartRecord _start;
+        private readonly List<ProcessingAttemptRecord> _attempts = [];
+        private readonly List<ProcessingDiagnosticRecord> _diagnostics = [];
+
+        public RecoveryHistoryStore(WorkflowOperationKind operationKind)
+        {
+            var correlation = OperationCorrelation.CreateNew(
+                DateTimeOffset.UtcNow.AddMinutes(-2));
+            _start = new ProcessingOperationStartRecord(
+                correlation,
+                operationKind.ToString(),
+                correlation.InitiatedAtUtc);
+        }
+
+        public ProcessingHistorySnapshot Read() => new(
+            _attempts.ToArray(),
+            _diagnostics.ToArray(),
+            [_start],
+            ReadProblem: null)
+        {
+            RecoveryEvidenceComplete = true
+        };
+
+        public void RecordStart(ProcessingOperationStartRecord record)
+        {
+        }
+
+        public void RecordAttempt(ProcessingAttemptRecord record) => _attempts.Add(record);
+
+        public void RecordDiagnostic(ProcessingDiagnosticRecord record) =>
+            _diagnostics.Add(record);
+    }
+
+    private sealed class RejectUnexpectedWorkingStateClient : IWorkingStateClient
+    {
+        public Task<WorkingStateClientResult> SaveAsync(
+            OperationCorrelation correlation,
+            string targetPath,
+            WorkingStateSnapshot snapshot,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Readiness evaluation must not save working state.");
+
+        public Task<WorkingStateClientResult> RestoreAsync(
+            OperationCorrelation correlation,
+            string packagePath,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Readiness evaluation must not restore working state.");
     }
 }

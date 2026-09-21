@@ -185,6 +185,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         {
             _extractionCoordinator.PublishedResultChanged += OnPublishedExtractionChanged;
         }
+
+        SynchronizeExportReadinessContext();
     }
 
     public ReadOnlyObservableCollection<DatabaseColumnPresentation> Columns { get; }
@@ -497,21 +499,9 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     {
         get
         {
-            if (_workbookExportCoordinator?.CanExport() != true
-                || _extractionCoordinator?.CurrentResult is not { } extractionResult
-                || !Directory.Exists(OutputFolder))
-            {
-                return false;
-            }
-
-            var configuration = CaptureExportConfiguration();
-            var validation = ExportConfigurationValidator.Validate(
-                configuration,
-                extractionResult);
-            return validation.IsValid
-                && validation.RunnableWorkbooks.Count > 0
-                && configuration.SourceSets.Any(set =>
-                    set.IsEnabled && set.Fields.Any(exportField => exportField.IsValueIncluded));
+            var readiness = _workbookExportCoordinator?.EvaluateReadiness();
+            return readiness is { NormalOperationReady: true }
+                or { AdditionalUserInputRequired: true };
         }
     }
 
@@ -1557,8 +1547,29 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private void NotifyExportReadinessChanged()
     {
+        SynchronizeExportReadinessContext();
         OnPropertyChanged(nameof(IsExportAvailable));
         ExportToExcelCommand.NotifyCanExecuteChanged();
+    }
+
+    private void SynchronizeExportReadinessContext()
+    {
+        if (_workbookExportCoordinator is null)
+        {
+            return;
+        }
+
+        ExportConfigurationSnapshot? configuration = null;
+        try
+        {
+            configuration = CaptureExportConfiguration();
+        }
+        catch (ArgumentException)
+        {
+            // An incomplete presentation configuration is truthfully not export-ready.
+        }
+
+        _workbookExportCoordinator.UpdateReadinessContext(configuration, OutputFolder);
     }
 
     private void CaptureLatestExtractionAttempt(WorkflowStateSnapshot state)

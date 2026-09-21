@@ -22,6 +22,9 @@ public interface IApplicationWorkflowCoordinator
         WorkflowOperationKind operationKind,
         CancellationToken cancellationToken = default);
 
+    WorkflowCommandResult EvaluateOperationPrerequisites(
+        WorkflowOperationKind operationKind);
+
     Task<WorkflowCommandResult> RequestCancellationAsync(
         CancellationToken cancellationToken = default);
 
@@ -30,4 +33,11 @@ public interface IApplicationWorkflowCoordinator
         OperationOutcome outcome);
 
     WorkflowCommandResult CompleteOperation(OperationCompletion completion);
+
+    void RestoreInterruptedOperationStatus(
+        WorkflowOperationKind operationKind,
+        OperationCorrelation correlation,
+        string detail);
+
+    void InterruptActiveOperationForShutdown();
 }

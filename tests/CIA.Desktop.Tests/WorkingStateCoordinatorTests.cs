@@ -1,4 +1,5 @@
 using CIA.Contracts.Database;
+using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -23,6 +24,7 @@ public sealed class WorkingStateCoordinatorTests
     {
         var prepared = await CreateCurrentDatabaseContextAsync();
 
+        Assert.IsTrue(prepared.Context.Coordinator.EvaluateSaveReadiness().NormalOperationReady);
         var result = await prepared.Context.Coordinator.SaveAsync("C:\\saved\\current.cia");
 
         Assert.IsTrue(result.Accepted, result.FailureDescription);
@@ -38,6 +40,7 @@ public sealed class WorkingStateCoordinatorTests
     {
         var context = CreateContext();
 
+        Assert.IsTrue(context.Coordinator.EvaluateSaveReadiness().NormalOperationReady);
         var result = await context.Coordinator.SaveAsync("C:\\saved\\empty.cia");
 
         Assert.IsTrue(result.Accepted, result.FailureDescription);
@@ -68,14 +71,45 @@ public sealed class WorkingStateCoordinatorTests
         var change = prepared.Loading.SetInclusion(
             [prepared.Context.Sources.Items.Single()],
             false);
+        var readiness = prepared.Context.Coordinator.EvaluateSaveReadiness();
         var result = await prepared.Context.Coordinator.SaveAsync(target.Path);
 
         Assert.IsTrue(change.Accepted);
         Assert.AreEqual(WorkflowArtifactStatus.Stale, prepared.Context.Workflow.Current.Database);
+        Assert.IsTrue(readiness.WorkflowPrerequisitesSatisfied);
+        Assert.IsFalse(readiness.NormalOperationReady);
+        StringAssert.Contains(readiness.UnavailableReason, "Update or rebuild");
         Assert.IsFalse(result.Accepted);
         StringAssert.Contains(result.FailureDescription, "Update or rebuild");
         Assert.AreEqual(0, prepared.Context.Client.SaveCallCount);
         CollectionAssert.AreEqual(original, await File.ReadAllBytesAsync(target.Path));
+    }
+
+    [TestMethod]
+    public async Task InterruptedSaveRecoveryUsesTheSameStaleDatabaseGuardAsNormalSave()
+    {
+        var prepared = await CreateCurrentDatabaseContextAsync();
+        Assert.IsTrue(prepared.Context.Workflow.RecordDiscoveryConfigurationChanged().Accepted);
+        var sharedReadiness = prepared.Context.Coordinator.EvaluateSaveReadiness();
+        var start = new ProcessingOperationStartRecord(
+            OperationCorrelation.CreateNew(DateTimeOffset.UtcNow.AddMinutes(-2)),
+            WorkflowOperationKind.WorkingStateSave.ToString(),
+            DateTimeOffset.UtcNow.AddMinutes(-2));
+        var history = new RecoveryHistoryStore(start);
+        using var recovery = new InterruptedOperationRecoveryCoordinator(
+            history,
+            history,
+            prepared.Context.Workflow,
+            new SaveOperationReadiness(prepared.Context.Coordinator));
+
+        recovery.ReconcileStartupHistory();
+
+        Assert.IsFalse(sharedReadiness.NormalOperationReady);
+        Assert.IsTrue(recovery.Current?.WorkflowPrerequisitesSatisfied);
+        Assert.IsFalse(recovery.Current?.NormalOperationReady);
+        Assert.AreEqual(sharedReadiness.UnavailableReason, recovery.Current?.UnavailableReason);
+        Assert.AreEqual(0, prepared.Context.Client.SaveCallCount);
+        Assert.IsNull(prepared.Context.Workflow.Current.ActiveOperation);
     }
 
     [TestMethod]
@@ -180,6 +214,22 @@ public sealed class WorkingStateCoordinatorTests
         Assert.IsFalse(result.Accepted);
         Assert.AreEqual(0, context.Client.RestoreCallCount);
         Assert.AreEqual(WorkflowOperationKind.WorkingStateSave, context.Workflow.Current.ActiveOperation?.Kind);
+    }
+
+    [TestMethod]
+    public void RestoreReadinessRequiresPackageSelectionWithoutClaimingExecutableReadiness()
+    {
+        var context = CreateContext();
+
+        var withoutSelection = context.Coordinator.EvaluateRestoreReadiness(packagePath: null);
+        var withSelection = context.Coordinator.EvaluateRestoreReadiness("C:\\saved\\state.cia");
+
+        Assert.IsTrue(withoutSelection.WorkflowPrerequisitesSatisfied);
+        Assert.IsFalse(withoutSelection.NormalOperationReady);
+        Assert.IsTrue(withoutSelection.AdditionalUserInputRequired);
+        StringAssert.Contains(withoutSelection.UnavailableReason, "Select a .cia");
+        Assert.IsTrue(withSelection.NormalOperationReady);
+        Assert.IsFalse(withSelection.AdditionalUserInputRequired);
     }
 
     [TestMethod]
@@ -365,6 +415,48 @@ public sealed class WorkingStateCoordinatorTests
                 null,
                 null));
         }
+    }
+
+    private sealed class SaveOperationReadiness(WorkingStateCoordinator coordinator) :
+        IWorkflowOperationReadiness
+    {
+        public event EventHandler? ReadinessChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public WorkflowOperationReadiness Evaluate(WorkflowOperationKind operationKind)
+        {
+            Assert.AreEqual(WorkflowOperationKind.WorkingStateSave, operationKind);
+            return coordinator.EvaluateSaveReadiness();
+        }
+    }
+
+    private sealed class RecoveryHistoryStore(ProcessingOperationStartRecord start) :
+        IProcessingHistoryReader,
+        IProcessingHistoryRecorder
+    {
+        private readonly List<ProcessingAttemptRecord> _attempts = [];
+        private readonly List<ProcessingDiagnosticRecord> _diagnostics = [];
+
+        public ProcessingHistorySnapshot Read() => new(
+            _attempts.ToArray(),
+            _diagnostics.ToArray(),
+            [start],
+            ReadProblem: null)
+        {
+            RecoveryEvidenceComplete = true
+        };
+
+        public void RecordStart(ProcessingOperationStartRecord record)
+        {
+        }
+
+        public void RecordAttempt(ProcessingAttemptRecord record) => _attempts.Add(record);
+
+        public void RecordDiagnostic(ProcessingDiagnosticRecord record) =>
+            _diagnostics.Add(record);
     }
 
     private sealed class ReadySupervisor : IProcessingHostSupervisor
