@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CIA.Core.Runtime;
@@ -48,18 +49,30 @@ public sealed class ProfileArtifactFileOperations : IProfileArtifactFileOperatio
 public sealed class ProfileArtifactStore
 {
     public const string FileExtension = ".cia-profile.json";
+    public const string PublicationLockFileName = ".cia-profile-store.lock";
     public const long MaximumArtifactBytes = 8 * 1024 * 1024;
+    private static readonly TimeSpan DefaultPublicationLockTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PublicationLockRetryInterval = TimeSpan.FromMilliseconds(20);
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
     private readonly string _profilesDirectory;
     private readonly IProfileArtifactFileOperations _fileOperations;
+    private readonly TimeSpan _publicationLockTimeout;
 
     public ProfileArtifactStore(
         ApplicationPaths applicationPaths,
-        IProfileArtifactFileOperations? fileOperations = null)
+        IProfileArtifactFileOperations? fileOperations = null,
+        TimeSpan? publicationLockTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(applicationPaths);
         _profilesDirectory = Canonicalize(applicationPaths.ProfilesDirectory);
         _fileOperations = fileOperations ?? new ProfileArtifactFileOperations();
+        _publicationLockTimeout = publicationLockTimeout ?? DefaultPublicationLockTimeout;
+        if (_publicationLockTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(publicationLockTimeout),
+                "The profile publication-lock timeout must be positive.");
+        }
     }
 
     public string ProfilesDirectory => _profilesDirectory;
@@ -169,6 +182,7 @@ public sealed class ProfileArtifactStore
             ProfileArtifactValidator.Validate(artifact);
             EnsureProfilesDirectoryForWrite();
             var targetPath = ResolveTargetFileName(targetFileName);
+            using var publicationLock = AcquirePublicationLock();
             if (File.Exists(targetPath))
             {
                 throw new IOException("The target profile file already exists.");
@@ -191,20 +205,42 @@ public sealed class ProfileArtifactStore
         }
     }
 
-    public ProfileArtifactWriteResult Update(ProfileArtifactV1 replacement)
+    public ProfileArtifactWriteResult Update(
+        ProfileArtifactV1 replacement,
+        ProfileArtifactFingerprint expectedCurrentFingerprint)
     {
         try
         {
             ProfileArtifactValidator.Validate(replacement);
+            if (!ProfileArtifactFingerprint.IsValid(expectedCurrentFingerprint.Value))
+            {
+                throw new InvalidDataException(
+                    "A valid current-profile fingerprint is required for replacement.");
+            }
+
+            EnsureProfilesDirectoryForWrite();
+            using var publicationLock = AcquirePublicationLock();
             var existing = FindById(replacement.ProfileId);
-            if (existing.State != ProfileArtifactReadState.Valid || existing.Artifact is null)
+            if (existing.State != ProfileArtifactReadState.Valid
+                || existing.Artifact is null
+                || existing.Fingerprint is not { } authoritativeFingerprint)
             {
                 throw new InvalidDataException(existing.Problem ?? "The profile is not available for update.");
             }
 
+            if (authoritativeFingerprint != expectedCurrentFingerprint)
+            {
+                throw new InvalidDataException(
+                    "The profile changed after it was read; reload it before saving the replacement.");
+            }
+
             ProfileArtifactValidator.ValidateReplacement(existing.Artifact, replacement);
             var targetPath = ValidateProfilePath(existing.Path, requireProfileExtension: true);
-            return WriteCandidateAndPublish(targetPath, replacement, existing.Artifact);
+            return WriteCandidateAndPublish(
+                targetPath,
+                replacement,
+                existing.Artifact,
+                authoritativeFingerprint);
         }
         catch (Exception exception) when (IsControlledWriteFailure(exception))
         {
@@ -222,7 +258,8 @@ public sealed class ProfileArtifactStore
     private ProfileArtifactWriteResult WriteCandidateAndPublish(
         string targetPath,
         ProfileArtifactV1 artifact,
-        ProfileArtifactV1? replacement)
+        ProfileArtifactV1? replacement,
+        ProfileArtifactFingerprint? expectedCurrentFingerprint = null)
     {
         var candidatePath = Path.Combine(
             _profilesDirectory,
@@ -262,7 +299,7 @@ public sealed class ProfileArtifactStore
                 var current = InspectCore(targetPath);
                 if (current.State != ProfileArtifactReadState.Valid
                     || current.Artifact?.ProfileId != replacement.ProfileId
-                    || !Serialize(current.Artifact).AsSpan().SequenceEqual(Serialize(replacement)))
+                    || current.Fingerprint != expectedCurrentFingerprint)
                 {
                     throw new InvalidDataException(
                         "The existing profile changed before replacement publication.");
@@ -278,7 +315,10 @@ public sealed class ProfileArtifactStore
                 throw new InvalidDataException("The published profile could not be verified.");
             }
 
-            return ProfileArtifactWriteResult.Success(targetPath, published.Artifact);
+            return ProfileArtifactWriteResult.Success(
+                targetPath,
+                published.Artifact,
+                published.Fingerprint!.Value);
         }
         finally
         {
@@ -350,7 +390,10 @@ public sealed class ProfileArtifactStore
                 fullPath,
                 ProfileArtifactReadState.Valid,
                 artifact,
-                Problem: null);
+                Problem: null)
+            {
+                Fingerprint = ProfileArtifactFingerprint.FromBytes(bytes)
+            };
         }
         catch (Exception exception) when (exception is JsonException
                                           or InvalidDataException
@@ -428,6 +471,49 @@ public sealed class ProfileArtifactStore
 
         Directory.CreateDirectory(_profilesDirectory);
         EnsureSafeProfilesRoot();
+    }
+
+    private ProfileStorePublicationLease AcquirePublicationLock()
+    {
+        var lockPath = ValidateProfilePath(
+            Path.Combine(_profilesDirectory, PublicationLockFileName),
+            requireProfileExtension: false);
+        var stopwatch = Stopwatch.StartNew();
+        while (true)
+        {
+            FileStream? stream = null;
+            try
+            {
+                stream = new FileStream(
+                    lockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.WriteThrough);
+                EnsureNotReparsePoint(
+                    lockPath,
+                    "The profile publication lock cannot be a reparse point.");
+                return new ProfileStorePublicationLease(stream);
+            }
+            catch (IOException exception) when (IsSharingViolation(exception))
+            {
+                stream?.Dispose();
+                if (stopwatch.Elapsed >= _publicationLockTimeout)
+                {
+                    throw new IOException(
+                        "Timed out waiting for exclusive profile publication ownership.",
+                        exception);
+                }
+
+                Thread.Sleep(PublicationLockRetryInterval);
+            }
+            catch
+            {
+                stream?.Dispose();
+                throw;
+            }
+        }
     }
 
     private void EnsureSafeProfilesRoot()
@@ -529,4 +615,17 @@ public sealed class ProfileArtifactStore
     private static bool IsControlledWriteFailure(Exception exception) =>
         IsControlledFileFailure(exception)
         || exception is JsonException;
+
+    private static bool IsSharingViolation(IOException exception) =>
+        (uint)exception.HResult is 0x80070020 or 0x80070021;
+
+    private sealed class ProfileStorePublicationLease(FileStream stream) : IDisposable
+    {
+        private FileStream? _stream = stream;
+
+        public void Dispose()
+        {
+            Interlocked.Exchange(ref _stream, null)?.Dispose();
+        }
+    }
 }

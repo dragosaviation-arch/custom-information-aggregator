@@ -73,11 +73,59 @@ public enum ProfileArtifactReadState
     NotFound = 6
 }
 
+public readonly record struct ProfileArtifactFingerprint
+{
+    private ProfileArtifactFingerprint(string value)
+    {
+        Value = value;
+    }
+
+    public string Value { get; }
+
+    public static ProfileArtifactFingerprint Parse(string value)
+    {
+        if (!IsValid(value))
+        {
+            throw new ArgumentException(
+                "A profile artifact fingerprint must be a 64-character SHA-256 value.",
+                nameof(value));
+        }
+
+        return new ProfileArtifactFingerprint(value.ToLowerInvariant());
+    }
+
+    public override string ToString() => Value;
+
+    internal static ProfileArtifactFingerprint FromBytes(ReadOnlySpan<byte> content) =>
+        new(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(content)));
+
+    internal static bool IsValid(string? value)
+    {
+        if (value is null || value.Length != 64)
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (!Uri.IsHexDigit(character))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}
+
 public sealed record ProfileArtifactInspection(
     string Path,
     ProfileArtifactReadState State,
     ProfileArtifactV1? Artifact,
-    string? Problem);
+    string? Problem)
+{
+    public ProfileArtifactFingerprint? Fingerprint { get; init; }
+}
 
 public sealed record ProfileArtifactInventory(IReadOnlyList<ProfileArtifactInspection> Items)
 {
@@ -93,10 +141,16 @@ public sealed record ProfileArtifactWriteResult(
     ProfileArtifactV1? Artifact,
     string? Problem)
 {
+    public ProfileArtifactFingerprint? Fingerprint { get; init; }
+
     internal static ProfileArtifactWriteResult Success(
         string path,
-        ProfileArtifactV1 artifact) =>
-        new(true, path, artifact, Problem: null);
+        ProfileArtifactV1 artifact,
+        ProfileArtifactFingerprint fingerprint) =>
+        new(true, path, artifact, Problem: null)
+        {
+            Fingerprint = fingerprint
+        };
 
     internal static ProfileArtifactWriteResult Failure(string problem) =>
         new(false, Path: null, Artifact: null, problem);

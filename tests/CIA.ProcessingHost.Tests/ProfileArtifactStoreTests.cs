@@ -21,7 +21,7 @@ public sealed class ProfileArtifactStoreTests
         var inventory = environment.Store.CreateInventory();
 
         Assert.IsTrue(write.Succeeded, write.Problem);
-        Assert.HasCount(1, Directory.GetFiles(environment.Paths.ProfilesDirectory));
+        Assert.HasCount(1, GetPublishedProfilePaths(environment.Paths.ProfilesDirectory));
         Assert.HasCount(1, inventory.ValidProfiles);
         var loaded = inventory.ValidProfiles.Single();
         Assert.AreEqual(artifact.ProfileId, loaded.ProfileId);
@@ -312,7 +312,144 @@ public sealed class ProfileArtifactStoreTests
         Assert.IsFalse(environment.Store.Update(artifact with
         {
             UpdatedAtUtc = artifact.UpdatedAtUtc.AddMinutes(1)
-        }).Succeeded);
+        }, created.Fingerprint!.Value).Succeeded);
+    }
+
+    [TestMethod]
+    public async Task ConcurrentSameIdCreatesAcrossStoresPublishExactlyOneArtifact()
+    {
+        using var environment = new ProfileTestEnvironment();
+        using var blockingOperations = new BlockingFileOperations();
+        var firstStore = new ProfileArtifactStore(environment.Paths, blockingOperations);
+        var secondStore = new ProfileArtifactStore(environment.Paths);
+        var artifact = CreateInformationSelection();
+        var firstTask = Task.Run(() => firstStore.Create(
+            "first.cia-profile.json",
+            artifact));
+        Assert.IsTrue(blockingOperations.WaitUntilEntered(TimeSpan.FromSeconds(10)));
+        var secondTask = Task.Run(() => secondStore.Create(
+            "second.cia-profile.json",
+            artifact));
+        try
+        {
+            Assert.AreNotSame(
+                secondTask,
+                await Task.WhenAny(secondTask, Task.Delay(TimeSpan.FromMilliseconds(150))));
+        }
+        finally
+        {
+            blockingOperations.Release();
+        }
+
+        var results = await Task.WhenAll(firstTask, secondTask);
+        var inventory = secondStore.CreateInventory();
+
+        Assert.AreEqual(1, results.Count(result => result.Succeeded));
+        Assert.AreEqual(1, results.Count(result => !result.Succeeded));
+        Assert.HasCount(1, inventory.ValidProfiles);
+        Assert.AreEqual(artifact.ProfileId, inventory.ValidProfiles.Single().ProfileId);
+        Assert.IsFalse(inventory.Items.Any(item =>
+            item.State == ProfileArtifactReadState.AmbiguousProfileId));
+        Assert.IsEmpty(Directory.GetFiles(environment.Paths.ProfilesDirectory, "*.incomplete"));
+    }
+
+    [TestMethod]
+    public async Task ConcurrentUpdatesAcrossStoresRejectStaleAcceptedGeneration()
+    {
+        using var environment = new ProfileTestEnvironment();
+        var current = CreateInformationSelection();
+        var created = environment.Store.Create("profile.cia-profile.json", current);
+        using var blockingOperations = new BlockingFileOperations();
+        var firstStore = new ProfileArtifactStore(environment.Paths, blockingOperations);
+        var secondStore = new ProfileArtifactStore(environment.Paths);
+        var firstReplacement = current with
+        {
+            Name = "First accepted update",
+            UpdatedAtUtc = current.UpdatedAtUtc.AddMinutes(1)
+        };
+        var staleReplacement = current with
+        {
+            Name = "Stale conflicting update",
+            UpdatedAtUtc = current.UpdatedAtUtc.AddMinutes(2)
+        };
+        var firstTask = Task.Run(() => firstStore.Update(
+            firstReplacement,
+            created.Fingerprint!.Value));
+        Assert.IsTrue(blockingOperations.WaitUntilEntered(TimeSpan.FromSeconds(10)));
+        var staleTask = Task.Run(() => secondStore.Update(
+            staleReplacement,
+            created.Fingerprint!.Value));
+        try
+        {
+            Assert.AreNotSame(
+                staleTask,
+                await Task.WhenAny(staleTask, Task.Delay(TimeSpan.FromMilliseconds(150))));
+        }
+        finally
+        {
+            blockingOperations.Release();
+        }
+
+        var firstResult = await firstTask;
+        var staleResult = await staleTask;
+        var inventory = secondStore.CreateInventory();
+        var final = inventory.ValidProfiles.Single();
+
+        Assert.IsTrue(firstResult.Succeeded, firstResult.Problem);
+        Assert.IsFalse(staleResult.Succeeded);
+        StringAssert.Contains(staleResult.Problem, "changed after it was read");
+        Assert.AreEqual(current.ProfileId, final.ProfileId);
+        Assert.AreEqual(current.CreatedAtUtc, final.CreatedAtUtc);
+        Assert.AreEqual(firstReplacement.UpdatedAtUtc, final.UpdatedAtUtc);
+        Assert.AreEqual(firstReplacement.Name, final.Name);
+        Assert.IsFalse(inventory.Items.Any(item =>
+            item.State == ProfileArtifactReadState.AmbiguousProfileId));
+        Assert.IsEmpty(Directory.GetFiles(environment.Paths.ProfilesDirectory, "*.incomplete"));
+    }
+
+    [TestMethod]
+    public async Task PublicationOwnershipReleasesAfterFailureAndLockShellIsIgnored()
+    {
+        using var environment = new ProfileTestEnvironment();
+        using var blockingOperations = new BlockingFileOperations
+        {
+            FailAfterRelease = true
+        };
+        var failingStore = new ProfileArtifactStore(environment.Paths, blockingOperations);
+        var waitingStore = new ProfileArtifactStore(environment.Paths);
+        var failedTask = Task.Run(() => failingStore.Create(
+            "failed.cia-profile.json",
+            CreateBlacklist()));
+        Assert.IsTrue(blockingOperations.WaitUntilEntered(TimeSpan.FromSeconds(10)));
+        var successfulArtifact = CreateInformationSelection();
+        var waitingTask = Task.Run(() => waitingStore.Create(
+            "successful.cia-profile.json",
+            successfulArtifact));
+        try
+        {
+            Assert.AreNotSame(
+                waitingTask,
+                await Task.WhenAny(waitingTask, Task.Delay(TimeSpan.FromMilliseconds(150))));
+        }
+        finally
+        {
+            blockingOperations.Release();
+        }
+
+        var failed = await failedTask;
+        var succeeded = await waitingTask;
+        var later = waitingStore.Create("later.cia-profile.json", CreateBlacklist());
+        var inventory = waitingStore.CreateInventory();
+
+        Assert.IsFalse(failed.Succeeded);
+        Assert.IsTrue(succeeded.Succeeded, succeeded.Problem);
+        Assert.IsTrue(later.Succeeded, later.Problem);
+        Assert.IsTrue(File.Exists(Path.Combine(
+            environment.Paths.ProfilesDirectory,
+            ProfileArtifactStore.PublicationLockFileName)));
+        Assert.HasCount(2, inventory.ValidProfiles);
+        Assert.HasCount(2, inventory.Items);
+        Assert.IsEmpty(Directory.GetFiles(environment.Paths.ProfilesDirectory, "*.incomplete"));
     }
 
     [TestMethod]
@@ -328,7 +465,7 @@ public sealed class ProfileArtifactStoreTests
             CreateInformationSelection());
 
         Assert.IsFalse(result.Succeeded);
-        Assert.IsEmpty(Directory.GetFiles(environment.Paths.ProfilesDirectory));
+        Assert.IsEmpty(GetPublishedProfilePaths(environment.Paths.ProfilesDirectory));
     }
 
     [TestMethod]
@@ -344,7 +481,7 @@ public sealed class ProfileArtifactStoreTests
             CreateInformationSelection());
 
         Assert.IsFalse(result.Succeeded);
-        Assert.IsEmpty(Directory.GetFiles(environment.Paths.ProfilesDirectory));
+        Assert.IsEmpty(GetPublishedProfilePaths(environment.Paths.ProfilesDirectory));
     }
 
     [TestMethod]
@@ -361,7 +498,7 @@ public sealed class ProfileArtifactStoreTests
             UpdatedAtUtc = current.UpdatedAtUtc.AddMinutes(1)
         };
 
-        var result = environment.Store.Update(replacement);
+        var result = environment.Store.Update(replacement, created.Fingerprint!.Value);
 
         Assert.IsFalse(result.Succeeded);
         CollectionAssert.AreEqual(before, File.ReadAllBytes(created.Path!));
@@ -380,7 +517,7 @@ public sealed class ProfileArtifactStoreTests
             UpdatedAtUtc = current.UpdatedAtUtc.AddHours(1)
         };
 
-        var result = environment.Store.Update(replacement);
+        var result = environment.Store.Update(replacement, created.Fingerprint!.Value);
         var loaded = environment.Store.Inspect(created.Path!).Artifact!;
 
         Assert.IsTrue(result.Succeeded, result.Problem);
@@ -406,7 +543,7 @@ public sealed class ProfileArtifactStoreTests
         Assert.IsFalse(File.Exists(Path.Combine(
             environment.Paths.ProfilesDirectory,
             "corrupted-candidate.cia-profile.json")));
-        Assert.IsEmpty(Directory.GetFiles(environment.Paths.ProfilesDirectory));
+        Assert.IsEmpty(GetPublishedProfilePaths(environment.Paths.ProfilesDirectory));
     }
 
     [TestMethod]
@@ -523,6 +660,12 @@ public sealed class ProfileArtifactStoreTests
         Assert.HasCount(1, environment.Store.CreateInventory().ValidProfiles);
     }
 
+    private static string[] GetPublishedProfilePaths(string profilesDirectory) =>
+        Directory.GetFiles(
+            profilesDirectory,
+            $"*{ProfileArtifactStore.FileExtension}",
+            SearchOption.TopDirectoryOnly);
+
     private static ProfileArtifactV1 CreateInformationSelection(
         ProfileId? profileId = null)
     {
@@ -615,6 +758,51 @@ public sealed class ProfileArtifactStoreTests
 
         public void DeleteCandidate(string candidatePath) =>
             _inner.DeleteCandidate(candidatePath);
+    }
+
+    private sealed class BlockingFileOperations : IProfileArtifactFileOperations, IDisposable
+    {
+        private readonly ProfileArtifactFileOperations _inner = new();
+        private readonly ManualResetEventSlim _entered = new(initialState: false);
+        private readonly ManualResetEventSlim _release = new(initialState: false);
+
+        public bool FailAfterRelease { get; init; }
+
+        public void WriteCandidate(string candidatePath, ReadOnlyMemory<byte> content)
+        {
+            _entered.Set();
+            if (!_release.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new TimeoutException("The coordinated profile writer was not released.");
+            }
+
+            if (FailAfterRelease)
+            {
+                throw new IOException("Simulated candidate failure while publication is owned.");
+            }
+
+            _inner.WriteCandidate(candidatePath, content);
+        }
+
+        public void PublishNew(string candidatePath, string targetPath) =>
+            _inner.PublishNew(candidatePath, targetPath);
+
+        public void Replace(string candidatePath, string targetPath) =>
+            _inner.Replace(candidatePath, targetPath);
+
+        public void DeleteCandidate(string candidatePath) =>
+            _inner.DeleteCandidate(candidatePath);
+
+        public bool WaitUntilEntered(TimeSpan timeout) => _entered.Wait(timeout);
+
+        public void Release() => _release.Set();
+
+        public void Dispose()
+        {
+            _release.Set();
+            _entered.Dispose();
+            _release.Dispose();
+        }
     }
 
     private sealed class ProfileTestEnvironment : IDisposable
