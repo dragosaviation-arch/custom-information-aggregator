@@ -8,13 +8,28 @@ using Microsoft.Extensions.Logging;
 
 namespace CIA.Desktop.WorkingState;
 
+public interface IWorkingStateCoordinator
+{
+    WorkflowOperationReadiness EvaluateSaveReadiness();
+
+    WorkflowOperationReadiness EvaluateRestoreReadiness(string? packagePath);
+
+    Task<WorkingStateCoordinatorResult> SaveAsync(
+        string targetPath,
+        CancellationToken cancellationToken = default);
+
+    Task<WorkingStateCoordinatorResult> RestoreAsync(
+        string packagePath,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed class WorkingStateCoordinator(
     ActiveLoadedSourceSet sourceSet,
     ActiveDiscoveryConfiguration discoveryConfiguration,
     DatabaseBuildCoordinator databaseBuildCoordinator,
     IApplicationWorkflowCoordinator workflowCoordinator,
     IWorkingStateClient client,
-    ILogger<WorkingStateCoordinator> logger)
+    ILogger<WorkingStateCoordinator> logger) : IWorkingStateCoordinator
 {
     public WorkflowOperationReadiness EvaluateSaveReadiness()
     {

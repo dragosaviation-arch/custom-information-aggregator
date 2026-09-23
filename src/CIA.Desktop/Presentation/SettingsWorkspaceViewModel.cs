@@ -6,6 +6,8 @@ using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
+using CIA.Desktop.Workflow;
+using CIA.Desktop.WorkingState;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -28,6 +30,16 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     private readonly string _logDirectory;
     private readonly ApplicationSettingsService _settingsService;
     private readonly ISettingsFolderPicker? _settingsFolderPicker;
+    private readonly SavedWorkingStateLibrary _savedStateLibrary;
+    private readonly IWorkingStateCoordinator? _workingStateCoordinator;
+    private readonly IApplicationWorkflowCoordinator? _workflowCoordinator;
+    private readonly ISavedWorkingStateDeleteConfirmation _deleteConfirmation;
+    private readonly SynchronizationContext? _uiSynchronizationContext;
+    private readonly AsyncRelayCommand _saveStateCommand;
+    private readonly AsyncRelayCommand _restoreStateCommand;
+    private readonly AsyncRelayCommand _deleteStateCommand;
+    private readonly RelayCommand _confirmDeleteStateCommand;
+    private readonly RelayCommand _cancelDeleteStateCommand;
     private IReadOnlyList<ProcessingAttemptPresentation> _attempts = [];
     private IReadOnlyList<ProcessingIssuePresentation> _issues = [];
     private IReadOnlyList<SettingsLogEntryPresentation> _entries = [];
@@ -57,12 +69,22 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     private string _persistentArchiveExtractionDirectory;
     private PostExportBehaviorPresentation _selectedPostExportBehavior;
     private string _settingsStatusText;
+    private IReadOnlyList<SavedWorkingStateEntry> _savedStates = [];
+    private SavedWorkingStateEntry? _selectedSavedState;
+    private string _savedStateName = string.Empty;
+    private string? _savedStateNameProblem;
+    private string _savedStateStatusText = "No saved states have been created yet.";
+    private bool _isSavedStateActionRunning;
 
     public SettingsWorkspaceViewModel(
         IProcessingHistoryReader historyReader,
         SettingsWorkspaceRuntimePaths runtimePaths,
         ApplicationSettingsService? settingsService = null,
-        ISettingsFolderPicker? settingsFolderPicker = null)
+        ISettingsFolderPicker? settingsFolderPicker = null,
+        SavedWorkingStateLibrary? savedStateLibrary = null,
+        IWorkingStateCoordinator? workingStateCoordinator = null,
+        IApplicationWorkflowCoordinator? workflowCoordinator = null,
+        ISavedWorkingStateDeleteConfirmation? deleteConfirmation = null)
     {
         _historyReader = historyReader ?? throw new ArgumentNullException(nameof(historyReader));
         ArgumentNullException.ThrowIfNull(runtimePaths);
@@ -74,6 +96,19 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
             new ApplicationSettingsStore(
                 runtimePaths.ApplicationPaths.LocalApplicationDataDirectory));
         _settingsFolderPicker = settingsFolderPicker;
+        _savedStateLibrary = savedStateLibrary
+            ?? new SavedWorkingStateLibrary(runtimePaths.ApplicationPaths);
+        _workingStateCoordinator = workingStateCoordinator;
+        _workflowCoordinator = workflowCoordinator;
+        _deleteConfirmation = deleteConfirmation
+            ?? new InApplicationSavedWorkingStateDeleteConfirmation();
+        _uiSynchronizationContext = SynchronizationContext.Current;
+        _deleteConfirmation.Changed += OnDeleteConfirmationChanged;
+        if (_workflowCoordinator is not null)
+        {
+            _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
+        }
+
         var settings = _settingsService.Current;
         _temporaryDirectory = settings.TemporaryDirectory;
         _workingDirectory = settings.WorkingDirectory;
@@ -100,6 +135,17 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         RefreshCommand = new RelayCommand(Refresh);
         OpenLogsFolderCommand = new RelayCommand(OpenLogsFolder);
         SaveSettingsCommand = new RelayCommand(SaveSettings);
+        RefreshSavedStatesCommand = new RelayCommand(
+            () => RefreshSavedStates(updateStatus: true));
+        _saveStateCommand = new AsyncRelayCommand(SaveStateAsync, CanSaveState);
+        _restoreStateCommand = new AsyncRelayCommand(RestoreStateAsync, CanRestoreState);
+        _deleteStateCommand = new AsyncRelayCommand(DeleteStateAsync, CanDeleteState);
+        _confirmDeleteStateCommand = new RelayCommand(
+            _deleteConfirmation.Accept,
+            () => _deleteConfirmation.IsOpen);
+        _cancelDeleteStateCommand = new RelayCommand(
+            _deleteConfirmation.Decline,
+            () => _deleteConfirmation.IsOpen);
         BrowseTemporaryDirectoryCommand = CreateBrowseCommand(
             "Choose CIA Temporary directory",
             () => TemporaryDirectory,
@@ -145,6 +191,18 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public IRelayCommand OpenLogsFolderCommand { get; }
 
     public IRelayCommand SaveSettingsCommand { get; }
+
+    public IRelayCommand RefreshSavedStatesCommand { get; }
+
+    public IAsyncRelayCommand SaveStateCommand => _saveStateCommand;
+
+    public IAsyncRelayCommand RestoreStateCommand => _restoreStateCommand;
+
+    public IAsyncRelayCommand DeleteStateCommand => _deleteStateCommand;
+
+    public IRelayCommand ConfirmDeleteStateCommand => _confirmDeleteStateCommand;
+
+    public IRelayCommand CancelDeleteStateCommand => _cancelDeleteStateCommand;
 
     public IRelayCommand BrowseTemporaryDirectoryCommand { get; }
 
@@ -447,6 +505,126 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         private set => SetProperty(ref _settingsStatusText, value);
     }
 
+    public IReadOnlyList<SavedWorkingStateEntry> SavedStates
+    {
+        get => _savedStates;
+        private set
+        {
+            if (SetProperty(ref _savedStates, value))
+            {
+                OnPropertyChanged(nameof(HasSavedStates));
+            }
+        }
+    }
+
+    public SavedWorkingStateEntry? SelectedSavedState
+    {
+        get => _selectedSavedState;
+        set
+        {
+            if (SetProperty(ref _selectedSavedState, value))
+            {
+                NotifySavedStateCommandsChanged();
+            }
+        }
+    }
+
+    public string SavedStateName
+    {
+        get => _savedStateName;
+        set
+        {
+            if (!SetProperty(ref _savedStateName, value ?? string.Empty))
+            {
+                return;
+            }
+
+            SavedStateNameProblem = EvaluateSavedStateNameProblem(_savedStateName);
+            NotifySavedStateCommandsChanged();
+        }
+    }
+
+    public string? SavedStateNameProblem
+    {
+        get => _savedStateNameProblem;
+        private set
+        {
+            if (SetProperty(ref _savedStateNameProblem, value))
+            {
+                OnPropertyChanged(nameof(HasSavedStateNameProblem));
+                OnPropertyChanged(nameof(SaveStateAvailabilityText));
+            }
+        }
+    }
+
+    public string SavedStateStatusText
+    {
+        get => _savedStateStatusText;
+        private set => SetProperty(ref _savedStateStatusText, value);
+    }
+
+    public bool IsSavedStateActionRunning
+    {
+        get => _isSavedStateActionRunning;
+        private set
+        {
+            if (SetProperty(ref _isSavedStateActionRunning, value))
+            {
+                NotifySavedStateCommandsChanged();
+            }
+        }
+    }
+
+    public bool HasSavedStates => SavedStates.Count > 0;
+
+    public bool HasSavedStateNameProblem => SavedStateNameProblem is not null;
+
+    public string SavedStatesDirectory => _savedStateLibrary.DirectoryPath;
+
+    public string SaveStateAvailabilityText
+    {
+        get
+        {
+            if (SavedStateNameProblem is not null)
+            {
+                return SavedStateNameProblem;
+            }
+
+            if (_workingStateCoordinator is null)
+            {
+                return "Working-state save is unavailable.";
+            }
+
+            var readiness = _workingStateCoordinator.EvaluateSaveReadiness();
+            return readiness.NormalOperationReady
+                ? "Save the current working state as a managed .cia package."
+                : readiness.UnavailableReason ?? "Working-state save is unavailable.";
+        }
+    }
+
+    public string RestoreStateAvailabilityText
+    {
+        get
+        {
+            if (_workingStateCoordinator is null || SelectedSavedState is null)
+            {
+                return "Select an existing saved state to restore.";
+            }
+
+            var readiness = _workingStateCoordinator.EvaluateRestoreReadiness(
+                SelectedSavedState.Path);
+            return readiness.NormalOperationReady
+                ? $"Restore '{SelectedSavedState.Name}'."
+                : readiness.UnavailableReason ?? "Working-state restore is unavailable.";
+        }
+    }
+
+    public bool IsDeleteStateConfirmationOpen => _deleteConfirmation.IsOpen;
+
+    public string DeleteStateConfirmationMessage => _deleteConfirmation.StateName is { } name
+        ? $"Delete saved state '{name}'?"
+        : "Delete the selected saved state?";
+
     public bool IsSettingsRestartRequired => _settingsService.IsRestartRequired;
 
     public string VersionText { get; }
@@ -484,6 +662,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
             ?? Issues.FirstOrDefault();
         EnsureDynamicFilterSelectionIsValid();
         ApplyFilters(selectedKey);
+        RefreshSavedStates(updateStatus: false);
     }
 
     private void ApplyFilters(string? preferredSelectionKey = null)
@@ -606,6 +785,211 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         {
             SettingsStatusText = exception.Message;
         }
+    }
+
+    private bool CanSaveState()
+    {
+        if (_workingStateCoordinator is null
+            || IsSavedStateActionRunning
+            || EvaluateSavedStateNameProblem(SavedStateName) is not null)
+        {
+            return false;
+        }
+
+        return _workingStateCoordinator.EvaluateSaveReadiness().NormalOperationReady;
+    }
+
+    private bool CanRestoreState()
+    {
+        if (_workingStateCoordinator is null
+            || IsSavedStateActionRunning
+            || SelectedSavedState is null)
+        {
+            return false;
+        }
+
+        return _savedStateLibrary.Revalidate(SelectedSavedState).Succeeded
+            && _workingStateCoordinator
+            .EvaluateRestoreReadiness(SelectedSavedState.Path)
+            .NormalOperationReady;
+    }
+
+    private bool CanDeleteState() =>
+        !IsSavedStateActionRunning
+        && SelectedSavedState is not null
+        && _savedStateLibrary.Revalidate(SelectedSavedState).Succeeded;
+
+    private async Task SaveStateAsync()
+    {
+        if (_workingStateCoordinator is null)
+        {
+            return;
+        }
+
+        var target = _savedStateLibrary.ResolveNewTarget(SavedStateName);
+        if (!target.Succeeded || target.Path is null)
+        {
+            SavedStateStatusText = target.Problem ?? "The saved-state target is unavailable.";
+            RefreshSavedStates(updateStatus: false);
+            return;
+        }
+
+        IsSavedStateActionRunning = true;
+        try
+        {
+            var result = await _workingStateCoordinator.SaveAsync(target.Path);
+            if (!result.Accepted)
+            {
+                SavedStateStatusText = result.FailureDescription
+                    ?? "The working state could not be saved.";
+                RefreshSavedStates(updateStatus: false);
+                return;
+            }
+
+            RefreshSavedStates(target.Path, updateStatus: false);
+            SavedStateStatusText = SelectedSavedState is not null
+                && string.Equals(SelectedSavedState.Path, target.Path, StringComparison.OrdinalIgnoreCase)
+                    ? $"Saved state '{SelectedSavedState.Name}'."
+                    : "The working-state operation completed, but the saved file is unavailable.";
+        }
+        finally
+        {
+            IsSavedStateActionRunning = false;
+        }
+    }
+
+    private async Task RestoreStateAsync()
+    {
+        if (_workingStateCoordinator is null || SelectedSavedState is null)
+        {
+            return;
+        }
+
+        var selected = SelectedSavedState;
+        var validation = _savedStateLibrary.Revalidate(selected);
+        if (!validation.Succeeded || validation.Path is null)
+        {
+            SavedStateStatusText = validation.Problem
+                ?? "The selected saved state is unavailable.";
+            RefreshSavedStates(updateStatus: false);
+            return;
+        }
+
+        IsSavedStateActionRunning = true;
+        try
+        {
+            var result = await _workingStateCoordinator.RestoreAsync(validation.Path);
+            RefreshSavedStates(validation.Path, updateStatus: false);
+            SavedStateStatusText = result.Accepted
+                ? $"Restored saved state '{selected.Name}'."
+                : result.FailureDescription ?? "The working state could not be restored.";
+        }
+        finally
+        {
+            IsSavedStateActionRunning = false;
+        }
+    }
+
+    private async Task DeleteStateAsync()
+    {
+        if (SelectedSavedState is null)
+        {
+            return;
+        }
+
+        var selected = SelectedSavedState;
+        IsSavedStateActionRunning = true;
+        try
+        {
+            if (!await _deleteConfirmation.ConfirmAsync(selected.Name))
+            {
+                SavedStateStatusText = "Saved-state deletion cancelled.";
+                return;
+            }
+
+            var result = _savedStateLibrary.Delete(selected);
+            RefreshSavedStates(updateStatus: false);
+            SavedStateStatusText = result.Succeeded
+                ? $"Deleted saved state '{selected.Name}'."
+                : result.Problem ?? "The saved state could not be deleted.";
+        }
+        finally
+        {
+            IsSavedStateActionRunning = false;
+        }
+    }
+
+    private void RefreshSavedStates(
+        string? preferredPath = null,
+        bool updateStatus = true)
+    {
+        var selectionPath = preferredPath ?? SelectedSavedState?.Path;
+        var inventory = _savedStateLibrary.CreateInventory();
+        SavedStates = inventory.States;
+        SelectedSavedState = SavedStates.FirstOrDefault(state =>
+                selectionPath is not null
+                && string.Equals(state.Path, selectionPath, StringComparison.OrdinalIgnoreCase))
+            ?? SavedStates.FirstOrDefault();
+        SavedStateNameProblem = EvaluateSavedStateNameProblem(SavedStateName);
+        if (updateStatus)
+        {
+            SavedStateStatusText = inventory.Problems.Count > 0
+                ? inventory.Problems[0].Description
+                : SavedStates.Count == 0
+                    ? "No saved states have been created yet."
+                    : $"{SavedStates.Count} saved state(s) available.";
+        }
+
+        NotifySavedStateCommandsChanged();
+    }
+
+    private string? EvaluateSavedStateNameProblem(string stateName)
+    {
+        var validationProblem = SavedWorkingStateLibrary.ValidateStateName(stateName);
+        if (validationProblem is not null)
+        {
+            return validationProblem;
+        }
+
+        return SavedStates.Any(state =>
+            string.Equals(state.Name, stateName, StringComparison.OrdinalIgnoreCase))
+                ? $"A saved state named '{stateName}' already exists."
+                : null;
+    }
+
+    private void OnDeleteConfirmationChanged(object? sender, EventArgs e)
+    {
+        DispatchToUi(() =>
+        {
+            OnPropertyChanged(nameof(IsDeleteStateConfirmationOpen));
+            OnPropertyChanged(nameof(DeleteStateConfirmationMessage));
+            _confirmDeleteStateCommand.NotifyCanExecuteChanged();
+            _cancelDeleteStateCommand.NotifyCanExecuteChanged();
+        });
+    }
+
+    private void OnWorkflowStateChanged(object? sender, WorkflowStateSnapshot e) =>
+        DispatchToUi(NotifySavedStateCommandsChanged);
+
+    private void NotifySavedStateCommandsChanged()
+    {
+        OnPropertyChanged(nameof(SaveStateAvailabilityText));
+        OnPropertyChanged(nameof(RestoreStateAvailabilityText));
+        _saveStateCommand.NotifyCanExecuteChanged();
+        _restoreStateCommand.NotifyCanExecuteChanged();
+        _deleteStateCommand.NotifyCanExecuteChanged();
+    }
+
+    private void DispatchToUi(Action action)
+    {
+        if (_uiSynchronizationContext is null
+            || SynchronizationContext.Current == _uiSynchronizationContext)
+        {
+            action();
+            return;
+        }
+
+        _uiSynchronizationContext.Post(static state => ((Action)state!).Invoke(), action);
     }
 
     private static string CreateInitialSettingsStatus(ApplicationSettingsLoadResult result)
