@@ -336,7 +336,8 @@ public sealed class ProcessingHostLifetimeService(
                             command.Path,
                             command.Settings,
                             progress,
-                            cancellationToken)
+                            cancellationToken,
+                            command.SourceSetId)
                         .ConfigureAwait(false);
                     var sources = result.Sources
                         .Select(source => source with { SourceSetId = command.SourceSetId })

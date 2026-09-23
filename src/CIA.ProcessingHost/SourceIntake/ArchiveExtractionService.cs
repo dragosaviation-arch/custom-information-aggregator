@@ -1,5 +1,6 @@
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Sources;
+using CIA.Core.ManagedStorage;
 using CIA.Core.Runtime;
 using SharpCompress.Archives;
 using SharpCompress.Common;
@@ -7,22 +8,34 @@ using SharpCompress.Readers;
 
 namespace CIA.ProcessingHost.SourceIntake;
 
-public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
+public sealed class ArchiveExtractionService
 {
     private const string ManagedExtractionDirectoryName = "ArchiveExtraction";
+    private readonly ApplicationPaths _applicationPaths;
+    private readonly ManagedStorageOwnershipMetadataStore _metadataStore;
+
+    public ArchiveExtractionService(
+        ApplicationPaths applicationPaths,
+        ManagedStorageOwnershipMetadataStore? metadataStore = null)
+    {
+        _applicationPaths = applicationPaths ?? throw new ArgumentNullException(nameof(applicationPaths));
+        _metadataStore = metadataStore ?? new ManagedStorageOwnershipMetadataStore();
+    }
 
     public ArchiveExtractionResult Extract(
         string archivePath,
         SourceLoadSettings settings,
         CancellationToken cancellationToken = default,
-        SourceId? retainedOriginalArchiveSourceId = null)
+        SourceId? retainedOriginalArchiveSourceId = null,
+        SourceSetId? sourceSetId = null)
     {
         return Extract(
             archivePath,
             settings,
             progress: null,
             cancellationToken,
-            retainedOriginalArchiveSourceId);
+            retainedOriginalArchiveSourceId,
+            sourceSetId);
     }
 
     internal ArchiveExtractionResult Extract(
@@ -30,7 +43,8 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
         SourceLoadSettings settings,
         SourceIntakeProgressTracker? progress,
         CancellationToken cancellationToken = default,
-        SourceId? retainedOriginalArchiveSourceId = null)
+        SourceId? retainedOriginalArchiveSourceId = null,
+        SourceSetId? sourceSetId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(archivePath);
         ArgumentNullException.ThrowIfNull(settings);
@@ -43,7 +57,8 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
             var location = CreateExtractionLocation(
                 fullArchivePath,
                 originalArchiveSourceId,
-                settings);
+                settings,
+                sourceSetId);
             var rootLineage = new ArchiveLineageItem(
                 originalArchiveSourceId,
                 fullArchivePath,
@@ -311,7 +326,8 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
     private ArchiveExtractionLocation CreateExtractionLocation(
         string originalArchivePath,
         SourceId originalArchiveSourceId,
-        SourceLoadSettings settings)
+        SourceLoadSettings settings,
+        SourceSetId? sourceSetId)
     {
         string baseDirectory;
         ArchiveExtractionRetention retention;
@@ -332,7 +348,7 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
         else
         {
             baseDirectory = Path.Combine(
-                applicationPaths.TempDirectory,
+                _applicationPaths.TempDirectory,
                 ManagedExtractionDirectoryName);
             retention = ArchiveExtractionRetention.ManagedTemporary;
         }
@@ -349,6 +365,22 @@ public sealed class ArchiveExtractionService(ApplicationPaths applicationPaths)
         }
 
         Directory.CreateDirectory(extractionRoot);
+        if (retention == ArchiveExtractionRetention.ManagedTemporary)
+        {
+            _metadataStore.Write(
+                extractionRoot,
+                new ManagedStorageOwnershipMetadata(
+                    ManagedStorageOwnershipMetadata.CurrentSchemaVersion,
+                    ManagedStorageArtifactId.CreateNew(),
+                    ManagedStorageArtifactKind.ManagedTemporaryArchiveExtraction,
+                    ManagedStorageLifecycle.SessionTemporary,
+                    extractionRoot,
+                    OperationId: null,
+                    SourceId: originalArchiveSourceId,
+                    sourceSetId,
+                    DateTimeOffset.UtcNow));
+        }
+
         return new ArchiveExtractionLocation(extractionRoot, retention);
     }
 

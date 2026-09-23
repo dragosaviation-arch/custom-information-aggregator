@@ -67,7 +67,7 @@ public sealed class SourceRefreshService(
     {
         var provenance = source.ArchiveProvenance!;
         var intake = await sourceIntake
-            .ReloadArchiveAsync(provenance, cancellationToken)
+            .ReloadArchiveAsync(provenance, cancellationToken, source.SourceSetId)
             .ConfigureAwait(false);
 
         if (!intake.Accepted)

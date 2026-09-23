@@ -3,6 +3,7 @@ using System.Text.Json;
 using CIA.Contracts.Operations;
 using CIA.Core;
 using CIA.Core.Diagnostics;
+using CIA.Core.ManagedStorage;
 using CIA.Core.Runtime;
 using CIA.Desktop;
 using CIA.Desktop.Hosting;
@@ -52,6 +53,8 @@ public sealed class ApplicationHostTests
         Assert.IsNotNull(host.Services.GetRequiredService<DatabaseBuildCoordinator>());
         Assert.IsNotNull(host.Services.GetRequiredService<IWorkbookExportClient>());
         Assert.IsNotNull(host.Services.GetRequiredService<WorkbookExportCoordinator>());
+        Assert.IsNotNull(host.Services.GetRequiredService<ManagedStorageInventoryService>());
+        Assert.IsNotNull(host.Services.GetRequiredService<IManagedStorageDependencySnapshotProvider>());
         Assert.AreEqual("Stopped", globalStatus.HostStatusText);
         Assert.AreEqual("No operation", globalStatus.OperationStatusText);
         Assert.IsTrue(serviceProbe.IsService(typeof(MainWindow)));
@@ -73,6 +76,7 @@ public sealed class ApplicationHostTests
         Assert.IsNotNull(host.Services.GetRequiredService<DatabaseGenerationService>());
         Assert.IsNotNull(host.Services.GetRequiredService<DatabaseReviewService>());
         Assert.IsNotNull(host.Services.GetRequiredService<ExcelWorkbookExportService>());
+        Assert.IsNotNull(host.Services.GetRequiredService<ManagedStorageOwnershipMetadataStore>());
         Assert.IsEmpty(host.Services.GetServices<IHostedService>());
     }
 
