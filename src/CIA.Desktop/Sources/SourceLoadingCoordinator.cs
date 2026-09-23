@@ -7,10 +7,13 @@ namespace CIA.Desktop.Sources;
 public sealed class SourceLoadingCoordinator(
     ISourceIntakeClient intakeClient,
     ActiveLoadedSourceSet sourceSet,
-    IApplicationWorkflowCoordinator workflowCoordinator)
+    IApplicationWorkflowCoordinator workflowCoordinator,
+    SourceIntakeActivityRegistry? intakeActivities = null)
 {
     private const int MaximumSourceSetNameLength = 100;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly SourceIntakeActivityRegistry _intakeActivities =
+        intakeActivities ?? new SourceIntakeActivityRegistry();
 
     public Task<SourceLoadingResult> AddAsync(
         SourceSelectionKind selectionKind,
@@ -152,11 +155,14 @@ public sealed class SourceLoadingCoordinator(
                     "The selected source path is already loaded.");
             }
 
+            var intakeActivityId = SourceIntakeActivityId.CreateNew();
+            using var intakeActivity = _intakeActivities.Begin(intakeActivityId);
             var intakeResult = await intakeClient.LoadAsync(
                 selectionKind,
                 fullPath,
                 settings,
                 targetSourceSetId,
+                intakeActivityId,
                 progress,
                 cancellationToken);
 

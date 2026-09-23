@@ -197,6 +197,26 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         IProgress<SourceIntakeProgressSnapshot>? progress,
         CancellationToken cancellationToken = default)
     {
+        return await RequestSourceLoadAsync(
+                selectionKind,
+                path,
+                settings,
+                sourceSetId,
+                SourceIntakeActivityId.CreateNew(),
+                progress,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<LoadSourcesResponse> RequestSourceLoadAsync(
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings,
+        SourceSetId sourceSetId,
+        SourceIntakeActivityId intakeActivityId,
+        IProgress<SourceIntakeProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
         ThrowIfDisposed();
         await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -219,7 +239,10 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                     sourceSetId,
                     selectionKind,
                     path,
-                    settings);
+                    settings)
+                {
+                    IntakeActivityId = intakeActivityId
+                };
                 await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
                 while (true)
                 {

@@ -286,6 +286,28 @@ public sealed class ManagedStorageInventoryService
             reasons.Add(ManagedStorageProtectionReason.ActiveOperation);
         }
 
+        if (metadata.IntakeActivityId is { } intakeActivityId)
+        {
+            if (snapshot.ActiveIntakeActivityIds.Contains(intakeActivityId))
+            {
+                reasons.Add(ManagedStorageProtectionReason.ActiveIntakeActivity);
+            }
+            else
+            {
+                var activity = _metadataStore.InspectIntakeActivity(
+                    canonicalPath,
+                    intakeActivityId);
+                if (activity.State == ManagedStorageIntakeActivityState.Active)
+                {
+                    reasons.Add(ManagedStorageProtectionReason.ActiveIntakeActivity);
+                }
+                else if (activity.State == ManagedStorageIntakeActivityState.Invalid)
+                {
+                    reasons.Add(ManagedStorageProtectionReason.InspectionFailed);
+                }
+            }
+        }
+
         if (IsNeededByActiveSource(metadata, canonicalPath, snapshot.ActiveSources))
         {
             reasons.Add(ManagedStorageProtectionReason.ActiveSessionSource);
@@ -308,6 +330,7 @@ public sealed class ManagedStorageInventoryService
             metadata.ArtifactKind,
             metadata.Lifecycle,
             metadata.OperationId,
+            metadata.IntakeActivityId,
             metadata.SourceId,
             metadata.SourceSetId,
             metadata.CreatedAtUtc,
@@ -544,6 +567,7 @@ public sealed class ManagedStorageInventoryService
             ArtifactKind: kind,
             Lifecycle: lifecycle,
             OperationId: null,
+            IntakeActivityId: null,
             SourceId: null,
             SourceSetId: null,
             CreatedAtUtc: null,

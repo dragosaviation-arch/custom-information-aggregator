@@ -19,7 +19,8 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
             settings,
             progress: null,
             cancellationToken,
-            sourceSetId: null);
+            sourceSetId: null,
+            intakeActivityId: null);
     }
 
     public Task<SourceIntakeResult> LoadAsync(
@@ -28,7 +29,8 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         SourceLoadSettings settings,
         IProgress<SourceIntakeProgressSnapshot>? progress,
         CancellationToken cancellationToken = default,
-        SourceSetId? sourceSetId = null)
+        SourceSetId? sourceSetId = null,
+        SourceIntakeActivityId? intakeActivityId = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -42,7 +44,8 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
                 settings,
                 progressTracker,
                 cancellationToken,
-                sourceSetId),
+                sourceSetId,
+                intakeActivityId ?? SourceIntakeActivityId.CreateNew()),
             cancellationToken);
     }
 
@@ -67,7 +70,8 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
                 progress: null,
                 cancellationToken: cancellationToken,
                 retainedOriginalArchiveSourceId: provenance.OriginalArchiveSourceId,
-                sourceSetId),
+                sourceSetId,
+                SourceIntakeActivityId.CreateNew()),
             cancellationToken);
     }
 
@@ -77,7 +81,8 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         SourceLoadSettings settings,
         SourceIntakeProgressTracker? progress,
         CancellationToken cancellationToken,
-        SourceSetId? sourceSetId)
+        SourceSetId? sourceSetId,
+        SourceIntakeActivityId intakeActivityId)
     {
         if (settings.MaximumArchiveNestingDepth.Value < 1
             || settings.PersistentArchiveExtractionEnabled
@@ -106,13 +111,15 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
                     settings,
                     progress,
                     cancellationToken,
-                    sourceSetId: sourceSetId),
+                    sourceSetId: sourceSetId,
+                    intakeActivityId: intakeActivityId),
                 SourceSelectionKind.Folder => LoadFolder(
                     fullPath,
                     settings,
                     progress,
                     cancellationToken,
-                    sourceSetId),
+                    sourceSetId,
+                    intakeActivityId),
                 _ => Reject("unsupported-selection", "The requested source-selection kind is not supported.")
             };
 
@@ -158,7 +165,8 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         SourceIntakeProgressTracker? progress,
         CancellationToken cancellationToken,
         SourceId? retainedOriginalArchiveSourceId = null,
-        SourceSetId? sourceSetId = null)
+        SourceSetId? sourceSetId = null,
+        SourceIntakeActivityId? intakeActivityId = null)
     {
         if (!File.Exists(path))
         {
@@ -176,7 +184,8 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
             progress,
             cancellationToken,
             retainedOriginalArchiveSourceId,
-            sourceSetId);
+            sourceSetId,
+            intakeActivityId ?? SourceIntakeActivityId.CreateNew());
         return new SourceIntakeResult(
             extraction.Accepted,
             extraction.Sources,
@@ -191,7 +200,8 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         SourceLoadSettings settings,
         SourceIntakeProgressTracker? progress,
         CancellationToken cancellationToken,
-        SourceSetId? sourceSetId)
+        SourceSetId? sourceSetId,
+        SourceIntakeActivityId intakeActivityId)
     {
         if (!Directory.Exists(path))
         {
@@ -254,7 +264,8 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
                     settings,
                     progress,
                     cancellationToken,
-                    sourceSetId: sourceSetId);
+                    sourceSetId: sourceSetId,
+                    intakeActivityId: intakeActivityId);
                 if (archiveResult.Accepted)
                 {
                     sources.AddRange(archiveResult.Sources);

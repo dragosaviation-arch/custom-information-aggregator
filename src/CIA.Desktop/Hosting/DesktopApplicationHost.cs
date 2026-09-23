@@ -58,6 +58,7 @@ public static class DesktopApplicationHost
         builder.Services.AddHostedService<ProcessingHostSupervisorLifetime>();
         builder.Services.AddSingleton<IApplicationWorkflowCoordinator, ApplicationWorkflowCoordinator>();
         builder.Services.AddSingleton<ActiveLoadedSourceSet>();
+        builder.Services.AddSingleton<SourceIntakeActivityRegistry>();
         builder.Services.AddSingleton<ManagedStorageInventoryService>();
         builder.Services.AddSingleton<IManagedStorageDependencySnapshotProvider,
             ManagedStorageDependencySnapshotProvider>();

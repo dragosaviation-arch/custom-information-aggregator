@@ -9,6 +9,7 @@ using CIA.Desktop;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Export;
 using CIA.Desktop.Presentation;
+using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using CIA.Desktop.Database;
 using CIA.ProcessingHost.Database;
@@ -55,6 +56,7 @@ public sealed class ApplicationHostTests
         Assert.IsNotNull(host.Services.GetRequiredService<WorkbookExportCoordinator>());
         Assert.IsNotNull(host.Services.GetRequiredService<ManagedStorageInventoryService>());
         Assert.IsNotNull(host.Services.GetRequiredService<IManagedStorageDependencySnapshotProvider>());
+        Assert.IsNotNull(host.Services.GetRequiredService<SourceIntakeActivityRegistry>());
         Assert.AreEqual("Stopped", globalStatus.HostStatusText);
         Assert.AreEqual("No operation", globalStatus.OperationStatusText);
         Assert.IsTrue(serviceProbe.IsService(typeof(MainWindow)));

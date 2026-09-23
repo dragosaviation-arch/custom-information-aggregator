@@ -9,7 +9,8 @@ namespace CIA.Desktop.Sources;
 public sealed class ManagedStorageDependencySnapshotProvider(
     IApplicationWorkflowCoordinator workflowCoordinator,
     ActiveLoadedSourceSet sourceSet,
-    ApplicationSettingsService settingsService)
+    ApplicationSettingsService settingsService,
+    SourceIntakeActivityRegistry? intakeActivities = null)
     : IManagedStorageDependencySnapshotProvider
 {
     public ManagedStorageDependencySnapshot CreateSnapshot()
@@ -55,6 +56,7 @@ public sealed class ManagedStorageDependencySnapshotProvider(
 
         return new ManagedStorageDependencySnapshot(
             activeOperationIds,
+            intakeActivities?.CreateSnapshot() ?? [],
             sourceDependencies,
             RetainedResultDependencies: [],
             protectedLocations

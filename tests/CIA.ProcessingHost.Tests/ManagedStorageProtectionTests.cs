@@ -3,10 +3,13 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Diagnostics;
 using CIA.Core.ManagedStorage;
 using CIA.Core.Runtime;
+using CIA.Desktop.Hosting;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using CIA.ProcessingHost.SourceIntake;
@@ -89,6 +92,36 @@ public sealed class ManagedStorageProtectionTests
             first.ProtectionReasons.ToArray(),
             second.ProtectionReasons.ToArray());
         Assert.IsFalse(first.IsCleanupEligible);
+    }
+
+    [TestMethod]
+    public void ProducerHeldIntakeLeaseProtectsArtifactAndReleaseMakesTerminalOrphanEligible()
+    {
+        using var environment = new ManagedStorageTestEnvironment();
+        var path = environment.CreateUnownedDirectory(environment.Paths.TempDirectory, "active-intake");
+        File.WriteAllText(Path.Combine(path, "source.xml"), "<source />");
+        var activityId = SourceIntakeActivityId.CreateNew();
+        using var activity = environment.Metadata.BeginIntakeActivity(path, activityId);
+        var metadata = environment.CreateMetadata(
+            path,
+            ManagedStorageArtifactKind.ManagedTemporaryArchiveExtraction,
+            ManagedStorageLifecycle.SessionTemporary,
+            sourceId: SourceId.CreateNew()) with
+        {
+            IntakeActivityId = activityId
+        };
+        environment.Metadata.Write(path, metadata);
+
+        var whileHeld = environment.Inventory.CreateInventory().Items.Single();
+        Assert.IsFalse(whileHeld.IsCleanupEligible);
+        CollectionAssert.Contains(
+            whileHeld.ProtectionReasons.ToArray(),
+            ManagedStorageProtectionReason.ActiveIntakeActivity);
+
+        activity.Dispose();
+        var afterRelease = environment.Inventory.CreateInventory().Items.Single();
+        Assert.IsTrue(afterRelease.IsCleanupEligible);
+        Assert.IsTrue(File.Exists(Path.Combine(path, "source.xml")));
     }
 
     [TestMethod]
@@ -538,6 +571,7 @@ public sealed class ManagedStorageProtectionTests
             metadata.Metadata?.ArtifactKind);
         Assert.AreEqual(provenance.OriginalArchiveSourceId, metadata.Metadata?.SourceId);
         Assert.AreEqual(sourceSetId, metadata.Metadata?.SourceSetId);
+        Assert.IsNotNull(metadata.Metadata?.IntakeActivityId);
 
         var active = Snapshot(activeSources:
         [
@@ -552,6 +586,195 @@ public sealed class ManagedStorageProtectionTests
         Assert.IsFalse(environment.Inventory.CreateInventory(active).Items.Single().IsCleanupEligible);
         Assert.IsTrue(environment.Inventory.CreateInventory().Items.Single().IsCleanupEligible);
         Assert.IsTrue(File.Exists(source.Path));
+    }
+
+    [TestMethod]
+    public async Task RealInitialArchiveLoadTransfersProtectionFromActiveIntakeToSessionSourceThenEligibility()
+    {
+        using var environment = new ManagedStorageTestEnvironment();
+        var archivePath = environment.CreateNestedArchive("held.zip");
+        using var workflow = CreateWorkflowCoordinator();
+        var sourceSet = new ActiveLoadedSourceSet();
+        var activities = new SourceIntakeActivityRegistry();
+        var provider = new ManagedStorageDependencySnapshotProvider(
+            workflow,
+            sourceSet,
+            new ApplicationSettingsService(
+                new ApplicationSettingsStore(environment.LocalApplicationDataDirectory)),
+            activities);
+        var intake = new SourceIntakeService(new ArchiveExtractionService(environment.Paths));
+        var coordinator = new SourceLoadingCoordinator(
+            new RealSourceIntakeClient(intake),
+            sourceSet,
+            workflow,
+            activities);
+        using var progress = new HoldingProgress(holdOnReportNumber: 2);
+
+        var loadTask = coordinator.AddAsync(
+            SourceSelectionKind.Archive,
+            archivePath,
+            SourceLoadSettings.Default,
+            progress);
+        Assert.IsTrue(progress.WaitUntilHeld(TimeSpan.FromSeconds(10)));
+
+        var inProgressSnapshot = provider.CreateSnapshot();
+        Assert.HasCount(1, inProgressSnapshot.ActiveIntakeActivityIds);
+        var inProgress = environment.Inventory
+            .CreateInventory(inProgressSnapshot)
+            .Items
+            .Single(item =>
+                item.ArtifactKind == ManagedStorageArtifactKind.ManagedTemporaryArchiveExtraction);
+        Assert.IsFalse(inProgress.IsCleanupEligible);
+        CollectionAssert.Contains(
+            inProgress.ProtectionReasons.ToArray(),
+            ManagedStorageProtectionReason.ActiveIntakeActivity);
+        Assert.AreEqual(
+            inProgressSnapshot.ActiveIntakeActivityIds.Single(),
+            inProgress.IntakeActivityId);
+        Assert.IsTrue(Directory.EnumerateFiles(
+            inProgress.CanonicalPath,
+            "*",
+            SearchOption.AllDirectories).Any());
+
+        progress.Release();
+        var load = await loadTask;
+        Assert.IsTrue(load.Accepted);
+        Assert.IsEmpty(activities.CreateSnapshot());
+        Assert.IsNotEmpty(sourceSet.Items);
+
+        var sessionProtected = environment.Inventory
+            .CreateInventory(provider.CreateSnapshot())
+            .Items
+            .Single(item => item.ArtifactId == inProgress.ArtifactId);
+        Assert.IsFalse(sessionProtected.IsCleanupEligible);
+        CollectionAssert.Contains(
+            sessionProtected.ProtectionReasons.ToArray(),
+            ManagedStorageProtectionReason.ActiveSessionSource);
+
+        var removal = coordinator.Remove(sourceSet.Items.ToArray());
+        Assert.IsTrue(removal.Accepted);
+        var eligible = environment.Inventory
+            .CreateInventory(provider.CreateSnapshot())
+            .Items
+            .Single(item => item.ArtifactId == inProgress.ArtifactId);
+        Assert.IsTrue(eligible.IsCleanupEligible);
+        Assert.IsTrue(Directory.Exists(eligible.CanonicalPath));
+        Assert.IsTrue(Directory.EnumerateFiles(
+            eligible.CanonicalPath,
+            "*",
+            SearchOption.AllDirectories).Any());
+    }
+
+    [TestMethod]
+    public async Task FailedInitialArchiveLoadEndsActivityAndLeavesEligibleTerminalOrphan()
+    {
+        using var environment = new ManagedStorageTestEnvironment();
+        var archivePath = environment.CreateArchive("failed.zip", "notes.txt", "not XML");
+        using var workflow = CreateWorkflowCoordinator();
+        var sourceSet = new ActiveLoadedSourceSet();
+        var activities = new SourceIntakeActivityRegistry();
+        var settings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(environment.LocalApplicationDataDirectory));
+        var provider = new ManagedStorageDependencySnapshotProvider(
+            workflow,
+            sourceSet,
+            settings,
+            activities);
+        var coordinator = new SourceLoadingCoordinator(
+            new RealSourceIntakeClient(
+                new SourceIntakeService(new ArchiveExtractionService(environment.Paths))),
+            sourceSet,
+            workflow,
+            activities);
+
+        var result = await coordinator.AddAsync(
+            SourceSelectionKind.Archive,
+            archivePath,
+            SourceLoadSettings.Default);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.IsEmpty(activities.CreateSnapshot());
+        Assert.IsEmpty(sourceSet.Items);
+        var orphan = environment.Inventory.CreateInventory(provider.CreateSnapshot()).Items.Single();
+        Assert.IsTrue(orphan.IsCleanupEligible);
+        Assert.IsTrue(Directory.Exists(orphan.CanonicalPath));
+    }
+
+    [TestMethod]
+    public async Task CancelledInitialArchiveLoadReleasesLeaseAndActivityWithoutPermanentProtection()
+    {
+        using var environment = new ManagedStorageTestEnvironment();
+        var archivePath = environment.CreateNestedArchive("cancelled.zip");
+        using var workflow = CreateWorkflowCoordinator();
+        var sourceSet = new ActiveLoadedSourceSet();
+        var activities = new SourceIntakeActivityRegistry();
+        var settings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(environment.LocalApplicationDataDirectory));
+        var provider = new ManagedStorageDependencySnapshotProvider(
+            workflow,
+            sourceSet,
+            settings,
+            activities);
+        var coordinator = new SourceLoadingCoordinator(
+            new RealSourceIntakeClient(
+                new SourceIntakeService(new ArchiveExtractionService(environment.Paths))),
+            sourceSet,
+            workflow,
+            activities);
+        using var progress = new HoldingProgress(holdOnReportNumber: 2);
+        using var cancellation = new CancellationTokenSource();
+        var loadTask = coordinator.AddAsync(
+            SourceSelectionKind.Archive,
+            archivePath,
+            SourceLoadSettings.Default,
+            progress,
+            cancellation.Token);
+        Assert.IsTrue(progress.WaitUntilHeld(TimeSpan.FromSeconds(10)));
+
+        cancellation.Cancel();
+        progress.Release();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => loadTask);
+
+        Assert.IsEmpty(activities.CreateSnapshot());
+        Assert.IsEmpty(sourceSet.Items);
+        var orphan = environment.Inventory.CreateInventory(provider.CreateSnapshot()).Items.Single();
+        Assert.IsTrue(orphan.IsCleanupEligible);
+        Assert.IsTrue(Directory.Exists(orphan.CanonicalPath));
+    }
+
+    [TestMethod]
+    public async Task InterruptedInitialArchiveResponseCannotLeavePermanentActiveOwnership()
+    {
+        using var environment = new ManagedStorageTestEnvironment();
+        var archivePath = environment.CreateArchive("interrupted.zip", "source.xml", "<source />");
+        using var workflow = CreateWorkflowCoordinator();
+        var sourceSet = new ActiveLoadedSourceSet();
+        var activities = new SourceIntakeActivityRegistry();
+        var settings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(environment.LocalApplicationDataDirectory));
+        var provider = new ManagedStorageDependencySnapshotProvider(
+            workflow,
+            sourceSet,
+            settings,
+            activities);
+        var coordinator = new SourceLoadingCoordinator(
+            new RealSourceIntakeClient(
+                new SourceIntakeService(new ArchiveExtractionService(environment.Paths)),
+                interruptAfterIntake: true),
+            sourceSet,
+            workflow,
+            activities);
+
+        await Assert.ThrowsAsync<IOException>(() => coordinator.AddAsync(
+            SourceSelectionKind.Archive,
+            archivePath,
+            SourceLoadSettings.Default));
+
+        Assert.IsEmpty(activities.CreateSnapshot());
+        Assert.IsEmpty(sourceSet.Items);
+        var orphan = environment.Inventory.CreateInventory(provider.CreateSnapshot()).Items.Single();
+        Assert.IsTrue(orphan.IsCleanupEligible);
+        Assert.IsTrue(Directory.Exists(orphan.CanonicalPath));
     }
 
     [TestMethod]
@@ -593,13 +816,18 @@ public sealed class ManagedStorageProtectionTests
             && location.Kind == ManagedStorageArtifactKind.PersistentArchiveExtraction));
     }
 
+    private static ApplicationWorkflowCoordinator CreateWorkflowCoordinator() =>
+        new(new ReadyProcessingHostSupervisor(), new NullProcessingHistoryRecorder());
+
     private static ManagedStorageDependencySnapshot Snapshot(
         IReadOnlyList<OperationId>? activeOperations = null,
+        IReadOnlyList<SourceIntakeActivityId>? activeIntakeActivities = null,
         IReadOnlyList<ManagedStorageSourceDependency>? activeSources = null,
         IReadOnlyList<ManagedStorageRetainedDependency>? retained = null,
         IReadOnlyList<ManagedStorageProtectedLocation>? protectedLocations = null) =>
         new(
             activeOperations ?? [],
+            activeIntakeActivities ?? [],
             activeSources ?? [],
             retained ?? [],
             protectedLocations ?? []);
@@ -709,6 +937,12 @@ public sealed class ManagedStorageProtectionTests
             var path = Path.Combine(root, Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(path);
             File.WriteAllText(Path.Combine(path, "payload.bin"), payload);
+            var intakeActivityId = kind == ManagedStorageArtifactKind.ManagedTemporaryArchiveExtraction
+                ? SourceIntakeActivityId.CreateNew()
+                : (SourceIntakeActivityId?)null;
+            ManagedStorageIntakeActivityLease? activity = intakeActivityId is { } activeId
+                ? Metadata.BeginIntakeActivity(path, activeId)
+                : null;
             var metadata = CreateMetadata(
                 path,
                 kind,
@@ -716,8 +950,19 @@ public sealed class ManagedStorageProtectionTests
                 operationId,
                 sourceId,
                 sourceSetId,
-                createdAtUtc);
-            Metadata.Write(path, metadata);
+                createdAtUtc) with
+            {
+                IntakeActivityId = intakeActivityId
+            };
+            try
+            {
+                Metadata.Write(path, metadata);
+            }
+            finally
+            {
+                activity?.Dispose();
+            }
+
             return new Artifact(Path.GetFullPath(path), metadata);
         }
 
@@ -799,6 +1044,43 @@ public sealed class ManagedStorageProtectionTests
             return archivePath;
         }
 
+        public string CreateNestedArchive(string fileName)
+        {
+            byte[] nestedBytes;
+            using (var nestedStream = new MemoryStream())
+            {
+                using (var nested = new ZipArchive(
+                           nestedStream,
+                           ZipArchiveMode.Create,
+                           leaveOpen: true))
+                {
+                    var nestedEntry = nested.CreateEntry("nested.xml");
+                    using var nestedEntryStream = nestedEntry.Open();
+                    nestedEntryStream.Write(Encoding.UTF8.GetBytes("<nested />"));
+                }
+
+                nestedBytes = nestedStream.ToArray();
+            }
+
+            var sourceDirectory = Path.Combine(TestRoot, "Sources");
+            Directory.CreateDirectory(sourceDirectory);
+            var archivePath = Path.Combine(sourceDirectory, fileName);
+            using var archive = ZipFile.Open(archivePath, ZipArchiveMode.Create);
+            var rootEntry = archive.CreateEntry("root.xml");
+            using (var rootStream = rootEntry.Open())
+            {
+                rootStream.Write(Encoding.UTF8.GetBytes("<root />"));
+            }
+
+            var nestedArchive = archive.CreateEntry("nested/inner.zip");
+            using (var nestedArchiveStream = nestedArchive.Open())
+            {
+                nestedArchiveStream.Write(nestedBytes);
+            }
+
+            return archivePath;
+        }
+
         public void Dispose()
         {
             if (!Directory.Exists(TestRoot))
@@ -870,5 +1152,128 @@ public sealed class ManagedStorageProtectionTests
             string detail) => throw new NotSupportedException();
 
         public void InterruptActiveOperationForShutdown() => throw new NotSupportedException();
+    }
+
+    private sealed class RealSourceIntakeClient(
+        SourceIntakeService intake,
+        bool interruptAfterIntake = false) : ISourceIntakeClient
+    {
+        public async Task<SourceIntakeClientResult> LoadAsync(
+            SourceSelectionKind selectionKind,
+            string path,
+            SourceLoadSettings settings,
+            CancellationToken cancellationToken = default)
+        {
+            return await LoadAsync(
+                selectionKind,
+                path,
+                settings,
+                SourceSetId.CreateNew(),
+                SourceIntakeActivityId.CreateNew(),
+                progress: null,
+                cancellationToken);
+        }
+
+        public async Task<SourceIntakeClientResult> LoadAsync(
+            SourceSelectionKind selectionKind,
+            string path,
+            SourceLoadSettings settings,
+            SourceSetId sourceSetId,
+            SourceIntakeActivityId intakeActivityId,
+            IProgress<SourceIntakeProgressSnapshot>? progress,
+            CancellationToken cancellationToken = default)
+        {
+            var result = await intake.LoadAsync(
+                selectionKind,
+                path,
+                settings,
+                progress,
+                cancellationToken,
+                sourceSetId,
+                intakeActivityId);
+            if (interruptAfterIntake)
+            {
+                throw new IOException("The source-intake response was interrupted after host processing.");
+            }
+
+            return new SourceIntakeClientResult(
+                result.Accepted,
+                result.Sources,
+                result.Failure?.Code,
+                result.Failure?.Description)
+            {
+                Issues = result.Issues
+            };
+        }
+
+        public Task<SourceRefreshClientResult> RefreshAsync(
+            LoadedSourceContract source,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class HoldingProgress(int holdOnReportNumber)
+        : IProgress<SourceIntakeProgressSnapshot>, IDisposable
+    {
+        private readonly ManualResetEventSlim _held = new(initialState: false);
+        private readonly ManualResetEventSlim _release = new(initialState: false);
+        private int _reportCount;
+
+        public void Report(SourceIntakeProgressSnapshot value)
+        {
+            if (Interlocked.Increment(ref _reportCount) != holdOnReportNumber)
+            {
+                return;
+            }
+
+            _held.Set();
+            _release.Wait();
+        }
+
+        public bool WaitUntilHeld(TimeSpan timeout) => _held.Wait(timeout);
+
+        public void Release() => _release.Set();
+
+        public void Dispose()
+        {
+            _release.Set();
+            _held.Dispose();
+            _release.Dispose();
+        }
+    }
+
+    private sealed class ReadyProcessingHostSupervisor : IProcessingHostSupervisor
+    {
+        public ProcessingHostLifecycleSnapshot Current { get; } = new(
+            ProcessingHostLifecycleState.Ready,
+            HostDesired: true,
+            ProcessId: 1234,
+            FailureCode: null);
+
+        public event EventHandler<ProcessingHostLifecycleSnapshot>? StateChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public Task<ProcessingHostLifecycleSnapshot> EnsureAvailableAsync(
+            CancellationToken cancellationToken = default) => Task.FromResult(Current);
+
+        public Task<bool> RequestOperationCancellationAsync(
+            OperationId operationId,
+            CancellationToken cancellationToken = default) => Task.FromResult(true);
+
+        public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class NullProcessingHistoryRecorder : IProcessingHistoryRecorder
+    {
+        public void RecordAttempt(ProcessingAttemptRecord record)
+        {
+        }
+
+        public void RecordDiagnostic(ProcessingDiagnosticRecord record)
+        {
+        }
     }
 }

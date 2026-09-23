@@ -42,6 +42,24 @@ public interface ISourceIntakeClient
         };
     }
 
+    Task<SourceIntakeClientResult> LoadAsync(
+        SourceSelectionKind selectionKind,
+        string path,
+        SourceLoadSettings settings,
+        SourceSetId sourceSetId,
+        SourceIntakeActivityId intakeActivityId,
+        IProgress<SourceIntakeProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
+        return LoadAsync(
+            selectionKind,
+            path,
+            settings,
+            sourceSetId,
+            progress,
+            cancellationToken);
+    }
+
     Task<SourceRefreshClientResult> RefreshAsync(
         LoadedSourceContract source,
         CancellationToken cancellationToken = default);

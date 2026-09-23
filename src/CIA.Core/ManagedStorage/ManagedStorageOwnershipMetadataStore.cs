@@ -20,10 +20,118 @@ public sealed record ManagedStorageMetadataReadResult(
     ManagedStorageOwnershipMetadata? Metadata,
     string? Problem);
 
+public enum ManagedStorageIntakeActivityState
+{
+    Active = 1,
+    Terminal = 2,
+    Invalid = 3
+}
+
+public sealed record ManagedStorageIntakeActivityInspection(
+    ManagedStorageIntakeActivityState State,
+    string? Problem);
+
 public sealed class ManagedStorageOwnershipMetadataStore
 {
     public const string FileName = ".cia-managed-artifact.json";
+    public const string IntakeActivityFileName = ".cia-source-intake.activity";
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
+
+    public ManagedStorageIntakeActivityLease BeginIntakeActivity(
+        string artifactDirectory,
+        SourceIntakeActivityId activityId)
+    {
+        var canonicalDirectory = Canonicalize(artifactDirectory);
+        _ = SourceIntakeActivityId.From(activityId.Value);
+        var activityPath = Path.Combine(canonicalDirectory, IntakeActivityFileName);
+        var stream = new FileStream(
+            activityPath,
+            FileMode.CreateNew,
+            FileAccess.ReadWrite,
+            FileShare.None,
+            bufferSize: 128,
+            FileOptions.WriteThrough);
+        try
+        {
+            var content = System.Text.Encoding.UTF8.GetBytes(activityId.ToString());
+            stream.Write(content);
+            stream.Flush(flushToDisk: true);
+            stream.Position = 0;
+            return new ManagedStorageIntakeActivityLease(activityId, activityPath, stream);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
+    public ManagedStorageIntakeActivityInspection InspectIntakeActivity(
+        string artifactDirectory,
+        SourceIntakeActivityId expectedActivityId)
+    {
+        string activityPath;
+        try
+        {
+            activityPath = Path.Combine(Canonicalize(artifactDirectory), IntakeActivityFileName);
+            _ = SourceIntakeActivityId.From(expectedActivityId.Value);
+            if (!File.Exists(activityPath))
+            {
+                return new ManagedStorageIntakeActivityInspection(
+                    ManagedStorageIntakeActivityState.Invalid,
+                    "The source-intake activity evidence is missing.");
+            }
+
+            if ((File.GetAttributes(activityPath) & FileAttributes.ReparsePoint) != 0)
+            {
+                return new ManagedStorageIntakeActivityInspection(
+                    ManagedStorageIntakeActivityState.Invalid,
+                    "The source-intake activity evidence is a reparse point.");
+            }
+
+            using var stream = new FileStream(
+                activityPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                bufferSize: 128,
+                FileOptions.SequentialScan);
+            if (stream.Length is <= 0 or > 128)
+            {
+                throw new InvalidDataException("The source-intake activity evidence has an invalid length.");
+            }
+
+            using var reader = new StreamReader(
+                stream,
+                System.Text.Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: false,
+                bufferSize: 128,
+                leaveOpen: false);
+            var content = reader.ReadToEnd();
+            if (!Guid.TryParse(content, out var parsed)
+                || SourceIntakeActivityId.From(parsed) != expectedActivityId)
+            {
+                throw new InvalidDataException(
+                    "The source-intake activity evidence does not match its ownership metadata.");
+            }
+
+            return new ManagedStorageIntakeActivityInspection(
+                ManagedStorageIntakeActivityState.Terminal,
+                Problem: null);
+        }
+        catch (IOException exception) when (IsSharingViolation(exception))
+        {
+            return new ManagedStorageIntakeActivityInspection(
+                ManagedStorageIntakeActivityState.Active,
+                Problem: null);
+        }
+        catch (Exception exception) when (IsControlledFailure(exception))
+        {
+            return new ManagedStorageIntakeActivityInspection(
+                ManagedStorageIntakeActivityState.Invalid,
+                $"The source-intake activity evidence could not be verified ({exception.Message}).");
+        }
+    }
 
     public void Write(string artifactDirectory, ManagedStorageOwnershipMetadata metadata)
     {
@@ -173,6 +281,11 @@ public sealed class ManagedStorageOwnershipMetadataStore
             _ = SourceSetId.From(sourceSetId.Value);
         }
 
+        if (metadata.IntakeActivityId is { } activityId)
+        {
+            _ = SourceIntakeActivityId.From(activityId.Value);
+        }
+
         if (metadata.ArtifactKind == ManagedStorageArtifactKind.TemporaryOperationArtifact
             && metadata.OperationId is null)
         {
@@ -187,9 +300,10 @@ public sealed class ManagedStorageOwnershipMetadataStore
         }
 
         if (metadata.ArtifactKind == ManagedStorageArtifactKind.ManagedTemporaryArchiveExtraction
-            && metadata.SourceId is null)
+            && (metadata.SourceId is null || metadata.IntakeActivityId is null))
         {
-            throw new InvalidDataException("Managed temporary archive extractions require a source identity.");
+            throw new InvalidDataException(
+                "Managed temporary archive extractions require source and intake-activity identities.");
         }
 
         var declaredPath = Canonicalize(metadata.CanonicalArtifactPath);
@@ -223,6 +337,9 @@ public sealed class ManagedStorageOwnershipMetadataStore
             or ArgumentException
             or NotSupportedException;
 
+    private static bool IsSharingViolation(IOException exception) =>
+        (uint)exception.HResult is 0x80070020 or 0x80070021;
+
     private static JsonSerializerOptions CreateSerializerOptions()
     {
         var options = new JsonSerializerOptions
@@ -237,4 +354,28 @@ public sealed class ManagedStorageOwnershipMetadataStore
 
     private sealed class ManagedStoragePathMismatchException(string message)
         : Exception(message);
+}
+
+public sealed class ManagedStorageIntakeActivityLease : IDisposable
+{
+    private FileStream? _stream;
+
+    internal ManagedStorageIntakeActivityLease(
+        SourceIntakeActivityId activityId,
+        string path,
+        FileStream stream)
+    {
+        ActivityId = activityId;
+        Path = path;
+        _stream = stream;
+    }
+
+    public SourceIntakeActivityId ActivityId { get; }
+
+    public string Path { get; }
+
+    public void Dispose()
+    {
+        Interlocked.Exchange(ref _stream, null)?.Dispose();
+    }
 }

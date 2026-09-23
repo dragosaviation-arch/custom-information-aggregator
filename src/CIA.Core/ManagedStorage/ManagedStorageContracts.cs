@@ -50,7 +50,8 @@ public enum ManagedStorageProtectionReason
     UnsupportedOwnershipMetadataVersion = 13,
     OwnershipPathMismatch = 14,
     InspectionFailed = 15,
-    ArtifactKindNotEligibleInRoot = 16
+    ArtifactKindNotEligibleInRoot = 16,
+    ActiveIntakeActivity = 17
 }
 
 public sealed record ManagedStorageOwnershipMetadata(
@@ -64,7 +65,9 @@ public sealed record ManagedStorageOwnershipMetadata(
     SourceSetId? SourceSetId,
     DateTimeOffset CreatedAtUtc)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
+
+    public SourceIntakeActivityId? IntakeActivityId { get; init; }
 }
 
 public sealed record ManagedStorageSourceDependency(
@@ -87,11 +90,12 @@ public sealed record ManagedStorageProtectedLocation(
 
 public sealed record ManagedStorageDependencySnapshot(
     IReadOnlyList<OperationId> ActiveOperationIds,
+    IReadOnlyList<SourceIntakeActivityId> ActiveIntakeActivityIds,
     IReadOnlyList<ManagedStorageSourceDependency> ActiveSources,
     IReadOnlyList<ManagedStorageRetainedDependency> RetainedResultDependencies,
     IReadOnlyList<ManagedStorageProtectedLocation> KnownProtectedLocations)
 {
-    public static ManagedStorageDependencySnapshot Empty { get; } = new([], [], [], []);
+    public static ManagedStorageDependencySnapshot Empty { get; } = new([], [], [], [], []);
 }
 
 public interface IManagedStorageDependencySnapshotProvider
@@ -105,6 +109,7 @@ public sealed record ManagedStorageArtifactClassification(
     ManagedStorageArtifactKind ArtifactKind,
     ManagedStorageLifecycle Lifecycle,
     OperationId? OperationId,
+    SourceIntakeActivityId? IntakeActivityId,
     SourceId? SourceId,
     SourceSetId? SourceSetId,
     DateTimeOffset? CreatedAtUtc,

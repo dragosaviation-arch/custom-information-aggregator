@@ -27,7 +27,8 @@ public sealed class ArchiveExtractionService
         SourceLoadSettings settings,
         CancellationToken cancellationToken = default,
         SourceId? retainedOriginalArchiveSourceId = null,
-        SourceSetId? sourceSetId = null)
+        SourceSetId? sourceSetId = null,
+        SourceIntakeActivityId? intakeActivityId = null)
     {
         return Extract(
             archivePath,
@@ -35,7 +36,8 @@ public sealed class ArchiveExtractionService
             progress: null,
             cancellationToken,
             retainedOriginalArchiveSourceId,
-            sourceSetId);
+            sourceSetId,
+            intakeActivityId);
     }
 
     internal ArchiveExtractionResult Extract(
@@ -44,21 +46,24 @@ public sealed class ArchiveExtractionService
         SourceIntakeProgressTracker? progress,
         CancellationToken cancellationToken = default,
         SourceId? retainedOriginalArchiveSourceId = null,
-        SourceSetId? sourceSetId = null)
+        SourceSetId? sourceSetId = null,
+        SourceIntakeActivityId? intakeActivityId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(archivePath);
         ArgumentNullException.ThrowIfNull(settings);
 
         var fullArchivePath = Path.GetFullPath(archivePath);
         var originalArchiveSourceId = retainedOriginalArchiveSourceId ?? SourceId.CreateNew();
+        var activityId = intakeActivityId ?? SourceIntakeActivityId.CreateNew();
 
         try
         {
-            var location = CreateExtractionLocation(
+            using var location = CreateExtractionLocation(
                 fullArchivePath,
                 originalArchiveSourceId,
                 settings,
-                sourceSetId);
+                sourceSetId,
+                activityId);
             var rootLineage = new ArchiveLineageItem(
                 originalArchiveSourceId,
                 fullArchivePath,
@@ -327,7 +332,8 @@ public sealed class ArchiveExtractionService
         string originalArchivePath,
         SourceId originalArchiveSourceId,
         SourceLoadSettings settings,
-        SourceSetId? sourceSetId)
+        SourceSetId? sourceSetId,
+        SourceIntakeActivityId intakeActivityId)
     {
         string baseDirectory;
         ArchiveExtractionRetention retention;
@@ -367,21 +373,36 @@ public sealed class ArchiveExtractionService
         Directory.CreateDirectory(extractionRoot);
         if (retention == ArchiveExtractionRetention.ManagedTemporary)
         {
-            _metadataStore.Write(
+            var activity = _metadataStore.BeginIntakeActivity(
                 extractionRoot,
-                new ManagedStorageOwnershipMetadata(
-                    ManagedStorageOwnershipMetadata.CurrentSchemaVersion,
-                    ManagedStorageArtifactId.CreateNew(),
-                    ManagedStorageArtifactKind.ManagedTemporaryArchiveExtraction,
-                    ManagedStorageLifecycle.SessionTemporary,
+                intakeActivityId);
+            try
+            {
+                _metadataStore.Write(
                     extractionRoot,
-                    OperationId: null,
-                    SourceId: originalArchiveSourceId,
-                    sourceSetId,
-                    DateTimeOffset.UtcNow));
+                    new ManagedStorageOwnershipMetadata(
+                        ManagedStorageOwnershipMetadata.CurrentSchemaVersion,
+                        ManagedStorageArtifactId.CreateNew(),
+                        ManagedStorageArtifactKind.ManagedTemporaryArchiveExtraction,
+                        ManagedStorageLifecycle.SessionTemporary,
+                        extractionRoot,
+                        OperationId: null,
+                        SourceId: originalArchiveSourceId,
+                        sourceSetId,
+                        DateTimeOffset.UtcNow)
+                    {
+                        IntakeActivityId = intakeActivityId
+                    });
+                return new ArchiveExtractionLocation(extractionRoot, retention, activity);
+            }
+            catch
+            {
+                activity.Dispose();
+                throw;
+            }
         }
 
-        return new ArchiveExtractionLocation(extractionRoot, retention);
+        return new ArchiveExtractionLocation(extractionRoot, retention, Activity: null);
     }
 
     private static LoadedSourceContract CreateExtractedSource(
@@ -554,7 +575,14 @@ public sealed class ArchiveExtractionService
 
     private sealed record ArchiveExtractionLocation(
         string Root,
-        ArchiveExtractionRetention Retention);
+        ArchiveExtractionRetention Retention,
+        ManagedStorageIntakeActivityLease? Activity) : IDisposable
+    {
+        public void Dispose()
+        {
+            Activity?.Dispose();
+        }
+    }
 
     private enum ArchiveDetection
     {
