@@ -1,6 +1,7 @@
 using System.IO;
 using CIA.Core;
 using CIA.Core.Diagnostics;
+using CIA.Core.ManagedStorage;
 using CIA.Core.Runtime;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
@@ -57,6 +58,10 @@ public static class DesktopApplicationHost
         builder.Services.AddHostedService<ProcessingHostSupervisorLifetime>();
         builder.Services.AddSingleton<IApplicationWorkflowCoordinator, ApplicationWorkflowCoordinator>();
         builder.Services.AddSingleton<ActiveLoadedSourceSet>();
+        builder.Services.AddSingleton<SourceIntakeActivityRegistry>();
+        builder.Services.AddSingleton<ManagedStorageInventoryService>();
+        builder.Services.AddSingleton<IManagedStorageDependencySnapshotProvider,
+            ManagedStorageDependencySnapshotProvider>();
         builder.Services.AddSingleton<ISourceIntakeClient, ProcessingHostSourceIntakeClient>();
         builder.Services.AddSingleton<SourceLoadingCoordinator>();
         builder.Services.AddSingleton<ISourcePathPicker, WindowsSourcePathPicker>();

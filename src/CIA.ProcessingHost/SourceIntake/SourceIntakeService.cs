@@ -18,7 +18,9 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
             path,
             settings,
             progress: null,
-            cancellationToken);
+            cancellationToken,
+            sourceSetId: null,
+            intakeActivityId: null);
     }
 
     public Task<SourceIntakeResult> LoadAsync(
@@ -26,7 +28,9 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         string path,
         SourceLoadSettings settings,
         IProgress<SourceIntakeProgressSnapshot>? progress,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        SourceSetId? sourceSetId = null,
+        SourceIntakeActivityId? intakeActivityId = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -34,13 +38,21 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
             ? null
             : new SourceIntakeProgressTracker(progress);
         return Task.Run(
-            () => Load(selectionKind, path, settings, progressTracker, cancellationToken),
+            () => Load(
+                selectionKind,
+                path,
+                settings,
+                progressTracker,
+                cancellationToken,
+                sourceSetId,
+                intakeActivityId ?? SourceIntakeActivityId.CreateNew()),
             cancellationToken);
     }
 
     public Task<SourceIntakeResult> ReloadArchiveAsync(
         ArchiveSourceProvenance provenance,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        SourceSetId? sourceSetId = null)
     {
         ArgumentNullException.ThrowIfNull(provenance);
         var settings = SourceLoadSettings.Default with
@@ -57,7 +69,9 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
                 settings,
                 progress: null,
                 cancellationToken: cancellationToken,
-                retainedOriginalArchiveSourceId: provenance.OriginalArchiveSourceId),
+                retainedOriginalArchiveSourceId: provenance.OriginalArchiveSourceId,
+                sourceSetId,
+                SourceIntakeActivityId.CreateNew()),
             cancellationToken);
     }
 
@@ -66,7 +80,9 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         string path,
         SourceLoadSettings settings,
         SourceIntakeProgressTracker? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SourceSetId? sourceSetId,
+        SourceIntakeActivityId intakeActivityId)
     {
         if (settings.MaximumArchiveNestingDepth.Value < 1
             || settings.PersistentArchiveExtractionEnabled
@@ -94,12 +110,16 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
                     fullPath,
                     settings,
                     progress,
-                    cancellationToken),
+                    cancellationToken,
+                    sourceSetId: sourceSetId,
+                    intakeActivityId: intakeActivityId),
                 SourceSelectionKind.Folder => LoadFolder(
                     fullPath,
                     settings,
                     progress,
-                    cancellationToken),
+                    cancellationToken,
+                    sourceSetId,
+                    intakeActivityId),
                 _ => Reject("unsupported-selection", "The requested source-selection kind is not supported.")
             };
 
@@ -144,7 +164,9 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         SourceLoadSettings settings,
         SourceIntakeProgressTracker? progress,
         CancellationToken cancellationToken,
-        SourceId? retainedOriginalArchiveSourceId = null)
+        SourceId? retainedOriginalArchiveSourceId = null,
+        SourceSetId? sourceSetId = null,
+        SourceIntakeActivityId? intakeActivityId = null)
     {
         if (!File.Exists(path))
         {
@@ -161,7 +183,9 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
             settings,
             progress,
             cancellationToken,
-            retainedOriginalArchiveSourceId);
+            retainedOriginalArchiveSourceId,
+            sourceSetId,
+            intakeActivityId ?? SourceIntakeActivityId.CreateNew());
         return new SourceIntakeResult(
             extraction.Accepted,
             extraction.Sources,
@@ -175,7 +199,9 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
         string path,
         SourceLoadSettings settings,
         SourceIntakeProgressTracker? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SourceSetId? sourceSetId,
+        SourceIntakeActivityId intakeActivityId)
     {
         if (!Directory.Exists(path))
         {
@@ -233,7 +259,13 @@ public sealed class SourceIntakeService(ArchiveExtractionService archiveExtracti
                     continue;
                 }
 
-                var archiveResult = LoadArchive(fullPath, settings, progress, cancellationToken);
+                var archiveResult = LoadArchive(
+                    fullPath,
+                    settings,
+                    progress,
+                    cancellationToken,
+                    sourceSetId: sourceSetId,
+                    intakeActivityId: intakeActivityId);
                 if (archiveResult.Accepted)
                 {
                     sources.AddRange(archiveResult.Sources);

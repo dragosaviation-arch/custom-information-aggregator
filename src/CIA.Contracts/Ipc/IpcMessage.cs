@@ -80,6 +80,9 @@ public sealed record LoadSourcesCommand(
     SourceLoadSettings Settings)
     : IpcCommand(MessageId, TimestampUtc)
 {
+    public SourceIntakeActivityId IntakeActivityId { get; init; } =
+        SourceIntakeActivityId.CreateNew();
+
     public LoadSourcesCommand(
         Guid messageId,
         DateTimeOffset timestampUtc,

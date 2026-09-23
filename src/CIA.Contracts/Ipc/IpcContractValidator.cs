@@ -195,6 +195,12 @@ public static class IpcContractValidator
             throw InvalidContract("A source-load command requires a non-empty Source Set ID.");
         }
 
+        if (!SourceIntakeActivityId.IsValid(command.IntakeActivityId.Value))
+        {
+            throw InvalidContract(
+                "A source-load command requires a non-empty UUIDv7 intake activity ID.");
+        }
+
         if (!Enum.IsDefined(command.SelectionKind))
         {
             throw InvalidContract("The source-selection kind is not supported.");

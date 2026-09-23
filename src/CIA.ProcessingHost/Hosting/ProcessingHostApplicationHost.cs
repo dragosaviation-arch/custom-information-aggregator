@@ -1,6 +1,7 @@
 using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
 using CIA.Core.Hierarchy;
+using CIA.Core.ManagedStorage;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Extraction;
@@ -41,6 +42,7 @@ public static class ProcessingHostApplicationHost
         builder.Services.AddSingleton<IProcessingHistoryRecorder, ClefProcessingHistoryRecorder>();
         builder.Services.AddSingleton<CooperativeOperationCancellation>();
         builder.Services.AddSingleton(settingsService.RuntimePaths);
+        builder.Services.AddSingleton<ManagedStorageOwnershipMetadataStore>();
         builder.Services.AddSingleton<ArchiveExtractionService>();
         builder.Services.AddSingleton<SourceIntakeService>();
         builder.Services.AddSingleton<IGenericXmlSourceAdapter, GenericXmlElementValueSourceAdapter>();
