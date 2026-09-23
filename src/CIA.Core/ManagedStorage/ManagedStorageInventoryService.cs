@@ -490,10 +490,14 @@ public sealed class ManagedStorageInventoryService
                 continue;
             }
 
-            if (source.ExtractionRoot is { } extractionRoot
-                && PathsEqual(artifactPath, TryCanonicalize(extractionRoot)))
+            if (source.ExtractionRoot is { } extractionRoot)
             {
-                return true;
+                if (PathsEqual(artifactPath, TryCanonicalize(extractionRoot)))
+                {
+                    return true;
+                }
+
+                continue;
             }
 
             if (metadata.SourceId == source.SourceId

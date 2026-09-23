@@ -13,6 +13,8 @@ using CIA.Desktop.Hosting;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using CIA.ProcessingHost.SourceIntake;
+using CIA.ProcessingHost.SourceInterpretation;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.ProcessingHost.Tests;
 
@@ -101,31 +103,44 @@ public sealed class ManagedStorageProtectionTests
         var path = environment.CreateUnownedDirectory(environment.Paths.TempDirectory, "active-intake");
         File.WriteAllText(Path.Combine(path, "source.xml"), "<source />");
         var activityId = SourceIntakeActivityId.CreateNew();
+        var originalArchiveSourceId = SourceId.CreateNew();
         using var activity = environment.Metadata.BeginIntakeActivity(path, activityId);
         var metadata = environment.CreateMetadata(
             path,
             ManagedStorageArtifactKind.ManagedTemporaryArchiveExtraction,
             ManagedStorageLifecycle.SessionTemporary,
-            sourceId: SourceId.CreateNew()) with
+            sourceId: originalArchiveSourceId) with
         {
             IntakeActivityId = activityId
         };
         environment.Metadata.Write(path, metadata);
+        var dependencies = Snapshot(activeSources:
+        [
+            new ManagedStorageSourceDependency(
+                SourceId.CreateNew(),
+                SourceSetId.CreateNew(),
+                originalArchiveSourceId,
+                Path.Combine(path, "source.xml"),
+                Path.Combine(environment.Paths.TempDirectory, "different-current-root"),
+                ArchiveExtractionRetention.ManagedTemporary)
+        ]);
 
-        var whileHeld = environment.Inventory.CreateInventory().Items.Single();
+        var whileHeld = environment.Inventory.CreateInventory(dependencies).Items.Single();
         Assert.IsFalse(whileHeld.IsCleanupEligible);
         CollectionAssert.Contains(
             whileHeld.ProtectionReasons.ToArray(),
             ManagedStorageProtectionReason.ActiveIntakeActivity);
+        Assert.IsFalse(whileHeld.ProtectionReasons.Contains(
+            ManagedStorageProtectionReason.ActiveSessionSource));
 
         activity.Dispose();
-        var afterRelease = environment.Inventory.CreateInventory().Items.Single();
+        var afterRelease = environment.Inventory.CreateInventory(dependencies).Items.Single();
         Assert.IsTrue(afterRelease.IsCleanupEligible);
         Assert.IsTrue(File.Exists(Path.Combine(path, "source.xml")));
     }
 
     [TestMethod]
-    public void ManagedArchiveExtractionIsProtectedByActiveSourcePathAndOriginalArchiveIdentity()
+    public void ManagedArchiveExtractionUsesExactRootAndFallsBackToIdentityOnlyWhenRootUnavailable()
     {
         using var environment = new ManagedStorageTestEnvironment();
         var originalArchiveSourceId = SourceId.CreateNew();
@@ -156,13 +171,136 @@ public sealed class ManagedStorageProtectionTests
                 ExtractionRoot: null,
                 ArchiveExtractionRetention.ManagedTemporary)
         ]);
+        var explicitMismatch = Snapshot(activeSources:
+        [
+            new ManagedStorageSourceDependency(
+                sourceId,
+                sourceSetId,
+                originalArchiveSourceId,
+                Path.Combine(artifact.Path, "source.xml"),
+                Path.Combine(environment.Paths.TempDirectory, "different-current-root"),
+                ArchiveExtractionRetention.ManagedTemporary)
+        ]);
 
-        Assert.IsFalse(environment.Inventory.CreateInventory(byPath).Items.Single().IsCleanupEligible);
+        var pathResult = environment.Inventory.CreateInventory(byPath).Items.Single();
+        Assert.IsFalse(pathResult.IsCleanupEligible);
+        CollectionAssert.Contains(
+            pathResult.ProtectionReasons.ToArray(),
+            ManagedStorageProtectionReason.ActiveSessionSource);
         var identityResult = environment.Inventory.CreateInventory(byIdentity).Items.Single();
         Assert.IsFalse(identityResult.IsCleanupEligible);
         CollectionAssert.Contains(
             identityResult.ProtectionReasons.ToArray(),
             ManagedStorageProtectionReason.ActiveSessionSource);
+        var mismatchResult = environment.Inventory.CreateInventory(explicitMismatch).Items.Single();
+        Assert.IsTrue(mismatchResult.IsCleanupEligible);
+        Assert.IsFalse(mismatchResult.ProtectionReasons.Contains(
+            ManagedStorageProtectionReason.ActiveSessionSource));
+        Assert.IsTrue(File.Exists(Path.Combine(artifact.Path, "payload.bin")));
+    }
+
+    [TestMethod]
+    public async Task SuccessfulArchiveRefreshProtectsCurrentRootAndMakesSupersededRootEligible()
+    {
+        using var environment = new ManagedStorageTestEnvironment();
+        var archivePath = environment.CreateArchive(
+            "successful-refresh.zip",
+            "folder/source.xml",
+            "<source><item>one</item></source>");
+        var intake = new SourceIntakeService(new ArchiveExtractionService(environment.Paths));
+        var initial = await intake.LoadAsync(
+            SourceSelectionKind.Archive,
+            archivePath,
+            SourceLoadSettings.Default,
+            progress: null,
+            cancellationToken: default,
+            SourceSetId.CreateNew());
+        var originalSource = initial.Sources.Single();
+        var originalRoot = originalSource.ArchiveProvenance!.ExtractionRoot;
+        var refresh = await new SourceRefreshService(
+                intake,
+                new SourceInterpreter([], NullLogger<SourceInterpreter>.Instance))
+            .RefreshAsync(originalSource);
+
+        Assert.IsTrue(refresh.Accepted);
+        var currentSource = refresh.Source;
+        var currentRoot = currentSource.ArchiveProvenance!.ExtractionRoot;
+        Assert.AreNotEqual(originalRoot, currentRoot);
+        Assert.AreEqual(
+            originalSource.ArchiveProvenance.OriginalArchiveSourceId,
+            currentSource.ArchiveProvenance.OriginalArchiveSourceId);
+
+        var inventory = environment.Inventory.CreateInventory(Snapshot(activeSources:
+        [
+            ToDependency(currentSource)
+        ]));
+        var superseded = FindByPath(inventory, originalRoot);
+        var current = FindByPath(inventory, currentRoot);
+
+        Assert.IsTrue(superseded.IsCleanupEligible);
+        Assert.IsFalse(superseded.ProtectionReasons.Contains(
+            ManagedStorageProtectionReason.ActiveSessionSource));
+        Assert.IsFalse(current.IsCleanupEligible);
+        CollectionAssert.Contains(
+            current.ProtectionReasons.ToArray(),
+            ManagedStorageProtectionReason.ActiveSessionSource);
+        Assert.IsTrue(File.Exists(originalSource.Path));
+        Assert.IsTrue(File.Exists(currentSource.Path));
+    }
+
+    [TestMethod]
+    public async Task FailedArchiveRefreshOrphanWithSharedIdentityBecomesEligible()
+    {
+        using var environment = new ManagedStorageTestEnvironment();
+        var archivePath = environment.CreateArchive(
+            "failed-refresh.zip",
+            "folder/source.xml",
+            "<source><item>one</item></source>");
+        var intake = new SourceIntakeService(new ArchiveExtractionService(environment.Paths));
+        var initial = await intake.LoadAsync(
+            SourceSelectionKind.Archive,
+            archivePath,
+            SourceLoadSettings.Default,
+            progress: null,
+            cancellationToken: default,
+            SourceSetId.CreateNew());
+        var activeSource = initial.Sources.Single();
+        var activeRoot = activeSource.ArchiveProvenance!.ExtractionRoot;
+        File.Delete(archivePath);
+        environment.CreateArchive(
+            "failed-refresh.zip",
+            "folder/different.xml",
+            "<source><item>different</item></source>");
+
+        var refresh = await new SourceRefreshService(
+                intake,
+                new SourceInterpreter([], NullLogger<SourceInterpreter>.Instance))
+            .RefreshAsync(activeSource);
+
+        Assert.IsFalse(refresh.Accepted);
+        Assert.AreEqual("archive-member-not-found", refresh.Failure?.Code);
+        var inventory = environment.Inventory.CreateInventory(Snapshot(activeSources:
+        [
+            ToDependency(activeSource)
+        ]));
+        var current = FindByPath(inventory, activeRoot);
+        var orphan = inventory.Items.Single(item =>
+            item.ArtifactKind == ManagedStorageArtifactKind.ManagedTemporaryArchiveExtraction
+            && !PathsEqual(item.CanonicalPath, activeRoot));
+
+        Assert.IsFalse(current.IsCleanupEligible);
+        CollectionAssert.Contains(
+            current.ProtectionReasons.ToArray(),
+            ManagedStorageProtectionReason.ActiveSessionSource);
+        Assert.IsTrue(orphan.IsCleanupEligible);
+        Assert.IsFalse(orphan.ProtectionReasons.Contains(
+            ManagedStorageProtectionReason.ActiveSessionSource));
+        Assert.AreEqual(current.SourceId, orphan.SourceId);
+        Assert.IsTrue(Directory.Exists(orphan.CanonicalPath));
+        Assert.IsTrue(Directory.EnumerateFiles(
+            orphan.CanonicalPath,
+            "*",
+            SearchOption.AllDirectories).Any());
     }
 
     [TestMethod]
@@ -831,6 +969,26 @@ public sealed class ManagedStorageProtectionTests
             activeSources ?? [],
             retained ?? [],
             protectedLocations ?? []);
+
+    private static ManagedStorageSourceDependency ToDependency(LoadedSourceContract source) =>
+        new(
+            source.SourceId,
+            source.SourceSetId,
+            source.ArchiveProvenance?.OriginalArchiveSourceId,
+            source.Path,
+            source.ArchiveProvenance?.ExtractionRoot,
+            source.ArchiveProvenance?.Retention);
+
+    private static ManagedStorageArtifactClassification FindByPath(
+        ManagedStorageInventory inventory,
+        string path) =>
+        inventory.Items.Single(item => PathsEqual(item.CanonicalPath, path));
+
+    private static bool PathsEqual(string first, string second) =>
+        string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(first)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(second)),
+            StringComparison.OrdinalIgnoreCase);
 
     private static bool IsWithin(string path, string root)
     {
