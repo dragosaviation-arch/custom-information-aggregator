@@ -227,6 +227,7 @@ public sealed class SavedWorkingStateLibraryTests
         await viewModel.SaveStateCommand.ExecuteAsync(null);
 
         Assert.AreEqual(1, coordinator.SaveCallCount);
+        Assert.AreEqual(WorkingStatePublicationMode.CreateNew, coordinator.LastPublicationMode);
         Assert.AreEqual(
             Path.Combine(environment.Library.DirectoryPath, "Flight review.cia"),
             coordinator.LastSavePath);
@@ -260,6 +261,34 @@ public sealed class SavedWorkingStateLibraryTests
             environment.Library.DirectoryPath,
             "Cancelled.cia")));
         StringAssert.Contains(viewModel.SavedStateStatusText, "cancelled");
+    }
+
+    [TestMethod]
+    public async Task LateNameCollisionRefreshesInventoryWithoutClaimingOrSelectingSuccess()
+    {
+        using var environment = new SavedStateTestEnvironment();
+        var existing = environment.CreateState("Existing", [1, 4, 9]);
+        byte[] sentinel = [9, 8, 7, 6];
+        var coordinator = new StubWorkingStateCoordinator
+        {
+            SaveResult = WorkingStateCoordinatorResult.Reject(
+                "A saved state with this name already exists or became unavailable before publication."),
+            BeforeSaveResult = path => File.WriteAllBytes(path, sentinel)
+        };
+        var viewModel = environment.CreateViewModel(coordinator);
+        viewModel.SelectedSavedState = viewModel.SavedStates.Single(state => state.Name == "Existing");
+        viewModel.SavedStateName = "Raced";
+
+        await viewModel.SaveStateCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(WorkingStatePublicationMode.CreateNew, coordinator.LastPublicationMode);
+        Assert.HasCount(2, viewModel.SavedStates);
+        Assert.AreEqual(existing.Path, viewModel.SelectedSavedState?.Path);
+        CollectionAssert.AreEqual(
+            sentinel,
+            File.ReadAllBytes(Path.Combine(environment.Library.DirectoryPath, "Raced.cia")));
+        StringAssert.Contains(viewModel.SavedStateStatusText, "already exists");
+        Assert.IsFalse(viewModel.SavedStateStatusText.Contains("Saved state 'Raced'", StringComparison.Ordinal));
     }
 
     [TestMethod]
@@ -453,6 +482,10 @@ public sealed class SavedWorkingStateLibraryTests
 
         public string? LastSavePath { get; private set; }
 
+        public WorkingStatePublicationMode? LastPublicationMode { get; private set; }
+
+        public Action<string>? BeforeSaveResult { get; set; }
+
         public string? LastRestorePath { get; private set; }
 
         public WorkflowOperationReadiness EvaluateSaveReadiness() =>
@@ -465,10 +498,21 @@ public sealed class SavedWorkingStateLibraryTests
 
         public Task<WorkingStateCoordinatorResult> SaveAsync(
             string targetPath,
+            CancellationToken cancellationToken = default) =>
+            SaveAsync(
+                targetPath,
+                WorkingStatePublicationMode.ReplaceExisting,
+                cancellationToken);
+
+        public Task<WorkingStateCoordinatorResult> SaveAsync(
+            string targetPath,
+            WorkingStatePublicationMode publicationMode,
             CancellationToken cancellationToken = default)
         {
             SaveCallCount++;
             LastSavePath = targetPath;
+            LastPublicationMode = publicationMode;
+            BeforeSaveResult?.Invoke(targetPath);
             if (SaveResult.Accepted)
             {
                 File.WriteAllBytes(targetPath, [1, 2, 3, 4]);

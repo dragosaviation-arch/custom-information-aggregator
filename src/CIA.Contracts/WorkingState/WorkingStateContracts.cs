@@ -15,6 +15,12 @@ public static class WorkingStatePackageFormat
     public const long MaximumDatabaseLength = 16L * 1024 * 1024 * 1024;
 }
 
+public enum WorkingStatePublicationMode
+{
+    ReplaceExisting = 0,
+    CreateNew = 1
+}
+
 public sealed record WorkingStateSourceSet
 {
     [JsonConstructor]

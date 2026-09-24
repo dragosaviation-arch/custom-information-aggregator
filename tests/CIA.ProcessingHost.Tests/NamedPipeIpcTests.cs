@@ -38,7 +38,8 @@ public sealed class NamedPipeIpcTests
             DateTimeOffset.UtcNow,
             correlation,
             Path.GetFullPath("state.cia"),
-            snapshot);
+            snapshot,
+            WorkingStatePublicationMode.CreateNew);
         var restore = new RestoreWorkingStateCommand(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
@@ -68,6 +69,7 @@ public sealed class NamedPipeIpcTests
         var restoredResponse = (RestoreWorkingStateResponse)await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
         Assert.AreEqual(snapshot.PackageId, saved.Snapshot.PackageId);
         Assert.AreEqual(correlation, saved.Correlation);
+        Assert.AreEqual(WorkingStatePublicationMode.CreateNew, saved.PublicationMode);
         Assert.AreEqual(correlation, restored.Correlation);
         Assert.AreEqual(manifest.DatabaseSha256, restoredResponse.Manifest?.DatabaseSha256);
     }

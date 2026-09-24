@@ -4,6 +4,7 @@ using System.Reflection;
 using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Contracts.WorkingState;
 using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
 using CIA.Desktop.Workflow;
@@ -837,12 +838,18 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         IsSavedStateActionRunning = true;
         try
         {
-            var result = await _workingStateCoordinator.SaveAsync(target.Path);
+            var previousSelectionPath = SelectedSavedState?.Path;
+            var result = await _workingStateCoordinator.SaveAsync(
+                target.Path,
+                WorkingStatePublicationMode.CreateNew);
             if (!result.Accepted)
             {
                 SavedStateStatusText = result.FailureDescription
                     ?? "The working state could not be saved.";
-                RefreshSavedStates(updateStatus: false);
+                RefreshSavedStates(
+                    previousSelectionPath,
+                    updateStatus: false,
+                    selectFirstWhenPreferredUnavailable: false);
                 return;
             }
 
@@ -921,7 +928,8 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
 
     private void RefreshSavedStates(
         string? preferredPath = null,
-        bool updateStatus = true)
+        bool updateStatus = true,
+        bool selectFirstWhenPreferredUnavailable = true)
     {
         var selectionPath = preferredPath ?? SelectedSavedState?.Path;
         var inventory = _savedStateLibrary.CreateInventory();
@@ -929,7 +937,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         SelectedSavedState = SavedStates.FirstOrDefault(state =>
                 selectionPath is not null
                 && string.Equals(state.Path, selectionPath, StringComparison.OrdinalIgnoreCase))
-            ?? SavedStates.FirstOrDefault();
+            ?? (selectFirstWhenPreferredUnavailable ? SavedStates.FirstOrDefault() : null);
         SavedStateNameProblem = EvaluateSavedStateNameProblem(SavedStateName);
         if (updateStatus)
         {

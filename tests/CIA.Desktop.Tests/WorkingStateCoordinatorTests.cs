@@ -31,6 +31,9 @@ public sealed class WorkingStateCoordinatorTests
 
         Assert.IsTrue(result.Accepted, result.FailureDescription);
         Assert.AreEqual(1, prepared.Context.Client.SaveCallCount);
+        Assert.AreEqual(
+            WorkingStatePublicationMode.ReplaceExisting,
+            prepared.Context.Client.LastPublicationMode);
         Assert.IsNotNull(prepared.Context.Client.LastSavedSnapshot?.DatabaseGeneration);
         Assert.AreEqual(
             WorkflowArtifactStatus.Current,
@@ -436,14 +439,18 @@ public sealed class WorkingStateCoordinatorTests
 
         public WorkingStateSnapshot? LastSavedSnapshot { get; private set; }
 
+        public WorkingStatePublicationMode? LastPublicationMode { get; private set; }
+
         public Task<WorkingStateClientResult> SaveAsync(
             OperationCorrelation correlation,
             string targetPath,
             WorkingStateSnapshot snapshot,
+            WorkingStatePublicationMode publicationMode,
             CancellationToken cancellationToken = default)
         {
             SaveCallCount++;
             LastSavedSnapshot = snapshot;
+            LastPublicationMode = publicationMode;
             RestoreManifest = CreateManifest(snapshot);
             if (PersistSaveTargets)
             {
