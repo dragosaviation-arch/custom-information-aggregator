@@ -566,6 +566,7 @@ public sealed class InterruptedOperationRecoveryTests
             OperationCorrelation correlation,
             string targetPath,
             WorkingStateSnapshot snapshot,
+            WorkingStatePublicationMode publicationMode,
             CancellationToken cancellationToken = default) =>
             throw new AssertFailedException("Readiness evaluation must not save working state.");
 

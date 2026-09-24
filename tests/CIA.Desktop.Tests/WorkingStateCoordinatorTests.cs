@@ -6,9 +6,11 @@ using CIA.Contracts.Sources;
 using CIA.Contracts.WorkingState;
 using CIA.Core.Database;
 using CIA.Core.Diagnostics;
+using CIA.Core.Runtime;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Hosting;
+using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using CIA.Desktop.WorkingState;
@@ -29,6 +31,9 @@ public sealed class WorkingStateCoordinatorTests
 
         Assert.IsTrue(result.Accepted, result.FailureDescription);
         Assert.AreEqual(1, prepared.Context.Client.SaveCallCount);
+        Assert.AreEqual(
+            WorkingStatePublicationMode.ReplaceExisting,
+            prepared.Context.Client.LastPublicationMode);
         Assert.IsNotNull(prepared.Context.Client.LastSavedSnapshot?.DatabaseGeneration);
         Assert.AreEqual(
             WorkflowArtifactStatus.Current,
@@ -59,6 +64,52 @@ public sealed class WorkingStateCoordinatorTests
         Assert.AreEqual(WorkflowArtifactStatus.Current, prepared.Context.Workflow.Current.Database);
         Assert.IsTrue(result.Accepted, result.FailureDescription);
         Assert.AreEqual(1, prepared.Context.Client.SaveCallCount);
+    }
+
+    [TestMethod]
+    public async Task SettingsManagedLibrarySavesRestoresAndDeletesAuthoritativeWorkingBoundary()
+    {
+        var prepared = await CreateCurrentDatabaseContextAsync();
+        using var environment = new TemporaryManagedStateDirectory();
+        var library = new SavedWorkingStateLibrary(environment.Paths);
+        prepared.Context.Client.PersistSaveTargets = true;
+        var viewModel = new SettingsWorkspaceViewModel(
+            new EmptyHistoryReader(),
+            new SettingsWorkspaceRuntimePaths(environment.Paths, environment.Paths.LogsDirectory),
+            savedStateLibrary: library,
+            workingStateCoordinator: prepared.Context.Coordinator,
+            workflowCoordinator: prepared.Context.Workflow,
+            deleteConfirmation: new AcceptedDeleteConfirmation());
+        viewModel.SavedStateName = "Current boundary";
+
+        await viewModel.SaveStateCommand.ExecuteAsync(null);
+        var savedPath = viewModel.SelectedSavedState?.Path;
+        var savedSnapshot = prepared.Context.Client.LastSavedSnapshot;
+        Assert.IsNotNull(savedSnapshot);
+        Assert.IsNotNull(savedPath);
+        Assert.IsTrue(File.Exists(savedPath));
+        Assert.HasCount(1, viewModel.SavedStates);
+
+        var source = prepared.Context.Sources.Items.Single();
+        Assert.IsTrue(prepared.Loading.SetInclusion([source], isIncluded: false).Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, prepared.Context.Workflow.Current.Database);
+        Assert.IsFalse(prepared.Context.Sources.Items.Single().IsIncluded);
+
+        await viewModel.RestoreStateCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, prepared.Context.Client.RestoreCallCount);
+        Assert.IsTrue(prepared.Context.Sources.Items.Single().IsIncluded);
+        Assert.AreEqual(
+            savedSnapshot.DatabaseGeneration,
+            prepared.Context.Database.CurrentGeneration);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, prepared.Context.Workflow.Current.Database);
+        Assert.IsTrue(File.Exists(savedPath));
+        Assert.HasCount(1, viewModel.SavedStates);
+
+        await viewModel.DeleteStateCommand.ExecuteAsync(null);
+
+        Assert.IsFalse(File.Exists(savedPath));
+        Assert.IsEmpty(viewModel.SavedStates);
     }
 
     [TestMethod]
@@ -378,6 +429,8 @@ public sealed class WorkingStateCoordinatorTests
 
     private sealed class StubWorkingStateClient : IWorkingStateClient
     {
+        public bool PersistSaveTargets { get; set; }
+
         public WorkingStateManifest? RestoreManifest { get; set; }
 
         public int SaveCallCount { get; private set; }
@@ -386,14 +439,25 @@ public sealed class WorkingStateCoordinatorTests
 
         public WorkingStateSnapshot? LastSavedSnapshot { get; private set; }
 
+        public WorkingStatePublicationMode? LastPublicationMode { get; private set; }
+
         public Task<WorkingStateClientResult> SaveAsync(
             OperationCorrelation correlation,
             string targetPath,
             WorkingStateSnapshot snapshot,
+            WorkingStatePublicationMode publicationMode,
             CancellationToken cancellationToken = default)
         {
             SaveCallCount++;
             LastSavedSnapshot = snapshot;
+            LastPublicationMode = publicationMode;
+            RestoreManifest = CreateManifest(snapshot);
+            if (PersistSaveTargets)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+                File.WriteAllBytes(targetPath, [1, 2, 3, 4]);
+            }
+
             return Task.FromResult(new WorkingStateClientResult(
                 true,
                 new OperationCompletion(correlation, OperationOutcome.CompletedSuccessfully, []),
@@ -457,6 +521,36 @@ public sealed class WorkingStateCoordinatorTests
 
         public void RecordDiagnostic(ProcessingDiagnosticRecord record) =>
             _diagnostics.Add(record);
+    }
+
+    private sealed class EmptyHistoryReader : IProcessingHistoryReader
+    {
+        public ProcessingHistorySnapshot Read() => new([], [], ReadProblem: null);
+    }
+
+    private sealed class AcceptedDeleteConfirmation : ISavedWorkingStateDeleteConfirmation
+    {
+        public bool IsOpen => false;
+
+        public string? StateName => null;
+
+        public event EventHandler? Changed
+        {
+            add { }
+            remove { }
+        }
+
+        public Task<bool> ConfirmAsync(
+            string stateName,
+            CancellationToken cancellationToken = default) => Task.FromResult(true);
+
+        public void Accept()
+        {
+        }
+
+        public void Decline()
+        {
+        }
     }
 
     private sealed class ReadySupervisor : IProcessingHostSupervisor
@@ -537,6 +631,29 @@ public sealed class WorkingStateCoordinatorTests
             if (Directory.Exists(_directory))
             {
                 Directory.Delete(_directory, recursive: true);
+            }
+        }
+    }
+
+    private sealed class TemporaryManagedStateDirectory : IDisposable
+    {
+        private readonly string _root = Path.Combine(
+            Path.GetTempPath(),
+            "CIA.SPR93.Integration.Tests",
+            Guid.NewGuid().ToString("N"));
+
+        public TemporaryManagedStateDirectory()
+        {
+            Paths = ApplicationPaths.FromLocalApplicationData(_root);
+        }
+
+        public ApplicationPaths Paths { get; }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(_root))
+            {
+                Directory.Delete(_root, recursive: true);
             }
         }
     }

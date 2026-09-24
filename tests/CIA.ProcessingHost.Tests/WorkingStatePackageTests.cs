@@ -198,7 +198,75 @@ public sealed class WorkingStatePackageTests
 
         Assert.IsFalse(result.Accepted);
         CollectionAssert.AreEqual(before, await File.ReadAllBytesAsync(packagePath));
-        Assert.IsFalse(File.Exists(packagePath + ".incomplete"));
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.incomplete"));
+    }
+
+    [TestMethod]
+    public async Task CreateNewPublishesOnceRejectsExistingAndReplaceModeStillReplaces()
+    {
+        using var workspace = new Workspace();
+        var state = await workspace.CreatePublishedStateAsync();
+        var createNewPath = Path.Combine(workspace.Root, "create-new.cia");
+
+        var created = await workspace.PackageService.SaveAsync(
+            OperationCorrelation.CreateNew(),
+            createNewPath,
+            state.Snapshot,
+            WorkingStatePublicationMode.CreateNew);
+        Assert.IsTrue(created.Accepted, created.Failure?.Description);
+        var createdBytes = await File.ReadAllBytesAsync(createNewPath);
+        var rejected = await workspace.PackageService.SaveAsync(
+            OperationCorrelation.CreateNew(),
+            createNewPath,
+            CopySnapshot(state.Snapshot, savedAtUtc: DateTimeOffset.UtcNow),
+            WorkingStatePublicationMode.CreateNew);
+
+        Assert.IsFalse(rejected.Accepted);
+        Assert.AreEqual("working-state-save-target-exists", rejected.Failure?.Code);
+        CollectionAssert.AreEqual(createdBytes, await File.ReadAllBytesAsync(createNewPath));
+
+        var replaced = await workspace.PackageService.SaveAsync(
+            OperationCorrelation.CreateNew(),
+            createNewPath,
+            CopySnapshot(state.Snapshot, savedAtUtc: DateTimeOffset.UtcNow.AddMinutes(1)),
+            WorkingStatePublicationMode.ReplaceExisting);
+
+        Assert.IsTrue(replaced.Accepted, replaced.Failure?.Description);
+        Assert.AreNotEqual(created.Manifest?.Snapshot.SavedAtUtc, replaced.Manifest?.Snapshot.SavedAtUtc);
+        var replacedBytes = await File.ReadAllBytesAsync(createNewPath);
+        Assert.IsFalse(createdBytes.SequenceEqual(replacedBytes));
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.incomplete"));
+    }
+
+    [TestMethod]
+    public async Task LateCreateNewTargetWinsRaceAndRemainsByteIdentical()
+    {
+        using var workspace = new Workspace();
+        var state = await workspace.CreatePublishedStateAsync();
+        var packagePath = Path.Combine(workspace.Root, "raced.cia");
+        var unrelatedPath = Path.Combine(workspace.Root, "unrelated.cia");
+        byte[] sentinel = [9, 7, 5, 3, 1];
+        byte[] unrelated = [2, 4, 6, 8];
+        await File.WriteAllBytesAsync(unrelatedPath, unrelated);
+        var publisher = new GatedWorkingStatePackagePublisher();
+        var service = workspace.CreatePackageService(publisher);
+
+        var saveTask = service.SaveAsync(
+            OperationCorrelation.CreateNew(),
+            packagePath,
+            state.Snapshot,
+            WorkingStatePublicationMode.CreateNew);
+        await publisher.PublicationReached;
+        Assert.IsFalse(File.Exists(packagePath));
+        await File.WriteAllBytesAsync(packagePath, sentinel);
+        publisher.Release();
+        var result = await saveTask;
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("working-state-save-target-exists", result.Failure?.Code);
+        CollectionAssert.AreEqual(sentinel, await File.ReadAllBytesAsync(packagePath));
+        CollectionAssert.AreEqual(unrelated, await File.ReadAllBytesAsync(unrelatedPath));
+        Assert.IsEmpty(Directory.GetFiles(workspace.Root, "*.incomplete"));
     }
 
     [TestMethod]
@@ -575,6 +643,15 @@ public sealed class WorkingStatePackageTests
 
         public WorkingStatePackageService PackageService { get; }
 
+        public WorkingStatePackageService CreatePackageService(
+            IWorkingStatePackagePublisher publisher) =>
+            new(
+                Repository,
+                _paths,
+                new CooperativeOperationCancellation(new NullHistory()),
+                NullLogger<WorkingStatePackageService>.Instance,
+                publisher);
+
         public Workspace CreateFreshRepositoryContext() => new(_root, "RestoredLocalAppData");
 
         public async Task<PublishedState> CreatePublishedStateAsync()
@@ -705,6 +782,31 @@ public sealed class WorkingStatePackageTests
                 paths,
                 new CooperativeOperationCancellation(new NullHistory()),
                 NullLogger<WorkingStatePackageService>.Instance);
+    }
+
+    private sealed class GatedWorkingStatePackagePublisher : IWorkingStatePackagePublisher
+    {
+        private readonly TaskCompletionSource _publicationReached = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task PublicationReached => _publicationReached.Task;
+
+        public async Task PublishAsync(
+            string candidatePath,
+            string targetPath,
+            WorkingStatePublicationMode publicationMode)
+        {
+            _publicationReached.TrySetResult();
+            await _release.Task;
+            await FileSystemWorkingStatePackagePublisher.Instance.PublishAsync(
+                candidatePath,
+                targetPath,
+                publicationMode);
+        }
+
+        public void Release() => _release.TrySetResult();
     }
 
     private sealed record PublishedState(

@@ -67,7 +67,11 @@ public static class IpcContractValidator
                 ValidateDatabaseRowInclusionChange(command.Change);
                 break;
             case SaveWorkingStateCommand command:
-                ValidateWorkingStateCommand(command.Correlation, command.TargetPath, command.Snapshot);
+                ValidateWorkingStateCommand(
+                    command.Correlation,
+                    command.TargetPath,
+                    command.Snapshot,
+                    command.PublicationMode);
                 break;
             case RestoreWorkingStateCommand command:
                 ValidateOperationCorrelation(command.Correlation);
@@ -1279,14 +1283,17 @@ public static class IpcContractValidator
     private static void ValidateWorkingStateCommand(
         OperationCorrelation correlation,
         string path,
-        WorkingStateSnapshot snapshot)
+        WorkingStateSnapshot snapshot,
+        WorkingStatePublicationMode publicationMode)
     {
         ValidateOperationCorrelation(correlation);
         ValidatePath(path);
         if (!string.Equals(Path.GetExtension(path), ".cia", StringComparison.OrdinalIgnoreCase)
-            || snapshot is null)
+            || snapshot is null
+            || !Enum.IsDefined(publicationMode))
         {
-            throw InvalidContract("A working-state command requires a .cia path and typed snapshot.");
+            throw InvalidContract(
+                "A working-state command requires a .cia path, typed snapshot, and publication mode.");
         }
 
         try

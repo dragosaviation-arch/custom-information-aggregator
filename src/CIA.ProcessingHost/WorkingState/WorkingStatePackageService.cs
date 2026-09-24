@@ -12,11 +12,7 @@ using Microsoft.Extensions.Logging;
 
 namespace CIA.ProcessingHost.WorkingState;
 
-public sealed class WorkingStatePackageService(
-    StructuredInformationRepository repository,
-    ApplicationPaths applicationPaths,
-    CooperativeOperationCancellation operationCancellation,
-    ILogger<WorkingStatePackageService> logger)
+public sealed class WorkingStatePackageService
 {
     private const string OperationItemId = "working-state-package";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -24,18 +20,69 @@ public sealed class WorkingStatePackageService(
         MaxDepth = 128,
         WriteIndented = true
     };
+    private readonly StructuredInformationRepository _repository;
+    private readonly ApplicationPaths _applicationPaths;
+    private readonly CooperativeOperationCancellation _operationCancellation;
+    private readonly ILogger<WorkingStatePackageService> _logger;
+    private readonly IWorkingStatePackagePublisher _publisher;
+
+    public WorkingStatePackageService(
+        StructuredInformationRepository repository,
+        ApplicationPaths applicationPaths,
+        CooperativeOperationCancellation operationCancellation,
+        ILogger<WorkingStatePackageService> logger)
+        : this(
+            repository,
+            applicationPaths,
+            operationCancellation,
+            logger,
+            FileSystemWorkingStatePackagePublisher.Instance)
+    {
+    }
+
+    internal WorkingStatePackageService(
+        StructuredInformationRepository repository,
+        ApplicationPaths applicationPaths,
+        CooperativeOperationCancellation operationCancellation,
+        ILogger<WorkingStatePackageService> logger,
+        IWorkingStatePackagePublisher publisher)
+    {
+        _repository = repository;
+        _applicationPaths = applicationPaths;
+        _operationCancellation = operationCancellation;
+        _logger = logger;
+        _publisher = publisher;
+    }
+
+    public Task<WorkingStatePackageHostResult> SaveAsync(
+        OperationCorrelation correlation,
+        string targetPath,
+        WorkingStateSnapshot snapshot,
+        CancellationToken cancellationToken = default) =>
+        SaveAsync(
+            correlation,
+            targetPath,
+            snapshot,
+            WorkingStatePublicationMode.ReplaceExisting,
+            cancellationToken);
 
     public async Task<WorkingStatePackageHostResult> SaveAsync(
         OperationCorrelation correlation,
         string targetPath,
         WorkingStateSnapshot snapshot,
+        WorkingStatePublicationMode publicationMode,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (!Enum.IsDefined(publicationMode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(publicationMode));
+        }
+
         var fullTargetPath = ValidatePackagePath(targetPath);
         WorkingStateContractValidator.Validate(snapshot);
-        var operation = operationCancellation.BeginOperation(
+        var operation = _operationCancellation.BeginOperation(
             correlation,
             "WorkingStateSave",
             "Working-state package publication",
@@ -53,7 +100,7 @@ public sealed class WorkingStatePackageService(
                    cancellationToken,
                    execution!.CancellationToken))
         {
-            var candidatePath = fullTargetPath + ".incomplete";
+            var candidatePath = $"{fullTargetPath}.{correlation.OperationId}.incomplete";
             var temporaryDirectory = CreateTemporaryDirectory();
             try
             {
@@ -63,7 +110,7 @@ public sealed class WorkingStatePackageService(
                 var databasePath = Path.Combine(
                     temporaryDirectory,
                     WorkingStatePackageFormat.DatabaseEntryName);
-                var actualGeneration = await repository.CreateWorkingStateSnapshotAsync(
+                var actualGeneration = await _repository.CreateWorkingStateSnapshotAsync(
                         databasePath,
                         snapshot.DatabaseGeneration,
                         linkedCancellation.Token)
@@ -95,7 +142,11 @@ public sealed class WorkingStatePackageService(
                     throw new OperationCanceledException(linkedCancellation.Token);
                 }
 
-                PublishCandidate(candidatePath, fullTargetPath);
+                await _publisher.PublishAsync(
+                        candidatePath,
+                        fullTargetPath,
+                        publicationMode)
+                    .ConfigureAwait(false);
                 execution.CommitCompletedResult();
                 return WorkingStatePackageHostResult.Accept(manifest, operation.Complete());
             }
@@ -103,7 +154,7 @@ public sealed class WorkingStatePackageService(
             {
                 if (!operation.IsCancellationAccepted)
                 {
-                    operationCancellation.RequestCancellation(correlation.OperationId);
+                    _operationCancellation.RequestCancellation(correlation.OperationId);
                 }
 
                 execution.StopBeforeCommit();
@@ -112,9 +163,20 @@ public sealed class WorkingStatePackageService(
                     "working-state-save-cancelled",
                     "Working-state save was cancelled before publication.");
             }
+            catch (WorkingStateTargetAlreadyExistsException)
+            {
+                _logger.LogWarning(
+                    "Working-state CreateNew publication target became unavailable for {OperationId}",
+                    correlation.OperationId);
+                execution.RecordFailure("working-state-save-target-exists");
+                return WorkingStatePackageHostResult.Reject(
+                    operation.CompleteTerminal(OperationOutcome.Failed),
+                    "working-state-save-target-exists",
+                    "A saved state with this name already exists or became unavailable before publication. Choose another name and try again.");
+            }
             catch (Exception exception)
             {
-                logger.LogError(exception, "Working-state package save failed for {OperationId}", correlation.OperationId);
+                _logger.LogError(exception, "Working-state package save failed for {OperationId}", correlation.OperationId);
                 execution.RecordFailure("working-state-save-failed");
                 return WorkingStatePackageHostResult.Reject(
                     operation.CompleteTerminal(OperationOutcome.Failed),
@@ -136,7 +198,7 @@ public sealed class WorkingStatePackageService(
     {
         ArgumentNullException.ThrowIfNull(correlation);
         var fullPackagePath = ValidatePackagePath(packagePath);
-        var operation = operationCancellation.BeginOperation(
+        var operation = _operationCancellation.BeginOperation(
             correlation,
             "WorkingStateRestore",
             "Working-state package validation and repository restore",
@@ -162,7 +224,7 @@ public sealed class WorkingStatePackageService(
                         temporaryDirectory,
                         linkedCancellation.Token)
                     .ConfigureAwait(false);
-                var restored = await repository.RestoreWorkingStateSnapshotAsync(
+                var restored = await _repository.RestoreWorkingStateSnapshotAsync(
                         validated.DatabasePath,
                         validated.Manifest.RepositorySchemaVersion,
                         validated.Manifest.Snapshot.DatabaseGeneration,
@@ -185,7 +247,7 @@ public sealed class WorkingStatePackageService(
             {
                 if (!operation.IsCancellationAccepted)
                 {
-                    operationCancellation.RequestCancellation(correlation.OperationId);
+                    _operationCancellation.RequestCancellation(correlation.OperationId);
                 }
 
                 execution.StopBeforeCommit();
@@ -196,7 +258,7 @@ public sealed class WorkingStatePackageService(
             }
             catch (Exception exception)
             {
-                logger.LogError(exception, "Working-state package restore failed for {OperationId}", correlation.OperationId);
+                _logger.LogError(exception, "Working-state package restore failed for {OperationId}", correlation.OperationId);
                 execution.RecordFailure("working-state-restore-failed");
                 return WorkingStatePackageHostResult.Reject(
                     operation.CompleteTerminal(OperationOutcome.Failed),
@@ -289,7 +351,7 @@ public sealed class WorkingStatePackageService(
             throw new InvalidDataException("The working-state SQLite snapshot digest does not match its manifest.");
         }
 
-        await repository.ValidateWorkingStateSnapshotAsync(
+        await _repository.ValidateWorkingStateSnapshotAsync(
                 databasePath,
                 manifest.RepositorySchemaVersion,
                 manifest.Snapshot.DatabaseGeneration,
@@ -363,7 +425,7 @@ public sealed class WorkingStatePackageService(
     private string CreateTemporaryDirectory()
     {
         var directory = Path.Combine(
-            applicationPaths.TempDirectory,
+            _applicationPaths.TempDirectory,
             "WorkingState",
             Guid.CreateVersion7().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -380,18 +442,6 @@ public sealed class WorkingStatePackageService(
         }
 
         return fullPath;
-    }
-
-    private static void PublishCandidate(string candidatePath, string targetPath)
-    {
-        if (File.Exists(targetPath))
-        {
-            File.Replace(candidatePath, targetPath, destinationBackupFileName: null);
-        }
-        else
-        {
-            File.Move(candidatePath, targetPath);
-        }
     }
 
     private static bool GenerationsAgree(
@@ -417,7 +467,7 @@ public sealed class WorkingStatePackageService(
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            logger.LogWarning(exception, "Working-state candidate {CandidatePath} could not be cleaned", path);
+            _logger.LogWarning(exception, "Working-state candidate {CandidatePath} could not be cleaned", path);
         }
     }
 
@@ -432,10 +482,76 @@ public sealed class WorkingStatePackageService(
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            logger.LogWarning(exception, "Working-state temporary directory {TemporaryDirectory} could not be cleaned", path);
+            _logger.LogWarning(exception, "Working-state temporary directory {TemporaryDirectory} could not be cleaned", path);
         }
     }
 }
+
+internal interface IWorkingStatePackagePublisher
+{
+    Task PublishAsync(
+        string candidatePath,
+        string targetPath,
+        WorkingStatePublicationMode publicationMode);
+}
+
+internal sealed class FileSystemWorkingStatePackagePublisher : IWorkingStatePackagePublisher
+{
+    public static FileSystemWorkingStatePackagePublisher Instance { get; } = new();
+
+    private FileSystemWorkingStatePackagePublisher()
+    {
+    }
+
+    public Task PublishAsync(
+        string candidatePath,
+        string targetPath,
+        WorkingStatePublicationMode publicationMode)
+    {
+        switch (publicationMode)
+        {
+            case WorkingStatePublicationMode.CreateNew:
+                try
+                {
+                    File.Move(candidatePath, targetPath, overwrite: false);
+                }
+                catch (IOException exception) when (IsTargetCollision(exception, targetPath))
+                {
+                    throw new WorkingStateTargetAlreadyExistsException(targetPath, exception);
+                }
+
+                break;
+            case WorkingStatePublicationMode.ReplaceExisting:
+                if (File.Exists(targetPath))
+                {
+                    File.Replace(candidatePath, targetPath, destinationBackupFileName: null);
+                }
+                else
+                {
+                    File.Move(candidatePath, targetPath);
+                }
+
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(publicationMode));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private static bool IsTargetCollision(IOException exception, string targetPath)
+    {
+        const int errorFileExists = 80;
+        const int errorAlreadyExists = 183;
+        var nativeError = exception.HResult & 0xffff;
+        return nativeError is errorFileExists or errorAlreadyExists || File.Exists(targetPath);
+    }
+}
+
+internal sealed class WorkingStateTargetAlreadyExistsException(
+    string targetPath,
+    Exception innerException) :
+    IOException($"The working-state target already exists: {targetPath}", innerException);
 
 internal sealed record ValidatedWorkingStatePackage(
     WorkingStateManifest Manifest,

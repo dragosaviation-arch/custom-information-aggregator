@@ -8,13 +8,33 @@ using Microsoft.Extensions.Logging;
 
 namespace CIA.Desktop.WorkingState;
 
+public interface IWorkingStateCoordinator
+{
+    WorkflowOperationReadiness EvaluateSaveReadiness();
+
+    WorkflowOperationReadiness EvaluateRestoreReadiness(string? packagePath);
+
+    Task<WorkingStateCoordinatorResult> SaveAsync(
+        string targetPath,
+        CancellationToken cancellationToken = default);
+
+    Task<WorkingStateCoordinatorResult> SaveAsync(
+        string targetPath,
+        WorkingStatePublicationMode publicationMode,
+        CancellationToken cancellationToken = default);
+
+    Task<WorkingStateCoordinatorResult> RestoreAsync(
+        string packagePath,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed class WorkingStateCoordinator(
     ActiveLoadedSourceSet sourceSet,
     ActiveDiscoveryConfiguration discoveryConfiguration,
     DatabaseBuildCoordinator databaseBuildCoordinator,
     IApplicationWorkflowCoordinator workflowCoordinator,
     IWorkingStateClient client,
-    ILogger<WorkingStateCoordinator> logger)
+    ILogger<WorkingStateCoordinator> logger) : IWorkingStateCoordinator
 {
     public WorkflowOperationReadiness EvaluateSaveReadiness()
     {
@@ -45,10 +65,24 @@ public sealed class WorkingStateCoordinator(
             : WorkflowOperationReadiness.Ready();
     }
 
+    public Task<WorkingStateCoordinatorResult> SaveAsync(
+        string targetPath,
+        CancellationToken cancellationToken = default) =>
+        SaveAsync(
+            targetPath,
+            WorkingStatePublicationMode.ReplaceExisting,
+            cancellationToken);
+
     public async Task<WorkingStateCoordinatorResult> SaveAsync(
         string targetPath,
+        WorkingStatePublicationMode publicationMode,
         CancellationToken cancellationToken = default)
     {
+        if (!Enum.IsDefined(publicationMode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(publicationMode));
+        }
+
         var readiness = EvaluateSaveReadiness();
         if (!readiness.NormalOperationReady)
         {
@@ -84,6 +118,7 @@ public sealed class WorkingStateCoordinator(
                     begin.Operation,
                     targetPath,
                     snapshot,
+                    publicationMode,
                     cancellationToken)
                 .ConfigureAwait(false);
             var completion = workflowCoordinator.CompleteOperation(result.Completion);
