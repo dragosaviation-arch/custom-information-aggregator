@@ -44,8 +44,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _loadProfileCommand;
     private readonly RelayCommand _saveNewProfileCommand;
     private readonly RelayCommand _updateProfileCommand;
-    private readonly RelayCommand _deleteProfileCommand;
-    private readonly InformationSelectionProfileCoordinator? _profileCoordinator;
+    private readonly AsyncRelayCommand _deleteProfileCommand;
+    private readonly RelayCommand _confirmDeleteProfileCommand;
+    private readonly RelayCommand _cancelDeleteProfileCommand;
+    private readonly IInformationSelectionProfileCoordinator? _profileCoordinator;
+    private readonly IInformationSelectionProfileDeleteConfirmation _profileDeleteConfirmation;
     private readonly SemaphoreSlim _previewRequestGate = new(1, 1);
     private readonly object _previewRequestStateGate = new();
     private readonly SynchronizationContext? _uiSynchronizationContext;
@@ -92,7 +95,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         ActiveLoadedSourceSet sourceSet,
         IApplicationWorkflowCoordinator workflowCoordinator,
         DatabaseBuildCoordinator? databaseBuildCoordinator = null,
-        InformationSelectionProfileCoordinator? profileCoordinator = null)
+        IInformationSelectionProfileCoordinator? profileCoordinator = null,
+        IInformationSelectionProfileDeleteConfirmation? profileDeleteConfirmation = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryClient);
         ArgumentNullException.ThrowIfNull(activeConfiguration);
@@ -105,6 +109,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _workflowCoordinator = workflowCoordinator;
         _databaseBuildCoordinator = databaseBuildCoordinator;
         _profileCoordinator = profileCoordinator;
+        _profileDeleteConfirmation = profileDeleteConfirmation
+            ?? new InApplicationInformationSelectionProfileDeleteConfirmation();
+        _profileDeleteConfirmation.Changed += OnProfileDeleteConfirmationChanged;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
         _uiSynchronizationContext = SynchronizationContext.Current;
         _readOnlyInformation = new ReadOnlyObservableCollection<DiscoveredInformationItemViewModel>(
@@ -160,7 +167,15 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _loadProfileCommand = new RelayCommand(LoadSelectedProfile, CanLoadSelectedProfile);
         _saveNewProfileCommand = new RelayCommand(SaveNewProfile, CanSaveNewProfile);
         _updateProfileCommand = new RelayCommand(UpdateSelectedProfile, CanUpdateSelectedProfile);
-        _deleteProfileCommand = new RelayCommand(DeleteSelectedProfile, CanDeleteSelectedProfile);
+        _deleteProfileCommand = new AsyncRelayCommand(
+            DeleteSelectedProfileAsync,
+            CanDeleteSelectedProfile);
+        _confirmDeleteProfileCommand = new RelayCommand(
+            _profileDeleteConfirmation.Accept,
+            () => _profileDeleteConfirmation.IsOpen);
+        _cancelDeleteProfileCommand = new RelayCommand(
+            _profileDeleteConfirmation.Decline,
+            () => _profileDeleteConfirmation.IsOpen);
         CloseSourceInspectionCommand = new RelayCommand(
             () => IsSourceInspectionOpen = false);
 
@@ -292,7 +307,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public IRelayCommand UpdateProfileCommand => _updateProfileCommand;
 
-    public IRelayCommand DeleteProfileCommand => _deleteProfileCommand;
+    public IAsyncRelayCommand DeleteProfileCommand => _deleteProfileCommand;
+
+    public IRelayCommand ConfirmDeleteProfileCommand => _confirmDeleteProfileCommand;
+
+    public IRelayCommand CancelDeleteProfileCommand => _cancelDeleteProfileCommand;
 
     public IRelayCommand CloseSourceInspectionCommand { get; }
 
@@ -335,6 +354,13 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public string ProfileCaptureAvailabilityReason =>
         _profileCoordinator?.CaptureReadinessReason
         ?? "Information-selection profile management is unavailable.";
+
+    public bool IsDeleteProfileConfirmationOpen => _profileDeleteConfirmation.IsOpen;
+
+    public string DeleteProfileConfirmationMessage =>
+        _profileDeleteConfirmation.ProfileName is { } name
+            ? $"Delete information-selection profile '{name}'?"
+            : "Delete the selected information-selection profile?";
 
     public string SearchText
     {
@@ -666,6 +692,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         ((INotifyCollectionChanged)_sourceSet.Items).CollectionChanged -= OnSourcesChanged;
         ((INotifyCollectionChanged)_sourceSet.SourceSets).CollectionChanged -= OnSourceSetsChanged;
         _workflowCoordinator.StateChanged -= OnWorkflowStateChanged;
+        _profileDeleteConfirmation.Changed -= OnProfileDeleteConfirmationChanged;
         if (_databaseBuildCoordinator is not null)
         {
             _databaseBuildCoordinator.PublishedGenerationChanged -=
@@ -1232,7 +1259,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool CanDeleteSelectedProfile()
     {
         return _profileCoordinator is not null
-            && SelectedInformationSelectionProfile is not null;
+            && SelectedInformationSelectionProfile is not null
+            && !_profileDeleteConfirmation.IsOpen;
     }
 
     private void RefreshProfiles()
@@ -1314,14 +1342,21 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         NotifyProfileCommandsChanged();
     }
 
-    private void DeleteSelectedProfile()
+    private async Task DeleteSelectedProfileAsync()
     {
         if (_profileCoordinator is null || SelectedInformationSelectionProfile is null)
         {
             return;
         }
 
-        var result = _profileCoordinator.Delete(SelectedInformationSelectionProfile);
+        var selectedProfile = SelectedInformationSelectionProfile;
+        if (!await _profileDeleteConfirmation.ConfirmAsync(selectedProfile.Name))
+        {
+            ProfileStatusText = "Profile deletion cancelled.";
+            return;
+        }
+
+        var result = _profileCoordinator.Delete(selectedProfile);
         ProfileStatusText = result.Message;
         InformationSelectionProfiles = _profileCoordinator.Inventory.Profiles;
         if (result.Succeeded || result.RequiresReselection)
@@ -1706,6 +1741,18 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 NotifyConfigurationCommandsChanged();
                 NotifyProfileCommandsChanged();
             });
+    }
+
+    private void OnProfileDeleteConfirmationChanged(object? sender, EventArgs e)
+    {
+        DispatchToUi(() =>
+        {
+            OnPropertyChanged(nameof(IsDeleteProfileConfirmationOpen));
+            OnPropertyChanged(nameof(DeleteProfileConfirmationMessage));
+            _confirmDeleteProfileCommand.NotifyCanExecuteChanged();
+            _cancelDeleteProfileCommand.NotifyCanExecuteChanged();
+            _deleteProfileCommand.NotifyCanExecuteChanged();
+        });
     }
 
     private void OnPublishedDatabaseGenerationChanged(

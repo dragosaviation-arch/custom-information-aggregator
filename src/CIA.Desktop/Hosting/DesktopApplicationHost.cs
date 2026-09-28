@@ -71,6 +71,10 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ActiveDiscoveryConfiguration>();
         builder.Services.AddSingleton<ProfileArtifactStore>();
         builder.Services.AddSingleton<InformationSelectionProfileCoordinator>();
+        builder.Services.AddSingleton<IInformationSelectionProfileCoordinator>(
+            services => services.GetRequiredService<InformationSelectionProfileCoordinator>());
+        builder.Services.AddSingleton<IInformationSelectionProfileDeleteConfirmation,
+            InApplicationInformationSelectionProfileDeleteConfirmation>();
         builder.Services.AddSingleton<ProcessingHostDatabaseClient>();
         builder.Services.AddSingleton<IDatabaseClient>(
             services => services.GetRequiredService<ProcessingHostDatabaseClient>());

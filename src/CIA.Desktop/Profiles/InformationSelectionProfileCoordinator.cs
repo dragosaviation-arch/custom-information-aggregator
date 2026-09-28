@@ -55,7 +55,32 @@ public sealed record InformationSelectionProfileOperationResult(
         new(false, message, RequiresReselection: requiresReselection);
 }
 
-public sealed class InformationSelectionProfileCoordinator
+public interface IInformationSelectionProfileCoordinator
+{
+    InformationSelectionProfileInventory Inventory { get; }
+
+    bool CanCaptureCurrentConfiguration { get; }
+
+    string CaptureReadinessReason { get; }
+
+    bool CanLoadCurrentConfiguration { get; }
+
+    InformationSelectionProfileInventory RefreshInventory();
+
+    InformationSelectionProfileOperationResult SaveNew(string name);
+
+    InformationSelectionProfileOperationResult Load(
+        InformationSelectionProfileItem selectedProfile);
+
+    InformationSelectionProfileOperationResult Update(
+        InformationSelectionProfileItem selectedProfile);
+
+    InformationSelectionProfileOperationResult Delete(
+        InformationSelectionProfileItem selectedProfile);
+}
+
+public sealed class InformationSelectionProfileCoordinator :
+    IInformationSelectionProfileCoordinator
 {
     private readonly ProfileArtifactStore _store;
     private readonly ActiveDiscoveryConfiguration _activeConfiguration;
@@ -258,8 +283,19 @@ public sealed class InformationSelectionProfileCoordinator
         }
 
         var current = resolved.Artifact;
-        var updatedAtUtc = UtcNow();
-        if (updatedAtUtc <= current.UpdatedAtUtc)
+        var currentUtc = UtcNow();
+        DateTimeOffset updatedAtUtc;
+        if (currentUtc > current.UpdatedAtUtc)
+        {
+            updatedAtUtc = currentUtc;
+        }
+        else if (current.UpdatedAtUtc == DateTimeOffset.MaxValue)
+        {
+            RefreshInventory();
+            return InformationSelectionProfileOperationResult.Failure(
+                "The profile timestamp is already at the maximum supported value and cannot be advanced. Save a new profile instead.");
+        }
+        else
         {
             updatedAtUtc = current.UpdatedAtUtc.AddTicks(1);
         }

@@ -6,7 +6,9 @@ using CIA.Core.Profiles;
 using CIA.Core.Runtime;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Hosting;
+using CIA.Desktop.Presentation;
 using CIA.Desktop.Profiles;
+using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 
 namespace CIA.Desktop.Tests;
@@ -357,6 +359,200 @@ public sealed class InformationSelectionProfileCoordinatorTests
         CollectionAssert.AreEqual(bytes, File.ReadAllBytes(saved.Profile.Path));
     }
 
+    [TestMethod]
+    public async Task DeclinedViewModelDeleteConfirmsOnceAndPreservesSelectionAndBytes()
+    {
+        using var environment = await ProfileCoordinatorEnvironment.CreateAsync();
+        var selected = CreateStoredProfile(environment, "Keep me");
+        var originalBytes = File.ReadAllBytes(selected.Path);
+        var coordinator = new RecordingProfileCoordinator(environment.Coordinator);
+        var confirmation = new StubProfileDeleteConfirmation(accepted: false);
+        using var viewModel = CreateProfileViewModel(environment, coordinator, confirmation);
+        viewModel.SelectedInformationSelectionProfile = viewModel.InformationSelectionProfiles.Single();
+
+        await viewModel.DeleteProfileCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, confirmation.RequestCount);
+        Assert.AreEqual("Keep me", confirmation.RequestedProfileName);
+        Assert.AreEqual(0, coordinator.DeleteCount);
+        CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(selected.Path));
+        Assert.HasCount(1, viewModel.InformationSelectionProfiles);
+        Assert.AreEqual(selected.ProfileId, viewModel.SelectedInformationSelectionProfile?.ProfileId);
+        Assert.AreEqual("Profile deletion cancelled.", viewModel.ProfileStatusText);
+    }
+
+    [TestMethod]
+    public async Task ConfirmedViewModelDeleteUsesCoordinatorOnceAndRefreshesInventory()
+    {
+        using var environment = await ProfileCoordinatorEnvironment.CreateAsync();
+        var selected = CreateStoredProfile(environment, "Delete me");
+        var coordinator = new RecordingProfileCoordinator(environment.Coordinator);
+        var confirmation = new StubProfileDeleteConfirmation(accepted: true);
+        using var viewModel = CreateProfileViewModel(environment, coordinator, confirmation);
+        viewModel.SelectedInformationSelectionProfile = viewModel.InformationSelectionProfiles.Single();
+
+        await viewModel.DeleteProfileCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, confirmation.RequestCount);
+        Assert.AreEqual("Delete me", confirmation.RequestedProfileName);
+        Assert.AreEqual(1, coordinator.DeleteCount);
+        Assert.IsFalse(File.Exists(selected.Path));
+        Assert.IsEmpty(viewModel.InformationSelectionProfiles);
+        Assert.IsNull(viewModel.SelectedInformationSelectionProfile);
+        StringAssert.Contains(viewModel.ProfileStatusText, "Deleted information-selection profile");
+    }
+
+    [TestMethod]
+    public async Task DeleteWithoutSelectedProfileCannotExecuteOrRequestConfirmation()
+    {
+        using var environment = await ProfileCoordinatorEnvironment.CreateAsync();
+        _ = CreateStoredProfile(environment, "Not selected");
+        var coordinator = new RecordingProfileCoordinator(environment.Coordinator);
+        var confirmation = new StubProfileDeleteConfirmation(accepted: true);
+        using var viewModel = CreateProfileViewModel(environment, coordinator, confirmation);
+
+        Assert.IsFalse(viewModel.DeleteProfileCommand.CanExecute(null));
+        await viewModel.DeleteProfileCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(0, confirmation.RequestCount);
+        Assert.AreEqual(0, coordinator.DeleteCount);
+    }
+
+    [TestMethod]
+    public async Task ConfirmedStaleDeleteFailsSafelyAndRetainsReplacementArtifact()
+    {
+        using var environment = await ProfileCoordinatorEnvironment.CreateAsync();
+        var selected = CreateStoredProfile(environment, "Changed externally");
+        byte[]? replacementBytes = null;
+        var confirmation = new StubProfileDeleteConfirmation(
+            accepted: true,
+            onConfirm: () =>
+            {
+                var current = environment.Store.FindById(selected.ProfileId).Artifact!;
+                var replacement = current with
+                {
+                    UpdatedAtUtc = current.UpdatedAtUtc.AddMinutes(1)
+                };
+                var updated = environment.Store.Update(replacement, selected.Fingerprint);
+                Assert.IsTrue(updated.Succeeded, updated.Problem);
+                replacementBytes = File.ReadAllBytes(updated.Path!);
+            });
+        var coordinator = new RecordingProfileCoordinator(environment.Coordinator);
+        using var viewModel = CreateProfileViewModel(environment, coordinator, confirmation);
+        viewModel.SelectedInformationSelectionProfile = viewModel.InformationSelectionProfiles.Single();
+
+        await viewModel.DeleteProfileCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, confirmation.RequestCount);
+        Assert.AreEqual(1, coordinator.DeleteCount);
+        Assert.IsNotNull(replacementBytes);
+        CollectionAssert.AreEqual(replacementBytes, File.ReadAllBytes(selected.Path));
+        Assert.IsNull(viewModel.SelectedInformationSelectionProfile);
+        StringAssert.Contains(viewModel.ProfileStatusText, "changed after it was listed");
+    }
+
+    [TestMethod]
+    public async Task InApplicationProfileConfirmationExposesNamedExplicitDecision()
+    {
+        var confirmation = new InApplicationInformationSelectionProfileDeleteConfirmation();
+
+        var declinedTask = confirmation.ConfirmAsync("First profile");
+        Assert.IsTrue(confirmation.IsOpen);
+        Assert.AreEqual("First profile", confirmation.ProfileName);
+        confirmation.Decline();
+        Assert.IsFalse(await declinedTask);
+
+        var acceptedTask = confirmation.ConfirmAsync("Second profile");
+        Assert.IsTrue(confirmation.IsOpen);
+        Assert.AreEqual("Second profile", confirmation.ProfileName);
+        confirmation.Accept();
+        Assert.IsTrue(await acceptedTask);
+        Assert.IsFalse(confirmation.IsOpen);
+        Assert.IsNull(confirmation.ProfileName);
+    }
+
+    [TestMethod]
+    public void DiscoveryViewExposesCiaStyledProfileDeleteConfirmation()
+    {
+        var xaml = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "CIA.Desktop",
+            "Views",
+            "DiscoveryWorkspaceView.xaml"));
+
+        StringAssert.Contains(xaml, "DeleteInformationSelectionProfileConfirmation");
+        StringAssert.Contains(xaml, "IsDeleteProfileConfirmationOpen");
+        StringAssert.Contains(xaml, "CancelDeleteProfileCommand");
+        StringAssert.Contains(xaml, "ConfirmDeleteProfileCommand");
+        StringAssert.Contains(xaml, "CiaDangerButtonStyle");
+    }
+
+    [TestMethod]
+    public async Task MaximumUpdatedTimestampRejectsUpdateWithoutMutationOrException()
+    {
+        using var environment = await ProfileCoordinatorEnvironment.CreateAsync();
+        var identity = Identity(SourceSetId.CreateNew(), "/catalog/code", "code");
+        environment.Configuration.Synchronize([identity]);
+        var createdAt = new DateTimeOffset(2026, 9, 28, 8, 0, 0, TimeSpan.Zero);
+        var artifact = CreateArtifactWithTimestamps(
+            "Maximum timestamp",
+            createdAt,
+            DateTimeOffset.MaxValue,
+            Entry("/catalog/code", "code", InformationSelectionMembership.Excluded));
+        var created = environment.Store.Create(
+            $"{artifact.ProfileId}{ProfileArtifactStore.FileExtension}",
+            artifact);
+        Assert.IsTrue(created.Succeeded, created.Problem);
+        var coordinator = new InformationSelectionProfileCoordinator(
+            environment.Store,
+            environment.Configuration,
+            environment.Workflow,
+            new FixedTimeProvider(DateTimeOffset.MaxValue));
+        var selected = coordinator.RefreshInventory().Profiles.Single();
+        var originalBytes = File.ReadAllBytes(selected.Path);
+
+        var result = coordinator.Update(selected);
+
+        Assert.IsFalse(result.Succeeded);
+        StringAssert.Contains(result.Message, "cannot be advanced");
+        CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(selected.Path));
+        var current = environment.Store.FindById(selected.ProfileId);
+        Assert.AreEqual(DateTimeOffset.MaxValue, current.Artifact!.UpdatedAtUtc);
+        Assert.AreEqual(selected.Fingerprint, current.Fingerprint);
+    }
+
+    [TestMethod]
+    public async Task OlderClockAdvancesUpdateByExactlyOneRepresentableTick()
+    {
+        using var environment = await ProfileCoordinatorEnvironment.CreateAsync();
+        var identity = Identity(SourceSetId.CreateNew(), "/catalog/code", "code");
+        environment.Configuration.Synchronize([identity]);
+        var createdAt = new DateTimeOffset(2026, 9, 28, 8, 0, 0, TimeSpan.Zero);
+        var updatedAt = createdAt.AddDays(1);
+        var artifact = CreateArtifactWithTimestamps(
+            "Future timestamp",
+            createdAt,
+            updatedAt,
+            Entry("/catalog/code", "code", InformationSelectionMembership.Excluded));
+        var created = environment.Store.Create(
+            $"{artifact.ProfileId}{ProfileArtifactStore.FileExtension}",
+            artifact);
+        Assert.IsTrue(created.Succeeded, created.Problem);
+        var coordinator = new InformationSelectionProfileCoordinator(
+            environment.Store,
+            environment.Configuration,
+            environment.Workflow,
+            new FixedTimeProvider(createdAt.AddDays(-1)));
+        var selected = coordinator.RefreshInventory().Profiles.Single();
+
+        var result = coordinator.Update(selected);
+
+        Assert.IsTrue(result.Succeeded, result.Message);
+        Assert.AreEqual(updatedAt.AddTicks(1), result.Profile!.UpdatedAtUtc);
+        Assert.AreEqual(createdAt, result.Profile.CreatedAtUtc);
+    }
+
     private static DiscoveryInformationIdentity Identity(
         SourceSetId sourceSetId,
         string path,
@@ -387,14 +583,60 @@ public sealed class InformationSelectionProfileCoordinatorTests
         params InformationSelectionProfileEntryV1[] entries)
     {
         var now = new DateTimeOffset(2026, 9, 28, 8, 0, 0, TimeSpan.Zero);
+        return CreateArtifactWithTimestamps(name, now, now, entries);
+    }
+
+    private static ProfileArtifactV1 CreateArtifactWithTimestamps(
+        string name,
+        DateTimeOffset createdAtUtc,
+        DateTimeOffset updatedAtUtc,
+        params InformationSelectionProfileEntryV1[] entries)
+    {
         return new ProfileArtifactV1(
             ProfileArtifactV1.CurrentSchemaVersion,
             ProfileId.CreateNew(),
             ProfileKind.InformationSelection,
             name,
-            now,
-            now,
+            createdAtUtc,
+            updatedAtUtc,
             new InformationSelectionProfileContentV1(entries));
+    }
+
+    private static InformationSelectionProfileItem CreateStoredProfile(
+        ProfileCoordinatorEnvironment environment,
+        string name)
+    {
+        var artifact = CreateArtifact(name, Entry("/catalog/code", "code"));
+        var created = environment.Store.Create(
+            $"{artifact.ProfileId}{ProfileArtifactStore.FileExtension}",
+            artifact);
+        Assert.IsTrue(created.Succeeded, created.Problem);
+        return environment.Coordinator.RefreshInventory().Profiles.Single(
+            profile => profile.ProfileId == artifact.ProfileId);
+    }
+
+    private static DiscoveryWorkspaceViewModel CreateProfileViewModel(
+        ProfileCoordinatorEnvironment environment,
+        IInformationSelectionProfileCoordinator coordinator,
+        IInformationSelectionProfileDeleteConfirmation confirmation) =>
+        new(
+            new ThrowingDiscoveryClient(),
+            environment.Configuration,
+            new ActiveLoadedSourceSet(),
+            environment.Workflow,
+            profileCoordinator: coordinator,
+            profileDeleteConfirmation: confirmation);
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "CIA.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new DirectoryNotFoundException("The repository root could not be located.");
     }
 
     private static ProfileArtifactV1 CreateBlacklistArtifact(string name)
@@ -513,6 +755,96 @@ public sealed class InformationSelectionProfileCoordinatorTests
             CancellationToken cancellationToken = default) => Task.FromResult(true);
 
         public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class RecordingProfileCoordinator(
+        IInformationSelectionProfileCoordinator inner) :
+        IInformationSelectionProfileCoordinator
+    {
+        public int DeleteCount { get; private set; }
+
+        public InformationSelectionProfileInventory Inventory => inner.Inventory;
+
+        public bool CanCaptureCurrentConfiguration => inner.CanCaptureCurrentConfiguration;
+
+        public string CaptureReadinessReason => inner.CaptureReadinessReason;
+
+        public bool CanLoadCurrentConfiguration => inner.CanLoadCurrentConfiguration;
+
+        public InformationSelectionProfileInventory RefreshInventory() => inner.RefreshInventory();
+
+        public InformationSelectionProfileOperationResult SaveNew(string name) =>
+            inner.SaveNew(name);
+
+        public InformationSelectionProfileOperationResult Load(
+            InformationSelectionProfileItem selectedProfile) => inner.Load(selectedProfile);
+
+        public InformationSelectionProfileOperationResult Update(
+            InformationSelectionProfileItem selectedProfile) => inner.Update(selectedProfile);
+
+        public InformationSelectionProfileOperationResult Delete(
+            InformationSelectionProfileItem selectedProfile)
+        {
+            DeleteCount++;
+            return inner.Delete(selectedProfile);
+        }
+    }
+
+    private sealed class StubProfileDeleteConfirmation(
+        bool accepted,
+        Action? onConfirm = null) : IInformationSelectionProfileDeleteConfirmation
+    {
+        public bool IsOpen => false;
+
+        public string? ProfileName => null;
+
+        public int RequestCount { get; private set; }
+
+        public string? RequestedProfileName { get; private set; }
+
+        public event EventHandler? Changed
+        {
+            add { }
+            remove { }
+        }
+
+        public Task<bool> ConfirmAsync(
+            string profileName,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RequestCount++;
+            RequestedProfileName = profileName;
+            onConfirm?.Invoke();
+            return Task.FromResult(accepted);
+        }
+
+        public void Accept()
+        {
+        }
+
+        public void Decline()
+        {
+        }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+    }
+
+    private sealed class ThrowingDiscoveryClient : IDiscoveryClient
+    {
+        public Task<DiscoveryClientResult> RunAsync(
+            OperationCorrelation correlation,
+            IReadOnlyList<LoadedSourceContract> sources,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Discovery is not used by profile confirmation tests.");
+
+        public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
+            DiscoveryOccurrenceLookup lookup,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Occurrence preview is not used by profile confirmation tests.");
     }
 
 }

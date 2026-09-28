@@ -756,6 +756,57 @@
             </Border>
         </Grid>
 
+        <Grid x:Name="DeleteInformationSelectionProfileConfirmation"
+              Grid.RowSpan="3"
+              Grid.ColumnSpan="3"
+              Panel.ZIndex="20"
+              Background="#99000000">
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsDeleteProfileConfirmationOpen}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <Border Width="410"
+                    Padding="20"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{StaticResource CiaPanelBrush}"
+                    BorderBrush="{StaticResource CiaBorderStrongBrush}"
+                    BorderThickness="1"
+                    CornerRadius="10">
+                <StackPanel>
+                    <TextBlock FontSize="15"
+                               FontWeight="Bold"
+                               Text="Delete information-selection profile" />
+                    <TextBlock Margin="0,8,0,0"
+                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                               Text="{Binding DeleteProfileConfirmationMessage}"
+                               TextWrapping="Wrap" />
+                    <TextBlock Margin="0,5,0,0"
+                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                               FontSize="10"
+                               Text="This deletes only the selected CIA-managed profile file. The active Discovery selection is not changed."
+                               TextWrapping="Wrap" />
+                    <StackPanel Margin="0,16,0,0"
+                                HorizontalAlignment="Right"
+                                Orientation="Horizontal">
+                        <Button Margin="0,0,8,0"
+                                Command="{Binding CancelDeleteProfileCommand}"
+                                Content="Cancel"
+                                Style="{StaticResource CiaGhostButtonStyle}" />
+                        <Button Command="{Binding ConfirmDeleteProfileCommand}"
+                                Content="Delete"
+                                Style="{StaticResource CiaDangerButtonStyle}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
+
         <Popup AllowsTransparency="True"
                IsOpen="{Binding IsSourceInspectionOpen, Mode=TwoWay}"
                Placement="MousePoint"
