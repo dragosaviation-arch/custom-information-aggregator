@@ -9,7 +9,7 @@ public sealed record SavedWorkingStateFileIdentity(
     long Length,
     long CreationTimeUtcTicks,
     long LastWriteTimeUtcTicks,
-    string ContentMarker);
+    string ContentSha256);
 
 public sealed record SavedWorkingStateEntry(
     string Name,
@@ -253,22 +253,44 @@ public sealed class SavedWorkingStateLibrary
             throw new InvalidDataException("Saved-state files cannot be reparse points.");
         }
 
-        var information = new FileInfo(fullPath);
-        information.Refresh();
-        var contentMarker = ComputeBoundedContentMarker(fullPath);
-        information.Refresh();
-        if (information.Length != contentMarker.Length)
+        using var stream = new FileStream(
+            fullPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            128 * 1024,
+            FileOptions.SequentialScan);
+        var attributesAfterOpen = File.GetAttributes(fullPath);
+        if ((attributesAfterOpen & FileAttributes.Directory) != 0)
+        {
+            throw new InvalidDataException("Saved states must be files.");
+        }
+
+        if ((attributesAfterOpen & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidDataException("Saved-state files cannot be reparse points.");
+        }
+
+        var beforeHash = ReadFileMetadata(fullPath);
+        if (beforeHash.Length != stream.Length)
         {
             throw new IOException("The saved-state file changed while it was being inspected.");
         }
 
-        var modifiedAtUtc = new DateTimeOffset(information.LastWriteTimeUtc, TimeSpan.Zero);
+        var contentSha256 = ComputeContentSha256(stream);
+        var afterHash = ReadFileMetadata(fullPath);
+        if (afterHash != beforeHash || afterHash.Length != stream.Length)
+        {
+            throw new IOException("The saved-state file changed while it was being inspected.");
+        }
+
+        var modifiedAtUtc = new DateTimeOffset(afterHash.LastWriteTimeUtcTicks, TimeSpan.Zero);
         var identity = new SavedWorkingStateFileIdentity(
             fullPath,
-            information.Length,
-            information.CreationTimeUtc.Ticks,
-            information.LastWriteTimeUtc.Ticks,
-            contentMarker.Marker);
+            afterHash.Length,
+            afterHash.CreationTimeUtcTicks,
+            afterHash.LastWriteTimeUtcTicks,
+            contentSha256);
         var stateName = Path.GetFileNameWithoutExtension(fullPath);
         var nameProblem = ValidateStateName(stateName);
         if (nameProblem is not null)
@@ -280,7 +302,7 @@ public sealed class SavedWorkingStateLibrary
             stateName,
             fullPath,
             modifiedAtUtc,
-            information.Length,
+            afterHash.Length,
             identity);
     }
 
@@ -338,34 +360,33 @@ public sealed class SavedWorkingStateLibrary
         }
     }
 
-    private static (long Length, string Marker) ComputeBoundedContentMarker(string path)
+    private static SavedWorkingStateFileMetadata ReadFileMetadata(string path)
     {
-        const int markerWindowBytes = 4 * 1024;
-        using var stream = new FileStream(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            markerWindowBytes,
-            FileOptions.SequentialScan);
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var length = stream.Length;
-        var buffer = new byte[markerWindowBytes];
-        var firstLength = (int)Math.Min(length, markerWindowBytes);
-        stream.ReadExactly(buffer.AsSpan(0, firstLength));
-        hash.AppendData(buffer, 0, firstLength);
-        if (length > firstLength)
+        var information = new FileInfo(path);
+        information.Refresh();
+        if (!information.Exists)
         {
-            stream.Position = Math.Max(firstLength, length - markerWindowBytes);
-            var finalLength = (int)Math.Min(
-                markerWindowBytes,
-                length - stream.Position);
-            stream.ReadExactly(buffer.AsSpan(0, finalLength));
-            hash.AppendData(buffer, 0, finalLength);
+            throw new FileNotFoundException("The saved-state file does not exist.", path);
         }
 
-        hash.AppendData(BitConverter.GetBytes(length));
-        return (length, Convert.ToHexStringLower(hash.GetHashAndReset()));
+        return new SavedWorkingStateFileMetadata(
+            information.Length,
+            information.CreationTimeUtc.Ticks,
+            information.LastWriteTimeUtc.Ticks);
+    }
+
+    private static string ComputeContentSha256(Stream stream)
+    {
+        const int hashBufferBytes = 128 * 1024;
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[hashBufferBytes];
+        int bytesRead;
+        while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            hash.AppendData(buffer, 0, bytesRead);
+        }
+
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
 
     private static bool IsDirectChild(string path, string directory)
@@ -399,4 +420,9 @@ public sealed class SavedWorkingStateLibrary
             or IOException
             or UnauthorizedAccessException
             or NotSupportedException;
+
+    private sealed record SavedWorkingStateFileMetadata(
+        long Length,
+        long CreationTimeUtcTicks,
+        long LastWriteTimeUtcTicks);
 }

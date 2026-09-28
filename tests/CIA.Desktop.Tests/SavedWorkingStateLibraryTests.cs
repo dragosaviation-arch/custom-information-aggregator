@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.WorkingState;
 using CIA.Core.Diagnostics;
@@ -166,6 +167,121 @@ public sealed class SavedWorkingStateLibraryTests
         Assert.IsFalse(result.Succeeded);
         StringAssert.Contains(result.Problem, "changed after it was listed");
         CollectionAssert.AreEqual(new byte[] { 4, 3, 2, 1 }, File.ReadAllBytes(selected.Path));
+    }
+
+    [TestMethod]
+    public async Task MiddleOnlyReplacementIsRejectedForRevalidateDeleteAndRestore()
+    {
+        using var environment = new SavedStateTestEnvironment();
+        var original = Enumerable.Range(0, 64 * 1024)
+            .Select(index => (byte)((index * 31) % 251))
+            .ToArray();
+        var selected = environment.CreateState("Middle changed", original);
+        var originalCreationTime = File.GetCreationTimeUtc(selected.Path);
+        var originalWriteTime = File.GetLastWriteTimeUtc(selected.Path);
+        var restoreCoordinator = new StubWorkingStateCoordinator();
+        var restoreViewModel = environment.CreateViewModel(restoreCoordinator);
+        restoreViewModel.SelectedSavedState = restoreViewModel.SavedStates.Single();
+        var deleteConfirmation = new StubDeleteConfirmation(accepted: true);
+        var deleteViewModel = environment.CreateViewModel(
+            new StubWorkingStateCoordinator(),
+            deleteConfirmation);
+        deleteViewModel.SelectedSavedState = deleteViewModel.SavedStates.Single();
+        var replacement = original.ToArray();
+        for (var index = 16 * 1024; index < 20 * 1024; index++)
+        {
+            replacement[index] ^= 0x5a;
+        }
+
+        Assert.AreEqual(ComputeLegacyBoundedMarker(original), ComputeLegacyBoundedMarker(replacement));
+        using (var stream = new FileStream(
+                   selected.Path,
+                   FileMode.Open,
+                   FileAccess.Write,
+                   FileShare.None))
+        {
+            stream.Position = 16 * 1024;
+            stream.Write(replacement, 16 * 1024, 4 * 1024);
+            stream.Flush(flushToDisk: true);
+        }
+
+        File.SetCreationTimeUtc(selected.Path, originalCreationTime);
+        File.SetLastWriteTimeUtc(selected.Path, originalWriteTime);
+        Assert.AreEqual(original.Length, new FileInfo(selected.Path).Length);
+        CollectionAssert.AreEqual(original[..(4 * 1024)], replacement[..(4 * 1024)]);
+        CollectionAssert.AreEqual(original[^4096..], replacement[^4096..]);
+
+        var current = environment.Library.CreateInventory().States.Single();
+        var revalidation = environment.Library.Revalidate(selected);
+        var deletion = environment.Library.Delete(selected);
+        await deleteViewModel.DeleteStateCommand.ExecuteAsync(null);
+        await restoreViewModel.RestoreStateCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(selected.Identity.CanonicalPath, current.Identity.CanonicalPath);
+        Assert.AreEqual(selected.Identity.Length, current.Identity.Length);
+        Assert.AreEqual(selected.Identity.CreationTimeUtcTicks, current.Identity.CreationTimeUtcTicks);
+        Assert.AreEqual(selected.Identity.LastWriteTimeUtcTicks, current.Identity.LastWriteTimeUtcTicks);
+        Assert.AreNotEqual(selected.Identity.ContentSha256, current.Identity.ContentSha256);
+        Assert.AreEqual(
+            Convert.ToHexStringLower(SHA256.HashData(replacement)),
+            current.Identity.ContentSha256);
+        Assert.IsFalse(revalidation.Succeeded);
+        Assert.IsFalse(deletion.Succeeded);
+        Assert.IsNull(deleteConfirmation.RequestedStateName);
+        Assert.IsNull(deleteViewModel.SelectedSavedState);
+        Assert.HasCount(1, deleteViewModel.SavedStates);
+        Assert.AreEqual(current.Identity, deleteViewModel.SavedStates[0].Identity);
+        Assert.AreEqual(0, restoreCoordinator.RestoreCallCount);
+        Assert.IsNull(restoreViewModel.SelectedSavedState);
+        Assert.HasCount(1, restoreViewModel.SavedStates);
+        Assert.AreEqual(current.Identity, restoreViewModel.SavedStates[0].Identity);
+        StringAssert.Contains(restoreViewModel.SavedStateStatusText, "changed after it was listed");
+        CollectionAssert.AreEqual(replacement, File.ReadAllBytes(selected.Path));
+    }
+
+    [TestMethod]
+    public void UnchangedFullContentHashIsStableAndInventoryDoesNotMutateFile()
+    {
+        using var environment = new SavedStateTestEnvironment();
+        var content = Enumerable.Range(0, 48 * 1024)
+            .Select(index => (byte)((index * 17) % 253))
+            .ToArray();
+        var selected = environment.CreateState("Stable", content);
+        var creationTime = File.GetCreationTimeUtc(selected.Path);
+        var writeTime = File.GetLastWriteTimeUtc(selected.Path);
+
+        var first = environment.Library.CreateInventory().States.Single();
+        var second = environment.Library.CreateInventory().States.Single();
+
+        Assert.AreEqual(64, first.Identity.ContentSha256.Length);
+        Assert.AreEqual(first.Identity.ContentSha256, second.Identity.ContentSha256);
+        CollectionAssert.AreEqual(content, File.ReadAllBytes(selected.Path));
+        Assert.AreEqual(creationTime, File.GetCreationTimeUtc(selected.Path));
+        Assert.AreEqual(writeTime, File.GetLastWriteTimeUtc(selected.Path));
+    }
+
+    [TestMethod]
+    public void ExclusivelyLockedPackageIsReportedWithoutWeakInventoryIdentity()
+    {
+        using var environment = new SavedStateTestEnvironment();
+        byte[] content = [3, 1, 4, 1, 5, 9];
+        var selected = environment.CreateState("Locked identity", content);
+        SavedWorkingStateInventory inventory;
+        SavedWorkingStateLibraryResult revalidation;
+        using (var lockStream = new FileStream(
+                   selected.Path,
+                   FileMode.Open,
+                   FileAccess.ReadWrite,
+                   FileShare.None))
+        {
+            inventory = environment.Library.CreateInventory();
+            revalidation = environment.Library.Revalidate(selected);
+        }
+
+        Assert.IsEmpty(inventory.States);
+        Assert.HasCount(1, inventory.Problems);
+        Assert.IsFalse(revalidation.Succeeded);
+        CollectionAssert.AreEqual(content, File.ReadAllBytes(selected.Path));
     }
 
     [TestMethod]
@@ -451,6 +567,22 @@ public sealed class SavedWorkingStateLibraryTests
             repositorySchemaVersion: 1,
             new string('0', 64),
             snapshot);
+    }
+
+    private static string ComputeLegacyBoundedMarker(byte[] content)
+    {
+        const int markerWindowBytes = 4 * 1024;
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var firstLength = Math.Min(content.Length, markerWindowBytes);
+        hash.AppendData(content, 0, firstLength);
+        if (content.Length > firstLength)
+        {
+            var finalStart = Math.Max(firstLength, content.Length - markerWindowBytes);
+            hash.AppendData(content, finalStart, content.Length - finalStart);
+        }
+
+        hash.AppendData(BitConverter.GetBytes((long)content.Length));
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
 
     private static string FindRepositoryRoot()

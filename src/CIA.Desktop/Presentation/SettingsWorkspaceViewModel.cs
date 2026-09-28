@@ -809,16 +809,14 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
             return false;
         }
 
-        return _savedStateLibrary.Revalidate(SelectedSavedState).Succeeded
-            && _workingStateCoordinator
+        return _workingStateCoordinator
             .EvaluateRestoreReadiness(SelectedSavedState.Path)
             .NormalOperationReady;
     }
 
     private bool CanDeleteState() =>
         !IsSavedStateActionRunning
-        && SelectedSavedState is not null
-        && _savedStateLibrary.Revalidate(SelectedSavedState).Succeeded;
+        && SelectedSavedState is not null;
 
     private async Task SaveStateAsync()
     {
@@ -876,9 +874,8 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         var validation = _savedStateLibrary.Revalidate(selected);
         if (!validation.Succeeded || validation.Path is null)
         {
-            SavedStateStatusText = validation.Problem
-                ?? "The selected saved state is unavailable.";
-            RefreshSavedStates(updateStatus: false);
+            RejectStaleSavedStateSelection(
+                validation.Problem ?? "The selected saved state is unavailable.");
             return;
         }
 
@@ -908,22 +905,44 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         IsSavedStateActionRunning = true;
         try
         {
+            var validation = _savedStateLibrary.Revalidate(selected);
+            if (!validation.Succeeded || validation.State is null)
+            {
+                RejectStaleSavedStateSelection(
+                    validation.Problem ?? "The selected saved state is unavailable.");
+                return;
+            }
+
             if (!await _deleteConfirmation.ConfirmAsync(selected.Name))
             {
                 SavedStateStatusText = "Saved-state deletion cancelled.";
                 return;
             }
 
-            var result = _savedStateLibrary.Delete(selected);
+            var result = _savedStateLibrary.Delete(validation.State);
+            if (!result.Succeeded)
+            {
+                RejectStaleSavedStateSelection(
+                    result.Problem ?? "The saved state could not be deleted.");
+                return;
+            }
+
             RefreshSavedStates(updateStatus: false);
-            SavedStateStatusText = result.Succeeded
-                ? $"Deleted saved state '{selected.Name}'."
-                : result.Problem ?? "The saved state could not be deleted.";
+            SavedStateStatusText = $"Deleted saved state '{selected.Name}'.";
         }
         finally
         {
             IsSavedStateActionRunning = false;
         }
+    }
+
+    private void RejectStaleSavedStateSelection(string problem)
+    {
+        SelectedSavedState = null;
+        RefreshSavedStates(
+            updateStatus: false,
+            selectFirstWhenPreferredUnavailable: false);
+        SavedStateStatusText = problem;
     }
 
     private void RefreshSavedStates(
