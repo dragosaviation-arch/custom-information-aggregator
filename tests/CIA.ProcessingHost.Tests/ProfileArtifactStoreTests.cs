@@ -666,6 +666,71 @@ public sealed class ProfileArtifactStoreTests
             $"*{ProfileArtifactStore.FileExtension}",
             SearchOption.TopDirectoryOnly);
 
+    [TestMethod]
+    public void DeleteRequiresCurrentFingerprintAndRemovesOnlyAuthoritativeProfile()
+    {
+        using var environment = new ProfileTestEnvironment();
+        var original = CreateInformationSelection();
+        var created = environment.Store.Create(
+            $"{original.ProfileId}{ProfileArtifactStore.FileExtension}",
+            original);
+        Assert.IsTrue(created.Succeeded, created.Problem);
+        var replacement = original with
+        {
+            UpdatedAtUtc = original.UpdatedAtUtc.AddMinutes(1),
+            Content = new InformationSelectionProfileContentV1(
+            [
+                new(
+                    Identity("/catalog/updated", "updated"),
+                    InformationSelectionMembership.Selected)
+            ])
+        };
+        var updated = environment.Store.Update(replacement, created.Fingerprint!.Value);
+        Assert.IsTrue(updated.Succeeded, updated.Problem);
+
+        var staleDelete = environment.Store.Delete(
+            original.ProfileId,
+            created.Fingerprint.Value);
+
+        Assert.IsFalse(staleDelete.Succeeded);
+        Assert.IsTrue(File.Exists(updated.Path));
+        Assert.AreEqual("updated", ((InformationSelectionProfileContentV1)
+            environment.Store.Inspect(updated.Path!).Artifact!.Content).Entries.Single()
+            .Identity.InformationType);
+
+        var deleted = environment.Store.Delete(
+            original.ProfileId,
+            updated.Fingerprint!.Value);
+        Assert.IsTrue(deleted.Succeeded, deleted.Problem);
+        Assert.IsFalse(File.Exists(updated.Path));
+        Assert.AreEqual(
+            ProfileArtifactReadState.NotFound,
+            environment.Store.FindById(original.ProfileId).State);
+    }
+
+    [TestMethod]
+    public void DeleteFailsClosedForAmbiguousProfileId()
+    {
+        using var environment = new ProfileTestEnvironment();
+        var artifact = CreateInformationSelection();
+        var created = environment.Store.Create(
+            $"{artifact.ProfileId}{ProfileArtifactStore.FileExtension}",
+            artifact);
+        Assert.IsTrue(created.Succeeded, created.Problem);
+        var duplicatePath = Path.Combine(
+            environment.Paths.ProfilesDirectory,
+            $"duplicate-{artifact.ProfileId}{ProfileArtifactStore.FileExtension}");
+        File.Copy(created.Path!, duplicatePath);
+
+        var deleted = environment.Store.Delete(
+            artifact.ProfileId,
+            created.Fingerprint!.Value);
+
+        Assert.IsFalse(deleted.Succeeded);
+        Assert.IsTrue(File.Exists(created.Path));
+        Assert.IsTrue(File.Exists(duplicatePath));
+    }
+
     private static ProfileArtifactV1 CreateInformationSelection(
         ProfileId? profileId = null)
     {

@@ -5,8 +5,10 @@ using System.Globalization;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Profiles;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
+using CIA.Desktop.Profiles;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -38,6 +40,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _clearDatabaseTagOverrideCommand;
     private readonly RelayCommand _selectVisibleCommand;
     private readonly RelayCommand _deselectVisibleCommand;
+    private readonly RelayCommand _refreshProfilesCommand;
+    private readonly RelayCommand _loadProfileCommand;
+    private readonly RelayCommand _saveNewProfileCommand;
+    private readonly RelayCommand _updateProfileCommand;
+    private readonly RelayCommand _deleteProfileCommand;
+    private readonly InformationSelectionProfileCoordinator? _profileCoordinator;
     private readonly SemaphoreSlim _previewRequestGate = new(1, 1);
     private readonly object _previewRequestStateGate = new();
     private readonly SynchronizationContext? _uiSynchronizationContext;
@@ -72,6 +80,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool _isOccurrenceLoading;
     private int _previewRequestVersion;
     private CancellationTokenSource _previewRequestCancellation = new();
+    private IReadOnlyList<InformationSelectionProfileItem> _informationSelectionProfiles = [];
+    private InformationSelectionProfileItem? _selectedInformationSelectionProfile;
+    private string _newProfileName = string.Empty;
+    private string _profileStatusText = "Refresh to view information-selection profiles.";
     private int _disposed;
 
     public DiscoveryWorkspaceViewModel(
@@ -79,7 +91,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         ActiveDiscoveryConfiguration activeConfiguration,
         ActiveLoadedSourceSet sourceSet,
         IApplicationWorkflowCoordinator workflowCoordinator,
-        DatabaseBuildCoordinator? databaseBuildCoordinator = null)
+        DatabaseBuildCoordinator? databaseBuildCoordinator = null,
+        InformationSelectionProfileCoordinator? profileCoordinator = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryClient);
         ArgumentNullException.ThrowIfNull(activeConfiguration);
@@ -91,6 +104,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _sourceSet = sourceSet;
         _workflowCoordinator = workflowCoordinator;
         _databaseBuildCoordinator = databaseBuildCoordinator;
+        _profileCoordinator = profileCoordinator;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
         _uiSynchronizationContext = SynchronizationContext.Current;
         _readOnlyInformation = new ReadOnlyObservableCollection<DiscoveredInformationItemViewModel>(
@@ -140,6 +154,13 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _deselectVisibleCommand = new RelayCommand(
             () => SetVisibleSelection(isSelected: false),
             CanDeselectVisible);
+        _refreshProfilesCommand = new RelayCommand(
+            RefreshProfiles,
+            () => _profileCoordinator is not null);
+        _loadProfileCommand = new RelayCommand(LoadSelectedProfile, CanLoadSelectedProfile);
+        _saveNewProfileCommand = new RelayCommand(SaveNewProfile, CanSaveNewProfile);
+        _updateProfileCommand = new RelayCommand(UpdateSelectedProfile, CanUpdateSelectedProfile);
+        _deleteProfileCommand = new RelayCommand(DeleteSelectedProfile, CanDeleteSelectedProfile);
         CloseSourceInspectionCommand = new RelayCommand(
             () => IsSourceInspectionOpen = false);
 
@@ -163,6 +184,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             _databaseBuildCoordinator.PublishedGenerationChanged +=
                 OnPublishedDatabaseGenerationChanged;
+        }
+        if (_profileCoordinator is not null)
+        {
+            RefreshProfiles();
         }
         RefreshPresentation();
     }
@@ -259,7 +284,57 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public IRelayCommand DeselectVisibleCommand => _deselectVisibleCommand;
 
+    public IRelayCommand RefreshProfilesCommand => _refreshProfilesCommand;
+
+    public IRelayCommand LoadProfileCommand => _loadProfileCommand;
+
+    public IRelayCommand SaveNewProfileCommand => _saveNewProfileCommand;
+
+    public IRelayCommand UpdateProfileCommand => _updateProfileCommand;
+
+    public IRelayCommand DeleteProfileCommand => _deleteProfileCommand;
+
     public IRelayCommand CloseSourceInspectionCommand { get; }
+
+    public IReadOnlyList<InformationSelectionProfileItem> InformationSelectionProfiles
+    {
+        get => _informationSelectionProfiles;
+        private set => SetProperty(ref _informationSelectionProfiles, value);
+    }
+
+    public InformationSelectionProfileItem? SelectedInformationSelectionProfile
+    {
+        get => _selectedInformationSelectionProfile;
+        set
+        {
+            if (SetProperty(ref _selectedInformationSelectionProfile, value))
+            {
+                NotifyProfileCommandsChanged();
+            }
+        }
+    }
+
+    public string NewProfileName
+    {
+        get => _newProfileName;
+        set
+        {
+            if (SetProperty(ref _newProfileName, value))
+            {
+                _saveNewProfileCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public string ProfileStatusText
+    {
+        get => _profileStatusText;
+        private set => SetProperty(ref _profileStatusText, value);
+    }
+
+    public string ProfileCaptureAvailabilityReason =>
+        _profileCoordinator?.CaptureReadinessReason
+        ?? "Information-selection profile management is unavailable.";
 
     public string SearchText
     {
@@ -362,6 +437,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 RunDiscoveryCommand.NotifyCanExecuteChanged();
                 BuildDatabaseCommand.NotifyCanExecuteChanged();
                 NotifyConfigurationCommandsChanged();
+                NotifyProfileCommandsChanged();
                 NotifyOccurrenceCommandsChanged();
             }
         }
@@ -383,6 +459,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(DiscoveryStateText));
                 OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
                 OnPropertyChanged(nameof(CanConfigureRepeatedDataLayout));
+                NotifyProfileCommandsChanged();
             }
         }
     }
@@ -1130,6 +1207,131 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             && _filteredInformation.Any(information => information.IsSelected);
     }
 
+    private bool CanLoadSelectedProfile()
+    {
+        return !IsBusy
+            && SelectedInformationSelectionProfile is not null
+            && _profileCoordinator?.CanLoadCurrentConfiguration == true;
+    }
+
+    private bool CanSaveNewProfile()
+    {
+        var name = NewProfileName.Trim();
+        return !IsBusy
+            && name.Length is > 0 and <= ProfileArtifactValidator.MaximumProfileNameLength
+            && _profileCoordinator?.CanCaptureCurrentConfiguration == true;
+    }
+
+    private bool CanUpdateSelectedProfile()
+    {
+        return !IsBusy
+            && SelectedInformationSelectionProfile is not null
+            && _profileCoordinator?.CanCaptureCurrentConfiguration == true;
+    }
+
+    private bool CanDeleteSelectedProfile()
+    {
+        return _profileCoordinator is not null
+            && SelectedInformationSelectionProfile is not null;
+    }
+
+    private void RefreshProfiles()
+    {
+        if (_profileCoordinator is null)
+        {
+            return;
+        }
+
+        var previous = SelectedInformationSelectionProfile;
+        var inventory = _profileCoordinator.RefreshInventory();
+        InformationSelectionProfiles = inventory.Profiles;
+        SelectedInformationSelectionProfile = previous is null
+            ? null
+            : inventory.Profiles.FirstOrDefault(profile =>
+                profile.ProfileId == previous.ProfileId
+                && profile.Fingerprint == previous.Fingerprint);
+        ProfileStatusText = inventory.Problems.Count == 0
+            ? $"{inventory.Profiles.Count:N0} information-selection profiles available."
+            : $"{inventory.Profiles.Count:N0} profiles available; {inventory.Problems.Count:N0} profile artifacts unavailable.";
+        NotifyProfileCommandsChanged();
+    }
+
+    private void LoadSelectedProfile()
+    {
+        if (_profileCoordinator is null || SelectedInformationSelectionProfile is null)
+        {
+            return;
+        }
+
+        var result = _profileCoordinator.Load(SelectedInformationSelectionProfile);
+        ProfileStatusText = result.Message;
+        if (result.RequiresReselection)
+        {
+            InformationSelectionProfiles = _profileCoordinator.Inventory.Profiles;
+            SelectedInformationSelectionProfile = null;
+        }
+
+        if (result.Succeeded && result.ChangedCount > 0)
+        {
+            ApplyActiveConfiguration();
+        }
+
+        NotifyProfileCommandsChanged();
+    }
+
+    private void SaveNewProfile()
+    {
+        if (_profileCoordinator is null)
+        {
+            return;
+        }
+
+        var result = _profileCoordinator.SaveNew(NewProfileName.Trim());
+        ProfileStatusText = result.Message;
+        InformationSelectionProfiles = _profileCoordinator.Inventory.Profiles;
+        if (result.Succeeded)
+        {
+            SelectedInformationSelectionProfile = result.Profile;
+            NewProfileName = string.Empty;
+        }
+
+        NotifyProfileCommandsChanged();
+    }
+
+    private void UpdateSelectedProfile()
+    {
+        if (_profileCoordinator is null || SelectedInformationSelectionProfile is null)
+        {
+            return;
+        }
+
+        var result = _profileCoordinator.Update(SelectedInformationSelectionProfile);
+        ProfileStatusText = result.Message;
+        InformationSelectionProfiles = _profileCoordinator.Inventory.Profiles;
+        SelectedInformationSelectionProfile = result.RequiresReselection
+            ? null
+            : result.Profile ?? SelectedInformationSelectionProfile;
+        NotifyProfileCommandsChanged();
+    }
+
+    private void DeleteSelectedProfile()
+    {
+        if (_profileCoordinator is null || SelectedInformationSelectionProfile is null)
+        {
+            return;
+        }
+
+        var result = _profileCoordinator.Delete(SelectedInformationSelectionProfile);
+        ProfileStatusText = result.Message;
+        InformationSelectionProfiles = _profileCoordinator.Inventory.Profiles;
+        if (result.Succeeded || result.RequiresReselection)
+        {
+            SelectedInformationSelectionProfile = null;
+        }
+
+        NotifyProfileCommandsChanged();
+    }
+
     private void ToggleSelection(DiscoveredInformationItemViewModel? information)
     {
         if (information is null || information.IsBlacklisted)
@@ -1263,6 +1465,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
         _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
         RefreshPresentation();
+        NotifyProfileCommandsChanged();
     }
 
     private bool ChangeRepeatedDataLayout(SourceSetId sourceSetId, RepeatedDataLayout layout)
@@ -1501,6 +1704,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(DatabaseBuildButtonText));
                 OnPropertyChanged(nameof(DatabaseBuildAvailabilityReason));
                 NotifyConfigurationCommandsChanged();
+                NotifyProfileCommandsChanged();
             });
     }
 
@@ -1553,6 +1757,15 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
         _selectVisibleCommand.NotifyCanExecuteChanged();
         _deselectVisibleCommand.NotifyCanExecuteChanged();
+    }
+
+    private void NotifyProfileCommandsChanged()
+    {
+        OnPropertyChanged(nameof(ProfileCaptureAvailabilityReason));
+        _loadProfileCommand.NotifyCanExecuteChanged();
+        _saveNewProfileCommand.NotifyCanExecuteChanged();
+        _updateProfileCommand.NotifyCanExecuteChanged();
+        _deleteProfileCommand.NotifyCanExecuteChanged();
     }
 
     private void NotifyOccurrenceCommandsChanged()

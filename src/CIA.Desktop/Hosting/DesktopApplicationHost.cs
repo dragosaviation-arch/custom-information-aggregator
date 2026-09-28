@@ -2,12 +2,14 @@ using System.IO;
 using CIA.Core;
 using CIA.Core.Diagnostics;
 using CIA.Core.ManagedStorage;
+using CIA.Core.Profiles;
 using CIA.Core.Runtime;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Extraction;
 using CIA.Desktop.Export;
 using CIA.Desktop.Presentation;
+using CIA.Desktop.Profiles;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using CIA.Desktop.WorkingState;
@@ -67,6 +69,8 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ISourcePathPicker, WindowsSourcePathPicker>();
         builder.Services.AddSingleton<IDiscoveryClient, ProcessingHostDiscoveryClient>();
         builder.Services.AddSingleton<ActiveDiscoveryConfiguration>();
+        builder.Services.AddSingleton<ProfileArtifactStore>();
+        builder.Services.AddSingleton<InformationSelectionProfileCoordinator>();
         builder.Services.AddSingleton<ProcessingHostDatabaseClient>();
         builder.Services.AddSingleton<IDatabaseClient>(
             services => services.GetRequiredService<ProcessingHostDatabaseClient>());

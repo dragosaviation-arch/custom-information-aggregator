@@ -155,3 +155,18 @@ public sealed record ProfileArtifactWriteResult(
     internal static ProfileArtifactWriteResult Failure(string problem) =>
         new(false, Path: null, Artifact: null, problem);
 }
+
+public sealed record ProfileArtifactDeleteResult(
+    bool Succeeded,
+    ProfileId? ProfileId,
+    string? Path,
+    string? Problem)
+{
+    internal static ProfileArtifactDeleteResult Success(
+        ProfileId profileId,
+        string path) =>
+        new(true, profileId, path, Problem: null);
+
+    internal static ProfileArtifactDeleteResult Failure(string problem) =>
+        new(false, ProfileId: null, Path: null, problem);
+}

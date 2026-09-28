@@ -249,6 +249,60 @@ public sealed class ProfileArtifactStore
         }
     }
 
+    public ProfileArtifactDeleteResult Delete(
+        ProfileId profileId,
+        ProfileArtifactFingerprint expectedCurrentFingerprint)
+    {
+        try
+        {
+            _ = ProfileId.From(profileId.Value);
+            if (!ProfileArtifactFingerprint.IsValid(expectedCurrentFingerprint.Value))
+            {
+                throw new InvalidDataException(
+                    "A valid current-profile fingerprint is required for deletion.");
+            }
+
+            EnsureProfilesDirectoryForWrite();
+            using var publicationLock = AcquirePublicationLock();
+            var existing = FindById(profileId);
+            if (existing.State != ProfileArtifactReadState.Valid
+                || existing.Artifact is null
+                || existing.Fingerprint is not { } authoritativeFingerprint)
+            {
+                throw new InvalidDataException(existing.Problem ?? "The profile is not available for deletion.");
+            }
+
+            if (authoritativeFingerprint != expectedCurrentFingerprint)
+            {
+                throw new InvalidDataException(
+                    "The profile changed after it was read; reload it before deleting it.");
+            }
+
+            var targetPath = ValidateProfilePath(existing.Path, requireProfileExtension: true);
+            var current = InspectCore(targetPath);
+            if (current.State != ProfileArtifactReadState.Valid
+                || current.Artifact?.ProfileId != profileId
+                || current.Fingerprint != expectedCurrentFingerprint)
+            {
+                throw new InvalidDataException(
+                    "The existing profile changed before deletion.");
+            }
+
+            File.Delete(targetPath);
+            if (File.Exists(targetPath))
+            {
+                throw new IOException("The profile file could not be deleted.");
+            }
+
+            return ProfileArtifactDeleteResult.Success(profileId, targetPath);
+        }
+        catch (Exception exception) when (IsControlledWriteFailure(exception))
+        {
+            return ProfileArtifactDeleteResult.Failure(
+                $"The profile could not be deleted safely ({exception.Message}).");
+        }
+    }
+
     public static byte[] Serialize(ProfileArtifactV1 artifact)
     {
         ProfileArtifactValidator.Validate(artifact);
