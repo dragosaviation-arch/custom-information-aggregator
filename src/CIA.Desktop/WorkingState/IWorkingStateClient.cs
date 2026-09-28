@@ -9,6 +9,7 @@ public interface IWorkingStateClient
         OperationCorrelation correlation,
         string targetPath,
         WorkingStateSnapshot snapshot,
+        WorkingStatePublicationMode publicationMode,
         CancellationToken cancellationToken = default);
 
     Task<WorkingStateClientResult> RestoreAsync(

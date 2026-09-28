@@ -484,6 +484,7 @@ public sealed class ProcessingHostLifetimeService(
                 command.Correlation,
                 command.TargetPath,
                 command.Snapshot,
+                command.PublicationMode,
                 cancellationToken)
             .ConfigureAwait(false);
         await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);

@@ -622,6 +622,7 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         OperationCorrelation correlation,
         string targetPath,
         WorkingStateSnapshot snapshot,
+        WorkingStatePublicationMode publicationMode,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(correlation);
@@ -631,7 +632,8 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
             DateTimeOffset.UtcNow,
             correlation,
             targetPath,
-            snapshot);
+            snapshot,
+            publicationMode);
         return await RequestWorkingStateAsync<SaveWorkingStateResponse>(
                 command,
                 correlation,

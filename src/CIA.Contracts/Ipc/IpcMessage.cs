@@ -171,7 +171,8 @@ public sealed record SaveWorkingStateCommand(
     DateTimeOffset TimestampUtc,
     OperationCorrelation Correlation,
     string TargetPath,
-    WorkingStateSnapshot Snapshot)
+    WorkingStateSnapshot Snapshot,
+    WorkingStatePublicationMode PublicationMode)
     : IpcCommand(MessageId, TimestampUtc);
 
 public sealed record RestoreWorkingStateCommand(

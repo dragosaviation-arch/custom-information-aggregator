@@ -724,13 +724,131 @@
                                             </Border>
                                             <StackPanel Margin="8,7">
                                                 <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                                           Text="Working-state save, restore and unresolved-path management are not available yet."
+                                                           Text="Save and restore explicit CIA working-state packages managed under the active runtime Working directory. Missing-source relinking is not available yet."
                                                            TextWrapping="Wrap" />
+                                                <Grid Margin="0,6,0,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBox x:Name="SavedStateNameInput"
+                                                             MaxLength="120"
+                                                             Style="{StaticResource CiaTextInputStyle}"
+                                                             Text="{Binding SavedStateName, UpdateSourceTrigger=PropertyChanged}"
+                                                             ToolTip="Enter a friendly name without the .cia extension." />
+                                                    <Button x:Name="SaveStateButton"
+                                                            Grid.Column="1"
+                                                            Margin="5,0,0,0"
+                                                            Command="{Binding SaveStateCommand}"
+                                                            Content="Save State"
+                                                            Style="{StaticResource SettingsCompactButtonStyle}"
+                                                            ToolTip="{Binding SaveStateAvailabilityText}" />
+                                                </Grid>
+                                                <TextBlock Margin="0,3,0,0"
+                                                           Foreground="{StaticResource CiaDangerBrush}"
+                                                           FontSize="9.4"
+                                                           Text="{Binding SavedStateNameProblem}"
+                                                           TextWrapping="Wrap">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasSavedStateNameProblem}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <ListBox x:Name="SavedStatesList"
+                                                         MaxHeight="125"
+                                                         Margin="0,6,0,0"
+                                                         Background="{StaticResource CiaPanelBrush}"
+                                                         BorderBrush="{StaticResource CiaBorderBrush}"
+                                                         BorderThickness="1"
+                                                         Foreground="{StaticResource CiaTextPrimaryBrush}"
+                                                         ItemsSource="{Binding SavedStates}"
+                                                         SelectedItem="{Binding SelectedSavedState, Mode=TwoWay}"
+                                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                                    <ListBox.ItemContainerStyle>
+                                                        <Style TargetType="ListBoxItem">
+                                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                                            <Setter Property="Padding" Value="1" />
+                                                            <Setter Property="Foreground" Value="{StaticResource CiaTextPrimaryBrush}" />
+                                                            <Style.Triggers>
+                                                                <Trigger Property="IsSelected" Value="True">
+                                                                    <Setter Property="Background" Value="{StaticResource CiaSelectedRowBrush}" />
+                                                                </Trigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </ListBox.ItemContainerStyle>
+                                                    <ListBox.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Grid Margin="4,3">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*" />
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                </Grid.ColumnDefinitions>
+                                                                <StackPanel>
+                                                                    <TextBlock FontSize="10.4"
+                                                                               FontWeight="SemiBold"
+                                                                               Text="{Binding Name}"
+                                                                               TextTrimming="CharacterEllipsis" />
+                                                                    <TextBlock FontSize="8.9"
+                                                                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                                                               Text="{Binding Path}"
+                                                                               TextTrimming="CharacterEllipsis"
+                                                                               ToolTip="{Binding Path}" />
+                                                                </StackPanel>
+                                                                <TextBlock Grid.Column="1"
+                                                                           Margin="8,0,0,0"
+                                                                           VerticalAlignment="Center"
+                                                                           FontSize="9"
+                                                                           Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                                                           Text="{Binding ModifiedAtLocal, StringFormat={}{0:g}}" />
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ListBox.ItemTemplate>
+                                                </ListBox>
+                                                <TextBlock Margin="0,5,0,0"
+                                                           Text="No saved states are available.">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock" BasedOn="{StaticResource CiaSecondaryTextStyle}">
+                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasSavedStates}" Value="False">
+                                                                    <Setter Property="Visibility" Value="Visible" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
                                                 <WrapPanel Margin="0,6,0,0">
-                                                    <Button x:Name="SaveStateButton" Margin="0,0,5,5" Content="Save State…" IsEnabled="False" Style="{StaticResource SettingsCompactButtonStyle}" />
-                                                    <Button Margin="0,0,5,5" Content="Open State…" IsEnabled="False" Style="{StaticResource SettingsCompactButtonStyle}" />
-                                                    <Button Margin="0,0,0,5" Content="Manage…" IsEnabled="False" Style="{StaticResource SettingsCompactButtonStyle}" />
+                                                    <Button x:Name="RestoreSavedStateButton"
+                                                            Margin="0,0,5,5"
+                                                            Command="{Binding RestoreStateCommand}"
+                                                            Content="Restore"
+                                                            Style="{StaticResource SettingsCompactButtonStyle}"
+                                                            ToolTip="{Binding RestoreStateAvailabilityText}" />
+                                                    <Button x:Name="DeleteSavedStateButton"
+                                                            Height="27"
+                                                            Margin="0,0,5,5"
+                                                            Padding="8,0"
+                                                            Command="{Binding DeleteStateCommand}"
+                                                            Content="Delete"
+                                                            FontSize="10.5"
+                                                            Style="{StaticResource CiaDangerButtonStyle}" />
+                                                    <Button x:Name="RefreshSavedStatesButton"
+                                                            Margin="0,0,0,5"
+                                                            Command="{Binding RefreshSavedStatesCommand}"
+                                                            Content="Refresh"
+                                                            Style="{StaticResource SettingsCompactButtonStyle}" />
                                                 </WrapPanel>
+                                                <TextBlock FontSize="9.4"
+                                                           Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                                           Text="{Binding SavedStateStatusText}"
+                                                           TextWrapping="Wrap" />
                                             </StackPanel>
                                         </StackPanel>
                                     </Border>
@@ -805,6 +923,59 @@
                         </Grid>
                     </Grid>
                 </Grid>
+            </Border>
+        </Grid>
+
+        <Grid x:Name="DeleteSavedStateConfirmation"
+              Grid.RowSpan="3"
+              Panel.ZIndex="20"
+              Background="#99000000">
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsDeleteStateConfirmationOpen}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <Border Width="390"
+                    Padding="20"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{StaticResource CiaPanelBrush}"
+                    BorderBrush="{StaticResource CiaBorderStrongBrush}"
+                    BorderThickness="1"
+                    CornerRadius="10">
+                <StackPanel>
+                    <TextBlock FontSize="15"
+                               FontWeight="Bold"
+                               Text="Delete saved state" />
+                    <TextBlock Margin="0,8,0,0"
+                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                               Text="{Binding DeleteStateConfirmationMessage}"
+                               TextWrapping="Wrap" />
+                    <TextBlock Margin="0,5,0,0"
+                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                               FontSize="10"
+                               Text="This deletes only the selected CIA-managed .cia file. The active working state is not changed."
+                               TextWrapping="Wrap" />
+                    <StackPanel Margin="0,16,0,0"
+                                HorizontalAlignment="Right"
+                                Orientation="Horizontal">
+                        <Button Margin="0,0,8,0"
+                                Command="{Binding CancelDeleteStateCommand}"
+                                Content="Cancel"
+                                Style="{StaticResource SettingsCompactButtonStyle}" />
+                        <Button Height="27"
+                                Padding="10,0"
+                                Command="{Binding ConfirmDeleteStateCommand}"
+                                Content="Delete"
+                                FontSize="10.5"
+                                Style="{StaticResource CiaDangerButtonStyle}" />
+                    </StackPanel>
+                </StackPanel>
             </Border>
         </Grid>
     </Grid>

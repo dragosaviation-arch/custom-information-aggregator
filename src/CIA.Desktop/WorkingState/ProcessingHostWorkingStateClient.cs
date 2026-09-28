@@ -15,6 +15,7 @@ public sealed class ProcessingHostWorkingStateClient(
         OperationCorrelation correlation,
         string targetPath,
         WorkingStateSnapshot snapshot,
+        WorkingStatePublicationMode publicationMode,
         CancellationToken cancellationToken = default) =>
         ExecuteAsync(
             correlation,
@@ -22,6 +23,7 @@ public sealed class ProcessingHostWorkingStateClient(
                 correlation,
                 targetPath,
                 snapshot,
+                publicationMode,
                 token),
             cancellationToken);
 
