@@ -721,13 +721,40 @@
                                            FontWeight="Bold"
                                            Foreground="{StaticResource CiaAccentBrush}"
                                            Text="BLACKLIST PROFILE MANAGEMENT" />
-                                <ComboBox Width="264" Height="29" IsEnabled="False" SelectedIndex="0">
-                                    <ComboBoxItem Content="No Blacklist" />
-                                </ComboBox>
+                                <ComboBox Width="360"
+                                          Height="29"
+                                          Margin="0,0,0,7"
+                                          DisplayMemberPath="DisplayName"
+                                          ItemsSource="{Binding BlacklistProfiles}"
+                                          SelectedItem="{Binding SelectedBlacklistProfile, Mode=TwoWay}" />
+                                <TextBox Width="360"
+                                         AutomationProperties.Name="New blacklist profile name"
+                                         Style="{StaticResource CiaTextInputStyle}"
+                                         Text="{Binding NewBlacklistProfileName, UpdateSourceTrigger=PropertyChanged}" />
                                 <WrapPanel Margin="0,7,0,0" HorizontalAlignment="Center">
-                                    <Button Margin="0,0,6,0" IsEnabled="False" Style="{StaticResource CiaButtonStyle}" Content="Load Blacklist" />
-                                    <Button IsEnabled="False" Style="{StaticResource CiaButtonStyle}" Content="Save Current" />
+                                    <Button Margin="0,0,6,6" Command="{Binding RefreshBlacklistProfilesCommand}" Style="{StaticResource CiaGhostButtonStyle}" Content="Refresh" />
+                                    <Button Margin="0,0,6,6" Command="{Binding LoadBlacklistProfileCommand}" Style="{StaticResource CiaButtonStyle}" Content="Load" />
+                                    <Button Margin="0,0,6,6" Command="{Binding SaveNewBlacklistProfileCommand}" Style="{StaticResource CiaButtonStyle}" Content="Save New" ToolTip="{Binding BlacklistCaptureAvailabilityReason}" />
+                                    <Button Margin="0,0,6,6" Command="{Binding UpdateBlacklistProfileCommand}" Style="{StaticResource CiaButtonStyle}" Content="Update" ToolTip="{Binding BlacklistCaptureAvailabilityReason}" />
+                                    <Button Margin="0,0,6,6" Command="{Binding CloneBlacklistProfileCommand}" Style="{StaticResource CiaButtonStyle}" Content="Clone" />
+                                    <Button Margin="0,0,0,6" Command="{Binding DeleteBlacklistProfileCommand}" Style="{StaticResource CiaDangerButtonStyle}" Content="Delete" />
                                 </WrapPanel>
+                                <WrapPanel HorizontalAlignment="Center">
+                                    <Button Margin="0,0,6,0" Command="{Binding SetDefaultBlacklistProfileCommand}" Style="{StaticResource CiaButtonStyle}" Content="Set Default" />
+                                    <Button Command="{Binding ClearDefaultBlacklistProfileCommand}" Style="{StaticResource CiaGhostButtonStyle}" Content="Clear Default" />
+                                </WrapPanel>
+                                <TextBlock Width="440"
+                                           Margin="0,8,0,0"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"
+                                           FontWeight="SemiBold"
+                                           Text="{Binding DefaultBlacklistProfileText}" />
+                                <TextBlock Width="440"
+                                           Margin="0,5,0,0"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"
+                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                           Text="{Binding BlacklistProfileStatusText}" />
                             </StackPanel>
                         </TabItem>
                     </TabControl>
@@ -782,7 +809,7 @@
                 <StackPanel>
                     <TextBlock FontSize="15"
                                FontWeight="Bold"
-                               Text="Delete information-selection profile" />
+                               Text="Delete profile" />
                     <TextBlock Margin="0,8,0,0"
                                Foreground="{StaticResource CiaTextSecondaryBrush}"
                                Text="{Binding DeleteProfileConfirmationMessage}"
@@ -790,7 +817,7 @@
                     <TextBlock Margin="0,5,0,0"
                                Foreground="{StaticResource CiaTextSecondaryBrush}"
                                FontSize="10"
-                               Text="This deletes only the selected CIA-managed profile file. The active Discovery selection is not changed."
+                               Text="This deletes only the selected CIA-managed profile file. The active Discovery configuration is not changed."
                                TextWrapping="Wrap" />
                     <StackPanel Margin="0,16,0,0"
                                 HorizontalAlignment="Right"

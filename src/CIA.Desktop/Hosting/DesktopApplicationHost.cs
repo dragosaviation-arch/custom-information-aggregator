@@ -69,12 +69,19 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ISourcePathPicker, WindowsSourcePathPicker>();
         builder.Services.AddSingleton<IDiscoveryClient, ProcessingHostDiscoveryClient>();
         builder.Services.AddSingleton<ActiveDiscoveryConfiguration>();
+        builder.Services.AddSingleton<ProfileStorePublicationGate>();
         builder.Services.AddSingleton<ProfileArtifactStore>();
+        builder.Services.AddSingleton<DefaultBlacklistProfileDesignationStore>();
         builder.Services.AddSingleton<InformationSelectionProfileCoordinator>();
         builder.Services.AddSingleton<IInformationSelectionProfileCoordinator>(
             services => services.GetRequiredService<InformationSelectionProfileCoordinator>());
-        builder.Services.AddSingleton<IInformationSelectionProfileDeleteConfirmation,
-            InApplicationInformationSelectionProfileDeleteConfirmation>();
+        builder.Services.AddSingleton<BlacklistProfileCoordinator>();
+        builder.Services.AddSingleton<IBlacklistProfileCoordinator>(
+            services => services.GetRequiredService<BlacklistProfileCoordinator>());
+        builder.Services.AddSingleton<IHostedService>(
+            services => services.GetRequiredService<BlacklistProfileCoordinator>());
+        builder.Services.AddSingleton<IProfileDeleteConfirmation,
+            InApplicationProfileDeleteConfirmation>();
         builder.Services.AddSingleton<ProcessingHostDatabaseClient>();
         builder.Services.AddSingleton<IDatabaseClient>(
             services => services.GetRequiredService<ProcessingHostDatabaseClient>());

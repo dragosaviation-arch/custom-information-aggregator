@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CIA.Core.Runtime;
@@ -49,33 +48,37 @@ public sealed class ProfileArtifactFileOperations : IProfileArtifactFileOperatio
 public sealed class ProfileArtifactStore
 {
     public const string FileExtension = ".cia-profile.json";
-    public const string PublicationLockFileName = ".cia-profile-store.lock";
+    public const string PublicationLockFileName = ProfileStorePublicationGate.LockFileName;
     public const long MaximumArtifactBytes = 8 * 1024 * 1024;
-    private static readonly TimeSpan DefaultPublicationLockTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan PublicationLockRetryInterval = TimeSpan.FromMilliseconds(20);
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
     private readonly string _profilesDirectory;
     private readonly IProfileArtifactFileOperations _fileOperations;
-    private readonly TimeSpan _publicationLockTimeout;
+    private readonly ProfileStorePublicationGate _publicationGate;
 
     public ProfileArtifactStore(
         ApplicationPaths applicationPaths,
         IProfileArtifactFileOperations? fileOperations = null,
-        TimeSpan? publicationLockTimeout = null)
+        TimeSpan? publicationLockTimeout = null,
+        ProfileStorePublicationGate? publicationGate = null)
     {
         ArgumentNullException.ThrowIfNull(applicationPaths);
         _profilesDirectory = Canonicalize(applicationPaths.ProfilesDirectory);
         _fileOperations = fileOperations ?? new ProfileArtifactFileOperations();
-        _publicationLockTimeout = publicationLockTimeout ?? DefaultPublicationLockTimeout;
-        if (_publicationLockTimeout <= TimeSpan.Zero)
+        if (publicationGate is not null && publicationLockTimeout is not null)
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(publicationLockTimeout),
-                "The profile publication-lock timeout must be positive.");
+            throw new ArgumentException(
+                "A publication-lock timeout cannot be supplied with an existing publication gate.",
+                nameof(publicationLockTimeout));
         }
+
+        _publicationGate = publicationGate
+            ?? new ProfileStorePublicationGate(applicationPaths, publicationLockTimeout);
+        EnsureMatchingPublicationDirectory(_publicationGate.ProfilesDirectory);
     }
 
     public string ProfilesDirectory => _profilesDirectory;
+
+    public ProfileStorePublicationGate PublicationGate => _publicationGate;
 
     public ProfileArtifactInventory CreateInventory()
     {
@@ -182,7 +185,7 @@ public sealed class ProfileArtifactStore
             ProfileArtifactValidator.Validate(artifact);
             EnsureProfilesDirectoryForWrite();
             var targetPath = ResolveTargetFileName(targetFileName);
-            using var publicationLock = AcquirePublicationLock();
+            using var publicationLock = _publicationGate.Acquire();
             if (File.Exists(targetPath))
             {
                 throw new IOException("The target profile file already exists.");
@@ -219,7 +222,7 @@ public sealed class ProfileArtifactStore
             }
 
             EnsureProfilesDirectoryForWrite();
-            using var publicationLock = AcquirePublicationLock();
+            using var publicationLock = _publicationGate.Acquire();
             var existing = FindById(replacement.ProfileId);
             if (existing.State != ProfileArtifactReadState.Valid
                 || existing.Artifact is null
@@ -255,6 +258,26 @@ public sealed class ProfileArtifactStore
     {
         try
         {
+            EnsureProfilesDirectoryForWrite();
+            using var publicationLock = _publicationGate.Acquire();
+            return Delete(profileId, expectedCurrentFingerprint, publicationLock);
+        }
+        catch (Exception exception) when (IsControlledWriteFailure(exception))
+        {
+            return ProfileArtifactDeleteResult.Failure(
+                $"The profile could not be deleted safely ({exception.Message}).");
+        }
+    }
+
+    public ProfileArtifactDeleteResult Delete(
+        ProfileId profileId,
+        ProfileArtifactFingerprint expectedCurrentFingerprint,
+        ProfileStorePublicationLease publicationLease)
+    {
+        try
+        {
+            ArgumentNullException.ThrowIfNull(publicationLease);
+            publicationLease.VerifyFor(_profilesDirectory);
             _ = ProfileId.From(profileId.Value);
             if (!ProfileArtifactFingerprint.IsValid(expectedCurrentFingerprint.Value))
             {
@@ -263,7 +286,6 @@ public sealed class ProfileArtifactStore
             }
 
             EnsureProfilesDirectoryForWrite();
-            using var publicationLock = AcquirePublicationLock();
             var existing = FindById(profileId);
             if (existing.State != ProfileArtifactReadState.Valid
                 || existing.Artifact is null
@@ -527,49 +549,6 @@ public sealed class ProfileArtifactStore
         EnsureSafeProfilesRoot();
     }
 
-    private ProfileStorePublicationLease AcquirePublicationLock()
-    {
-        var lockPath = ValidateProfilePath(
-            Path.Combine(_profilesDirectory, PublicationLockFileName),
-            requireProfileExtension: false);
-        var stopwatch = Stopwatch.StartNew();
-        while (true)
-        {
-            FileStream? stream = null;
-            try
-            {
-                stream = new FileStream(
-                    lockPath,
-                    FileMode.OpenOrCreate,
-                    FileAccess.ReadWrite,
-                    FileShare.None,
-                    bufferSize: 1,
-                    FileOptions.WriteThrough);
-                EnsureNotReparsePoint(
-                    lockPath,
-                    "The profile publication lock cannot be a reparse point.");
-                return new ProfileStorePublicationLease(stream);
-            }
-            catch (IOException exception) when (IsSharingViolation(exception))
-            {
-                stream?.Dispose();
-                if (stopwatch.Elapsed >= _publicationLockTimeout)
-                {
-                    throw new IOException(
-                        "Timed out waiting for exclusive profile publication ownership.",
-                        exception);
-                }
-
-                Thread.Sleep(PublicationLockRetryInterval);
-            }
-            catch
-            {
-                stream?.Dispose();
-                throw;
-            }
-        }
-    }
-
     private void EnsureSafeProfilesRoot()
     {
         if (File.Exists(_profilesDirectory))
@@ -670,16 +649,13 @@ public sealed class ProfileArtifactStore
         IsControlledFileFailure(exception)
         || exception is JsonException;
 
-    private static bool IsSharingViolation(IOException exception) =>
-        (uint)exception.HResult is 0x80070020 or 0x80070021;
-
-    private sealed class ProfileStorePublicationLease(FileStream stream) : IDisposable
+    private void EnsureMatchingPublicationDirectory(string publicationDirectory)
     {
-        private FileStream? _stream = stream;
-
-        public void Dispose()
+        if (!PathsEqual(publicationDirectory, _profilesDirectory))
         {
-            Interlocked.Exchange(ref _stream, null)?.Dispose();
+            throw new ArgumentException(
+                "The publication gate must target the same Profiles directory as the profile store.",
+                nameof(publicationDirectory));
         }
     }
 }
