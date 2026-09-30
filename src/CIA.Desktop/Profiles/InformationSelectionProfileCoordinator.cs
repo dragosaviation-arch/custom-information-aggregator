@@ -86,12 +86,14 @@ public sealed class InformationSelectionProfileCoordinator :
     private readonly ActiveDiscoveryConfiguration _activeConfiguration;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly TimeProvider _timeProvider;
+    private readonly ReusableProfileSessionState _sessionState;
 
     public InformationSelectionProfileCoordinator(
         ProfileArtifactStore store,
         ActiveDiscoveryConfiguration activeConfiguration,
         IApplicationWorkflowCoordinator workflowCoordinator,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ReusableProfileSessionState? sessionState = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(activeConfiguration);
@@ -101,6 +103,7 @@ public sealed class InformationSelectionProfileCoordinator :
         _activeConfiguration = activeConfiguration;
         _workflowCoordinator = workflowCoordinator;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _sessionState = sessionState ?? new ReusableProfileSessionState();
     }
 
     public InformationSelectionProfileInventory Inventory { get; private set; } =
@@ -226,6 +229,9 @@ public sealed class InformationSelectionProfileCoordinator :
 
         if (changes.Length == 0)
         {
+            _sessionState.ActivateInformationSelection(
+                resolved.Artifact.ProfileId,
+                content);
             return InformationSelectionProfileOperationResult.Success(
                 CreateLoadMessage(
                     changedCount: 0,
@@ -250,6 +256,9 @@ public sealed class InformationSelectionProfileCoordinator :
         var excluded = changes.Where(item => !item.IsSelected).Select(item => item.Identity);
         var changedCount = _activeConfiguration.SetSelection(selected, isSelected: true)
             + _activeConfiguration.SetSelection(excluded, isSelected: false);
+        _sessionState.ActivateInformationSelection(
+            resolved.Artifact.ProfileId,
+            content);
 
         return InformationSelectionProfileOperationResult.Success(
             CreateLoadMessage(

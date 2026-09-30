@@ -72,6 +72,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ProfileStorePublicationGate>();
         builder.Services.AddSingleton<ProfileArtifactStore>();
         builder.Services.AddSingleton<DefaultBlacklistProfileDesignationStore>();
+        builder.Services.AddSingleton<ReusableProfileSessionState>();
         builder.Services.AddSingleton<InformationSelectionProfileCoordinator>();
         builder.Services.AddSingleton<IInformationSelectionProfileCoordinator>(
             services => services.GetRequiredService<InformationSelectionProfileCoordinator>());

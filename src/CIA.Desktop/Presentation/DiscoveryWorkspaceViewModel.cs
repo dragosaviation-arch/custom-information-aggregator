@@ -49,6 +49,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _cancelDeleteProfileCommand;
     private readonly IInformationSelectionProfileCoordinator? _profileCoordinator;
     private readonly IBlacklistProfileCoordinator? _blacklistProfileCoordinator;
+    private readonly ReusableProfileSessionState _reusableProfileSessionState;
     private readonly IProfileDeleteConfirmation _profileDeleteConfirmation;
     private readonly RelayCommand _refreshBlacklistProfilesCommand;
     private readonly RelayCommand _loadBlacklistProfileCommand;
@@ -110,7 +111,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         DatabaseBuildCoordinator? databaseBuildCoordinator = null,
         IInformationSelectionProfileCoordinator? profileCoordinator = null,
         IProfileDeleteConfirmation? profileDeleteConfirmation = null,
-        IBlacklistProfileCoordinator? blacklistProfileCoordinator = null)
+        IBlacklistProfileCoordinator? blacklistProfileCoordinator = null,
+        ReusableProfileSessionState? reusableProfileSessionState = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryClient);
         ArgumentNullException.ThrowIfNull(activeConfiguration);
@@ -124,6 +126,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _databaseBuildCoordinator = databaseBuildCoordinator;
         _profileCoordinator = profileCoordinator;
         _blacklistProfileCoordinator = blacklistProfileCoordinator;
+        _reusableProfileSessionState = reusableProfileSessionState
+            ?? new ReusableProfileSessionState();
         _profileDeleteConfirmation = profileDeleteConfirmation
             ?? new InApplicationProfileDeleteConfirmation();
         _profileDeleteConfirmation.Changed += OnProfileDeleteConfirmationChanged;
@@ -910,6 +914,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             _activeConfiguration.SynchronizeSourceSets(
                 _sourceSet.SourceSets.Select(sourceSet => sourceSet.SourceSetId)
                     .Concat(result.Information.Select(information => information.SourceSetId)));
+            _reusableProfileSessionState.ApplyTo(_activeConfiguration);
             var dispositions = _activeConfiguration.Current.Items.ToDictionary(
                 item => item.Identity,
                 item => item.Disposition);
