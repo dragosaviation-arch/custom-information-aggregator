@@ -1,6 +1,6 @@
 namespace CIA.Desktop.Profiles;
 
-public interface IInformationSelectionProfileDeleteConfirmation
+public interface IProfileDeleteConfirmation
 {
     bool IsOpen { get; }
 
@@ -17,8 +17,11 @@ public interface IInformationSelectionProfileDeleteConfirmation
     void Decline();
 }
 
-public sealed class InApplicationInformationSelectionProfileDeleteConfirmation :
-    IInformationSelectionProfileDeleteConfirmation
+public interface IInformationSelectionProfileDeleteConfirmation : IProfileDeleteConfirmation
+{
+}
+
+public class InApplicationProfileDeleteConfirmation : IProfileDeleteConfirmation
 {
     private TaskCompletionSource<bool>? _completion;
 
@@ -69,8 +72,14 @@ public sealed class InApplicationInformationSelectionProfileDeleteConfirmation :
     {
         using var registration = cancellationToken.Register(static state =>
         {
-            ((InApplicationInformationSelectionProfileDeleteConfirmation)state!).Decline();
+            ((InApplicationProfileDeleteConfirmation)state!).Decline();
         }, this);
         return await confirmation.ConfigureAwait(false);
     }
+}
+
+public sealed class InApplicationInformationSelectionProfileDeleteConfirmation :
+    InApplicationProfileDeleteConfirmation,
+    IInformationSelectionProfileDeleteConfirmation
+{
 }

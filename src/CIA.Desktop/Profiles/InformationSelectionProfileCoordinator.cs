@@ -283,21 +283,14 @@ public sealed class InformationSelectionProfileCoordinator :
         }
 
         var current = resolved.Artifact;
-        var currentUtc = UtcNow();
-        DateTimeOffset updatedAtUtc;
-        if (currentUtc > current.UpdatedAtUtc)
-        {
-            updatedAtUtc = currentUtc;
-        }
-        else if (current.UpdatedAtUtc == DateTimeOffset.MaxValue)
+        if (!ProfileTimestamp.TryAdvance(
+                current.UpdatedAtUtc,
+                _timeProvider,
+                out var updatedAtUtc))
         {
             RefreshInventory();
             return InformationSelectionProfileOperationResult.Failure(
                 "The profile timestamp is already at the maximum supported value and cannot be advanced. Save a new profile instead.");
-        }
-        else
-        {
-            updatedAtUtc = current.UpdatedAtUtc.AddTicks(1);
         }
 
         var replacement = current with

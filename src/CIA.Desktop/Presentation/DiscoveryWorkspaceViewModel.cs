@@ -48,7 +48,16 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _confirmDeleteProfileCommand;
     private readonly RelayCommand _cancelDeleteProfileCommand;
     private readonly IInformationSelectionProfileCoordinator? _profileCoordinator;
-    private readonly IInformationSelectionProfileDeleteConfirmation _profileDeleteConfirmation;
+    private readonly IBlacklistProfileCoordinator? _blacklistProfileCoordinator;
+    private readonly IProfileDeleteConfirmation _profileDeleteConfirmation;
+    private readonly RelayCommand _refreshBlacklistProfilesCommand;
+    private readonly RelayCommand _loadBlacklistProfileCommand;
+    private readonly RelayCommand _saveNewBlacklistProfileCommand;
+    private readonly RelayCommand _updateBlacklistProfileCommand;
+    private readonly RelayCommand _cloneBlacklistProfileCommand;
+    private readonly AsyncRelayCommand _deleteBlacklistProfileCommand;
+    private readonly RelayCommand _setDefaultBlacklistProfileCommand;
+    private readonly RelayCommand _clearDefaultBlacklistProfileCommand;
     private readonly SemaphoreSlim _previewRequestGate = new(1, 1);
     private readonly object _previewRequestStateGate = new();
     private readonly SynchronizationContext? _uiSynchronizationContext;
@@ -87,6 +96,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private InformationSelectionProfileItem? _selectedInformationSelectionProfile;
     private string _newProfileName = string.Empty;
     private string _profileStatusText = "Refresh to view information-selection profiles.";
+    private IReadOnlyList<BlacklistProfileItem> _blacklistProfiles = [];
+    private BlacklistProfileItem? _selectedBlacklistProfile;
+    private string _newBlacklistProfileName = string.Empty;
+    private string _blacklistProfileStatusText = "Refresh to view blacklist profiles.";
     private int _disposed;
 
     public DiscoveryWorkspaceViewModel(
@@ -96,7 +109,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         IApplicationWorkflowCoordinator workflowCoordinator,
         DatabaseBuildCoordinator? databaseBuildCoordinator = null,
         IInformationSelectionProfileCoordinator? profileCoordinator = null,
-        IInformationSelectionProfileDeleteConfirmation? profileDeleteConfirmation = null)
+        IProfileDeleteConfirmation? profileDeleteConfirmation = null,
+        IBlacklistProfileCoordinator? blacklistProfileCoordinator = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryClient);
         ArgumentNullException.ThrowIfNull(activeConfiguration);
@@ -109,8 +123,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _workflowCoordinator = workflowCoordinator;
         _databaseBuildCoordinator = databaseBuildCoordinator;
         _profileCoordinator = profileCoordinator;
+        _blacklistProfileCoordinator = blacklistProfileCoordinator;
         _profileDeleteConfirmation = profileDeleteConfirmation
-            ?? new InApplicationInformationSelectionProfileDeleteConfirmation();
+            ?? new InApplicationProfileDeleteConfirmation();
         _profileDeleteConfirmation.Changed += OnProfileDeleteConfirmationChanged;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
         _uiSynchronizationContext = SynchronizationContext.Current;
@@ -176,6 +191,30 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _cancelDeleteProfileCommand = new RelayCommand(
             _profileDeleteConfirmation.Decline,
             () => _profileDeleteConfirmation.IsOpen);
+        _refreshBlacklistProfilesCommand = new RelayCommand(
+            RefreshBlacklistProfiles,
+            () => _blacklistProfileCoordinator is not null);
+        _loadBlacklistProfileCommand = new RelayCommand(
+            LoadSelectedBlacklistProfile,
+            CanLoadSelectedBlacklistProfile);
+        _saveNewBlacklistProfileCommand = new RelayCommand(
+            SaveNewBlacklistProfile,
+            CanSaveNewBlacklistProfile);
+        _updateBlacklistProfileCommand = new RelayCommand(
+            UpdateSelectedBlacklistProfile,
+            CanUpdateSelectedBlacklistProfile);
+        _cloneBlacklistProfileCommand = new RelayCommand(
+            CloneSelectedBlacklistProfile,
+            CanCloneSelectedBlacklistProfile);
+        _deleteBlacklistProfileCommand = new AsyncRelayCommand(
+            DeleteSelectedBlacklistProfileAsync,
+            CanDeleteSelectedBlacklistProfile);
+        _setDefaultBlacklistProfileCommand = new RelayCommand(
+            SetDefaultBlacklistProfile,
+            CanSetDefaultBlacklistProfile);
+        _clearDefaultBlacklistProfileCommand = new RelayCommand(
+            ClearDefaultBlacklistProfile,
+            CanClearDefaultBlacklistProfile);
         CloseSourceInspectionCommand = new RelayCommand(
             () => IsSourceInspectionOpen = false);
 
@@ -203,6 +242,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         if (_profileCoordinator is not null)
         {
             RefreshProfiles();
+        }
+        if (_blacklistProfileCoordinator is not null)
+        {
+            RefreshBlacklistProfiles();
         }
         RefreshPresentation();
     }
@@ -313,6 +356,24 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public IRelayCommand CancelDeleteProfileCommand => _cancelDeleteProfileCommand;
 
+    public IRelayCommand RefreshBlacklistProfilesCommand => _refreshBlacklistProfilesCommand;
+
+    public IRelayCommand LoadBlacklistProfileCommand => _loadBlacklistProfileCommand;
+
+    public IRelayCommand SaveNewBlacklistProfileCommand => _saveNewBlacklistProfileCommand;
+
+    public IRelayCommand UpdateBlacklistProfileCommand => _updateBlacklistProfileCommand;
+
+    public IRelayCommand CloneBlacklistProfileCommand => _cloneBlacklistProfileCommand;
+
+    public IAsyncRelayCommand DeleteBlacklistProfileCommand => _deleteBlacklistProfileCommand;
+
+    public IRelayCommand SetDefaultBlacklistProfileCommand =>
+        _setDefaultBlacklistProfileCommand;
+
+    public IRelayCommand ClearDefaultBlacklistProfileCommand =>
+        _clearDefaultBlacklistProfileCommand;
+
     public IRelayCommand CloseSourceInspectionCommand { get; }
 
     public IReadOnlyList<InformationSelectionProfileItem> InformationSelectionProfiles
@@ -355,12 +416,62 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _profileCoordinator?.CaptureReadinessReason
         ?? "Information-selection profile management is unavailable.";
 
+    public IReadOnlyList<BlacklistProfileItem> BlacklistProfiles
+    {
+        get => _blacklistProfiles;
+        private set => SetProperty(ref _blacklistProfiles, value);
+    }
+
+    public BlacklistProfileItem? SelectedBlacklistProfile
+    {
+        get => _selectedBlacklistProfile;
+        set
+        {
+            if (SetProperty(ref _selectedBlacklistProfile, value))
+            {
+                NotifyBlacklistProfileCommandsChanged();
+            }
+        }
+    }
+
+    public string NewBlacklistProfileName
+    {
+        get => _newBlacklistProfileName;
+        set
+        {
+            if (SetProperty(ref _newBlacklistProfileName, value))
+            {
+                NotifyBlacklistProfileCommandsChanged();
+            }
+        }
+    }
+
+    public string BlacklistProfileStatusText
+    {
+        get => _blacklistProfileStatusText;
+        private set => SetProperty(ref _blacklistProfileStatusText, value);
+    }
+
+    public string BlacklistCaptureAvailabilityReason =>
+        _blacklistProfileCoordinator?.CaptureReadinessReason
+        ?? "Blacklist profile management is unavailable.";
+
+    public string DefaultBlacklistProfileText =>
+        _blacklistProfileCoordinator?.Inventory.DefaultProfileId is { } defaultProfileId
+            ? BlacklistProfiles.FirstOrDefault(profile => profile.ProfileId == defaultProfileId)
+                is { } profile
+                    ? $"Default: {profile.Name}"
+                    : "Default profile is configured but unavailable."
+            : _blacklistProfileCoordinator?.Inventory.DefaultDesignationProblem is { } problem
+                ? $"Default unavailable: {problem}"
+                : "Default: None";
+
     public bool IsDeleteProfileConfirmationOpen => _profileDeleteConfirmation.IsOpen;
 
     public string DeleteProfileConfirmationMessage =>
         _profileDeleteConfirmation.ProfileName is { } name
-            ? $"Delete information-selection profile '{name}'?"
-            : "Delete the selected information-selection profile?";
+            ? $"Delete profile '{name}'?"
+            : "Delete the selected profile?";
 
     public string SearchText
     {
@@ -1263,6 +1374,53 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             && !_profileDeleteConfirmation.IsOpen;
     }
 
+    private bool CanLoadSelectedBlacklistProfile()
+    {
+        return !IsBusy
+            && SelectedBlacklistProfile is not null
+            && _blacklistProfileCoordinator?.CanLoadCurrentConfiguration == true;
+    }
+
+    private bool CanSaveNewBlacklistProfile()
+    {
+        var name = NewBlacklistProfileName.Trim();
+        return !IsBusy
+            && name.Length is > 0 and <= ProfileArtifactValidator.MaximumProfileNameLength
+            && _blacklistProfileCoordinator?.CanCaptureCurrentConfiguration == true;
+    }
+
+    private bool CanUpdateSelectedBlacklistProfile()
+    {
+        return !IsBusy
+            && SelectedBlacklistProfile is not null
+            && _blacklistProfileCoordinator?.CanCaptureCurrentConfiguration == true;
+    }
+
+    private bool CanCloneSelectedBlacklistProfile()
+    {
+        var name = NewBlacklistProfileName.Trim();
+        return SelectedBlacklistProfile is not null
+            && name.Length is > 0 and <= ProfileArtifactValidator.MaximumProfileNameLength;
+    }
+
+    private bool CanDeleteSelectedBlacklistProfile()
+    {
+        return _blacklistProfileCoordinator is not null
+            && SelectedBlacklistProfile is not null
+            && !_profileDeleteConfirmation.IsOpen;
+    }
+
+    private bool CanSetDefaultBlacklistProfile()
+    {
+        return _blacklistProfileCoordinator is not null
+            && SelectedBlacklistProfile is not null;
+    }
+
+    private bool CanClearDefaultBlacklistProfile()
+    {
+        return _blacklistProfileCoordinator?.Inventory.DefaultProfileId is not null;
+    }
+
     private void RefreshProfiles()
     {
         if (_profileCoordinator is null)
@@ -1365,6 +1523,167 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         NotifyProfileCommandsChanged();
+    }
+
+    private void RefreshBlacklistProfiles()
+    {
+        if (_blacklistProfileCoordinator is null)
+        {
+            return;
+        }
+
+        var previous = SelectedBlacklistProfile;
+        var inventory = _blacklistProfileCoordinator.RefreshInventory();
+        BlacklistProfiles = inventory.Profiles;
+        SelectedBlacklistProfile = previous is null
+            ? null
+            : inventory.Profiles.FirstOrDefault(profile =>
+                profile.ProfileId == previous.ProfileId
+                && profile.Fingerprint == previous.Fingerprint);
+        var problemCount = inventory.Problems.Count
+            + (inventory.DefaultDesignationProblem is null ? 0 : 1);
+        BlacklistProfileStatusText = problemCount == 0
+            ? $"{inventory.Profiles.Count:N0} blacklist profiles available."
+            : $"{inventory.Profiles.Count:N0} blacklist profiles available; {problemCount:N0} profile artifacts unavailable.";
+        OnPropertyChanged(nameof(DefaultBlacklistProfileText));
+        NotifyBlacklistProfileCommandsChanged();
+    }
+
+    private void LoadSelectedBlacklistProfile()
+    {
+        if (_blacklistProfileCoordinator is null || SelectedBlacklistProfile is null)
+        {
+            return;
+        }
+
+        var result = _blacklistProfileCoordinator.Load(SelectedBlacklistProfile);
+        BlacklistProfileStatusText = result.Message;
+        if (result.RequiresReselection)
+        {
+            BlacklistProfiles = _blacklistProfileCoordinator.Inventory.Profiles;
+            SelectedBlacklistProfile = null;
+        }
+
+        if (result.Succeeded && result.ChangedCount > 0)
+        {
+            ApplyActiveConfiguration();
+        }
+
+        NotifyBlacklistProfileCommandsChanged();
+    }
+
+    private void SaveNewBlacklistProfile()
+    {
+        if (_blacklistProfileCoordinator is null)
+        {
+            return;
+        }
+
+        var result = _blacklistProfileCoordinator.SaveNew(NewBlacklistProfileName.Trim());
+        ApplyBlacklistProfileResult(result, clearNameOnSuccess: true);
+    }
+
+    private void UpdateSelectedBlacklistProfile()
+    {
+        if (_blacklistProfileCoordinator is null || SelectedBlacklistProfile is null)
+        {
+            return;
+        }
+
+        var result = _blacklistProfileCoordinator.Update(SelectedBlacklistProfile);
+        ApplyBlacklistProfileResult(result, clearNameOnSuccess: false);
+    }
+
+    private void CloneSelectedBlacklistProfile()
+    {
+        if (_blacklistProfileCoordinator is null || SelectedBlacklistProfile is null)
+        {
+            return;
+        }
+
+        var result = _blacklistProfileCoordinator.Clone(
+            SelectedBlacklistProfile,
+            NewBlacklistProfileName.Trim());
+        ApplyBlacklistProfileResult(result, clearNameOnSuccess: true);
+    }
+
+    private async Task DeleteSelectedBlacklistProfileAsync()
+    {
+        if (_blacklistProfileCoordinator is null || SelectedBlacklistProfile is null)
+        {
+            return;
+        }
+
+        var selectedProfile = SelectedBlacklistProfile;
+        if (!await _profileDeleteConfirmation.ConfirmAsync(selectedProfile.Name))
+        {
+            BlacklistProfileStatusText = "Profile deletion cancelled.";
+            return;
+        }
+
+        var result = _blacklistProfileCoordinator.Delete(selectedProfile);
+        BlacklistProfileStatusText = result.Message;
+        BlacklistProfiles = _blacklistProfileCoordinator.Inventory.Profiles;
+        if (result.Succeeded || result.RequiresReselection)
+        {
+            SelectedBlacklistProfile = null;
+        }
+
+        OnPropertyChanged(nameof(DefaultBlacklistProfileText));
+        NotifyBlacklistProfileCommandsChanged();
+    }
+
+    private void SetDefaultBlacklistProfile()
+    {
+        if (_blacklistProfileCoordinator is null || SelectedBlacklistProfile is null)
+        {
+            return;
+        }
+
+        ApplyBlacklistProfileResult(
+            _blacklistProfileCoordinator.SetDefault(SelectedBlacklistProfile),
+            clearNameOnSuccess: false);
+    }
+
+    private void ClearDefaultBlacklistProfile()
+    {
+        if (_blacklistProfileCoordinator is null)
+        {
+            return;
+        }
+
+        ApplyBlacklistProfileResult(
+            _blacklistProfileCoordinator.ClearDefault(),
+            clearNameOnSuccess: false);
+    }
+
+    private void ApplyBlacklistProfileResult(
+        BlacklistProfileOperationResult result,
+        bool clearNameOnSuccess)
+    {
+        if (_blacklistProfileCoordinator is null)
+        {
+            return;
+        }
+
+        BlacklistProfileStatusText = result.Message;
+        var previousSelection = SelectedBlacklistProfile;
+        BlacklistProfiles = _blacklistProfileCoordinator.Inventory.Profiles;
+        SelectedBlacklistProfile = result.RequiresReselection
+            ? null
+            : result.Profile
+                ?? (previousSelection is null
+                    ? null
+                    : BlacklistProfiles.FirstOrDefault(profile =>
+                        profile.ProfileId == previousSelection.ProfileId
+                        && profile.Fingerprint == previousSelection.Fingerprint));
+        if (result.Succeeded && clearNameOnSuccess)
+        {
+            NewBlacklistProfileName = string.Empty;
+        }
+
+        OnPropertyChanged(nameof(DefaultBlacklistProfileText));
+        NotifyBlacklistProfileCommandsChanged();
     }
 
     private void ToggleSelection(DiscoveredInformationItemViewModel? information)
@@ -1752,6 +2071,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             _confirmDeleteProfileCommand.NotifyCanExecuteChanged();
             _cancelDeleteProfileCommand.NotifyCanExecuteChanged();
             _deleteProfileCommand.NotifyCanExecuteChanged();
+            _deleteBlacklistProfileCommand.NotifyCanExecuteChanged();
         });
     }
 
@@ -1813,6 +2133,20 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _saveNewProfileCommand.NotifyCanExecuteChanged();
         _updateProfileCommand.NotifyCanExecuteChanged();
         _deleteProfileCommand.NotifyCanExecuteChanged();
+        NotifyBlacklistProfileCommandsChanged();
+    }
+
+    private void NotifyBlacklistProfileCommandsChanged()
+    {
+        OnPropertyChanged(nameof(BlacklistCaptureAvailabilityReason));
+        OnPropertyChanged(nameof(DefaultBlacklistProfileText));
+        _loadBlacklistProfileCommand.NotifyCanExecuteChanged();
+        _saveNewBlacklistProfileCommand.NotifyCanExecuteChanged();
+        _updateBlacklistProfileCommand.NotifyCanExecuteChanged();
+        _cloneBlacklistProfileCommand.NotifyCanExecuteChanged();
+        _deleteBlacklistProfileCommand.NotifyCanExecuteChanged();
+        _setDefaultBlacklistProfileCommand.NotifyCanExecuteChanged();
+        _clearDefaultBlacklistProfileCommand.NotifyCanExecuteChanged();
     }
 
     private void NotifyOccurrenceCommandsChanged()
