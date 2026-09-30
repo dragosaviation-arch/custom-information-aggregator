@@ -398,6 +398,192 @@ public sealed class BlacklistProfileCoordinatorTests
     }
 
     [TestMethod]
+    public async Task DeleteDefaultARacingSetDefaultBPreservesSuccessfulBDesignation()
+    {
+        using var environment = await BlacklistEnvironment.CreateAsync();
+        var identity = Identity(SourceSetId.CreateNew(), "/catalog/code", "code");
+        environment.Configuration.Synchronize([identity]);
+        var profileA = environment.Coordinator.SaveNew("A").Profile!;
+        var profileB = environment.Coordinator.Clone(profileA, "B").Profile!;
+        Assert.IsTrue(environment.Coordinator.SetDefault(profileA).Succeeded);
+        using var blockingOperations = new BlockingReplaceDesignationOperations();
+        var setCoordinator = CreateCoordinator(
+            new ProfileArtifactStore(environment.Paths),
+            new DefaultBlacklistProfileDesignationStore(
+                environment.Paths,
+                blockingOperations),
+            environment.Configuration,
+            environment.Workflow);
+        var deleteCoordinator = CreateCoordinator(
+            new ProfileArtifactStore(environment.Paths),
+            new DefaultBlacklistProfileDesignationStore(environment.Paths),
+            environment.Configuration,
+            environment.Workflow);
+        var selectedB = setCoordinator.RefreshInventory().Profiles.Single(
+            profile => profile.ProfileId == profileB.ProfileId);
+        var selectedA = deleteCoordinator.RefreshInventory().Profiles.Single(
+            profile => profile.ProfileId == profileA.ProfileId);
+
+        var setTask = Task.Run(() => setCoordinator.SetDefault(selectedB));
+        Assert.IsTrue(blockingOperations.WaitUntilEntered(TimeSpan.FromSeconds(10)));
+        var deleteTask = Task.Run(() => deleteCoordinator.Delete(selectedA));
+        blockingOperations.Release();
+        var results = await Task.WhenAll(setTask, deleteTask);
+
+        Assert.IsTrue(results[0].Succeeded, results[0].Message);
+        Assert.IsTrue(results[1].Succeeded, results[1].Message);
+        Assert.AreEqual(ProfileArtifactReadState.NotFound,
+            environment.Store.FindById(profileA.ProfileId).State);
+        Assert.AreEqual(ProfileArtifactReadState.Valid,
+            environment.Store.FindById(profileB.ProfileId).State);
+        Assert.AreEqual(profileB.ProfileId, environment.DesignationStore.Read().ProfileId);
+    }
+
+    [TestMethod]
+    public async Task SetDefaultARacingDeleteASerializesWithoutDanglingSuccessfulDesignation()
+    {
+        using var environment = await BlacklistEnvironment.CreateAsync();
+        var identity = Identity(SourceSetId.CreateNew(), "/catalog/code", "code");
+        environment.Configuration.Synchronize([identity]);
+        var profileA = environment.Coordinator.SaveNew("A").Profile!;
+        Assert.IsTrue(environment.Coordinator.SetDefault(profileA).Succeeded);
+        using var blockingOperations = new BlockingReplaceDesignationOperations();
+        var setCoordinator = CreateCoordinator(
+            new ProfileArtifactStore(environment.Paths),
+            new DefaultBlacklistProfileDesignationStore(
+                environment.Paths,
+                blockingOperations),
+            environment.Configuration,
+            environment.Workflow);
+        var deleteCoordinator = CreateCoordinator(
+            new ProfileArtifactStore(environment.Paths),
+            new DefaultBlacklistProfileDesignationStore(environment.Paths),
+            environment.Configuration,
+            environment.Workflow);
+        var setSelection = setCoordinator.RefreshInventory().Profiles.Single();
+        var deleteSelection = deleteCoordinator.RefreshInventory().Profiles.Single();
+
+        var setTask = Task.Run(() => setCoordinator.SetDefault(setSelection));
+        Assert.IsTrue(blockingOperations.WaitUntilEntered(TimeSpan.FromSeconds(10)));
+        var deleteTask = Task.Run(() => deleteCoordinator.Delete(deleteSelection));
+        blockingOperations.Release();
+        var setResult = await setTask;
+        var deleteResult = await deleteTask;
+
+        Assert.IsTrue(setResult.Succeeded, setResult.Message);
+        Assert.IsTrue(deleteResult.Succeeded, deleteResult.Message);
+        Assert.AreEqual(ProfileArtifactReadState.NotFound,
+            environment.Store.FindById(profileA.ProfileId).State);
+        Assert.AreEqual(
+            DefaultBlacklistProfileDesignationState.NotConfigured,
+            environment.DesignationStore.Read().State);
+    }
+
+    [TestMethod]
+    public async Task DeleteDefaultAWinningRaceMakesSetDefaultAFailSafely()
+    {
+        using var environment = await BlacklistEnvironment.CreateAsync();
+        var identity = Identity(SourceSetId.CreateNew(), "/catalog/code", "code");
+        environment.Configuration.Synchronize([identity]);
+        var profileA = environment.Coordinator.SaveNew("A").Profile!;
+        Assert.IsTrue(environment.Coordinator.SetDefault(profileA).Succeeded);
+        using var blockingOperations = new BlockingDeleteDesignationOperations();
+        var deleteCoordinator = CreateCoordinator(
+            new ProfileArtifactStore(environment.Paths),
+            new DefaultBlacklistProfileDesignationStore(
+                environment.Paths,
+                blockingOperations),
+            environment.Configuration,
+            environment.Workflow);
+        var setCoordinator = CreateCoordinator(
+            new ProfileArtifactStore(environment.Paths),
+            new DefaultBlacklistProfileDesignationStore(environment.Paths),
+            environment.Configuration,
+            environment.Workflow);
+        var deleteSelection = deleteCoordinator.RefreshInventory().Profiles.Single();
+        var setSelection = setCoordinator.RefreshInventory().Profiles.Single();
+
+        var deleteTask = Task.Run(() => deleteCoordinator.Delete(deleteSelection));
+        Assert.IsTrue(blockingOperations.WaitUntilEntered(TimeSpan.FromSeconds(10)));
+        var setTask = Task.Run(() => setCoordinator.SetDefault(setSelection));
+        blockingOperations.Release();
+        var deleteResult = await deleteTask;
+        var setResult = await setTask;
+
+        Assert.IsTrue(deleteResult.Succeeded, deleteResult.Message);
+        Assert.IsFalse(setResult.Succeeded);
+        Assert.IsTrue(setResult.RequiresReselection);
+        Assert.AreEqual(ProfileArtifactReadState.NotFound,
+            environment.Store.FindById(profileA.ProfileId).State);
+        Assert.AreEqual(
+            DefaultBlacklistProfileDesignationState.NotConfigured,
+            environment.DesignationStore.Read().State);
+    }
+
+    [TestMethod]
+    public async Task ConcurrentUpdateMakesSetDefaultRejectStaleSelectionWithoutChangingMarker()
+    {
+        using var environment = await BlacklistEnvironment.CreateAsync();
+        var identity = Identity(SourceSetId.CreateNew(), "/catalog/code", "code");
+        environment.Configuration.Synchronize([identity]);
+        var profileA = environment.Coordinator.SaveNew("A").Profile!;
+        var profileB = environment.Coordinator.Clone(profileA, "B").Profile!;
+        Assert.IsTrue(environment.Coordinator.SetDefault(profileB).Succeeded);
+        var markerBytes = File.ReadAllBytes(environment.DesignationStore.DesignationPath);
+        using var blockingOperations = new BlockingReplaceProfileOperations();
+        var updateCoordinator = CreateCoordinator(
+            new ProfileArtifactStore(environment.Paths, blockingOperations),
+            new DefaultBlacklistProfileDesignationStore(environment.Paths),
+            environment.Configuration,
+            environment.Workflow);
+        var setCoordinator = CreateCoordinator(
+            new ProfileArtifactStore(environment.Paths),
+            new DefaultBlacklistProfileDesignationStore(environment.Paths),
+            environment.Configuration,
+            environment.Workflow);
+        var updateSelection = updateCoordinator.RefreshInventory().Profiles.Single(
+            profile => profile.ProfileId == profileA.ProfileId);
+        var staleSetSelection = setCoordinator.RefreshInventory().Profiles.Single(
+            profile => profile.ProfileId == profileA.ProfileId);
+
+        var updateTask = Task.Run(() => updateCoordinator.Update(updateSelection));
+        Assert.IsTrue(blockingOperations.WaitUntilEntered(TimeSpan.FromSeconds(10)));
+        var setTask = Task.Run(() => setCoordinator.SetDefault(staleSetSelection));
+        blockingOperations.Release();
+        var updateResult = await updateTask;
+        var setResult = await setTask;
+
+        Assert.IsTrue(updateResult.Succeeded, updateResult.Message);
+        Assert.IsFalse(setResult.Succeeded);
+        Assert.IsTrue(setResult.RequiresReselection);
+        CollectionAssert.AreEqual(
+            markerBytes,
+            File.ReadAllBytes(environment.DesignationStore.DesignationPath));
+        Assert.AreEqual(profileB.ProfileId, environment.DesignationStore.Read().ProfileId);
+    }
+
+    [TestMethod]
+    public async Task DeletingANeverClearsAlreadyCommittedDefaultB()
+    {
+        using var environment = await BlacklistEnvironment.CreateAsync();
+        var identity = Identity(SourceSetId.CreateNew(), "/catalog/code", "code");
+        environment.Configuration.Synchronize([identity]);
+        var profileA = environment.Coordinator.SaveNew("A").Profile!;
+        var profileB = environment.Coordinator.Clone(profileA, "B").Profile!;
+        Assert.IsTrue(environment.Coordinator.SetDefault(profileA).Succeeded);
+        Assert.IsTrue(environment.Coordinator.SetDefault(profileB).Succeeded);
+
+        var result = environment.Coordinator.Delete(
+            environment.Coordinator.Inventory.Profiles.Single(
+                profile => profile.ProfileId == profileA.ProfileId));
+
+        Assert.IsTrue(result.Succeeded, result.Message);
+        Assert.AreEqual(profileB.ProfileId, environment.DesignationStore.Read().ProfileId);
+        Assert.AreEqual(ProfileArtifactReadState.Valid,
+            environment.Store.FindById(profileB.ProfileId).State);
+    }
+
+    [TestMethod]
     public async Task MalformedAndFutureDesignationFailClosedWithoutRepair()
     {
         using var environment = await BlacklistEnvironment.CreateAsync();
@@ -936,6 +1122,126 @@ public sealed class BlacklistProfileCoordinatorTests
 
         public void DeleteDesignation(string targetPath) =>
             throw new IOException("Injected designation deletion failure.");
+    }
+
+    private sealed class BlockingReplaceDesignationOperations :
+        IDefaultBlacklistProfileDesignationFileOperations,
+        IDisposable
+    {
+        private readonly DefaultBlacklistProfileDesignationFileOperations _inner = new();
+        private readonly DeterministicBlock _block = new();
+
+        public bool WaitUntilEntered(TimeSpan timeout) => _block.WaitUntilEntered(timeout);
+
+        public void Release() => _block.Release();
+
+        public void WriteCandidate(string candidatePath, ReadOnlyMemory<byte> content) =>
+            _inner.WriteCandidate(candidatePath, content);
+
+        public void PublishNew(string candidatePath, string targetPath) =>
+            _inner.PublishNew(candidatePath, targetPath);
+
+        public void Replace(string candidatePath, string targetPath)
+        {
+            _block.WaitForRelease();
+            _inner.Replace(candidatePath, targetPath);
+        }
+
+        public void DeleteCandidate(string candidatePath) =>
+            _inner.DeleteCandidate(candidatePath);
+
+        public void DeleteDesignation(string targetPath) =>
+            _inner.DeleteDesignation(targetPath);
+
+        public void Dispose() => _block.Dispose();
+    }
+
+    private sealed class BlockingDeleteDesignationOperations :
+        IDefaultBlacklistProfileDesignationFileOperations,
+        IDisposable
+    {
+        private readonly DefaultBlacklistProfileDesignationFileOperations _inner = new();
+        private readonly DeterministicBlock _block = new();
+
+        public bool WaitUntilEntered(TimeSpan timeout) => _block.WaitUntilEntered(timeout);
+
+        public void Release() => _block.Release();
+
+        public void WriteCandidate(string candidatePath, ReadOnlyMemory<byte> content) =>
+            _inner.WriteCandidate(candidatePath, content);
+
+        public void PublishNew(string candidatePath, string targetPath) =>
+            _inner.PublishNew(candidatePath, targetPath);
+
+        public void Replace(string candidatePath, string targetPath) =>
+            _inner.Replace(candidatePath, targetPath);
+
+        public void DeleteCandidate(string candidatePath) =>
+            _inner.DeleteCandidate(candidatePath);
+
+        public void DeleteDesignation(string targetPath)
+        {
+            _block.WaitForRelease();
+            _inner.DeleteDesignation(targetPath);
+        }
+
+        public void Dispose() => _block.Dispose();
+    }
+
+    private sealed class BlockingReplaceProfileOperations :
+        IProfileArtifactFileOperations,
+        IDisposable
+    {
+        private readonly ProfileArtifactFileOperations _inner = new();
+        private readonly DeterministicBlock _block = new();
+
+        public bool WaitUntilEntered(TimeSpan timeout) => _block.WaitUntilEntered(timeout);
+
+        public void Release() => _block.Release();
+
+        public void WriteCandidate(string candidatePath, ReadOnlyMemory<byte> content) =>
+            _inner.WriteCandidate(candidatePath, content);
+
+        public void PublishNew(string candidatePath, string targetPath) =>
+            _inner.PublishNew(candidatePath, targetPath);
+
+        public void Replace(string candidatePath, string targetPath)
+        {
+            _block.WaitForRelease();
+            _inner.Replace(candidatePath, targetPath);
+        }
+
+        public void DeleteCandidate(string candidatePath) =>
+            _inner.DeleteCandidate(candidatePath);
+
+        public void Dispose() => _block.Dispose();
+    }
+
+    private sealed class DeterministicBlock : IDisposable
+    {
+        private readonly ManualResetEventSlim _entered = new(initialState: false);
+        private readonly ManualResetEventSlim _release = new(initialState: false);
+
+        public bool WaitUntilEntered(TimeSpan timeout) => _entered.Wait(timeout);
+
+        public void Release() => _release.Set();
+
+        public void WaitForRelease()
+        {
+            _entered.Set();
+            if (!_release.Wait(TimeSpan.FromSeconds(10)))
+            {
+                throw new InvalidOperationException(
+                    "Timed out waiting for the deterministic concurrency-test release.");
+            }
+        }
+
+        public void Dispose()
+        {
+            _release.Set();
+            _entered.Dispose();
+            _release.Dispose();
+        }
     }
 
     private sealed class RecordingBlacklistCoordinator(IBlacklistProfileCoordinator inner) :

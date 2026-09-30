@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CIA.Core.Runtime;
@@ -81,25 +80,38 @@ public sealed class DefaultBlacklistProfileDesignationStore
 {
     public const string FileName = ".cia-default-blacklist.json";
     public const long MaximumArtifactBytes = 16 * 1024;
-    private static readonly TimeSpan PublicationLockTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan PublicationLockRetryInterval = TimeSpan.FromMilliseconds(20);
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
     private readonly string _profilesDirectory;
     private readonly string _designationPath;
     private readonly IDefaultBlacklistProfileDesignationFileOperations _fileOperations;
+    private readonly ProfileStorePublicationGate _publicationGate;
 
     public DefaultBlacklistProfileDesignationStore(
         ApplicationPaths applicationPaths,
-        IDefaultBlacklistProfileDesignationFileOperations? fileOperations = null)
+        IDefaultBlacklistProfileDesignationFileOperations? fileOperations = null,
+        ProfileStorePublicationGate? publicationGate = null)
     {
         ArgumentNullException.ThrowIfNull(applicationPaths);
         _profilesDirectory = Canonicalize(applicationPaths.ProfilesDirectory);
         _designationPath = Path.Combine(_profilesDirectory, FileName);
         _fileOperations = fileOperations
             ?? new DefaultBlacklistProfileDesignationFileOperations();
+        _publicationGate = publicationGate
+            ?? new ProfileStorePublicationGate(applicationPaths);
+        if (!string.Equals(
+                _publicationGate.ProfilesDirectory,
+                _profilesDirectory,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                "The publication gate must target the same Profiles directory as the designation store.",
+                nameof(publicationGate));
+        }
     }
 
     public string DesignationPath => _designationPath;
+
+    public string ProfilesDirectory => _profilesDirectory;
 
     public DefaultBlacklistProfileDesignationReadResult Read()
     {
@@ -121,9 +133,29 @@ public sealed class DefaultBlacklistProfileDesignationStore
     {
         try
         {
+            EnsureSafeProfilesRoot(createIfMissing: true);
+            using var publicationLock = _publicationGate.Acquire();
+            return Set(profileId, publicationLock);
+        }
+        catch (Exception exception) when (IsControlledFailure(exception))
+        {
+            return new DefaultBlacklistProfileDesignationWriteResult(
+                false,
+                ProfileId: null,
+                $"The default blacklist designation could not be saved safely ({exception.Message}).");
+        }
+    }
+
+    public DefaultBlacklistProfileDesignationWriteResult Set(
+        ProfileId profileId,
+        ProfileStorePublicationLease publicationLease)
+    {
+        try
+        {
+            ArgumentNullException.ThrowIfNull(publicationLease);
+            publicationLease.VerifyFor(_profilesDirectory);
             _ = ProfileId.From(profileId.Value);
             EnsureSafeProfilesRoot(createIfMissing: true);
-            using var publicationLock = AcquirePublicationLock();
             var existing = ReadCore(_designationPath, candidate: false);
             if (existing.State is not (DefaultBlacklistProfileDesignationState.NotConfigured
                 or DefaultBlacklistProfileDesignationState.Valid))
@@ -211,7 +243,34 @@ public sealed class DefaultBlacklistProfileDesignationStore
                     "No default blacklist profile is configured.");
             }
 
-            using var publicationLock = AcquirePublicationLock();
+            using var publicationLock = _publicationGate.Acquire();
+            return Clear(publicationLock);
+        }
+        catch (Exception exception) when (IsControlledFailure(exception))
+        {
+            return new DefaultBlacklistProfileDesignationWriteResult(
+                false,
+                ProfileId: null,
+                $"The default blacklist designation could not be cleared safely ({exception.Message}).");
+        }
+    }
+
+    public DefaultBlacklistProfileDesignationWriteResult Clear(
+        ProfileStorePublicationLease publicationLease)
+    {
+        try
+        {
+            ArgumentNullException.ThrowIfNull(publicationLease);
+            publicationLease.VerifyFor(_profilesDirectory);
+            EnsureSafeProfilesRoot(createIfMissing: false);
+            if (!Directory.Exists(_profilesDirectory))
+            {
+                return new DefaultBlacklistProfileDesignationWriteResult(
+                    true,
+                    ProfileId: null,
+                    "No default blacklist profile is configured.");
+            }
+
             var existing = ReadCore(_designationPath, candidate: false);
             if (existing.State == DefaultBlacklistProfileDesignationState.NotConfigured)
             {
@@ -228,17 +287,7 @@ public sealed class DefaultBlacklistProfileDesignationStore
                     ?? "The existing default blacklist designation is invalid and was not removed.");
             }
 
-            EnsureSafeDirectFile(_designationPath);
-            _fileOperations.DeleteDesignation(_designationPath);
-            if (File.Exists(_designationPath))
-            {
-                throw new IOException("The default blacklist designation still exists after deletion.");
-            }
-
-            return new DefaultBlacklistProfileDesignationWriteResult(
-                true,
-                ProfileId: null,
-                "The default blacklist designation was cleared.");
+            return DeleteDesignation();
         }
         catch (Exception exception) when (IsControlledFailure(exception))
         {
@@ -247,6 +296,86 @@ public sealed class DefaultBlacklistProfileDesignationStore
                 ProfileId: null,
                 $"The default blacklist designation could not be cleared safely ({exception.Message}).");
         }
+    }
+
+    public DefaultBlacklistProfileDesignationWriteResult ClearIfMatches(
+        ProfileId expectedProfileId,
+        ProfileStorePublicationLease publicationLease)
+    {
+        try
+        {
+            ArgumentNullException.ThrowIfNull(publicationLease);
+            publicationLease.VerifyFor(_profilesDirectory);
+            _ = ProfileId.From(expectedProfileId.Value);
+            EnsureSafeProfilesRoot(createIfMissing: false);
+            var existing = ReadCore(_designationPath, candidate: false);
+            if (existing.State == DefaultBlacklistProfileDesignationState.NotConfigured)
+            {
+                return new DefaultBlacklistProfileDesignationWriteResult(
+                    true,
+                    ProfileId: null,
+                    "No default blacklist profile is configured.");
+            }
+
+            if (existing.State != DefaultBlacklistProfileDesignationState.Valid
+                || existing.ProfileId is not { } currentProfileId)
+            {
+                throw new InvalidDataException(
+                    existing.Problem
+                    ?? "The existing default blacklist designation is invalid and was not removed.");
+            }
+
+            if (currentProfileId != expectedProfileId)
+            {
+                return new DefaultBlacklistProfileDesignationWriteResult(
+                    true,
+                    currentProfileId,
+                    "The default blacklist designation changed and was not cleared.");
+            }
+
+            return DeleteDesignation();
+        }
+        catch (Exception exception) when (IsControlledFailure(exception))
+        {
+            return new DefaultBlacklistProfileDesignationWriteResult(
+                false,
+                ProfileId: null,
+                $"The default blacklist designation could not be cleared safely ({exception.Message}).");
+        }
+    }
+
+    public DefaultBlacklistProfileDesignationReadResult Read(
+        ProfileStorePublicationLease publicationLease)
+    {
+        try
+        {
+            ArgumentNullException.ThrowIfNull(publicationLease);
+            publicationLease.VerifyFor(_profilesDirectory);
+            EnsureSafeProfilesRoot(createIfMissing: false);
+            return ReadCore(_designationPath, candidate: false);
+        }
+        catch (Exception exception) when (IsControlledFailure(exception))
+        {
+            return new DefaultBlacklistProfileDesignationReadResult(
+                DefaultBlacklistProfileDesignationState.UnsafePath,
+                ProfileId: null,
+                $"The default blacklist designation could not be read safely ({exception.Message}).");
+        }
+    }
+
+    private DefaultBlacklistProfileDesignationWriteResult DeleteDesignation()
+    {
+        EnsureSafeDirectFile(_designationPath);
+        _fileOperations.DeleteDesignation(_designationPath);
+        if (File.Exists(_designationPath))
+        {
+            throw new IOException("The default blacklist designation still exists after deletion.");
+        }
+
+        return new DefaultBlacklistProfileDesignationWriteResult(
+            true,
+            ProfileId: null,
+            "The default blacklist designation was cleared.");
     }
 
     private DefaultBlacklistProfileDesignationReadResult ReadCore(
@@ -389,47 +518,6 @@ public sealed class DefaultBlacklistProfileDesignationStore
         }
     }
 
-    private IDisposable AcquirePublicationLock()
-    {
-        var lockPath = Path.Combine(
-            _profilesDirectory,
-            ProfileArtifactStore.PublicationLockFileName);
-        var stopwatch = Stopwatch.StartNew();
-        while (true)
-        {
-            FileStream? stream = null;
-            try
-            {
-                stream = new FileStream(
-                    lockPath,
-                    FileMode.OpenOrCreate,
-                    FileAccess.ReadWrite,
-                    FileShare.None,
-                    bufferSize: 1,
-                    FileOptions.WriteThrough);
-                EnsureSafeDirectFile(lockPath);
-                return stream;
-            }
-            catch (IOException exception) when (IsSharingViolation(exception))
-            {
-                stream?.Dispose();
-                if (stopwatch.Elapsed >= PublicationLockTimeout)
-                {
-                    throw new IOException(
-                        "Timed out waiting for exclusive profile publication ownership.",
-                        exception);
-                }
-
-                Thread.Sleep(PublicationLockRetryInterval);
-            }
-            catch
-            {
-                stream?.Dispose();
-                throw;
-            }
-        }
-    }
-
     private static void ValidateNoDuplicateProperties(JsonElement element)
     {
         if (element.ValueKind == JsonValueKind.Object)
@@ -476,6 +564,4 @@ public sealed class DefaultBlacklistProfileDesignationStore
             or PathTooLongException
             or JsonException;
 
-    private static bool IsSharingViolation(IOException exception) =>
-        (uint)exception.HResult is 0x80070020 or 0x80070021;
 }

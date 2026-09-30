@@ -1,3 +1,4 @@
+using System.IO;
 using CIA.Contracts.Discovery;
 using CIA.Core.Profiles;
 using CIA.Desktop.Discovery;
@@ -122,6 +123,7 @@ public sealed class BlacklistProfileCoordinator :
 {
     private readonly ProfileArtifactStore _store;
     private readonly DefaultBlacklistProfileDesignationStore _designationStore;
+    private readonly ProfileStorePublicationGate _publicationGate;
     private readonly ActiveDiscoveryConfiguration _activeConfiguration;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly ILogger<BlacklistProfileCoordinator> _logger;
@@ -143,6 +145,17 @@ public sealed class BlacklistProfileCoordinator :
 
         _store = store;
         _designationStore = designationStore;
+        _publicationGate = store.PublicationGate;
+        if (!string.Equals(
+                store.ProfilesDirectory,
+                designationStore.ProfilesDirectory,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                "The profile and default-designation stores must use the same Profiles directory.",
+                nameof(designationStore));
+        }
+
         _activeConfiguration = activeConfiguration;
         _workflowCoordinator = workflowCoordinator;
         _logger = logger;
@@ -469,76 +482,103 @@ public sealed class BlacklistProfileCoordinator :
     public BlacklistProfileOperationResult Delete(BlacklistProfileItem selectedProfile)
     {
         ArgumentNullException.ThrowIfNull(selectedProfile);
-        var resolved = ResolveSelectedProfile(selectedProfile);
-        if (!resolved.Succeeded || resolved.Artifact is null)
+        try
         {
-            RefreshInventory();
-            return BlacklistProfileOperationResult.Failure(
-                resolved.Problem!,
-                requiresReselection: true);
-        }
-
-        var designation = _designationStore.Read();
-        var deletingDefault = designation.State
-            == DefaultBlacklistProfileDesignationState.Valid
-            && designation.ProfileId == selectedProfile.ProfileId;
-        var deleted = _store.Delete(
-            selectedProfile.ProfileId,
-            selectedProfile.Fingerprint);
-        if (!deleted.Succeeded)
-        {
-            RefreshInventory();
-            return BlacklistProfileOperationResult.Failure(
-                deleted.Problem ?? "The blacklist profile could not be deleted.",
-                requiresReselection: true);
-        }
-
-        if (deletingDefault)
-        {
-            var cleared = _designationStore.Clear();
-            RefreshInventory();
-            ResolveSessionDefault();
-            if (!cleared.Succeeded)
+            using var publicationLease = _publicationGate.Acquire();
+            var resolved = ResolveSelectedProfile(selectedProfile);
+            if (!resolved.Succeeded || resolved.Artifact is null)
             {
+                RefreshInventory();
                 return BlacklistProfileOperationResult.Failure(
-                    $"Deleted blacklist profile '{selectedProfile.Name}', but its default designation could not be cleared. {cleared.Message}",
+                    resolved.Problem!,
                     requiresReselection: true);
             }
+
+            var designation = _designationStore.Read(publicationLease);
+            var deletingDefault = designation.State
+                == DefaultBlacklistProfileDesignationState.Valid
+                && designation.ProfileId == selectedProfile.ProfileId;
+            var deleted = _store.Delete(
+                selectedProfile.ProfileId,
+                selectedProfile.Fingerprint,
+                publicationLease);
+            if (!deleted.Succeeded)
+            {
+                RefreshInventory();
+                return BlacklistProfileOperationResult.Failure(
+                    deleted.Problem ?? "The blacklist profile could not be deleted.",
+                    requiresReselection: true);
+            }
+
+            if (deletingDefault)
+            {
+                var cleared = _designationStore.ClearIfMatches(
+                    selectedProfile.ProfileId,
+                    publicationLease);
+                RefreshInventory();
+                ResolveSessionDefault();
+                if (!cleared.Succeeded)
+                {
+                    return BlacklistProfileOperationResult.Failure(
+                        $"Deleted blacklist profile '{selectedProfile.Name}', but its default designation could not be cleared. {cleared.Message}",
+                        requiresReselection: true);
+                }
+            }
+            else
+            {
+                RefreshInventory();
+            }
+
+            return BlacklistProfileOperationResult.Success(
+                $"Deleted blacklist profile '{selectedProfile.Name}'.");
         }
-        else
+        catch (Exception exception) when (IsControlledPublicationFailure(exception))
         {
             RefreshInventory();
+            return BlacklistProfileOperationResult.Failure(
+                $"The blacklist profile could not be deleted safely ({exception.Message}).",
+                requiresReselection: true);
         }
-
-        return BlacklistProfileOperationResult.Success(
-            $"Deleted blacklist profile '{selectedProfile.Name}'.");
     }
 
     public BlacklistProfileOperationResult SetDefault(BlacklistProfileItem selectedProfile)
     {
         ArgumentNullException.ThrowIfNull(selectedProfile);
-        var resolved = ResolveSelectedProfile(selectedProfile);
-        if (!resolved.Succeeded || resolved.Artifact is null)
+        try
+        {
+            using var publicationLease = _publicationGate.Acquire();
+            var resolved = ResolveSelectedProfile(selectedProfile);
+            if (!resolved.Succeeded || resolved.Artifact is null)
+            {
+                RefreshInventory();
+                return BlacklistProfileOperationResult.Failure(
+                    resolved.Problem!,
+                    requiresReselection: true);
+            }
+
+            var write = _designationStore.Set(
+                selectedProfile.ProfileId,
+                publicationLease);
+            if (!write.Succeeded)
+            {
+                RefreshInventory();
+                return BlacklistProfileOperationResult.Failure(write.Message);
+            }
+
+            var profile = RefreshInventory().Profiles.Single(
+                item => item.ProfileId == selectedProfile.ProfileId);
+            SessionDefault = BlacklistSessionDefaultSnapshot.Resolved(resolved.Artifact);
+            return BlacklistProfileOperationResult.Success(
+                $"'{profile.Name}' is now the default blacklist profile.",
+                profile);
+        }
+        catch (Exception exception) when (IsControlledPublicationFailure(exception))
         {
             RefreshInventory();
             return BlacklistProfileOperationResult.Failure(
-                resolved.Problem!,
+                $"The default blacklist profile could not be designated safely ({exception.Message}).",
                 requiresReselection: true);
         }
-
-        var write = _designationStore.Set(selectedProfile.ProfileId);
-        if (!write.Succeeded)
-        {
-            RefreshInventory();
-            return BlacklistProfileOperationResult.Failure(write.Message);
-        }
-
-        var profile = RefreshInventory().Profiles.Single(
-            item => item.ProfileId == selectedProfile.ProfileId);
-        SessionDefault = BlacklistSessionDefaultSnapshot.Resolved(resolved.Artifact);
-        return BlacklistProfileOperationResult.Success(
-            $"'{profile.Name}' is now the default blacklist profile.",
-            profile);
     }
 
     public BlacklistProfileOperationResult ClearDefault()
@@ -651,6 +691,14 @@ public sealed class BlacklistProfileCoordinator :
     }
 
     private DateTimeOffset UtcNow() => _timeProvider.GetUtcNow().ToUniversalTime();
+
+    private static bool IsControlledPublicationFailure(Exception exception) =>
+        exception is ArgumentException
+            or InvalidDataException
+            or IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or PathTooLongException;
 
     private static string CreateLoadMessage(
         int changedCount,
