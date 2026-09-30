@@ -145,6 +145,32 @@ public sealed class ActiveLoadedSourceSet
         return _items.Contains(source);
     }
 
+    internal bool ContainsPath(string path, LoadedSourceItem excludedSource)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(excludedSource);
+
+        return _items.Any(item =>
+            !ReferenceEquals(item, excludedSource)
+            && (string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    item.ArchiveProvenance?.OriginalArchivePath,
+                    path,
+                    StringComparison.OrdinalIgnoreCase)));
+    }
+
+    internal bool ContainsLogicalSource(
+        LoadedSourceContract source,
+        LoadedSourceItem excludedSource)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(excludedSource);
+
+        return _items.Any(item =>
+            !ReferenceEquals(item, excludedSource)
+            && item.HasSameLogicalSource(source));
+    }
+
     internal bool Contains(SourceSetId sourceSetId)
     {
         return _sourceSets.Any(sourceSet => sourceSet.SourceSetId == sourceSetId);
