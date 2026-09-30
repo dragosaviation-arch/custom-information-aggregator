@@ -136,11 +136,14 @@
                 <ComboBox Width="180"
                           Height="29"
                           Margin="0,0,6,0"
-                          IsEnabled="False"
-                          SelectedIndex="0"
-                          ToolTip="Selection profiles are implemented by a later story.">
-                    <ComboBoxItem Content="No Profile" />
-                </ComboBox>
+                          DisplayMemberPath="DisplayName"
+                          ItemsSource="{Binding InformationSelectionProfiles}"
+                          SelectedItem="{Binding SelectedInformationSelectionProfile, Mode=TwoWay}"
+                          ToolTip="Select an information-selection profile. Use Load to apply it." />
+                <Button Margin="0,0,6,0"
+                        Command="{Binding LoadProfileCommand}"
+                        Style="{StaticResource CiaGhostButtonStyle}"
+                        Content="Load profile" />
                 <Button Margin="0,0,2,0"
                         Command="{Binding SelectVisibleCommand}"
                         Style="{StaticResource CiaGhostButtonStyle}"
@@ -686,14 +689,29 @@
                                            FontWeight="Bold"
                                            Foreground="{StaticResource CiaAccentBrush}"
                                            Text="SELECTION PROFILE MANAGEMENT" />
-                                <TextBox Width="264"
-                                         IsEnabled="False"
+                                <ComboBox Width="300"
+                                          Height="29"
+                                          Margin="0,0,0,7"
+                                          DisplayMemberPath="DisplayName"
+                                          ItemsSource="{Binding InformationSelectionProfiles}"
+                                          SelectedItem="{Binding SelectedInformationSelectionProfile, Mode=TwoWay}" />
+                                <TextBox Width="300"
+                                         AutomationProperties.Name="New information-selection profile name"
                                          Style="{StaticResource CiaTextInputStyle}"
-                                         Text="No Profile" />
+                                         Text="{Binding NewProfileName, UpdateSourceTrigger=PropertyChanged}" />
                                 <WrapPanel Margin="0,7,0,0" HorizontalAlignment="Center">
-                                    <Button Margin="0,0,6,0" IsEnabled="False" Style="{StaticResource CiaButtonStyle}" Content="Save as Profile" />
-                                    <Button IsEnabled="False" Style="{StaticResource CiaButtonStyle}" Content="Update Profile" />
+                                    <Button Margin="0,0,6,0" Command="{Binding RefreshProfilesCommand}" Style="{StaticResource CiaGhostButtonStyle}" Content="Refresh" />
+                                    <Button Margin="0,0,6,0" Command="{Binding LoadProfileCommand}" Style="{StaticResource CiaButtonStyle}" Content="Load" />
+                                    <Button Margin="0,0,6,0" Command="{Binding SaveNewProfileCommand}" Style="{StaticResource CiaButtonStyle}" Content="Save New" ToolTip="{Binding ProfileCaptureAvailabilityReason}" />
+                                    <Button Margin="0,0,6,0" Command="{Binding UpdateProfileCommand}" Style="{StaticResource CiaButtonStyle}" Content="Update" ToolTip="{Binding ProfileCaptureAvailabilityReason}" />
+                                    <Button Command="{Binding DeleteProfileCommand}" Style="{StaticResource CiaDangerButtonStyle}" Content="Delete" />
                                 </WrapPanel>
+                                <TextBlock Width="420"
+                                           Margin="0,8,0,0"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"
+                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                           Text="{Binding ProfileStatusText}" />
                             </StackPanel>
                         </TabItem>
                         <TabItem Header="Blacklist">
@@ -735,6 +753,57 @@
                         </WrapPanel>
                     </Border>
                 </Grid>
+            </Border>
+        </Grid>
+
+        <Grid x:Name="DeleteInformationSelectionProfileConfirmation"
+              Grid.RowSpan="3"
+              Grid.ColumnSpan="3"
+              Panel.ZIndex="20"
+              Background="#99000000">
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsDeleteProfileConfirmationOpen}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
+            <Border Width="410"
+                    Padding="20"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{StaticResource CiaPanelBrush}"
+                    BorderBrush="{StaticResource CiaBorderStrongBrush}"
+                    BorderThickness="1"
+                    CornerRadius="10">
+                <StackPanel>
+                    <TextBlock FontSize="15"
+                               FontWeight="Bold"
+                               Text="Delete information-selection profile" />
+                    <TextBlock Margin="0,8,0,0"
+                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                               Text="{Binding DeleteProfileConfirmationMessage}"
+                               TextWrapping="Wrap" />
+                    <TextBlock Margin="0,5,0,0"
+                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                               FontSize="10"
+                               Text="This deletes only the selected CIA-managed profile file. The active Discovery selection is not changed."
+                               TextWrapping="Wrap" />
+                    <StackPanel Margin="0,16,0,0"
+                                HorizontalAlignment="Right"
+                                Orientation="Horizontal">
+                        <Button Margin="0,0,8,0"
+                                Command="{Binding CancelDeleteProfileCommand}"
+                                Content="Cancel"
+                                Style="{StaticResource CiaGhostButtonStyle}" />
+                        <Button Command="{Binding ConfirmDeleteProfileCommand}"
+                                Content="Delete"
+                                Style="{StaticResource CiaDangerButtonStyle}" />
+                    </StackPanel>
+                </StackPanel>
             </Border>
         </Grid>
 
