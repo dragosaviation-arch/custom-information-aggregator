@@ -155,7 +155,7 @@ public sealed class InterruptedOperationRecoveryTests
     }
 
     [TestMethod]
-    public void InterruptedDiscoveryAvailabilityTracksTheNormalSourcePrerequisite()
+    public async Task InterruptedDiscoveryAvailabilityTracksTheNormalSourcePrerequisite()
     {
         var start = CreateStart(WorkflowOperationKind.Discovery);
         var history = new MutableHistoryStore(starts: [start]);
@@ -185,11 +185,25 @@ public sealed class InterruptedOperationRecoveryTests
         Assert.AreEqual(WorkflowArtifactStatus.Unavailable, workflow.Current.Database);
         Assert.AreEqual(WorkflowArtifactStatus.Unavailable, workflow.Current.Extraction);
 
+        var blocked = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        Assert.IsFalse(blocked.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.MissingSourceSelection, blocked.Rejection?.Code);
+        Assert.HasCount(1, history.Starts);
+
         workflow.RecordSourceSelectionChanged(true);
 
         Assert.IsTrue(recovery.Current.ReinitiationPrerequisitesSatisfied);
         Assert.IsNull(recovery.Current.UnavailableReason);
         Assert.IsNull(workflow.Current.ActiveOperation);
+        Assert.AreEqual(0, supervisor.EnsureAvailableCallCount);
+        Assert.HasCount(1, history.Starts);
+
+        var reinitiated = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        Assert.IsTrue(reinitiated.Accepted);
+        Assert.AreNotEqual(start.Correlation.OperationId, reinitiated.Operation?.OperationId);
+        Assert.HasCount(2, history.Starts);
     }
 
     [TestMethod]

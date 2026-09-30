@@ -284,6 +284,38 @@ public sealed class WorkingStateCoordinatorTests
     }
 
     [TestMethod]
+    public async Task InterruptedRestoreRequiresFreshPackageSelectionBeforeNormalReinitiation()
+    {
+        var context = CreateContext();
+        var first = await context.Workflow.BeginOperationAsync(
+            WorkflowOperationKind.WorkingStateRestore);
+        Assert.IsTrue(first.Accepted);
+        Assert.IsTrue(context.Workflow.CompleteOperation(
+            first.Operation!.OperationId,
+            OperationOutcome.InterruptedIncomplete).Accepted);
+
+        var readiness = context.Coordinator.EvaluateRestoreReadiness(packagePath: null);
+        var withoutSelection = await context.Coordinator.RestoreAsync(string.Empty);
+
+        Assert.IsTrue(readiness.WorkflowPrerequisitesSatisfied);
+        Assert.IsTrue(readiness.AdditionalUserInputRequired);
+        Assert.IsFalse(readiness.NormalOperationReady);
+        Assert.IsFalse(withoutSelection.Accepted);
+        Assert.AreEqual(0, context.Client.RestoreCallCount);
+        Assert.IsNull(context.Workflow.Current.ActiveOperation);
+
+        var withSelection = await context.Coordinator.RestoreAsync("C:\\saved\\state.cia");
+
+        Assert.IsFalse(withSelection.Accepted,
+            "The stub has no manifest, but the normal restore attempt must reach it.");
+        Assert.AreEqual(1, context.Client.RestoreCallCount);
+        Assert.IsNotNull(context.Client.LastRestoreCorrelation);
+        Assert.AreNotEqual(
+            first.Operation.OperationId,
+            context.Client.LastRestoreCorrelation.OperationId);
+    }
+
+    [TestMethod]
     public async Task CapturedSaveSnapshotDoesNotTrackLaterDesktopChanges()
     {
         var context = CreateContext();
@@ -437,6 +469,8 @@ public sealed class WorkingStateCoordinatorTests
 
         public int RestoreCallCount { get; private set; }
 
+        public OperationCorrelation? LastRestoreCorrelation { get; private set; }
+
         public WorkingStateSnapshot? LastSavedSnapshot { get; private set; }
 
         public WorkingStatePublicationMode? LastPublicationMode { get; private set; }
@@ -472,6 +506,7 @@ public sealed class WorkingStateCoordinatorTests
             CancellationToken cancellationToken = default)
         {
             RestoreCallCount++;
+            LastRestoreCorrelation = correlation;
             return Task.FromResult(new WorkingStateClientResult(
                 true,
                 new OperationCompletion(correlation, OperationOutcome.CompletedSuccessfully, []),
