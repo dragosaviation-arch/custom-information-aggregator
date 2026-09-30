@@ -128,6 +128,7 @@ public sealed class BlacklistProfileCoordinator :
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly ILogger<BlacklistProfileCoordinator> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly ReusableProfileSessionState _sessionState;
 
     public BlacklistProfileCoordinator(
         ProfileArtifactStore store,
@@ -135,7 +136,8 @@ public sealed class BlacklistProfileCoordinator :
         ActiveDiscoveryConfiguration activeConfiguration,
         IApplicationWorkflowCoordinator workflowCoordinator,
         ILogger<BlacklistProfileCoordinator> logger,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ReusableProfileSessionState? sessionState = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(designationStore);
@@ -160,6 +162,7 @@ public sealed class BlacklistProfileCoordinator :
         _workflowCoordinator = workflowCoordinator;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _sessionState = sessionState ?? new ReusableProfileSessionState();
     }
 
     public BlacklistProfileInventory Inventory { get; private set; } =
@@ -183,7 +186,12 @@ public sealed class BlacklistProfileCoordinator :
     {
         cancellationToken.ThrowIfCancellationRequested();
         RefreshInventory();
-        ResolveSessionDefault();
+        var sessionDefault = ResolveSessionDefault();
+        _sessionState.SeedStartupDefaultBlacklist(
+            sessionDefault.Status == BlacklistSessionDefaultStatus.Resolved
+                ? sessionDefault.ProfileId
+                : null,
+            sessionDefault.Content);
         return Task.CompletedTask;
     }
 
@@ -329,7 +337,8 @@ public sealed class BlacklistProfileCoordinator :
                 requiresReselection: true);
         }
 
-        var entries = ((BlacklistProfileContentV1)resolved.Artifact.Content).Entries.ToHashSet();
+        var content = (BlacklistProfileContentV1)resolved.Artifact.Content;
+        var entries = content.Entries.ToHashSet();
         var snapshot = _activeConfiguration.Current;
         var currentPortableIdentities = snapshot.Items
             .Select(item => PortableDiscoveryInformationIdentity.From(item.Identity))
@@ -351,6 +360,10 @@ public sealed class BlacklistProfileCoordinator :
 
         if (changes.Length == 0)
         {
+            _sessionState.ActivateBlacklist(
+                resolved.Artifact.ProfileId,
+                content,
+                ReusableProfileActivationOrigin.ExplicitLoad);
             return BlacklistProfileOperationResult.Success(
                 CreateLoadMessage(0, matchedCount, unmatchedCount),
                 selectedProfile,
@@ -374,6 +387,10 @@ public sealed class BlacklistProfileCoordinator :
             .Select(item => item.Identity);
         var changedCount = _activeConfiguration.SetBlacklisted(blacklist, isBlacklisted: true)
             + _activeConfiguration.SetBlacklisted(removeBlacklist, isBlacklisted: false);
+        _sessionState.ActivateBlacklist(
+            resolved.Artifact.ProfileId,
+            content,
+            ReusableProfileActivationOrigin.ExplicitLoad);
         return BlacklistProfileOperationResult.Success(
             CreateLoadMessage(changedCount, matchedCount, unmatchedCount),
             selectedProfile,
