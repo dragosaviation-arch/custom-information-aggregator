@@ -272,6 +272,59 @@ public sealed class ApplicationWorkflowCoordinatorTests
     }
 
     [TestMethod]
+    [DataRow(OperationOutcome.Failed)]
+    [DataRow(OperationOutcome.Cancelled)]
+    [DataRow(OperationOutcome.InterruptedIncomplete)]
+    public async Task TerminalOperationCanUseTheNormalPathAgainWithNewCorrelationAndRetainedEvidence(
+        OperationOutcome terminalOutcome)
+    {
+        var history = new RecordingProcessingHistoryRecorder();
+        var coordinator = CreateCoordinator(new StubProcessingHostSupervisor(), history);
+        coordinator.RecordSourceSelectionChanged(true);
+        var first = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        var terminal = coordinator.CompleteOperation(
+            first.Operation!.OperationId,
+            terminalOutcome);
+        var retainedAttempt = history.Attempts.Single();
+        var retainedDiagnostics = history.Diagnostics.ToArray();
+
+        Assert.IsTrue(terminal.Accepted);
+        Assert.IsNull(coordinator.Current.ActiveOperation);
+        if (terminalOutcome == OperationOutcome.Cancelled)
+        {
+            Assert.IsEmpty(retainedDiagnostics);
+        }
+        else
+        {
+            Assert.HasCount(1, retainedDiagnostics);
+            Assert.AreEqual(
+                first.Operation.OperationId,
+                retainedDiagnostics[0].Correlation.OperationId);
+        }
+        Assert.IsTrue(coordinator.EvaluateOperationPrerequisites(
+            WorkflowOperationKind.Discovery).Accepted);
+
+        var second = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        Assert.IsTrue(second.Accepted);
+        Assert.AreNotEqual(first.Operation.OperationId, second.Operation?.OperationId);
+        Assert.AreEqual(second.Operation, coordinator.Current.ActiveOperation?.Correlation);
+        Assert.HasCount(1, history.Attempts);
+        Assert.AreSame(retainedAttempt, history.Attempts[0]);
+        CollectionAssert.AreEqual(retainedDiagnostics, history.Diagnostics.ToArray());
+        Assert.HasCount(2, history.Starts);
+
+        Assert.IsTrue(coordinator.CompleteOperation(
+            second.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully).Accepted);
+        Assert.HasCount(2, history.Attempts);
+        Assert.AreSame(retainedAttempt, history.Attempts[0]);
+        Assert.AreEqual(terminalOutcome, history.Attempts[0].TerminalOutcome);
+        CollectionAssert.AreEqual(retainedDiagnostics, history.Diagnostics.ToArray());
+    }
+
+    [TestMethod]
     public async Task HostFailureIsReturnedWithoutExposingTheRawException()
     {
         const string sensitiveMessage = "internal host failure details";

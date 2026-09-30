@@ -171,6 +171,38 @@ public sealed class DatabaseBuildCoordinatorTests
     }
 
     [TestMethod]
+    public async Task FailedBuildCanBeReinitiatedThroughTheSameNormalCoordinatorPath()
+    {
+        var context = await BuildContext.CreateAsync();
+        var correlations = new List<OperationCorrelation>();
+        var client = new RecordingDatabaseClient((correlation, specification) =>
+        {
+            correlations.Add(correlation);
+            return correlations.Count == 1
+                ? Failure(
+                    correlation,
+                    specification.Datasets.SelectMany(dataset => dataset.Sources).ToArray(),
+                    OperationOutcome.Failed)
+                : HierarchySuccess(correlation, specification, rowCount: 1, valueCount: 1);
+        });
+        var coordinator = context.CreateCoordinator(client);
+
+        var failed = await coordinator.BuildAsync();
+
+        Assert.IsFalse(failed.Accepted);
+        Assert.IsNull(context.Workflow.Current.ActiveOperation);
+        Assert.IsTrue(coordinator.EvaluateReadiness().NormalOperationReady);
+
+        var succeeded = await coordinator.BuildAsync();
+
+        Assert.IsTrue(succeeded.Accepted);
+        Assert.HasCount(2, correlations);
+        Assert.AreNotEqual(correlations[0].OperationId, correlations[1].OperationId);
+        Assert.AreEqual(correlations[1].OperationId, coordinator.CurrentGeneration?.OperationId);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Database);
+    }
+
+    [TestMethod]
     public async Task PublishedReviewExposesHierarchyRowsAndPerValueProvenance()
     {
         var context = await BuildContext.CreateAsync(

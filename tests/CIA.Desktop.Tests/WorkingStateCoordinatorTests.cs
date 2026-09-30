@@ -284,6 +284,51 @@ public sealed class WorkingStateCoordinatorTests
     }
 
     [TestMethod]
+    public async Task InterruptedRestoreRequiresFreshPackageSelectionBeforeNormalReinitiation()
+    {
+        const string priorPackagePath = "C:\\saved\\prior-state.cia";
+        const string newlySelectedPackagePath = "C:\\saved\\new-state.cia";
+        var context = CreateContext();
+        context.Client.NextRestoreOutcome = OperationOutcome.InterruptedIncomplete;
+
+        var interrupted = await context.Coordinator.RestoreAsync(priorPackagePath);
+
+        Assert.IsFalse(interrupted.Accepted);
+        Assert.AreEqual(
+            WorkflowOperationState.InterruptedIncomplete,
+            context.Workflow.Current.LatestOperation?.State);
+        Assert.HasCount(1, context.Client.RestorePackagePaths);
+        Assert.AreEqual(priorPackagePath, context.Client.RestorePackagePaths[0]);
+        var priorCorrelation = context.Client.RestoreCorrelations.Single();
+
+        var readiness = context.Coordinator.EvaluateRestoreReadiness(packagePath: null);
+        var withoutSelection = await context.Coordinator.RestoreAsync(string.Empty);
+
+        Assert.IsTrue(readiness.WorkflowPrerequisitesSatisfied);
+        Assert.IsTrue(readiness.AdditionalUserInputRequired);
+        Assert.IsFalse(readiness.NormalOperationReady);
+        Assert.IsFalse(withoutSelection.Accepted);
+        Assert.AreEqual(1, context.Client.RestoreCallCount);
+        Assert.HasCount(1, context.Client.RestorePackagePaths);
+        Assert.IsNull(context.Workflow.Current.ActiveOperation);
+
+        context.Client.NextRestoreOutcome = OperationOutcome.CompletedSuccessfully;
+        var withSelection = await context.Coordinator.RestoreAsync(newlySelectedPackagePath);
+
+        Assert.IsFalse(withSelection.Accepted,
+            "The stub has no manifest, but the normal restore attempt must reach it.");
+        Assert.AreEqual(2, context.Client.RestoreCallCount);
+        CollectionAssert.AreEqual(
+            new[] { priorPackagePath, newlySelectedPackagePath },
+            context.Client.RestorePackagePaths);
+        Assert.AreEqual(newlySelectedPackagePath, context.Client.RestorePackagePaths[^1]);
+        Assert.AreNotEqual(priorPackagePath, context.Client.RestorePackagePaths[^1]);
+        Assert.AreNotEqual(
+            priorCorrelation.OperationId,
+            context.Client.RestoreCorrelations[^1].OperationId);
+    }
+
+    [TestMethod]
     public async Task CapturedSaveSnapshotDoesNotTrackLaterDesktopChanges()
     {
         var context = CreateContext();
@@ -437,6 +482,13 @@ public sealed class WorkingStateCoordinatorTests
 
         public int RestoreCallCount { get; private set; }
 
+        public List<string> RestorePackagePaths { get; } = [];
+
+        public List<OperationCorrelation> RestoreCorrelations { get; } = [];
+
+        public OperationOutcome NextRestoreOutcome { get; set; } =
+            OperationOutcome.CompletedSuccessfully;
+
         public WorkingStateSnapshot? LastSavedSnapshot { get; private set; }
 
         public WorkingStatePublicationMode? LastPublicationMode { get; private set; }
@@ -472,12 +524,17 @@ public sealed class WorkingStateCoordinatorTests
             CancellationToken cancellationToken = default)
         {
             RestoreCallCount++;
+            RestorePackagePaths.Add(packagePath);
+            RestoreCorrelations.Add(correlation);
+            var outcome = NextRestoreOutcome;
+            var accepted = outcome is OperationOutcome.CompletedSuccessfully
+                or OperationOutcome.CompletedWithIssues;
             return Task.FromResult(new WorkingStateClientResult(
-                true,
-                new OperationCompletion(correlation, OperationOutcome.CompletedSuccessfully, []),
-                RestoreManifest,
-                null,
-                null));
+                accepted,
+                new OperationCompletion(correlation, outcome, []),
+                accepted ? RestoreManifest : null,
+                accepted ? null : "restore-interrupted",
+                accepted ? null : "The working-state restore was interrupted."));
         }
     }
 
