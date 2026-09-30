@@ -1068,6 +1068,46 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    public async Task UnavailableDirectArchiveRelinksFromProductionStyleValidatedResult()
+    {
+        var originalPath = Path.GetFullPath("missing.zip");
+        var replacementPath = Path.GetFullPath("replacement.zip");
+        var original = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            originalPath,
+            IsIncluded: false,
+            LoadedSourceStatus.Unavailable,
+            LoadedSourceKind.Archive);
+        var validated = original with
+        {
+            Path = replacementPath,
+            Status = LoadedSourceStatus.Ready
+        };
+        var client = new SequencedSourceIntakeClient(
+            Accept(original),
+            Accept(validated));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.Archive, originalPath);
+        var item = sourceSet.Items.Single();
+        var originalSourceSetId = item.SourceSetId;
+
+        var result = await coordinator.RelinkAsync(item, replacementPath);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.HasCount(1, sourceSet.Items);
+        Assert.AreSame(item, sourceSet.Items.Single());
+        Assert.AreEqual(original.SourceId, item.SourceId);
+        Assert.AreEqual(originalSourceSetId, item.SourceSetId);
+        Assert.IsFalse(item.IsIncluded);
+        Assert.AreEqual(LoadedSourceKind.Archive, item.Kind);
+        Assert.AreEqual(replacementPath, item.Path);
+        Assert.AreEqual(LoadedSourceStatus.Ready, item.Status);
+        Assert.IsNull(item.ArchiveProvenance);
+    }
+
+    [TestMethod]
     public async Task ArchiveBackedRelinkValidatesReplacementArchiveWithoutFabricatingProvenance()
     {
         var originalArchivePath = Path.GetFullPath("missing.zip");

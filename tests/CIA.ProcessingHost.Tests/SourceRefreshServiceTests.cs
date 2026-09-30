@@ -63,6 +63,69 @@ public sealed class SourceRefreshServiceTests
     }
 
     [TestMethod]
+    public async Task DirectArchiveRefreshValidatesIntakeAndRetainsPersistedArchiveIdentity()
+    {
+        using var directory = new TemporarySourceDirectory();
+        var archivePath = directory.CreateZip(
+            "catalog.zip",
+            "folder/catalog.xml",
+            "<catalog><item>Archive value</item></catalog>");
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            sourceSetId,
+            archivePath,
+            IsIncluded: false,
+            LoadedSourceStatus.Unavailable,
+            LoadedSourceKind.Archive);
+        var service = CreateService(directory.Path, new CatalogAdapter());
+
+        var result = await service.RefreshAsync(source);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreEqual(source.SourceId, result.Source.SourceId);
+        Assert.AreEqual(sourceSetId, result.Source.SourceSetId);
+        Assert.IsFalse(result.Source.IsIncluded);
+        Assert.AreEqual(LoadedSourceKind.Archive, result.Source.Kind);
+        Assert.AreEqual(archivePath, result.Source.Path);
+        Assert.AreEqual(LoadedSourceStatus.Ready, result.Source.Status);
+        Assert.IsNull(result.Source.ArchiveProvenance);
+        Assert.IsNull(result.Failure);
+    }
+
+    [TestMethod]
+    public async Task DirectArchiveRefreshReturnsControlledFailuresForMissingAndInvalidArchives()
+    {
+        using var directory = new TemporarySourceDirectory();
+        var missing = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            SourceSetId.CreateNew(),
+            Path.Combine(directory.Path, "missing.zip"),
+            IsIncluded: true,
+            LoadedSourceStatus.Unavailable,
+            LoadedSourceKind.Archive);
+        var invalidPath = directory.WriteFile("invalid.zip", "not an archive");
+        var invalid = missing with
+        {
+            SourceId = SourceId.CreateNew(),
+            Path = invalidPath
+        };
+        var service = CreateService(directory.Path, new CatalogAdapter());
+
+        var missingResult = await service.RefreshAsync(missing);
+        var invalidResult = await service.RefreshAsync(invalid);
+
+        Assert.IsFalse(missingResult.Accepted);
+        Assert.AreEqual(missing.SourceId, missingResult.Source.SourceId);
+        Assert.AreEqual(LoadedSourceStatus.Unavailable, missingResult.Source.Status);
+        Assert.AreEqual("source-not-found", missingResult.Failure?.Code);
+        Assert.IsFalse(invalidResult.Accepted);
+        Assert.AreEqual(invalid.SourceId, invalidResult.Source.SourceId);
+        Assert.AreEqual(LoadedSourceStatus.Unsupported, invalidResult.Source.Status);
+        Assert.AreEqual("unsupported-archive", invalidResult.Failure?.Code);
+    }
+
+    [TestMethod]
     public async Task ArchiveDerivedRefreshReextractsOriginalArchiveAndRetainsSourceIdentity()
     {
         using var directory = new TemporarySourceDirectory();

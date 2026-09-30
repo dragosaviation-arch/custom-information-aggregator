@@ -37,6 +37,12 @@ public sealed class SourceRefreshService(
                 failure);
         }
 
+        if (source.Kind == LoadedSourceKind.Archive)
+        {
+            return SourceRefreshHostResult.Accept(
+                RetainIdentity(source, LoadedSourceStatus.Ready));
+        }
+
         var reloaded = intake.Sources.SingleOrDefault(candidate =>
             string.Equals(candidate.Path, source.Path, StringComparison.OrdinalIgnoreCase)
             && candidate.Kind == source.Kind);
@@ -48,12 +54,6 @@ public sealed class SourceRefreshService(
                 new IpcFailure(
                     "invalid-refresh-result",
                     "Source intake did not return the requested source during refresh."));
-        }
-
-        if (source.Kind == LoadedSourceKind.Archive)
-        {
-            return SourceRefreshHostResult.Accept(
-                RetainIdentity(source, LoadedSourceStatus.Ready));
         }
 
         return await InterpretAsync(
