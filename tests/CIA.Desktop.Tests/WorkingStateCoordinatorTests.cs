@@ -238,6 +238,9 @@ public sealed class WorkingStateCoordinatorTests
         Assert.AreEqual("Restored set", context.Sources.ActiveSourceSet?.Name);
         Assert.HasCount(1, context.Sources.Items);
         Assert.AreEqual(sourceId, context.Sources.Items[0].SourceId);
+        Assert.AreEqual(restoredSet, context.Sources.Items[0].SourceSetId);
+        Assert.AreEqual("Restored set", context.Sources.Items[0].SourceSetName);
+        Assert.AreEqual(missingPath, context.Sources.Items[0].Path);
         Assert.AreEqual(LoadedSourceStatus.Unavailable, context.Sources.Items[0].Status);
         Assert.AreEqual(
             DiscoveryInformationDisposition.Selected,

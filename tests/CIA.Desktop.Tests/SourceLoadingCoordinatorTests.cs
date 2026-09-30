@@ -891,6 +891,260 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    public async Task RelinkUnavailableSourceValidatesInPlaceAndRetainsIdentitySetAndInclusion()
+    {
+        var originalPath = Path.GetFullPath("missing.xml");
+        var replacementPath = Path.GetFullPath("replacement.xml");
+        var original = CreateXml(originalPath) with { IsIncluded = false };
+        var unavailable = new SourceIntakeClientResult(
+            false,
+            [],
+            "source-unreadable",
+            "The source is no longer readable.");
+        var client = new SequencedSourceIntakeClient(
+            Accept(original),
+            unavailable,
+            Accept(CreateXml(replacementPath)));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, originalPath);
+        var item = sourceSet.Items.Single();
+        var sourceSetId = item.SourceSetId;
+        var sourceSetName = item.SourceSetName;
+        await coordinator.RefreshAsync(item);
+
+        var result = await coordinator.RelinkAsync(item, replacementPath);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.HasCount(1, sourceSet.Items);
+        Assert.AreSame(item, sourceSet.Items.Single());
+        Assert.AreEqual(original.SourceId, item.SourceId);
+        Assert.AreEqual(sourceSetId, item.SourceSetId);
+        Assert.AreEqual(sourceSetName, item.SourceSetName);
+        Assert.AreEqual(replacementPath, item.Path);
+        Assert.AreEqual(LoadedSourceStatus.Ready, item.Status);
+        Assert.AreEqual(LoadedSourceKind.XmlFile, item.Kind);
+        Assert.IsFalse(item.IsIncluded);
+        Assert.AreEqual(replacementPath, client.RefreshRequests.Last().Path);
+        var snapshot = sourceSet.CreateWorkingStateSourceSnapshot().Single();
+        Assert.AreEqual(replacementPath, snapshot.Path);
+        Assert.AreEqual(original.SourceId, snapshot.SourceId);
+        Assert.AreEqual(sourceSetId, snapshot.SourceSetId);
+    }
+
+    [TestMethod]
+    public async Task CancelledRelinkPickerLeavesUnavailableSourceUnchanged()
+    {
+        var originalPath = Path.GetFullPath("missing.xml");
+        var client = new SequencedSourceIntakeClient(
+            Accept(CreateXml(originalPath)),
+            new SourceIntakeClientResult(false, [], "source-unreadable", "Unavailable."));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, originalPath);
+        var item = sourceSet.Items.Single();
+        await coordinator.RefreshAsync(item);
+        using var viewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(null),
+            coordinator,
+            sourceSet,
+            workflow,
+            new MainWindowViewModel(new ApplicationSession()));
+
+        Assert.IsTrue(viewModel.RelinkSourceCommand.CanExecute(item));
+        await viewModel.RelinkSourceCommand.ExecuteAsync(item);
+
+        Assert.AreEqual(originalPath, item.Path);
+        Assert.AreEqual(LoadedSourceStatus.Unavailable, item.Status);
+        Assert.HasCount(1, client.RefreshRequests);
+    }
+
+    [TestMethod]
+    public async Task FailedRelinkLeavesUnavailableSourceAtItsPreviousPath()
+    {
+        var originalPath = Path.GetFullPath("missing.xml");
+        var replacementPath = Path.GetFullPath("invalid.xml");
+        var client = new SequencedSourceIntakeClient(
+            Accept(CreateXml(originalPath)),
+            new SourceIntakeClientResult(false, [], "source-unreadable", "Unavailable."),
+            new SourceIntakeClientResult(false, [], "malformed-xml", "Malformed XML."));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, originalPath);
+        var item = sourceSet.Items.Single();
+        await coordinator.RefreshAsync(item);
+
+        var result = await coordinator.RelinkAsync(item, replacementPath);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("malformed-xml", result.FailureCode);
+        Assert.AreEqual(originalPath, item.Path);
+        Assert.AreEqual(LoadedSourceStatus.Unavailable, item.Status);
+        Assert.HasCount(1, sourceSet.Items);
+    }
+
+    [TestMethod]
+    public async Task IncompatibleRelinkResponseCannotClaimTheSourceWasResolved()
+    {
+        var originalPath = Path.GetFullPath("missing.xml");
+        var replacementPath = Path.GetFullPath("replacement.xml");
+        var initial = CreateXml(originalPath) with
+        {
+            Status = LoadedSourceStatus.Unavailable
+        };
+        var client = new IncompatibleRelinkClient(initial);
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, originalPath);
+        var item = sourceSet.Items.Single();
+
+        var result = await coordinator.RelinkAsync(item, replacementPath);
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("incompatible-replacement", result.FailureCode);
+        Assert.AreEqual(originalPath, item.Path);
+        Assert.AreEqual(LoadedSourceStatus.Unavailable, item.Status);
+        Assert.AreEqual(LoadedSourceKind.XmlFile, item.Kind);
+    }
+
+    [TestMethod]
+    public async Task DuplicateRelinkAndBlockedWorkflowRejectWithoutMutationOrValidation()
+    {
+        var unavailablePath = Path.GetFullPath("missing.xml");
+        var existingPath = Path.GetFullPath("existing.xml");
+        var client = new SequencedSourceIntakeClient(
+            Accept(CreateXml(unavailablePath), CreateXml(existingPath)),
+            new SourceIntakeClientResult(false, [], "source-unreadable", "Unavailable."));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.Folder, Path.GetFullPath("folder"));
+        var unavailable = sourceSet.Items.Single(source => source.Path == unavailablePath);
+        await coordinator.RefreshAsync(unavailable);
+
+        var duplicate = await coordinator.RelinkAsync(unavailable, existingPath);
+        var active = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
+        var blocked = await coordinator.RelinkAsync(unavailable, Path.GetFullPath("replacement.xml"));
+
+        Assert.IsFalse(duplicate.Accepted);
+        Assert.AreEqual("duplicate-path", duplicate.FailureCode);
+        Assert.IsFalse(blocked.Accepted);
+        Assert.AreEqual("conflicting-operation", blocked.FailureCode);
+        Assert.AreEqual(unavailablePath, unavailable.Path);
+        Assert.AreEqual(LoadedSourceStatus.Unavailable, unavailable.Status);
+        Assert.HasCount(1, client.RefreshRequests);
+        workflow.CompleteOperation(active.Operation!.OperationId, OperationOutcome.Cancelled);
+    }
+
+    [TestMethod]
+    public async Task RelinkMakesExistingDownstreamResultsStaleThroughNormalWorkflowInvalidation()
+    {
+        var originalPath = Path.GetFullPath("source.xml");
+        var replacementPath = Path.GetFullPath("replacement.xml");
+        var original = CreateXml(originalPath);
+        var client = new SequencedSourceIntakeClient(
+            Accept(original),
+            new SourceIntakeClientResult(false, [], "source-unreadable", "Unavailable."),
+            Accept(CreateXml(replacementPath)));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.XmlFile, originalPath);
+        await CompleteWorkflowThroughExtractionAsync(workflow);
+        var item = sourceSet.Items.Single();
+        await coordinator.RefreshAsync(item);
+
+        var result = await coordinator.RelinkAsync(item, replacementPath);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.IsTrue(workflow.Current.HasValidSourceSelection);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Extraction);
+    }
+
+    [TestMethod]
+    public async Task ArchiveBackedRelinkValidatesReplacementArchiveWithoutFabricatingProvenance()
+    {
+        var originalArchivePath = Path.GetFullPath("missing.zip");
+        var replacementArchivePath = Path.GetFullPath("replacement.zip");
+        var originalExtractionRoot = Path.GetFullPath("old-extraction");
+        var replacementExtractionRoot = Path.GetFullPath("new-extraction");
+        var initial = CreateArchiveDerivedXml(
+            originalArchivePath,
+            originalExtractionRoot,
+            "records/source.xml",
+            nestingLevel: 1) with
+        {
+            Status = LoadedSourceStatus.Unavailable,
+            IsIncluded = false
+        };
+        var client = new ArchiveRelinkClient(initial, replacementExtractionRoot);
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        await coordinator.AddAsync(SourceSelectionKind.Archive, originalArchivePath);
+        var item = sourceSet.Items.Single();
+
+        var result = await coordinator.RelinkAsync(item, replacementArchivePath);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.AreSame(item, sourceSet.Items.Single());
+        Assert.AreEqual(initial.SourceId, item.SourceId);
+        Assert.IsFalse(item.IsIncluded);
+        Assert.AreEqual(
+            replacementArchivePath,
+            client.RelinkRequest?.ArchiveProvenance?.OriginalArchivePath);
+        Assert.AreEqual(
+            replacementArchivePath,
+            client.RelinkRequest?.ArchiveProvenance?.ArchiveLineage[0].Path);
+        Assert.AreEqual(
+            Path.Combine(replacementExtractionRoot, "source.xml"),
+            item.Path);
+        Assert.AreEqual(
+            initial.ArchiveProvenance?.OriginalArchiveSourceId,
+            item.ArchiveProvenance?.OriginalArchiveSourceId);
+        Assert.AreEqual(
+            initial.ArchiveProvenance?.ArchiveMemberPath,
+            item.ArchiveProvenance?.ArchiveMemberPath);
+    }
+
+    [TestMethod]
+    public async Task ExplicitRemovalOfUnavailableSourceRetainsOtherSourcesAndFilesystemContent()
+    {
+        var unavailablePath = Path.GetFullPath("missing.xml");
+        var retainedFile = Path.GetTempFileName();
+        try
+        {
+            var client = new SequencedSourceIntakeClient(
+                Accept(CreateXml(unavailablePath), CreateXml(retainedFile)),
+                new SourceIntakeClientResult(false, [], "source-unreadable", "Unavailable."));
+            var sourceSet = new ActiveLoadedSourceSet();
+            using var workflow = CreateWorkflowCoordinator();
+            var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+            await coordinator.AddAsync(SourceSelectionKind.Folder, Path.GetFullPath("folder"));
+            var unavailable = sourceSet.Items.Single(source => source.Path == unavailablePath);
+            await coordinator.RefreshAsync(unavailable);
+
+            var result = coordinator.Remove([unavailable]);
+
+            Assert.IsTrue(result.Accepted);
+            Assert.AreEqual(1, result.RemovedCount);
+            Assert.HasCount(1, sourceSet.Items);
+            Assert.AreEqual(retainedFile, sourceSet.Items.Single().Path);
+            Assert.IsTrue(File.Exists(retainedFile));
+        }
+        finally
+        {
+            File.Delete(retainedFile);
+        }
+    }
+
+    [TestMethod]
     public async Task SuccessfulRefreshMakesCurrentDiscoveryResultStale()
     {
         var path = Path.GetFullPath("source.xml");
@@ -1271,6 +1525,8 @@ public sealed class SourceLoadingCoordinatorTests
     {
         private int _index;
 
+        public List<LoadedSourceContract> RefreshRequests { get; } = [];
+
         public Task<SourceIntakeClientResult> LoadAsync(
             SourceSelectionKind selectionKind,
             string path,
@@ -1284,6 +1540,7 @@ public sealed class SourceLoadingCoordinatorTests
             LoadedSourceContract source,
             CancellationToken cancellationToken = default)
         {
+            RefreshRequests.Add(source);
             return Task.FromResult(ToRefreshResult(results[_index++], source));
         }
     }
@@ -1313,7 +1570,73 @@ public sealed class SourceLoadingCoordinatorTests
         }
     }
 
-    private sealed class StubSourcePathPicker(string path) : ISourcePathPicker
+    private sealed class ArchiveRelinkClient(
+        LoadedSourceContract initial,
+        string replacementExtractionRoot) : ISourceIntakeClient
+    {
+        public LoadedSourceContract? RelinkRequest { get; private set; }
+
+        public Task<SourceIntakeClientResult> LoadAsync(
+            SourceSelectionKind selectionKind,
+            string path,
+            SourceLoadSettings settings,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Accept(initial));
+        }
+
+        public Task<SourceRefreshClientResult> RefreshAsync(
+            LoadedSourceContract source,
+            CancellationToken cancellationToken = default)
+        {
+            RelinkRequest = source;
+            var provenance = source.ArchiveProvenance! with
+            {
+                ExtractionRoot = replacementExtractionRoot
+            };
+            var validated = source with
+            {
+                Path = Path.Combine(replacementExtractionRoot, "source.xml"),
+                Status = LoadedSourceStatus.Ready,
+                ArchiveProvenance = provenance
+            };
+            return Task.FromResult(new SourceRefreshClientResult(
+                true,
+                validated,
+                FailureCode: null,
+                FailureDescription: null));
+        }
+    }
+
+    private sealed class IncompatibleRelinkClient(LoadedSourceContract initial)
+        : ISourceIntakeClient
+    {
+        public Task<SourceIntakeClientResult> LoadAsync(
+            SourceSelectionKind selectionKind,
+            string path,
+            SourceLoadSettings settings,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Accept(initial));
+        }
+
+        public Task<SourceRefreshClientResult> RefreshAsync(
+            LoadedSourceContract source,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new SourceRefreshClientResult(
+                true,
+                source with
+                {
+                    Status = LoadedSourceStatus.Ready,
+                    Kind = LoadedSourceKind.Archive
+                },
+                FailureCode: null,
+                FailureDescription: null));
+        }
+    }
+
+    private sealed class StubSourcePathPicker(string? path) : ISourcePathPicker
     {
         public string? PickXmlFile() => path;
 

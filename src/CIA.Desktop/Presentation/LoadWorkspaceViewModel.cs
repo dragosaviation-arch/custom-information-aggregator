@@ -32,6 +32,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _confirmRemovalCommand;
     private readonly RelayCommand _cancelRemovalCommand;
     private readonly AsyncRelayCommand<LoadedSourceItem> _refreshSourceCommand;
+    private readonly AsyncRelayCommand<LoadedSourceItem> _relinkSourceCommand;
     private readonly AsyncRelayCommand _refreshSelectedCommand;
     private readonly RelayCommand _createSourceSetCommand;
     private readonly RelayCommand _renameActiveSourceSetCommand;
@@ -129,6 +130,9 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _refreshSourceCommand = new AsyncRelayCommand<LoadedSourceItem>(
             RefreshSourceAsync,
             source => source is not null && !IsBusy);
+        _relinkSourceCommand = new AsyncRelayCommand<LoadedSourceItem>(
+            RelinkSourceAsync,
+            CanRelinkSource);
         _refreshSelectedCommand = new AsyncRelayCommand(
             RefreshSelectedAsync,
             () => !IsBusy && _highlightedSources.Count > 0);
@@ -157,6 +161,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand ConfirmRemovalCommand => _confirmRemovalCommand;
     public IRelayCommand CancelRemovalCommand => _cancelRemovalCommand;
     public IAsyncRelayCommand RefreshSourceCommand => _refreshSourceCommand;
+    public IAsyncRelayCommand RelinkSourceCommand => _relinkSourceCommand;
     public IAsyncRelayCommand RefreshSelectedCommand => _refreshSelectedCommand;
     public IRelayCommand CreateSourceSetCommand => _createSourceSetCommand;
     public IRelayCommand RenameActiveSourceSetCommand => _renameActiveSourceSetCommand;
@@ -301,7 +306,13 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public LoadedSourceItem? SelectedSource
     {
         get => _selectedSource;
-        set => SetProperty(ref _selectedSource, value);
+        set
+        {
+            if (SetProperty(ref _selectedSource, value))
+            {
+                _relinkSourceCommand.NotifyCanExecuteChanged();
+            }
+        }
     }
 
     public string StatusTitle
@@ -809,6 +820,43 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
+    private async Task RelinkSourceAsync(LoadedSourceItem? source)
+    {
+        if (source is null || source.Status != LoadedSourceStatus.Unavailable)
+        {
+            return;
+        }
+
+        var replacementPath = source.ArchiveProvenance is not null
+            || source.Kind == LoadedSourceKind.Archive
+                ? _pathPicker.PickArchive()
+                : _pathPicker.PickXmlFile();
+        if (replacementPath is null)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        StatusTitle = "Relinking source";
+        StatusDetail = $"Validating a replacement for {source.DisplayName} through the Processing Host...";
+
+        try
+        {
+            var result = await _loadingCoordinator.RelinkAsync(source, replacementPath);
+            RefreshVisibleSources();
+            NotifySourceCountsChanged();
+            StatusTitle = result.Accepted ? "Source relinked" : "Source relink failed";
+            StatusDetail = result.Accepted
+                ? $"Relinked {source.DisplayName}; its source identity and Source Set were retained."
+                : result.FailureDescription
+                    ?? "The selected replacement could not be validated.";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     private async Task RefreshSelectedAsync()
     {
         var targets = _highlightedSources.Where(Sources.Contains).ToArray();
@@ -858,6 +906,12 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
     private bool CanChangeVisibleInclusion() => !IsBusy && !VisibleSources.IsEmpty;
 
+    private bool CanRelinkSource(LoadedSourceItem? source) =>
+        source is not null
+        && source.Status == LoadedSourceStatus.Unavailable
+        && !IsBusy
+        && _workflowCoordinator.Current.ActiveOperation is null;
+
     private bool CanRemoveChecked() => !IsBusy && Sources.Any(source => source.IsIncluded);
 
     private void RefreshVisibleSources()
@@ -873,6 +927,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _excludeVisibleCommand.NotifyCanExecuteChanged();
         _removeCheckedCommand.NotifyCanExecuteChanged();
         _refreshSourceCommand.NotifyCanExecuteChanged();
+        _relinkSourceCommand.NotifyCanExecuteChanged();
         _refreshSelectedCommand.NotifyCanExecuteChanged();
         _createSourceSetCommand.NotifyCanExecuteChanged();
         _renameActiveSourceSetCommand.NotifyCanExecuteChanged();
@@ -981,7 +1036,11 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
     private void OnWorkflowStateChanged(object? sender, WorkflowStateSnapshot state)
     {
-        DispatchToUi(() => DiscoveryStatus = state.Discovery);
+        DispatchToUi(() =>
+        {
+            DiscoveryStatus = state.Discovery;
+            _relinkSourceCommand.NotifyCanExecuteChanged();
+        });
     }
 
     private void DispatchToUi(Action update)

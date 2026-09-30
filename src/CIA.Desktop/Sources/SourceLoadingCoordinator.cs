@@ -616,6 +616,199 @@ public sealed class SourceLoadingCoordinator(
         }
     }
 
+    public async Task<SourceRefreshResult> RelinkAsync(
+        LoadedSourceItem source,
+        string replacementPath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        await _gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            if (!sourceSet.Contains(source))
+            {
+                return SourceRefreshResult.Reject(
+                    "source-not-loaded",
+                    "The source is no longer part of the active session.");
+            }
+
+            if (source.Status != LoadedSourceStatus.Unavailable)
+            {
+                return SourceRefreshResult.Reject(
+                    "source-not-unavailable",
+                    "Only an unavailable source can be relinked.");
+            }
+
+            if (workflowCoordinator.Current.ActiveOperation is not null)
+            {
+                return SourceRefreshResult.Reject(
+                    "conflicting-operation",
+                    "Sources cannot be relinked while an operation is active.");
+            }
+
+            if (!TryNormalizePath(replacementPath, out var fullPath))
+            {
+                return SourceRefreshResult.Reject(
+                    "invalid-path",
+                    "The selected replacement path is not valid.");
+            }
+
+            if (source.ArchiveProvenance is null
+                && sourceSet.ContainsPath(fullPath, source))
+            {
+                return SourceRefreshResult.Reject(
+                    "duplicate-path",
+                    "The selected replacement path is already loaded.");
+            }
+
+            var relinkRequest = CreateRelinkRequest(source, fullPath);
+            if (relinkRequest is null)
+            {
+                return SourceRefreshResult.Reject(
+                    "incompatible-provenance",
+                    "The unavailable source does not contain enough archive provenance to relink safely.");
+            }
+
+            var intakeResult = await intakeClient.RefreshAsync(
+                relinkRequest,
+                cancellationToken);
+            if (!intakeResult.Accepted)
+            {
+                return SourceRefreshResult.Reject(
+                    intakeResult.FailureCode ?? "source-relink-rejected",
+                    intakeResult.FailureDescription
+                        ?? "The selected replacement could not be validated.");
+            }
+
+            var validated = intakeResult.Source;
+            if (!IsCompatibleRelink(source, validated))
+            {
+                return SourceRefreshResult.Reject(
+                    "incompatible-replacement",
+                    "The selected replacement is not compatible with the unavailable source.");
+            }
+
+            var retainedIdentity = new LoadedSourceContract(
+                source.SourceId,
+                source.SourceSetId,
+                validated.Path,
+                source.IsIncluded,
+                validated.Status,
+                source.Kind)
+            {
+                ArchiveProvenance = validated.ArchiveProvenance
+            };
+            if (sourceSet.ContainsLogicalSource(retainedIdentity, source))
+            {
+                return SourceRefreshResult.Reject(
+                    "duplicate-path",
+                    "The selected replacement source is already loaded.");
+            }
+
+            var hasValidSourceSelection = HasValidSourceSelectionExcept(source)
+                || retainedIdentity.IsIncluded
+                && retainedIdentity.Status == LoadedSourceStatus.Ready;
+            var workflowResult = workflowCoordinator.RecordSourceSelectionChanged(
+                hasValidSourceSelection);
+            if (!workflowResult.Accepted)
+            {
+                return SourceRefreshResult.Reject(
+                    "workflow-rejected",
+                    workflowResult.Rejection?.Reason
+                        ?? "The workflow rejected the source relink.");
+            }
+
+            source.ApplyRefresh(retainedIdentity);
+            return SourceRefreshResult.Accept();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private static bool TryNormalizePath(string path, out string fullPath)
+    {
+        fullPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            fullPath = Path.GetFullPath(path);
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private static LoadedSourceContract? CreateRelinkRequest(
+        LoadedSourceItem source,
+        string fullPath)
+    {
+        ArchiveSourceProvenance? provenance = null;
+        if (source.ArchiveProvenance is { } archiveProvenance)
+        {
+            if (archiveProvenance.ArchiveLineage.Count == 0)
+            {
+                return null;
+            }
+
+            provenance = archiveProvenance with
+            {
+                OriginalArchivePath = fullPath,
+                ArchiveLineage = archiveProvenance.ArchiveLineage
+                    .Select((item, index) => index == 0 ? item with { Path = fullPath } : item)
+                    .ToArray()
+            };
+        }
+
+        return new LoadedSourceContract(
+            source.SourceId,
+            source.SourceSetId,
+            source.ArchiveProvenance is null ? fullPath : source.Path,
+            source.IsIncluded,
+            source.Status,
+            source.Kind)
+        {
+            ArchiveProvenance = provenance
+        };
+    }
+
+    private static bool IsCompatibleRelink(
+        LoadedSourceItem source,
+        LoadedSourceContract validated)
+    {
+        if (validated.SourceId != source.SourceId
+            || validated.SourceSetId != source.SourceSetId
+            || validated.Kind != source.Kind
+            || validated.Status != LoadedSourceStatus.Ready
+            || (source.ArchiveProvenance is null) != (validated.ArchiveProvenance is null))
+        {
+            return false;
+        }
+
+        if (source.ArchiveProvenance is not { } existingProvenance)
+        {
+            return true;
+        }
+
+        var validatedProvenance = validated.ArchiveProvenance!;
+        return validatedProvenance.OriginalArchiveSourceId
+                == existingProvenance.OriginalArchiveSourceId
+            && validatedProvenance.ArchiveNestingLevel
+                == existingProvenance.ArchiveNestingLevel
+            && string.Equals(
+                validatedProvenance.ArchiveMemberPath,
+                existingProvenance.ArchiveMemberPath,
+                StringComparison.OrdinalIgnoreCase);
+    }
+
     private bool HasValidSourceSelectionExcept(LoadedSourceItem excluded)
     {
         return sourceSet.Items.Any(source =>

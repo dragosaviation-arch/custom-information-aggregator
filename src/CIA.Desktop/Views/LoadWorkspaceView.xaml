@@ -672,6 +672,23 @@
                                            Style="{StaticResource CiaSecondaryTextStyle}"
                                            Text="{Binding SelectedSource.Path}"
                                            TextWrapping="Wrap" />
+                                <Button Margin="0,0,0,6"
+                                        HorizontalAlignment="Left"
+                                        Command="{Binding RelinkSourceCommand}"
+                                        CommandParameter="{Binding SelectedSource}"
+                                        Content="Relink...">
+                                    <Button.Style>
+                                        <Style BasedOn="{StaticResource CiaButtonStyle}" TargetType="Button">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SelectedSource.Status}"
+                                                             Value="{x:Static sources:LoadedSourceStatus.Unavailable}">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
