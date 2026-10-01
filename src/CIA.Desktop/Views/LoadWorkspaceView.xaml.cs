@@ -4,7 +4,6 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using CIA.Contracts.Sources;
-using CIA.Core.Runtime;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 
@@ -13,7 +12,6 @@ namespace CIA.Desktop.Views;
 public partial class LoadWorkspaceView : UserControl
 {
     private const double CompactLayoutBreakpoint = 1180;
-    private const double DefaultPaneSplitRatio = 2d / 3d;
     private const double SourceRowHeight = 33;
     private const double DropOverlaySafeSpace = 20;
     private bool? _dropOverlayVisible;
@@ -29,22 +27,10 @@ public partial class LoadWorkspaceView : UserControl
             typeof(DiscoveryWorkspaceViewModel),
             typeof(LoadWorkspaceView));
 
-    public static readonly DependencyProperty SettingsServiceProperty =
-        DependencyProperty.Register(
-            nameof(SettingsService),
-            typeof(ApplicationSettingsService),
-            typeof(LoadWorkspaceView));
-
     public DiscoveryWorkspaceViewModel? DiscoveryWorkspace
     {
         get => (DiscoveryWorkspaceViewModel?)GetValue(DiscoveryWorkspaceProperty);
         set => SetValue(DiscoveryWorkspaceProperty, value);
-    }
-
-    public ApplicationSettingsService? SettingsService
-    {
-        get => (ApplicationSettingsService?)GetValue(SettingsServiceProperty);
-        set => SetValue(SettingsServiceProperty, value);
     }
 
     private void OnViewLoaded(object sender, RoutedEventArgs e)
@@ -82,7 +68,6 @@ public partial class LoadWorkspaceView : UserControl
         LoadLeftColumn.MinWidth = 0;
         LoadLeftColumn.Width = new GridLength(1, GridUnitType.Star);
         LoadGapColumn.Width = new GridLength(0);
-        LoadPaneSplitter.Visibility = Visibility.Collapsed;
         LoadRightColumn.MinWidth = 0;
         LoadRightColumn.Width = new GridLength(0);
 
@@ -112,14 +97,10 @@ public partial class LoadWorkspaceView : UserControl
     private void ApplyWideLayout()
     {
         LoadLeftColumn.MinWidth = 600;
-        var splitRatio = ResolvePaneSplitRatio(
-            SettingsService?.Current.LoadPaneSplitRatio,
-            DefaultPaneSplitRatio);
-        LoadLeftColumn.Width = new GridLength(splitRatio, GridUnitType.Star);
+        LoadLeftColumn.Width = new GridLength(2, GridUnitType.Star);
         LoadGapColumn.Width = new GridLength(8);
         LoadRightColumn.MinWidth = 420;
-        LoadRightColumn.Width = new GridLength(1 - splitRatio, GridUnitType.Star);
-        LoadPaneSplitter.Visibility = Visibility.Visible;
+        LoadRightColumn.Width = new GridLength(1, GridUnitType.Star);
 
         LoadTopRow.Height = new GridLength(1, GridUnitType.Star);
         LoadStackGapRow.Height = new GridLength(0);
@@ -144,25 +125,6 @@ public partial class LoadWorkspaceView : UserControl
         Grid.SetColumn(SettingsPanel, 0);
     }
 
-    private void OnLoadPaneSplitterDragCompleted(object sender, DragCompletedEventArgs e)
-    {
-        var totalWidth = LoadLeftColumn.ActualWidth + LoadRightColumn.ActualWidth;
-        if (SettingsService is null || totalWidth <= 0)
-        {
-            return;
-        }
-
-        var ratio = ResolvePaneSplitRatio(
-            LoadLeftColumn.ActualWidth / totalWidth,
-            DefaultPaneSplitRatio);
-        SettingsService.Save(SettingsService.Current with { LoadPaneSplitRatio = ratio });
-    }
-
-    private static double ResolvePaneSplitRatio(double? ratio, double fallback) =>
-        ratio is >= 0.2 and <= 0.8 && double.IsFinite(ratio.Value)
-            ? ratio.Value
-            : fallback;
-
     private void OnSourceRowsLayoutUpdated(object? sender, EventArgs e)
     {
         UpdateDropOverlayVisibility();
@@ -175,6 +137,44 @@ public partial class LoadWorkspaceView : UserControl
             viewModel.SetHighlightedSources(
                 SourceRowsList.SelectedItems.Cast<LoadedSourceItem>());
         }
+    }
+
+    private void OnLoadColumnDividerDragDelta(object sender, DragDeltaEventArgs e)
+    {
+        if (DataContext is LoadWorkspaceViewModel viewModel
+            && sender is Thumb { Tag: string tag }
+            && TryParseColumnPair(tag, out var leftKey, out var rightKey))
+        {
+            viewModel.ResizeColumns(leftKey, rightKey, e.HorizontalChange);
+        }
+    }
+
+    private void OnLoadColumnDividerDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (DataContext is LoadWorkspaceViewModel viewModel
+            && sender is Thumb { Tag: string tag }
+            && TryParseColumnPair(tag, out var leftKey, out var rightKey))
+        {
+            viewModel.PersistColumnWidths(leftKey, rightKey);
+        }
+    }
+
+    private static bool TryParseColumnPair(
+        string value,
+        out string leftKey,
+        out string rightKey)
+    {
+        var separator = value.IndexOf('|', StringComparison.Ordinal);
+        if (separator <= 0 || separator >= value.Length - 1)
+        {
+            leftKey = string.Empty;
+            rightKey = string.Empty;
+            return false;
+        }
+
+        leftKey = value[..separator];
+        rightKey = value[(separator + 1)..];
+        return true;
     }
 
     private void OnAddFilesSetMenuClick(object sender, RoutedEventArgs e)

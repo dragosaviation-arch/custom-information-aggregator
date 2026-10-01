@@ -7,6 +7,17 @@
              Loaded="OnViewLoaded"
              SizeChanged="OnViewSizeChanged"
              SnapsToDevicePixels="True">
+    <UserControl.Resources>
+        <Style x:Key="LoadColumnResizeThumbStyle" TargetType="Thumb">
+            <Setter Property="Width" Value="7" />
+            <Setter Property="HorizontalAlignment" Value="Right" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Cursor" Value="SizeWE" />
+            <EventSetter Event="DragDelta" Handler="OnLoadColumnDividerDragDelta" />
+            <EventSetter Event="DragCompleted" Handler="OnLoadColumnDividerDragCompleted" />
+        </Style>
+    </UserControl.Resources>
     <Grid x:Name="LoadLayout"
           Margin="{StaticResource CiaWorkspaceMargin}"
           MinHeight="0">
@@ -259,12 +270,12 @@
                         <Grid Margin="6,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="34" />
-                                <ColumnDefinition Width="1.45*" MinWidth="110" />
-                                <ColumnDefinition Width="1.9*" MinWidth="135" />
-                                <ColumnDefinition Width="64" />
-                                <ColumnDefinition Width="42" />
-                                <ColumnDefinition Width="72" />
-                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="{Binding SourceColumnWidth}" MinWidth="110" />
+                                <ColumnDefinition Width="{Binding PathColumnWidth}" MinWidth="135" />
+                                <ColumnDefinition Width="{Binding SourceSetColumnWidth}" MinWidth="64" />
+                                <ColumnDefinition Width="{Binding LevelColumnWidth}" MinWidth="36" />
+                                <ColumnDefinition Width="{Binding SizeColumnWidth}" MinWidth="56" />
+                                <ColumnDefinition Width="{Binding StatusColumnWidth}" MinWidth="80" />
                                 <ColumnDefinition Width="36" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="1"
@@ -287,6 +298,11 @@
                             <TextBlock Grid.Column="6"
                                        Style="{StaticResource CiaSourceHeaderTextStyle}"
                                        Text="Status" />
+                            <Thumb Grid.Column="1" Tag="load.source|load.path" Style="{StaticResource LoadColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="2" Tag="load.path|load.sourceSet" Style="{StaticResource LoadColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="3" Tag="load.sourceSet|load.level" Style="{StaticResource LoadColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="4" Tag="load.level|load.size" Style="{StaticResource LoadColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="5" Tag="load.size|load.status" Style="{StaticResource LoadColumnResizeThumbStyle}" />
                         </Grid>
                     </Border>
 
@@ -371,12 +387,12 @@
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="34" />
-                                                <ColumnDefinition Width="1.45*" MinWidth="110" />
-                                                <ColumnDefinition Width="1.9*" MinWidth="135" />
-                                                <ColumnDefinition Width="64" />
-                                                <ColumnDefinition Width="42" />
-                                                <ColumnDefinition Width="72" />
-                                                <ColumnDefinition Width="100" />
+                                                <ColumnDefinition Width="{Binding DataContext.SourceColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="110" />
+                                                <ColumnDefinition Width="{Binding DataContext.PathColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="135" />
+                                                <ColumnDefinition Width="{Binding DataContext.SourceSetColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="64" />
+                                                <ColumnDefinition Width="{Binding DataContext.LevelColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="36" />
+                                                <ColumnDefinition Width="{Binding DataContext.SizeColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="56" />
+                                                <ColumnDefinition Width="{Binding DataContext.StatusColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="80" />
                                                 <ColumnDefinition Width="36" />
                                             </Grid.ColumnDefinitions>
                                             <CheckBox HorizontalAlignment="Center"
@@ -534,9 +550,7 @@
                                  Maximum="{Binding ProgressMaximum, Mode=OneWay}"
                                  IsIndeterminate="{Binding IsProgressIndeterminate, Mode=OneWay}"
                                  Value="{Binding ProgressValue, Mode=OneWay}"
-                                 Background="{StaticResource CiaProgressTrackBrush}"
-                                 BorderThickness="0"
-                                 Foreground="{StaticResource CiaAccentBrush}" />
+                                 Style="{StaticResource CiaDeterminateProgressBarStyle}" />
                     <Grid Margin="0,6,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -605,16 +619,6 @@
                 </Grid>
             </Border>
         </Grid>
-
-        <GridSplitter x:Name="LoadPaneSplitter"
-                      Grid.Row="0"
-                      Grid.Column="1"
-                      HorizontalAlignment="Stretch"
-                      VerticalAlignment="Stretch"
-                      DragCompleted="OnLoadPaneSplitterDragCompleted"
-                      ResizeBehavior="PreviousAndNext"
-                      ResizeDirection="Columns"
-                      ShowsPreview="False" />
 
         <Grid x:Name="LoadRightRail"
               Grid.Row="0"
@@ -847,16 +851,19 @@
                                            FontWeight="ExtraBold"
                                            Foreground="{StaticResource CiaAccentBrush}"
                                            Text="SOURCE SET" />
-                                <ComboBox Height="29"
+                                <ComboBox x:Name="ActiveSourceSetSelector"
+                                          Height="29"
                                           DisplayMemberPath="Name"
                                           ItemsSource="{Binding SourceSets}"
                                           SelectedItem="{Binding ActiveSourceSet, Mode=TwoWay}" />
-                                <TextBox Margin="0,5,0,0"
+                                <TextBox x:Name="SourceSetNameInput"
+                                         Margin="0,5,0,0"
                                          MaxLength="100"
                                          Style="{StaticResource CiaTextInputStyle}"
                                          Text="{Binding ActiveSourceSetName, UpdateSourceTrigger=PropertyChanged}" />
                                 <StackPanel Margin="0,5,0,8" Orientation="Horizontal">
-                                    <Button Margin="0,0,5,0"
+                                    <Button x:Name="CreateSourceSetButton"
+                                            Margin="0,0,5,0"
                                             Command="{Binding CreateSourceSetCommand}"
                                             Style="{StaticResource CiaButtonStyle}"
                                             Content="Create Set" />
@@ -874,18 +881,21 @@
                                           Content="Include XML files"
                                           FontWeight="SemiBold"
                                           IsChecked="{Binding IncludeXmlFiles}"
+                                          ToolTipService.InitialShowDelay="500"
                                           ToolTip="Include supported XML files found in the selected folder." />
                                 <Border Style="{StaticResource CiaDividerStyle}" />
                                 <CheckBox Padding="0,4"
                                           Content="Include archives"
                                           FontWeight="SemiBold"
                                           IsChecked="{Binding IncludeArchives}"
+                                          ToolTipService.InitialShowDelay="500"
                                           ToolTip="Include supported archives found inside the selected folder. Add Archive is unaffected." />
                                 <Border Style="{StaticResource CiaDividerStyle}" />
                                 <CheckBox Padding="0,4"
                                           Content="Search subfolders"
                                           FontWeight="SemiBold"
                                           IsChecked="{Binding SearchSubfolders}"
+                                          ToolTipService.InitialShowDelay="500"
                                           ToolTip="Traverse subfolders recursively when a folder is added." />
                             </StackPanel>
                             <StackPanel Grid.Column="2">
@@ -895,22 +905,18 @@
                                            Foreground="{StaticResource CiaAccentBrush}"
                                            Text="WORKFLOW" />
                                 <CheckBox Padding="0,4"
-                                          Content="Open Discovery when loading completes"
+                                          Content="Open Discovery when generation completes"
                                           FontWeight="SemiBold"
-                                          IsChecked="{Binding OpenDiscoveryWhenLoadingCompletes}"
-                                          ToolTip="Navigate after completion. Discovery is not started automatically." />
+                                          IsChecked="{Binding OpenDiscoveryWhenGenerationCompletes}"
+                                          ToolTipService.InitialShowDelay="500"
+                                          ToolTip="Navigate to Discovery after a successful explicit Discovery generation or update." />
                                 <Border Style="{StaticResource CiaDividerStyle}" />
                                 <CheckBox Padding="0,4"
-                                          IsChecked="{Binding DontWarnWhenRemovingEntries}">
-                                    <StackPanel Margin="7,0,0,0">
-                                        <TextBlock FontWeight="SemiBold"
-                                                   Text="Don't warn when removing entries"
-                                                   TextWrapping="Wrap" />
-                                        <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                                   Text="Skip the removal confirmation for this session."
-                                                   TextWrapping="Wrap" />
-                                    </StackPanel>
-                                </CheckBox>
+                                          Content="Don't warn when removing entries"
+                                          FontWeight="SemiBold"
+                                          IsChecked="{Binding DontWarnWhenRemovingEntries}"
+                                          ToolTipService.InitialShowDelay="500"
+                                          ToolTip="Remove checked entries immediately without showing the confirmation dialog. Source files are never deleted." />
                             </StackPanel>
                         </Grid>
                     </ScrollViewer>

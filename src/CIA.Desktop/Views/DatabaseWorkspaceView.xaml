@@ -236,12 +236,10 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="24" />
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="60" />
                                     <ColumnDefinition Width="54" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="1" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Column" />
-                                <TextBlock Grid.Column="2" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Width" />
-                                <TextBlock Grid.Column="3" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Order" />
+                                <TextBlock Grid.Column="2" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Order" />
                             </Grid>
                             <ScrollViewer Grid.Row="3"
                                           MaxHeight="300"
@@ -253,7 +251,6 @@
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="24" />
                                                     <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="60" />
                                                     <ColumnDefinition Width="54" />
                                                 </Grid.ColumnDefinitions>
                                                 <CheckBox VerticalAlignment="Center"
@@ -264,14 +261,7 @@
                                                            VerticalAlignment="Center"
                                                            Text="{Binding DatabaseField}"
                                                            TextTrimming="CharacterEllipsis" />
-                                                <TextBox Grid.Column="2"
-                                                         Width="56"
-                                                         Height="24"
-                                                         Padding="4,0"
-                                                         HorizontalContentAlignment="Right"
-                                                         VerticalContentAlignment="Center"
-                                                         Text="{Binding Width, UpdateSourceTrigger=LostFocus}" />
-                                                <StackPanel Grid.Column="3"
+                                                <StackPanel Grid.Column="2"
                                                             HorizontalAlignment="Right"
                                                             Orientation="Horizontal">
                                                     <Button Width="24"
@@ -385,8 +375,17 @@
                                                 <Border Width="{Binding Width}"
                                                         BorderBrush="{StaticResource CiaDividerBrush}"
                                                         BorderThickness="0,0,1,0">
-                                                    <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
-                                                               Text="{Binding DatabaseField}" />
+                                                    <Grid>
+                                                        <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
+                                                                   Text="{Binding DatabaseField}" />
+                                                        <Thumb Width="7"
+                                                               HorizontalAlignment="Right"
+                                                               Background="Transparent"
+                                                               Cursor="SizeWE"
+                                                               DragStarted="OnDatabaseColumnResizeStarted"
+                                                               DragDelta="OnDatabaseColumnResizeDelta"
+                                                               DragCompleted="OnDatabaseColumnResizeCompleted" />
+                                                    </Grid>
                                                 </Border>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
@@ -486,6 +485,19 @@
                             </ScrollViewer>
                         </Grid>
                     </ScrollViewer>
+                    <Border x:Name="DatabaseColumnSizeFeedback"
+                            Margin="0,34,12,0"
+                            Padding="8,4"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Top"
+                            Panel.ZIndex="4"
+                            Background="{StaticResource CiaTextPrimaryBrush}"
+                            CornerRadius="5"
+                            IsHitTestVisible="False"
+                            Visibility="Collapsed">
+                        <TextBlock x:Name="DatabaseColumnSizeFeedbackText"
+                                   Foreground="White" />
+                    </Border>
                     <StackPanel Margin="0,30,0,0"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
@@ -537,39 +549,10 @@
 
             <Grid x:Name="LowerPanelGrid" Grid.Row="1" MinHeight="0">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition x:Name="ExportFieldsColumn" Width="*" MinWidth="360" />
+                    <ColumnDefinition x:Name="ExportFieldsColumn" Width="*" />
                     <ColumnDefinition x:Name="LowerPanelGapColumn" Width="8" />
-                    <ColumnDefinition x:Name="ExcelExportColumn" Width="*" MinWidth="360" />
+                    <ColumnDefinition x:Name="ExcelExportColumn" Width="*" />
                 </Grid.ColumnDefinitions>
-
-                <GridSplitter x:Name="DatabasePaneSplitter"
-                              Grid.Column="1"
-                              Panel.ZIndex="10"
-                              HorizontalAlignment="Stretch"
-                              VerticalAlignment="Stretch"
-                              DragStarted="OnDatabasePaneSplitterDragStarted"
-                              DragDelta="OnDatabasePaneSplitterDragDelta"
-                              DragCompleted="OnDatabasePaneSplitterDragCompleted"
-                              ResizeBehavior="PreviousAndNext"
-                              ResizeDirection="Columns"
-                              ShowsPreview="False" />
-                <Border x:Name="DatabasePaneSizeFeedback"
-                        Grid.ColumnSpan="3"
-                        Panel.ZIndex="20"
-                        Margin="0,5,0,0"
-                        Padding="8,3"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Top"
-                        Background="{StaticResource CiaPanelBrush}"
-                        BorderBrush="{StaticResource CiaBorderStrongBrush}"
-                        BorderThickness="1"
-                        CornerRadius="6"
-                        IsHitTestVisible="False"
-                        Visibility="Collapsed">
-                    <TextBlock x:Name="DatabasePaneSizeFeedbackText"
-                               FontWeight="Bold"
-                               Foreground="{StaticResource CiaTextSecondaryBrush}" />
-                </Border>
 
                 <Border x:Name="ExportFieldsPanel"
                         Grid.Column="0"

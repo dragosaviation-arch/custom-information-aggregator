@@ -2,32 +2,20 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
-using CIA.Core.Runtime;
+using CIA.Desktop.Presentation;
 
 namespace CIA.Desktop.Views;
 
 public partial class DatabaseWorkspaceView : UserControl
 {
     private const double CompactLayoutBreakpoint = 1180;
-    private const double DefaultPaneSplitRatio = 0.5;
     private bool _isCompact;
     private bool _showExcelExport;
+    private DatabaseColumnWidthFeedback? _columnResize;
 
     public DatabaseWorkspaceView()
     {
         InitializeComponent();
-    }
-
-    public static readonly DependencyProperty SettingsServiceProperty =
-        DependencyProperty.Register(
-            nameof(SettingsService),
-            typeof(ApplicationSettingsService),
-            typeof(DatabaseWorkspaceView));
-
-    public ApplicationSettingsService? SettingsService
-    {
-        get => (ApplicationSettingsService?)GetValue(SettingsServiceProperty);
-        set => SetValue(SettingsServiceProperty, value);
     }
 
     private void OnViewLoaded(object sender, RoutedEventArgs e)
@@ -83,15 +71,9 @@ public partial class DatabaseWorkspaceView : UserControl
     private void ApplyWideLayout()
     {
         LowerTabs.Visibility = Visibility.Collapsed;
-        var splitRatio = ResolvePaneSplitRatio(
-            SettingsService?.Current.DatabasePaneSplitRatio,
-            DefaultPaneSplitRatio);
-        ExportFieldsColumn.MinWidth = 360;
-        ExportFieldsColumn.Width = new GridLength(splitRatio, GridUnitType.Star);
+        ExportFieldsColumn.Width = new GridLength(1, GridUnitType.Star);
         LowerPanelGapColumn.Width = new GridLength(8);
-        ExcelExportColumn.MinWidth = 360;
-        ExcelExportColumn.Width = new GridLength(1 - splitRatio, GridUnitType.Star);
-        DatabasePaneSplitter.Visibility = Visibility.Visible;
+        ExcelExportColumn.Width = new GridLength(1, GridUnitType.Star);
         Grid.SetColumn(ExportFieldsPanel, 0);
         Grid.SetColumn(ExcelExportPanel, 2);
         ExportFieldsPanel.Visibility = Visibility.Visible;
@@ -112,13 +94,9 @@ public partial class DatabaseWorkspaceView : UserControl
     private void ApplyCompactLayout()
     {
         LowerTabs.Visibility = Visibility.Visible;
-        ExportFieldsColumn.MinWidth = 0;
         ExportFieldsColumn.Width = new GridLength(1, GridUnitType.Star);
         LowerPanelGapColumn.Width = new GridLength(0);
-        ExcelExportColumn.MinWidth = 0;
         ExcelExportColumn.Width = new GridLength(0);
-        DatabasePaneSplitter.Visibility = Visibility.Collapsed;
-        DatabasePaneSizeFeedback.Visibility = Visibility.Collapsed;
         Grid.SetColumn(ExportFieldsPanel, 0);
         Grid.SetColumn(ExcelExportPanel, 0);
 
@@ -160,55 +138,52 @@ public partial class DatabaseWorkspaceView : UserControl
             isActive ? "CiaAccentBrush" : "CiaTextSecondaryBrush");
     }
 
-    private void OnDatabasePaneSplitterDragStarted(object sender, DragStartedEventArgs e)
+    private void OnDatabaseColumnResizeStarted(object sender, DragStartedEventArgs e)
     {
-        if (_isCompact)
+        if (sender is not Thumb { DataContext: DatabaseColumnPresentation column }
+            || DataContext is not DatabaseWorkspaceViewModel viewModel)
         {
             return;
         }
 
-        UpdateDatabasePaneSizeFeedback();
-        DatabasePaneSizeFeedback.Visibility = Visibility.Visible;
+        _columnResize = viewModel.GetAdjacentDatabaseColumnWidths(column);
+        ShowColumnSizeFeedback(_columnResize);
     }
 
-    private void OnDatabasePaneSplitterDragDelta(object sender, DragDeltaEventArgs e)
+    private void OnDatabaseColumnResizeDelta(object sender, DragDeltaEventArgs e)
     {
-        if (!_isCompact)
-        {
-            UpdateDatabasePaneSizeFeedback();
-        }
-    }
-
-    private void OnDatabasePaneSplitterDragCompleted(object sender, DragCompletedEventArgs e)
-    {
-        if (_isCompact)
+        if (sender is not Thumb { DataContext: DatabaseColumnPresentation column }
+            || DataContext is not DatabaseWorkspaceViewModel viewModel)
         {
             return;
         }
 
-        UpdateDatabasePaneSizeFeedback();
-        DatabasePaneSizeFeedback.Visibility = Visibility.Collapsed;
-        var totalWidth = ExportFieldsColumn.ActualWidth + ExcelExportColumn.ActualWidth;
-        if (SettingsService is null || totalWidth <= 0)
+        _columnResize = viewModel.ResizeAdjacentDatabaseColumns(column, e.HorizontalChange);
+        ShowColumnSizeFeedback(_columnResize);
+    }
+
+    private void OnDatabaseColumnResizeCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (_columnResize is { } resize
+            && DataContext is DatabaseWorkspaceViewModel viewModel)
         {
+            viewModel.PersistDatabaseColumnWidths([resize.LeftColumn, resize.RightColumn]);
+        }
+
+        _columnResize = null;
+        DatabaseColumnSizeFeedback.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowColumnSizeFeedback(DatabaseColumnWidthFeedback? feedback)
+    {
+        if (feedback is null)
+        {
+            DatabaseColumnSizeFeedback.Visibility = Visibility.Collapsed;
             return;
         }
 
-        var ratio = ResolvePaneSplitRatio(
-            ExportFieldsColumn.ActualWidth / totalWidth,
-            DefaultPaneSplitRatio);
-        SettingsService.Save(
-            SettingsService.Current with { DatabasePaneSplitRatio = ratio });
+        DatabaseColumnSizeFeedbackText.Text = $"{feedback.LeftWidth:0} / {feedback.RightWidth:0}";
+        DatabaseColumnSizeFeedback.Visibility = Visibility.Visible;
     }
 
-    private void UpdateDatabasePaneSizeFeedback()
-    {
-        DatabasePaneSizeFeedbackText.Text =
-            $"{ExportFieldsColumn.ActualWidth:0} / {ExcelExportColumn.ActualWidth:0}";
-    }
-
-    private static double ResolvePaneSplitRatio(double? ratio, double fallback) =>
-        ratio is >= 0.2 and <= 0.8 && double.IsFinite(ratio.Value)
-            ? ratio.Value
-            : fallback;
 }

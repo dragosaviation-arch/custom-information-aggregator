@@ -345,16 +345,27 @@ public sealed class ApplicationSettingsStore
             SettingsDirectory = settingsDirectory,
             PersistentArchiveExtractionDirectory = extractionDirectory,
             LastUsedOutputDirectory = outputDirectory,
-            LoadPaneSplitRatio = NormalizePaneSplitRatio(settings.LoadPaneSplitRatio),
-            DiscoveryPaneSplitRatio = NormalizePaneSplitRatio(settings.DiscoveryPaneSplitRatio),
-            DatabasePaneSplitRatio = NormalizePaneSplitRatio(settings.DatabasePaneSplitRatio)
+            ColumnWidths = NormalizeColumnWidths(settings.ColumnWidths)
         };
     }
 
-    private static double? NormalizePaneSplitRatio(double? ratio) =>
-        ratio is >= 0.2 and <= 0.8 && double.IsFinite(ratio.Value)
-            ? ratio
-            : null;
+    private static Dictionary<string, double> NormalizeColumnWidths(
+        IReadOnlyDictionary<string, double>? widths)
+    {
+        if (widths is null)
+        {
+            return [];
+        }
+
+        return widths
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.Key)
+                            && double.IsFinite(entry.Value)
+                            && entry.Value is >= 24 and <= 2000)
+            .ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value,
+                StringComparer.Ordinal);
+    }
 
     private static bool ArchiveNestingDepthIsValid(
         CIA.Contracts.Sources.ArchiveNestingDepth depth) => depth.Value >= 1;

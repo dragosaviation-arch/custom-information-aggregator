@@ -60,44 +60,72 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(load, "Maximum=\"{Binding ProgressMaximum, Mode=OneWay}\"");
         StringAssert.Contains(load, "Value=\"{Binding ProgressValue, Mode=OneWay}\"");
         StringAssert.Contains(load, "IsIndeterminate=\"{Binding IsProgressIndeterminate, Mode=OneWay}\"");
-        StringAssert.Contains(load, "Foreground=\"{StaticResource CiaAccentBrush}\"");
+        StringAssert.Contains(load, "Style=\"{StaticResource CiaDeterminateProgressBarStyle}\"");
         StringAssert.Contains(load, "ToolTip=\"Include supported XML files found in the selected folder.\"");
         StringAssert.Contains(load, "ToolTip=\"Include supported archives found inside the selected folder. Add Archive is unaffected.\"");
         StringAssert.Contains(load, "ToolTip=\"Traverse subfolders recursively when a folder is added.\"");
-        StringAssert.Contains(load, "ToolTip=\"Navigate after completion. Discovery is not started automatically.\"");
+        StringAssert.Contains(load, "Content=\"Open Discovery when generation completes\"");
+        StringAssert.Contains(load, "ToolTip=\"Navigate to Discovery after a successful explicit Discovery generation or update.\"");
+        StringAssert.Contains(load, "ToolTip=\"Remove checked entries immediately without showing the confirmation dialog. Source files are never deleted.\"");
+        Assert.IsFalse(load.Contains("Skip the confirmation modal; files are never deleted.", StringComparison.Ordinal));
     }
 
     [TestMethod]
-    public void MajorPanesAreResizableWithoutChangingResponsiveOrRowSelectionModels()
+    public void ActualDataColumnsAreResizableWithoutMajorPaneSplittersOrNumericWidthEditor()
     {
         var load = ReadDesktopFile("Views", "LoadWorkspaceView.xaml");
         var discovery = ReadDesktopFile("Views", "DiscoveryWorkspaceView.xaml");
         var database = ReadDesktopFile("Views", "DatabaseWorkspaceView.xaml");
+        var settings = ReadDesktopFile("Views", "SettingsWorkspaceView.xaml");
         var loadCode = ReadDesktopFile("Views", "LoadWorkspaceView.xaml.cs");
         var discoveryCode = ReadDesktopFile("Views", "DiscoveryWorkspaceView.xaml.cs");
         var databaseCode = ReadDesktopFile("Views", "DatabaseWorkspaceView.xaml.cs");
+        var settingsCode = ReadDesktopFile("Views", "SettingsWorkspaceView.xaml.cs");
 
-        StringAssert.Contains(load, "x:Name=\"LoadPaneSplitter\"");
-        StringAssert.Contains(discovery, "x:Name=\"DiscoveryPaneSplitter\"");
-        StringAssert.Contains(database, "x:Name=\"DatabasePaneSplitter\"");
+        Assert.IsFalse(load.Contains("LoadPaneSplitter", StringComparison.Ordinal));
+        Assert.IsFalse(discovery.Contains("DiscoveryPaneSplitter", StringComparison.Ordinal));
+        Assert.IsFalse(database.Contains("DatabasePaneSplitter", StringComparison.Ordinal));
         StringAssert.Contains(load, "SelectionMode=\"Extended\"");
 
         StringAssert.Contains(loadCode, "LoadLeftColumn.MinWidth = 600");
         StringAssert.Contains(loadCode, "LoadRightColumn.MinWidth = 420");
         StringAssert.Contains(discoveryCode, "DiscoveryLeftColumn.MinWidth = 580");
         StringAssert.Contains(discoveryCode, "DiscoveryRightColumn.MinWidth = 360");
-        StringAssert.Contains(databaseCode, "ExportFieldsColumn.MinWidth = 360");
-        StringAssert.Contains(databaseCode, "ExcelExportColumn.MinWidth = 360");
+        StringAssert.Contains(load, "LoadColumnResizeThumbStyle");
+        StringAssert.Contains(discovery, "DiscoveryColumnResizeThumbStyle");
+        StringAssert.Contains(database, "OnDatabaseColumnResizeDelta");
+        StringAssert.Contains(database, "x:Name=\"DatabaseColumnSizeFeedback\"");
+        StringAssert.Contains(databaseCode, "DatabaseColumnSizeFeedback.Visibility = Visibility.Visible");
+        StringAssert.Contains(databaseCode, "DatabaseColumnSizeFeedback.Visibility = Visibility.Collapsed");
+        StringAssert.Contains(settings, "<GridViewColumn Width=\"110\"");
+        StringAssert.Contains(settings, "OnLogEntriesPreviewMouseLeftButtonUp");
+        StringAssert.Contains(settingsCode, "PersistLogColumnWidths");
+        Assert.IsFalse(database.Contains("Text=\"{Binding Width, UpdateSourceTrigger=LostFocus}\"", StringComparison.Ordinal));
+        Assert.IsFalse(loadCode.Contains("PaneSplitRatio", StringComparison.Ordinal));
+        Assert.IsFalse(discoveryCode.Contains("PaneSplitRatio", StringComparison.Ordinal));
+        Assert.IsFalse(databaseCode.Contains("PaneSplitRatio", StringComparison.Ordinal));
+    }
 
-        StringAssert.Contains(loadCode, "LoadPaneSplitter.Visibility = Visibility.Collapsed");
-        StringAssert.Contains(discoveryCode, "DiscoveryPaneSplitter.Visibility = Visibility.Collapsed");
-        StringAssert.Contains(databaseCode, "DatabasePaneSplitter.Visibility = Visibility.Collapsed");
-        StringAssert.Contains(database, "x:Name=\"DatabasePaneSizeFeedback\"");
-        StringAssert.Contains(databaseCode, "DatabasePaneSizeFeedback.Visibility = Visibility.Visible");
-        StringAssert.Contains(databaseCode, "DatabasePaneSizeFeedback.Visibility = Visibility.Collapsed");
+    [TestMethod]
+    public void ProgressBarsAreDeterminateBlueAndDiscoveryDatabasePreferenceIsEnabled()
+    {
+        var load = ReadDesktopFile("Views", "LoadWorkspaceView.xaml");
+        var discovery = ReadDesktopFile("Views", "DiscoveryWorkspaceView.xaml");
+        var theme = ReadDesktopFile("Themes", "CiaTheme.xaml");
 
-        // The existing numeric width is per reviewed data column, not a major-pane width.
-        StringAssert.Contains(database, "Text=\"{Binding Width, UpdateSourceTrigger=LostFocus}\"");
+        StringAssert.Contains(theme, "x:Key=\"CiaDeterminateProgressBarStyle\"");
+        StringAssert.Contains(theme, "Foreground\" Value=\"{StaticResource CiaAccentBrush}\"");
+        Assert.IsFalse(theme.Contains("CiaSuccessBrush", StringComparison.Ordinal)
+            && theme.Contains("CiaDeterminateProgressBarStyle", StringComparison.Ordinal)
+            && theme.IndexOf("CiaSuccessBrush", StringComparison.Ordinal)
+                > theme.IndexOf("CiaDeterminateProgressBarStyle", StringComparison.Ordinal));
+        StringAssert.Contains(load, "IsIndeterminate=\"{Binding IsProgressIndeterminate, Mode=OneWay}\"");
+        StringAssert.Contains(discovery, "IsIndeterminate=\"{Binding IsProgressIndeterminate}\"");
+        StringAssert.Contains(discovery, "Maximum=\"{Binding ProgressMaximum}\"");
+        StringAssert.Contains(discovery, "Value=\"{Binding ProgressValue, Mode=OneWay}\"");
+        Assert.IsFalse(discovery.Contains("IsIndeterminate=\"{Binding IsBusy}\"", StringComparison.Ordinal));
+        StringAssert.Contains(discovery, "IsChecked=\"{Binding OpenDatabaseWhenCreationCompletes}\"");
+        Assert.IsNotNull(FindNamedElement(discovery, "BuildDatabaseButton"));
     }
 
     [TestMethod]

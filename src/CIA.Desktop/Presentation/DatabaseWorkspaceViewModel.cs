@@ -789,6 +789,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
         ReorderColumns(_publishedColumnOrder);
         UpdatePositionsAndPresentation();
+        PersistDatabaseColumnWidths(_columns);
     }
 
     private void ResetHeaders()
@@ -864,6 +865,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 column = new DatabaseColumnPresentation(
                     columnIdentity,
                     publishedColumn);
+                RestoreDatabaseColumnWidth(column);
                 column.PropertyChanged += OnColumnPropertyChanged;
                 _columnCache.Add(columnIdentity, column);
             }
@@ -993,6 +995,64 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
 
     }
+
+    internal DatabaseColumnWidthFeedback? ResizeAdjacentDatabaseColumns(
+        DatabaseColumnPresentation leftColumn,
+        double horizontalChange)
+    {
+        ArgumentNullException.ThrowIfNull(leftColumn);
+
+        var leftIndex = _visibleColumns.IndexOf(leftColumn);
+        if (leftIndex < 0 || leftIndex >= _visibleColumns.Count - 1)
+        {
+            return null;
+        }
+
+        var rightColumn = _visibleColumns[leftIndex + 1];
+        var appliedChange = ColumnWidthPreferences.ApplyAdjacentDelta(
+            leftColumn.Width,
+            rightColumn.Width,
+            horizontalChange,
+            DatabaseColumnPresentation.MinimumWidth,
+            DatabaseColumnPresentation.MinimumWidth,
+            DatabaseColumnPresentation.MaximumWidth);
+        leftColumn.Width += appliedChange;
+        rightColumn.Width -= appliedChange;
+        return new DatabaseColumnWidthFeedback(
+            leftColumn,
+            rightColumn,
+            leftColumn.Width,
+            rightColumn.Width);
+    }
+
+    internal DatabaseColumnWidthFeedback? GetAdjacentDatabaseColumnWidths(
+        DatabaseColumnPresentation leftColumn)
+    {
+        return ResizeAdjacentDatabaseColumns(leftColumn, horizontalChange: 0);
+    }
+
+    internal void PersistDatabaseColumnWidths(
+        IEnumerable<DatabaseColumnPresentation> columns)
+    {
+        ColumnWidthPreferences.Save(
+            _settingsService,
+            columns.Select(column => (
+                GetDatabaseColumnPreferenceKey(column.MappingIdentity),
+                column.Width)).ToArray());
+    }
+
+    private void RestoreDatabaseColumnWidth(DatabaseColumnPresentation column)
+    {
+        column.Width = ColumnWidthPreferences.Resolve(
+            _settingsService,
+            GetDatabaseColumnPreferenceKey(column.MappingIdentity),
+            DatabaseColumnPresentation.DefaultWidth,
+            DatabaseColumnPresentation.MinimumWidth,
+            DatabaseColumnPresentation.MaximumWidth);
+    }
+
+    private static string GetDatabaseColumnPreferenceKey(string mappingIdentity) =>
+        $"database.review.{mappingIdentity}";
 
     private void OnWorkflowStateChanged(object? sender, WorkflowStateSnapshot e)
     {
@@ -1669,6 +1729,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             if (!_columnCache.TryGetValue(pair.Second, out var column))
             {
                 column = new DatabaseColumnPresentation(pair.Second, pair.First);
+                RestoreDatabaseColumnWidth(column);
                 column.PropertyChanged += OnColumnPropertyChanged;
                 _columnCache.Add(pair.Second, column);
             }
@@ -1889,8 +1950,8 @@ public sealed class DatabaseReviewCellPresentation
 public sealed class DatabaseColumnPresentation : ObservableObject
 {
     public const double DefaultWidth = 160;
-    private const double MinimumWidth = 60;
-    private const double MaximumWidth = 500;
+    internal const double MinimumWidth = 60;
+    internal const double MaximumWidth = 500;
     private string _databaseField;
     private bool _isVisible = true;
     private double _width = DefaultWidth;
@@ -1965,3 +2026,9 @@ public sealed class DatabaseColumnPresentation : ObservableObject
     }
 
 }
+
+internal sealed record DatabaseColumnWidthFeedback(
+    DatabaseColumnPresentation LeftColumn,
+    DatabaseColumnPresentation RightColumn,
+    double LeftWidth,
+    double RightWidth);

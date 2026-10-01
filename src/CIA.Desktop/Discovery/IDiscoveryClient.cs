@@ -11,6 +11,15 @@ public interface IDiscoveryClient
         IReadOnlyList<LoadedSourceContract> sources,
         CancellationToken cancellationToken = default);
 
+    Task<DiscoveryClientResult> RunAsync(
+        OperationCorrelation correlation,
+        IReadOnlyList<LoadedSourceContract> sources,
+        IProgress<DiscoveryProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
+        return RunAsync(correlation, sources, cancellationToken);
+    }
+
     Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
         DiscoveryOccurrenceLookup lookup,
         CancellationToken cancellationToken = default);

@@ -61,6 +61,30 @@
     <CornerRadius x:Key="CiaControlCornerRadius">7</CornerRadius>
     <Visibility x:Key="CiaNavigationSubtitleVisibility">Visible</Visibility>
 
+    <Style x:Key="CiaDeterminateProgressBarStyle" TargetType="ProgressBar">
+        <Setter Property="Background" Value="{StaticResource CiaProgressTrackBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource CiaAccentBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ProgressBar">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="2"
+                            SnapsToDevicePixels="True">
+                        <Grid x:Name="PART_Track" ClipToBounds="True">
+                            <Border x:Name="PART_Indicator"
+                                    HorizontalAlignment="Left"
+                                    Background="{TemplateBinding Foreground}"
+                                    CornerRadius="2" />
+                        </Grid>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <Style x:Key="CiaPanelStyle" TargetType="Border">
         <Setter Property="Background" Value="{StaticResource CiaPanelBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource CiaBorderBrush}" />
