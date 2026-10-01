@@ -29,6 +29,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private readonly IExportFolderPicker? _exportFolderPicker;
     private readonly IWorkbookCollisionResolver? _workbookCollisionResolver;
     private readonly ApplicationSettingsService? _settingsService;
+    private readonly PostExportBehaviorCoordinator? _postExportBehaviorCoordinator;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly ExportRoutingConfigurationPresentation _exportRouting = new();
     private readonly Dictionary<string, DatabaseColumnPresentation> _columnCache = new(
@@ -74,7 +75,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         WorkbookExportCoordinator? workbookExportCoordinator = null,
         IExportFolderPicker? exportFolderPicker = null,
         IWorkbookCollisionResolver? workbookCollisionResolver = null,
-        ApplicationSettingsService? settingsService = null)
+        ApplicationSettingsService? settingsService = null,
+        PostExportBehaviorCoordinator? postExportBehaviorCoordinator = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryConfiguration);
         ArgumentNullException.ThrowIfNull(workflowCoordinator);
@@ -88,6 +90,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _exportFolderPicker = exportFolderPicker;
         _workbookCollisionResolver = workbookCollisionResolver;
         _settingsService = settingsService;
+        _postExportBehaviorCoordinator = postExportBehaviorCoordinator;
         if (settingsService?.Startup.Settings.LastUsedOutputDirectory is { } rememberedOutput
             && Directory.Exists(rememberedOutput))
         {
@@ -1363,16 +1366,33 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
         WorkbookExportStatusText = "Exporting workbook batch...";
         NotifyExportReadinessChanged();
-        var result = await _workbookExportCoordinator.ExportAsync(
+        var execution = await _workbookExportCoordinator.ExportWithBatchAsync(
                 publicationPlan,
                 configuration)
             .ConfigureAwait(false);
         DispatchToUi(() =>
         {
-            var batch = _workbookExportCoordinator.LastBatch;
-            WorkbookExportStatusText = result.Accepted && batch is not null
-                ? $"Published {batch.Workbooks.Count:N0} workbook(s): {string.Join(", ", batch.Workbooks.Select(workbook => workbook.FinalPath))}"
-                : result.Rejection?.Reason ?? "The workbook batch was not published.";
+            var batch = execution.PublishedBatch;
+            if (execution.Command.Accepted
+                && batch is not null
+                && execution.Command.Operation?.OperationId == batch.OperationId)
+            {
+                var postExportAction = _postExportBehaviorCoordinator?.Apply(
+                    execution.Command.Operation.OperationId,
+                    batch);
+                WorkbookExportStatusText =
+                    $"Published {batch.Workbooks.Count:N0} workbook(s): {string.Join(", ", batch.Workbooks.Select(workbook => workbook.FinalPath))}";
+                if (postExportAction is { Succeeded: false })
+                {
+                    WorkbookExportStatusText = postExportAction.FailureDescription!;
+                }
+            }
+            else
+            {
+                WorkbookExportStatusText = execution.Command.Rejection?.Reason
+                    ?? "The workbook batch was not published.";
+            }
+
             NotifyExportReadinessChanged();
         });
     }

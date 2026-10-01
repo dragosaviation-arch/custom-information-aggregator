@@ -448,6 +448,242 @@ public sealed class ExtractionCoordinatorTests
     }
 
     [TestMethod]
+    public async Task FailedReplacementExportDoesNotReusePriorBatchForPostExportAction()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var extraction = context.CreateExtractionCoordinator(
+            new RecordingExtractionClient((correlation, basis) => Success(correlation, basis)));
+        Assert.IsTrue((await extraction.ExtractAsync()).Accepted);
+        var callCount = 0;
+        var exportClient = new RecordingWorkbookExportClient(
+            (correlation, result, snapshot, publicationPlan) =>
+            {
+                callCount++;
+                return callCount == 1
+                    ? SuccessfulWorkbookExport(correlation, result, snapshot, publicationPlan)
+                    : FailedWorkbookExport(correlation, "replacement-failed");
+            });
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        using var directory = new TemporaryDirectory("CIA.SPR89.Desktop.Tests");
+        var settings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(directory.Path));
+        Assert.IsTrue(settings.Save(settings.Current with
+        {
+            PostExportBehavior = PostExportBehavior.OpenExportedFile
+        }).Succeeded);
+        var launcher = new RecordingPostExportLauncher();
+        var postExport = new PostExportBehaviorCoordinator(
+            settings,
+            new StaticPostExportPrompt(PostExportChoice.StatusOnly),
+            launcher);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: new StaticExportFolderPicker(directory.Path),
+            workbookCollisionResolver: new RecordingCollisionResolver(_ => null),
+            settingsService: settings,
+            postExportBehaviorCoordinator: postExport);
+        viewModel.OutputFolder = directory.Path;
+        viewModel.AlwaysAskWhereToExport = false;
+
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+        var firstBatch = export.LastBatch;
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.IsNotNull(firstBatch);
+        Assert.AreSame(firstBatch, export.LastBatch);
+        CollectionAssert.AreEqual(
+            firstBatch.Workbooks.Select(workbook => workbook.FinalPath).ToArray(),
+            launcher.Paths.ToArray());
+        Assert.AreEqual(WorkflowOperationState.Failed, context.Workflow.Current.LatestOperation?.State);
+        StringAssert.Contains(viewModel.WorkbookExportStatusText, "replacement-failed");
+    }
+
+    [TestMethod]
+    public async Task CancelledExportRunsNoPostExportAction()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var extraction = context.CreateExtractionCoordinator(
+            new RecordingExtractionClient((correlation, basis) => Success(correlation, basis)));
+        Assert.IsTrue((await extraction.ExtractAsync()).Accepted);
+        var exportClient = new RecordingWorkbookExportClient(
+            (correlation, _, _, _) => new WorkbookExportClientResult(
+                false,
+                OperationCompletion.FromTerminalOutcome(
+                    correlation,
+                    OperationOutcome.Cancelled,
+                    [OperationItemStatus.Unprocessed(
+                        "workbook-batch-publication",
+                        "cancelled")]),
+                Batch: null,
+                FailureCode: "cancelled",
+                FailureDescription: "Workbook export was cancelled."));
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        using var directory = new TemporaryDirectory("CIA.SPR89.Desktop.Tests");
+        var settings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(directory.Path));
+        Assert.IsTrue(settings.Save(settings.Current with
+        {
+            PostExportBehavior = PostExportBehavior.AskEachTime
+        }).Succeeded);
+        var launcher = new RecordingPostExportLauncher();
+        var prompt = new StaticPostExportPrompt(PostExportChoice.OpenExportedFiles);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: new StaticExportFolderPicker(directory.Path),
+            workbookCollisionResolver: new RecordingCollisionResolver(_ => null),
+            settingsService: settings,
+            postExportBehaviorCoordinator: new PostExportBehaviorCoordinator(
+                settings,
+                prompt,
+                launcher));
+        viewModel.OutputFolder = directory.Path;
+        viewModel.AlwaysAskWhereToExport = false;
+
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(0, prompt.CallCount);
+        Assert.IsEmpty(launcher.Paths);
+        Assert.IsNull(export.LastBatch);
+        Assert.AreEqual(
+            WorkflowOperationState.Cancelled,
+            context.Workflow.Current.LatestOperation?.State);
+        StringAssert.Contains(viewModel.WorkbookExportStatusText, "cancelled");
+    }
+
+    [TestMethod]
+    public async Task OperationMismatchRunsNoPostExportAction()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var extraction = context.CreateExtractionCoordinator(
+            new RecordingExtractionClient((correlation, basis) => Success(correlation, basis)));
+        Assert.IsTrue((await extraction.ExtractAsync()).Accepted);
+        var exportClient = new RecordingWorkbookExportClient(
+            (correlation, result, snapshot, publicationPlan) =>
+            {
+                var success = SuccessfulWorkbookExport(
+                    correlation,
+                    result,
+                    snapshot,
+                    publicationPlan);
+                return success with
+                {
+                    Batch = new WorkbookExportBatchSummary(
+                        OperationId.CreateNew(),
+                        success.Batch!.ExtractionResultId,
+                        success.Batch.OutputDirectory,
+                        success.Batch.Workbooks)
+                };
+            });
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        using var directory = new TemporaryDirectory("CIA.SPR89.Desktop.Tests");
+        var settings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(directory.Path));
+        Assert.IsTrue(settings.Save(settings.Current with
+        {
+            PostExportBehavior = PostExportBehavior.OpenContainingFolder
+        }).Succeeded);
+        var launcher = new RecordingPostExportLauncher();
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: new StaticExportFolderPicker(directory.Path),
+            workbookCollisionResolver: new RecordingCollisionResolver(_ => null),
+            settingsService: settings,
+            postExportBehaviorCoordinator: new PostExportBehaviorCoordinator(
+                settings,
+                new StaticPostExportPrompt(PostExportChoice.StatusOnly),
+                launcher));
+        viewModel.OutputFolder = directory.Path;
+        viewModel.AlwaysAskWhereToExport = false;
+
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.IsEmpty(launcher.Paths);
+        Assert.IsNull(export.LastBatch);
+        Assert.AreEqual(WorkflowOperationState.Failed, context.Workflow.Current.LatestOperation?.State);
+        StringAssert.Contains(viewModel.WorkbookExportStatusText, "does not match");
+    }
+
+    [TestMethod]
+    public async Task ShellFailureAfterSuccessfulExportDoesNotChangeWorkflowOutcomeOrBatch()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var extraction = context.CreateExtractionCoordinator(
+            new RecordingExtractionClient((correlation, basis) => Success(correlation, basis)));
+        Assert.IsTrue((await extraction.ExtractAsync()).Accepted);
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            new RecordingWorkbookExportClient(SuccessfulWorkbookExport),
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        using var directory = new TemporaryDirectory("CIA.SPR89.Desktop.Tests");
+        var settings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(directory.Path));
+        Assert.IsTrue(settings.Save(settings.Current with
+        {
+            PostExportBehavior = PostExportBehavior.OpenExportedFile
+        }).Succeeded);
+        var launcher = new RecordingPostExportLauncher
+        {
+            Failure = new InvalidOperationException("shell unavailable")
+        };
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: new StaticExportFolderPicker(directory.Path),
+            workbookCollisionResolver: new RecordingCollisionResolver(_ => null),
+            settingsService: settings,
+            postExportBehaviorCoordinator: new PostExportBehaviorCoordinator(
+                settings,
+                new StaticPostExportPrompt(PostExportChoice.StatusOnly),
+                launcher));
+        viewModel.OutputFolder = directory.Path;
+        viewModel.AlwaysAskWhereToExport = false;
+
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.IsNotNull(export.LastBatch);
+        Assert.AreEqual(
+            WorkflowOperationState.CompletedSuccessfully,
+            context.Workflow.Current.LatestOperation?.State);
+        CollectionAssert.AreEqual(
+            export.LastBatch.Workbooks.Select(workbook => workbook.FinalPath).ToArray(),
+            launcher.Paths.ToArray());
+        StringAssert.Contains(viewModel.WorkbookExportStatusText, "Export completed");
+        StringAssert.Contains(viewModel.WorkbookExportStatusText, "could not be opened");
+    }
+
+    [TestMethod]
     public async Task UnexpectedClientExceptionRejectsFirstExtractionAndRecordsFailure()
     {
         var context = await ExtractionContext.CreateAsync();
@@ -506,7 +742,7 @@ public sealed class ExtractionCoordinatorTests
             NullLogger<WorkbookExportCoordinator>.Instance);
         var configuration = new ExportConfigurationSnapshot([], []);
 
-        var unavailable = await coordinator.ExportAsync(
+        var unavailableExecution = await coordinator.ExportWithBatchAsync(
             new WorkbookPublicationPlan(
                 Path.GetFullPath("."),
                 [new WorkbookPublicationTarget(
@@ -514,15 +750,17 @@ public sealed class ExtractionCoordinatorTests
                     Path.Combine(Path.GetFullPath("."), "unavailable.xlsx"),
                     WorkbookPublicationDisposition.CreateNew)]),
             configuration);
+        var unavailable = unavailableExecution.Command;
 
         Assert.IsFalse(unavailable.Accepted);
         Assert.AreEqual(WorkflowRejectionCode.ExtractionNotCurrent, unavailable.Rejection?.Code);
+        Assert.IsNull(unavailableExecution.PublishedBatch);
 
         await context.BuildCurrentDatabaseAsync();
         Assert.IsTrue((await extraction.ExtractAsync()).Accepted);
         Assert.IsTrue(context.Workflow.RecordDiscoveryConfigurationChanged().Accepted);
 
-        var stale = await coordinator.ExportAsync(
+        var staleExecution = await coordinator.ExportWithBatchAsync(
             new WorkbookPublicationPlan(
                 Path.GetFullPath("."),
                 [new WorkbookPublicationTarget(
@@ -530,9 +768,11 @@ public sealed class ExtractionCoordinatorTests
                     Path.Combine(Path.GetFullPath("."), "stale.xlsx"),
                     WorkbookPublicationDisposition.CreateNew)]),
             configuration);
+        var stale = staleExecution.Command;
 
         Assert.IsFalse(stale.Accepted);
         Assert.AreEqual(WorkflowRejectionCode.ExtractionNotCurrent, stale.Rejection?.Code);
+        Assert.IsNull(staleExecution.PublishedBatch);
         Assert.AreEqual(0, exportClient.CallCount);
     }
 
@@ -723,6 +963,13 @@ public sealed class ExtractionCoordinatorTests
             NullLogger<WorkbookExportCoordinator>.Instance);
         var collisions = new RecordingCollisionResolver(_ => null);
         using var directory = new TemporaryDirectory("CIA.SPR88.Desktop.Tests");
+        var settings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(directory.Path));
+        Assert.IsTrue(settings.Save(settings.Current with
+        {
+            PostExportBehavior = PostExportBehavior.OpenExportedFile
+        }).Succeeded);
+        var launcher = new RecordingPostExportLauncher();
         using var viewModel = new DatabaseWorkspaceViewModel(
             context.Configuration,
             context.Workflow,
@@ -730,7 +977,12 @@ public sealed class ExtractionCoordinatorTests
             extractionCoordinator: extraction,
             workbookExportCoordinator: export,
             exportFolderPicker: new StaticExportFolderPicker(directory.Path),
-            workbookCollisionResolver: collisions);
+            workbookCollisionResolver: collisions,
+            settingsService: settings,
+            postExportBehaviorCoordinator: new PostExportBehaviorCoordinator(
+                settings,
+                new StaticPostExportPrompt(PostExportChoice.StatusOnly),
+                launcher));
         viewModel.OutputFolder = directory.Path;
         viewModel.AlwaysAskWhereToExport = false;
         var existingPath = Path.Combine(
@@ -742,6 +994,7 @@ public sealed class ExtractionCoordinatorTests
 
         Assert.AreEqual(1, collisions.CallCount);
         Assert.AreEqual(0, exportClient.CallCount);
+        Assert.IsEmpty(launcher.Paths);
         Assert.AreEqual("original", await File.ReadAllTextAsync(existingPath));
         Assert.IsNull(context.Workflow.Current.ActiveOperation);
         StringAssert.Contains(viewModel.WorkbookExportStatusText, "cancelled");
@@ -968,6 +1221,19 @@ public sealed class ExtractionCoordinatorTests
             FailureDescription: null);
     }
 
+    private static WorkbookExportClientResult FailedWorkbookExport(
+        OperationCorrelation correlation,
+        string description) =>
+        new(
+            false,
+            OperationCompletion.FromTerminalOutcome(
+                correlation,
+                OperationOutcome.Failed,
+                [OperationItemStatus.Failed("workbook-batch-publication", "export-failed")]),
+            Batch: null,
+            FailureCode: "export-failed",
+            FailureDescription: description);
+
     private sealed class RecordingExtractionClient : IExtractionClient
     {
         private readonly Func<
@@ -1093,6 +1359,33 @@ public sealed class ExtractionCoordinatorTests
         {
             CallCount++;
             return resolve(request);
+        }
+    }
+
+    private sealed class StaticPostExportPrompt(PostExportChoice choice) : IPostExportPrompt
+    {
+        public int CallCount { get; private set; }
+
+        public PostExportChoice Choose(WorkbookExportBatchSummary batch)
+        {
+            CallCount++;
+            return choice;
+        }
+    }
+
+    private sealed class RecordingPostExportLauncher : IPostExportLauncher
+    {
+        public List<string> Paths { get; } = [];
+
+        public Exception? Failure { get; init; }
+
+        public void Open(string path)
+        {
+            Paths.Add(path);
+            if (Failure is not null)
+            {
+                throw Failure;
+            }
         }
     }
 

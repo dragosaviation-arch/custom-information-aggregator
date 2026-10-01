@@ -108,6 +108,9 @@ public static class DesktopApplicationHost
             WorkflowOperationReadinessProvider>();
         builder.Services.AddSingleton<IExportFolderPicker, WindowsExportFolderPicker>();
         builder.Services.AddSingleton<IWorkbookCollisionResolver, WindowsWorkbookCollisionResolver>();
+        builder.Services.AddSingleton<IPostExportLauncher, WindowsPostExportLauncher>();
+        builder.Services.AddSingleton<IPostExportPrompt, WindowsPostExportPrompt>();
+        builder.Services.AddSingleton<PostExportBehaviorCoordinator>();
         builder.Services.AddSingleton<ISettingsFolderPicker, WindowsSettingsFolderPicker>();
         builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
         builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();
