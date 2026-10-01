@@ -63,6 +63,144 @@ public sealed class ApplicationSettingsPersistenceTests
     }
 
     [TestMethod]
+    public void ResetToDefaultsPersistsTheCompleteCanonicalConfiguration()
+    {
+        using var environment = new SettingsTestEnvironment();
+        var initial = environment.CreateService();
+        var configured = initial.Current with
+        {
+            TemporaryDirectory = environment.PathFor("Configured", "Temp"),
+            WorkingDirectory = environment.PathFor("Configured", "Working"),
+            ProfilesDirectory = environment.PathFor("Configured", "Profiles"),
+            SettingsDirectory = environment.PathFor("Configured", "Settings"),
+            TraverseSubfolders = false,
+            MaximumArchiveNestingDepth = ArchiveNestingDepth.From(9),
+            PersistentArchiveExtractionEnabled = true,
+            PersistentArchiveExtractionDirectory = environment.PathFor("Configured", "Extraction"),
+            LastUsedOutputDirectory = environment.CreateDirectory("Configured", "Output"),
+            PostExportBehavior = PostExportBehavior.AskEachTime
+        };
+        Assert.IsTrue(initial.Save(configured).Succeeded);
+        var service = environment.CreateService();
+        var expected = ApplicationSettings.CreateDefault(environment.LocalApplicationData);
+
+        var result = service.ResetToDefaults();
+
+        Assert.IsTrue(result.Succeeded, result.FailureDescription);
+        Assert.AreEqual(expected, result.Settings);
+        Assert.AreEqual(expected, service.Current);
+        Assert.IsNull(service.Current.LastUsedOutputDirectory);
+        Assert.AreEqual(PostExportBehavior.StatusOnly, service.Current.PostExportBehavior);
+        Assert.IsTrue(service.Current.TraverseSubfolders);
+        Assert.AreEqual(ArchiveNestingDepth.Default, service.Current.MaximumArchiveNestingDepth);
+        Assert.IsFalse(service.Current.PersistentArchiveExtractionEnabled);
+        Assert.IsNull(service.Current.PersistentArchiveExtractionDirectory);
+        Assert.IsTrue(service.IsRestartRequired);
+        Assert.AreEqual(configured.SettingsDirectory, service.RuntimePaths.SettingsDirectory);
+        Assert.AreEqual(expected, environment.CreateService().Current);
+    }
+
+    [TestMethod]
+    public void ResetPublicationFailurePreservesCurrentAndPersistedConfiguration()
+    {
+        using var environment = new SettingsTestEnvironment();
+        var initial = environment.CreateService();
+        var configured = initial.Current with
+        {
+            MaximumArchiveNestingDepth = ArchiveNestingDepth.From(8),
+            LastUsedOutputDirectory = environment.CreateDirectory("Output"),
+            PostExportBehavior = PostExportBehavior.OpenExportedFile
+        };
+        Assert.IsTrue(initial.Save(configured).Succeeded);
+        var settingsPath = environment.CreateService().Startup.SettingsFilePath;
+        var persistedBytes = File.ReadAllBytes(settingsPath);
+        var service = new ApplicationSettingsService(
+            environment.CreateStore(new AlwaysFailingWriter()));
+
+        var result = service.ResetToDefaults();
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreEqual(configured, service.Current);
+        CollectionAssert.AreEqual(persistedBytes, File.ReadAllBytes(settingsPath));
+        Assert.AreEqual(configured, environment.CreateService().Current);
+    }
+
+    [TestMethod]
+    public void ResetRepairsMalformedBootstrapAndFreshStartupLoadsCanonicalDefaults()
+    {
+        using var environment = new SettingsTestEnvironment();
+        var store = environment.CreateStore();
+        Directory.CreateDirectory(Path.GetDirectoryName(store.BootstrapFilePath)!);
+        File.WriteAllText(store.BootstrapFilePath, "{not-valid-json");
+        var service = new ApplicationSettingsService(store);
+        Assert.AreEqual(
+            ApplicationSettingsReadState.DefaultsBecauseBootstrapInvalid,
+            service.Startup.State);
+        var expected = ApplicationSettings.CreateDefault(environment.LocalApplicationData);
+
+        var result = service.ResetToDefaults();
+
+        Assert.IsTrue(result.Succeeded, result.FailureDescription);
+        using (var bootstrap = JsonDocument.Parse(File.ReadAllText(store.BootstrapFilePath)))
+        {
+            Assert.AreEqual(
+                expected.SettingsDirectory,
+                bootstrap.RootElement.GetProperty("settingsDirectory").GetString());
+        }
+
+        var reopened = environment.CreateService();
+        Assert.AreNotEqual(
+            ApplicationSettingsReadState.DefaultsBecauseBootstrapInvalid,
+            reopened.Startup.State);
+        Assert.AreEqual(ApplicationSettingsReadState.Loaded, reopened.Startup.State);
+        Assert.AreEqual(expected, reopened.Current);
+    }
+
+    [TestMethod]
+    public void BootstrapRepairFailureLeavesCurrentAndInvalidBootstrapUnchanged()
+    {
+        using var environment = new SettingsTestEnvironment();
+        var normalStore = environment.CreateStore();
+        Directory.CreateDirectory(Path.GetDirectoryName(normalStore.BootstrapFilePath)!);
+        const string invalidBootstrap = "{not-valid-json";
+        File.WriteAllText(normalStore.BootstrapFilePath, invalidBootstrap);
+        var failingStore = environment.CreateStore(new BootstrapFailingWriter(
+            new AtomicSettingsFileWriter(),
+            normalStore.BootstrapFilePath));
+        var service = new ApplicationSettingsService(failingStore);
+        var previousCurrent = service.Current;
+
+        var result = service.ResetToDefaults();
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreSame(previousCurrent, service.Current);
+        Assert.AreEqual(invalidBootstrap, File.ReadAllText(normalStore.BootstrapFilePath));
+        Assert.AreEqual(
+            ApplicationSettingsReadState.DefaultsBecauseBootstrapInvalid,
+            environment.CreateService().Startup.State);
+    }
+
+    [TestMethod]
+    public void ResetFromMissingBootstrapPublishesLoadableCanonicalConfiguration()
+    {
+        using var environment = new SettingsTestEnvironment();
+        var service = environment.CreateService();
+        Assert.AreEqual(
+            ApplicationSettingsReadState.DefaultsBecauseFileMissing,
+            service.Startup.State);
+        Assert.IsFalse(File.Exists(environment.CreateStore().BootstrapFilePath));
+
+        var result = service.ResetToDefaults();
+
+        Assert.IsTrue(result.Succeeded, result.FailureDescription);
+        var reopened = environment.CreateService();
+        Assert.AreEqual(ApplicationSettingsReadState.Loaded, reopened.Startup.State);
+        Assert.AreEqual(
+            ApplicationSettings.CreateDefault(environment.LocalApplicationData),
+            reopened.Current);
+    }
+
+    [TestMethod]
     public void AtomicWriteFailurePreservesPreviouslyPublishedSettings()
     {
         using var environment = new SettingsTestEnvironment();

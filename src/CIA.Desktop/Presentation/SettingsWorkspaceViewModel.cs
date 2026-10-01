@@ -143,6 +143,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         RefreshCommand = new RelayCommand(Refresh);
         OpenLogsFolderCommand = new RelayCommand(OpenLogsFolder);
         SaveSettingsCommand = new RelayCommand(SaveSettings);
+        ResetSettingsCommand = new RelayCommand(ResetSettings);
         RefreshSavedStatesCommand = new RelayCommand(
             () => RefreshSavedStates(updateStatus: true));
         _saveStateCommand = new AsyncRelayCommand(SaveStateAsync, CanSaveState);
@@ -202,6 +203,8 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public IRelayCommand OpenLogsFolderCommand { get; }
 
     public IRelayCommand SaveSettingsCommand { get; }
+
+    public IRelayCommand ResetSettingsCommand { get; }
 
     public IRelayCommand RefreshSavedStatesCommand { get; }
 
@@ -433,8 +436,6 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public bool IsExportVisibleAvailable => false;
 
     public bool IsPersistentSettingsAvailable => true;
-
-    public bool AreFutureSettingsActionsAvailable => false;
 
     public bool IsCleanupRunning
     {
@@ -816,6 +817,40 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         {
             SettingsStatusText = exception.Message;
         }
+    }
+
+    private void ResetSettings()
+    {
+        var result = _settingsService.ResetToDefaults();
+        if (!result.Succeeded || result.Settings is null)
+        {
+            SettingsStatusText = result.FailureDescription
+                ?? "Settings could not be reset to defaults.";
+            return;
+        }
+
+        ApplySettingsToPresentation(result.Settings);
+        SettingsStatusText = _settingsService.IsRestartRequired
+            ? "Settings reset to defaults and saved. Restart CIA to apply managed-storage path changes."
+            : "Settings reset to defaults and saved.";
+        OnPropertyChanged(nameof(IsSettingsRestartRequired));
+        OnPropertyChanged(nameof(ConfiguredSettingsFilePath));
+        OnPropertyChanged(nameof(SettingsPersistenceText));
+    }
+
+    private void ApplySettingsToPresentation(ApplicationSettings settings)
+    {
+        TemporaryDirectory = settings.TemporaryDirectory;
+        WorkingDirectory = settings.WorkingDirectory;
+        ProfilesDirectory = settings.ProfilesDirectory;
+        SettingsDirectory = settings.SettingsDirectory;
+        TraverseSubfolders = settings.TraverseSubfolders;
+        MaximumArchiveNestingDepth = settings.MaximumArchiveNestingDepth.Value;
+        PersistentArchiveExtractionEnabled = settings.PersistentArchiveExtractionEnabled;
+        PersistentArchiveExtractionDirectory =
+            settings.PersistentArchiveExtractionDirectory ?? string.Empty;
+        SelectedPostExportBehavior = PostExportBehaviorOptions.Single(option =>
+            option.Value == settings.PostExportBehavior);
     }
 
     private bool CanSaveState()

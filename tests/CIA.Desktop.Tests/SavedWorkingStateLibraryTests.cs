@@ -508,6 +508,30 @@ public sealed class SavedWorkingStateLibraryTests
     }
 
     [TestMethod]
+    public async Task ConfirmationRemainsBoundToOriginalStateWhenSelectionChanges()
+    {
+        using var environment = new SavedStateTestEnvironment();
+        var first = environment.CreateState("First", [1]);
+        var second = environment.CreateState("Second", [2]);
+        var confirmation = new InApplicationSavedWorkingStateDeleteConfirmation();
+        var viewModel = environment.CreateViewModel(
+            new StubWorkingStateCoordinator(),
+            confirmation);
+        viewModel.SelectedSavedState = viewModel.SavedStates.Single(state => state.Name == "First");
+
+        var deletion = viewModel.DeleteStateCommand.ExecuteAsync(null);
+        Assert.IsTrue(confirmation.IsOpen);
+        Assert.AreEqual("First", confirmation.StateName);
+        viewModel.SelectedSavedState = viewModel.SavedStates.Single(state => state.Name == "Second");
+        confirmation.Accept();
+        await deletion;
+
+        Assert.IsFalse(File.Exists(first.Path));
+        Assert.IsTrue(File.Exists(second.Path));
+        Assert.HasCount(1, viewModel.SavedStates);
+    }
+
+    [TestMethod]
     public void EditingWorkingDirectorySettingDoesNotRelocateRuntimeSavedStateLibrary()
     {
         using var environment = new SavedStateTestEnvironment();

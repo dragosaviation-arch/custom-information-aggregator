@@ -229,6 +229,32 @@ public sealed class ApplicationSettingsStore
         }
     }
 
+    public ApplicationSettingsSaveResult ResetToDefaults()
+    {
+        var defaults = ApplicationSettings.CreateDefault(_localApplicationDataDirectory);
+        try
+        {
+            EnsureCandidateDirectories(defaults);
+            _writer.Write(
+                Path.Combine(defaults.SettingsDirectory, SettingsFileName),
+                JsonSerializer.SerializeToUtf8Bytes(defaults, SerializerOptions));
+            var bootstrap = new ApplicationSettingsBootstrap(
+                BootstrapSchemaVersion,
+                defaults.SettingsDirectory);
+            _writer.Write(
+                _bootstrapFilePath,
+                JsonSerializer.SerializeToUtf8Bytes(bootstrap, SerializerOptions));
+            return ApplicationSettingsSaveResult.Success(defaults);
+        }
+        catch (Exception exception) when (exception is IOException
+                                          or UnauthorizedAccessException
+                                          or JsonException)
+        {
+            return ApplicationSettingsSaveResult.Failure(
+                $"Application settings could not be reset: {exception.Message}");
+        }
+    }
+
     private ApplicationSettingsLoadResult CreateResult(
         ApplicationSettings settings,
         ApplicationSettingsReadState state,
@@ -460,6 +486,17 @@ public sealed class ApplicationSettingsService
     public ApplicationSettingsSaveResult Save(ApplicationSettings candidate)
     {
         var result = _store.Save(candidate);
+        if (result.Succeeded)
+        {
+            Current = result.Settings!;
+        }
+
+        return result;
+    }
+
+    public ApplicationSettingsSaveResult ResetToDefaults()
+    {
+        var result = _store.ResetToDefaults();
         if (result.Succeeded)
         {
             Current = result.Settings!;

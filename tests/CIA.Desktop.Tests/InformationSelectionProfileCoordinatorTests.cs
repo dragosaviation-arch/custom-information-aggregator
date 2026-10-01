@@ -403,6 +403,33 @@ public sealed class InformationSelectionProfileCoordinatorTests
     }
 
     [TestMethod]
+    public async Task ConfirmationRemainsBoundToOriginalProfileWhenSelectionChanges()
+    {
+        using var environment = await ProfileCoordinatorEnvironment.CreateAsync();
+        var first = CreateStoredProfile(environment, "First");
+        var second = CreateStoredProfile(environment, "Second");
+        var confirmation = new InApplicationInformationSelectionProfileDeleteConfirmation();
+        using var viewModel = CreateProfileViewModel(
+            environment,
+            environment.Coordinator,
+            confirmation);
+        viewModel.SelectedInformationSelectionProfile =
+            viewModel.InformationSelectionProfiles.Single(profile => profile.Name == "First");
+
+        var deletion = viewModel.DeleteProfileCommand.ExecuteAsync(null);
+        Assert.IsTrue(confirmation.IsOpen);
+        Assert.AreEqual("First", confirmation.ProfileName);
+        viewModel.SelectedInformationSelectionProfile =
+            viewModel.InformationSelectionProfiles.Single(profile => profile.Name == "Second");
+        confirmation.Accept();
+        await deletion;
+
+        Assert.IsFalse(File.Exists(first.Path));
+        Assert.IsTrue(File.Exists(second.Path));
+        Assert.HasCount(1, viewModel.InformationSelectionProfiles);
+    }
+
+    [TestMethod]
     public async Task DeleteWithoutSelectedProfileCannotExecuteOrRequestConfirmation()
     {
         using var environment = await ProfileCoordinatorEnvironment.CreateAsync();

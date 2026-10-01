@@ -562,10 +562,10 @@
                                                 <TextBlock FontSize="10.7" FontWeight="Bold" Text="GENERAL" />
                                                 <Button x:Name="ResetDefaultsButton"
                                                         HorizontalAlignment="Right"
-                                                        Content="Reset to Defaults"
-                                                        IsEnabled="{Binding AreFutureSettingsActionsAvailable}"
+                                                        Command="{Binding ResetSettingsCommand}"
+                                                        Content="Reset to defaults"
                                                         Style="{StaticResource CiaGhostButtonStyle}"
-                                                        ToolTip="Reset to Defaults is owned by SPR-97 and is not available yet." />
+                                                        ToolTip="Persist the canonical application defaults without deleting saved data." />
                                             </Grid>
                                         </Border>
                                         <Grid Grid.Row="1" Margin="8,6">

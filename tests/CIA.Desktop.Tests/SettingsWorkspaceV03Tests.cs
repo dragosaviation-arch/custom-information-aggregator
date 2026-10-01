@@ -2,8 +2,10 @@ using System.Windows;
 using System.Windows.Controls;
 using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Operations;
+using CIA.Contracts.Sources;
 using CIA.Core.Diagnostics;
 using CIA.Core.ManagedStorage;
+using CIA.Core.Profiles;
 using CIA.Core.Runtime;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Views;
@@ -170,7 +172,7 @@ public sealed class SettingsWorkspaceV03Tests
             .Where(path => path.Name != "Logs")
             .Any(path => path.CanOpen));
         Assert.IsTrue(viewModel.IsPersistentSettingsAvailable);
-        Assert.IsFalse(viewModel.AreFutureSettingsActionsAvailable);
+        Assert.IsTrue(viewModel.ResetSettingsCommand.CanExecute(null));
         Assert.IsFalse(viewModel.IsExportVisibleAvailable);
         StringAssert.Contains(viewModel.SettingsPersistenceText, "Persistent settings");
         StringAssert.Contains(viewModel.SettingsPersistenceText, "after CIA restarts");
@@ -268,6 +270,155 @@ public sealed class SettingsWorkspaceV03Tests
     }
 
     [TestMethod]
+    public void ResetPersistsCanonicalDefaultsUpdatesPresentationAndLeavesSavedDataUntouched()
+    {
+        using var root = new TemporarySettingsDirectory();
+        var localAppData = Path.Combine(root.Path, "LocalAppData");
+        var first = new ApplicationSettingsService(new ApplicationSettingsStore(localAppData));
+        var configured = first.Current with
+        {
+            TemporaryDirectory = Path.Combine(root.Path, "Configured", "Temp"),
+            WorkingDirectory = Path.Combine(root.Path, "Configured", "Working"),
+            ProfilesDirectory = Path.Combine(root.Path, "Configured", "Profiles"),
+            SettingsDirectory = Path.Combine(root.Path, "Configured", "Settings"),
+            TraverseSubfolders = false,
+            MaximumArchiveNestingDepth = ArchiveNestingDepth.From(8),
+            PersistentArchiveExtractionEnabled = true,
+            PersistentArchiveExtractionDirectory = Path.Combine(root.Path, "Configured", "Extraction"),
+            LastUsedOutputDirectory = Path.Combine(root.Path, "Configured", "Output"),
+            PostExportBehavior = PostExportBehavior.OpenContainingFolder
+        };
+        Assert.IsTrue(first.Save(configured).Succeeded);
+        var service = new ApplicationSettingsService(new ApplicationSettingsStore(localAppData));
+        var cleanup = new RecordingCleanupService();
+        var preservedFiles = new[]
+        {
+            WriteEvidence(Path.Combine(root.Path, "External", "source.xml"), "source"),
+            WriteEvidence(Path.Combine(root.Path, "Exports", "completed.xlsx"), "export"),
+            WriteEvidence(Path.Combine(configured.WorkingDirectory, "SavedStates", "saved.cia"), "state"),
+            WriteEvidence(Path.Combine(configured.ProfilesDirectory, "selection" + ProfileArtifactStore.FileExtension), "selection-profile"),
+            WriteEvidence(Path.Combine(configured.ProfilesDirectory, "blacklist" + ProfileArtifactStore.FileExtension), "blacklist-profile"),
+            WriteEvidence(Path.Combine(configured.ProfilesDirectory, DefaultBlacklistProfileDesignationStore.FileName), "default-blacklist")
+        };
+        var preservedBytes = preservedFiles.ToDictionary(
+            path => path,
+            File.ReadAllBytes,
+            StringComparer.OrdinalIgnoreCase);
+        var viewModel = new SettingsWorkspaceViewModel(
+            CreateReader(),
+            new SettingsWorkspaceRuntimePaths(
+                service.RuntimePaths,
+                service.RuntimePaths.LogsDirectory),
+            service,
+            managedStorageCleanupService: cleanup);
+        var expected = ApplicationSettings.CreateDefault(localAppData);
+
+        viewModel.ResetSettingsCommand.Execute(null);
+
+        Assert.AreEqual(expected, service.Current);
+        Assert.AreEqual(expected.TemporaryDirectory, viewModel.TemporaryDirectory);
+        Assert.AreEqual(expected.WorkingDirectory, viewModel.WorkingDirectory);
+        Assert.AreEqual(expected.ProfilesDirectory, viewModel.ProfilesDirectory);
+        Assert.AreEqual(expected.SettingsDirectory, viewModel.SettingsDirectory);
+        Assert.AreEqual(expected.TraverseSubfolders, viewModel.TraverseSubfolders);
+        Assert.AreEqual(
+            expected.MaximumArchiveNestingDepth.Value,
+            viewModel.MaximumArchiveNestingDepth);
+        Assert.AreEqual(
+            expected.PersistentArchiveExtractionEnabled,
+            viewModel.PersistentArchiveExtractionEnabled);
+        Assert.AreEqual(string.Empty, viewModel.PersistentArchiveExtractionDirectory);
+        Assert.AreEqual(
+            expected.PostExportBehavior,
+            viewModel.SelectedPostExportBehavior.Value);
+        Assert.IsNull(service.Current.LastUsedOutputDirectory);
+        Assert.IsTrue(viewModel.IsSettingsRestartRequired);
+        Assert.AreEqual(configured.SettingsDirectory, service.RuntimePaths.SettingsDirectory);
+        StringAssert.Contains(viewModel.SettingsStatusText, "reset to defaults and saved");
+        StringAssert.Contains(viewModel.SettingsStatusText, "Restart CIA");
+        Assert.AreEqual(0, cleanup.CallCount);
+        foreach (var path in preservedFiles)
+        {
+            CollectionAssert.AreEqual(preservedBytes[path], File.ReadAllBytes(path));
+        }
+
+        Assert.AreEqual(
+            expected,
+            new ApplicationSettingsService(new ApplicationSettingsStore(localAppData)).Current);
+    }
+
+    [TestMethod]
+    public void ResetPersistenceFailureLeavesCurrentPresentationAndStoredSettingsUnchanged()
+    {
+        using var root = new TemporarySettingsDirectory();
+        var localAppData = Path.Combine(root.Path, "LocalAppData");
+        var first = new ApplicationSettingsService(new ApplicationSettingsStore(localAppData));
+        var configured = first.Current with
+        {
+            TraverseSubfolders = false,
+            MaximumArchiveNestingDepth = ArchiveNestingDepth.From(7),
+            LastUsedOutputDirectory = Path.Combine(root.Path, "Output"),
+            PostExportBehavior = PostExportBehavior.AskEachTime
+        };
+        Assert.IsTrue(first.Save(configured).Succeeded);
+        var service = new ApplicationSettingsService(
+            new ApplicationSettingsStore(localAppData, new AlwaysFailingSettingsWriter()));
+        var viewModel = new SettingsWorkspaceViewModel(
+            CreateReader(),
+            new SettingsWorkspaceRuntimePaths(
+                service.RuntimePaths,
+                service.RuntimePaths.LogsDirectory),
+            service);
+
+        viewModel.ResetSettingsCommand.Execute(null);
+
+        Assert.AreEqual(configured, service.Current);
+        Assert.IsFalse(viewModel.TraverseSubfolders);
+        Assert.AreEqual(7, viewModel.MaximumArchiveNestingDepth);
+        Assert.AreEqual(PostExportBehavior.AskEachTime, viewModel.SelectedPostExportBehavior.Value);
+        StringAssert.Contains(viewModel.SettingsStatusText, "could not be reset");
+        Assert.AreEqual(
+            configured,
+            new ApplicationSettingsService(new ApplicationSettingsStore(localAppData)).Current);
+    }
+
+    [TestMethod]
+    public void BootstrapRepairFailureDoesNotReportSuccessfulResetOrAdvancePresentation()
+    {
+        using var root = new TemporarySettingsDirectory();
+        var localAppData = Path.Combine(root.Path, "LocalAppData");
+        var normalStore = new ApplicationSettingsStore(localAppData);
+        Directory.CreateDirectory(Path.GetDirectoryName(normalStore.BootstrapFilePath)!);
+        const string invalidBootstrap = "{not-valid-json";
+        File.WriteAllText(normalStore.BootstrapFilePath, invalidBootstrap);
+        var service = new ApplicationSettingsService(new ApplicationSettingsStore(
+            localAppData,
+            new BootstrapFailingSettingsWriter(
+                new AtomicSettingsFileWriter(),
+                normalStore.BootstrapFilePath)));
+        var previousCurrent = service.Current;
+        var viewModel = new SettingsWorkspaceViewModel(
+            CreateReader(),
+            new SettingsWorkspaceRuntimePaths(
+                service.RuntimePaths,
+                service.RuntimePaths.LogsDirectory),
+            service);
+
+        viewModel.ResetSettingsCommand.Execute(null);
+
+        Assert.AreSame(previousCurrent, service.Current);
+        StringAssert.Contains(viewModel.SettingsStatusText, "could not be reset");
+        Assert.IsFalse(viewModel.SettingsStatusText.Contains(
+            "reset to defaults and saved",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.AreEqual(invalidBootstrap, File.ReadAllText(normalStore.BootstrapFilePath));
+        Assert.AreEqual(
+            ApplicationSettingsReadState.DefaultsBecauseBootstrapInvalid,
+            new ApplicationSettingsService(
+                new ApplicationSettingsStore(localAppData)).Startup.State);
+    }
+
+    [TestMethod]
     public void PersistentExtractionWithoutDestinationShowsActionableValidation()
     {
         using var root = new TemporarySettingsDirectory();
@@ -346,6 +497,50 @@ public sealed class SettingsWorkspaceV03Tests
             state,
             ProtectionReasons: [],
             Problem: null);
+
+    private static string WriteEvidence(string path, string content)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+        return path;
+    }
+
+    private sealed class AlwaysFailingSettingsWriter : IAtomicSettingsFileWriter
+    {
+        public void Write(string finalPath, ReadOnlyMemory<byte> content) =>
+            throw new IOException("Injected settings reset failure.");
+    }
+
+    private sealed class BootstrapFailingSettingsWriter(
+        IAtomicSettingsFileWriter inner,
+        string bootstrapPath) : IAtomicSettingsFileWriter
+    {
+        public void Write(string finalPath, ReadOnlyMemory<byte> content)
+        {
+            if (string.Equals(finalPath, bootstrapPath, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("Injected bootstrap repair failure.");
+            }
+
+            inner.Write(finalPath, content);
+        }
+    }
+
+    private sealed class RecordingCleanupService : IManagedStorageCleanupService
+    {
+        private int _callCount;
+
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        public ManagedStorageCleanupResult Cleanup()
+        {
+            Interlocked.Increment(ref _callCount);
+            return new ManagedStorageCleanupResult(
+                ManagedStorageCleanupOutcome.CompletedSuccessfully,
+                Items: [],
+                FailureDescription: null);
+        }
+    }
 
     private sealed class BlockingCleanupService(ManagedStorageCleanupResult result)
         : IManagedStorageCleanupService
@@ -498,7 +693,7 @@ public sealed class SettingsWorkspaceV03InteractionTests
             Assert.AreEqual(Visibility.Visible, aboutHelp.Visibility);
             Assert.AreEqual(2, entries.Items.Count);
             Assert.IsFalse(export.IsEnabled);
-            Assert.IsFalse(reset.IsEnabled);
+            Assert.IsTrue(reset.IsEnabled);
             Assert.IsFalse(saveState.IsEnabled);
             Assert.IsFalse(cleanTemporary.IsEnabled);
             Assert.IsTrue(saveSettings.IsEnabled);
