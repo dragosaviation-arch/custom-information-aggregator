@@ -1,5 +1,6 @@
 using System.Windows;
 using CIA.Core.Diagnostics;
+using CIA.Core.ManagedStorage;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Views;
@@ -45,6 +46,7 @@ public sealed class ApplicationStartupSmokeTests
             var discoveryWorkspace = host.Services.GetRequiredService<DiscoveryWorkspaceViewModel>();
             var databaseWorkspace = host.Services.GetRequiredService<DatabaseWorkspaceViewModel>();
             var settingsWorkspace = host.Services.GetRequiredService<SettingsWorkspaceViewModel>();
+            var cleanupService = host.Services.GetRequiredService<IManagedStorageCleanupService>();
             Application.Current.MainWindow = window;
 
             Assert.IsTrue(lifetime.ApplicationStarted.IsCancellationRequested);
@@ -55,6 +57,8 @@ public sealed class ApplicationStartupSmokeTests
             Assert.AreSame(discoveryWorkspace, window.DiscoveryWorkspace);
             Assert.AreSame(databaseWorkspace, window.DatabaseWorkspace);
             Assert.AreSame(settingsWorkspace, window.SettingsWorkspace);
+            Assert.IsNotNull(cleanupService);
+            Assert.IsTrue(settingsWorkspace.CleanupManagedStorageCommand.CanExecute(null));
             Assert.HasCount(4, viewModel.Workspaces);
             Assert.AreEqual(WorkspaceArea.Load, viewModel.SelectedWorkspace.Area);
 

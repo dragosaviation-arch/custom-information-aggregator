@@ -859,12 +859,19 @@
                                             </Border>
                                             <StackPanel Margin="8,7">
                                                 <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                                           Text="Storage usage and safe cleanup controls are not available yet."
+                                                           Text="Remove only currently eligible CIA-owned temporary and session artifacts. Protected and persistent data is preserved."
                                                            TextWrapping="Wrap" />
                                                 <WrapPanel Margin="0,6,0,0">
-                                                    <Button x:Name="CleanTemporaryDataButton" Margin="0,0,5,5" Content="Clean Temporary Data" IsEnabled="False" Style="{StaticResource SettingsCompactButtonStyle}" />
-                                                    <Button Margin="0,0,0,5" Content="Clean Session Data" IsEnabled="False" Style="{StaticResource SettingsCompactButtonStyle}" />
+                                                    <Button x:Name="CleanTemporaryDataButton"
+                                                            Margin="0,0,5,5"
+                                                            Command="{Binding CleanupManagedStorageCommand}"
+                                                            Content="Clean eligible data"
+                                                            Style="{StaticResource SettingsCompactButtonStyle}" />
                                                 </WrapPanel>
+                                                <TextBlock FontSize="9.4"
+                                                           Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                                           Text="{Binding CleanupStatusText}"
+                                                           TextWrapping="Wrap" />
                                             </StackPanel>
                                         </StackPanel>
                                     </Border>
