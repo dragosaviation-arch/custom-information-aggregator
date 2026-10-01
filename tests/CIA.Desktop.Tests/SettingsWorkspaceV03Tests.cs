@@ -376,10 +376,46 @@ public sealed class SettingsWorkspaceV03Tests
         Assert.IsFalse(viewModel.TraverseSubfolders);
         Assert.AreEqual(7, viewModel.MaximumArchiveNestingDepth);
         Assert.AreEqual(PostExportBehavior.AskEachTime, viewModel.SelectedPostExportBehavior.Value);
-        StringAssert.Contains(viewModel.SettingsStatusText, "could not be saved");
+        StringAssert.Contains(viewModel.SettingsStatusText, "could not be reset");
         Assert.AreEqual(
             configured,
             new ApplicationSettingsService(new ApplicationSettingsStore(localAppData)).Current);
+    }
+
+    [TestMethod]
+    public void BootstrapRepairFailureDoesNotReportSuccessfulResetOrAdvancePresentation()
+    {
+        using var root = new TemporarySettingsDirectory();
+        var localAppData = Path.Combine(root.Path, "LocalAppData");
+        var normalStore = new ApplicationSettingsStore(localAppData);
+        Directory.CreateDirectory(Path.GetDirectoryName(normalStore.BootstrapFilePath)!);
+        const string invalidBootstrap = "{not-valid-json";
+        File.WriteAllText(normalStore.BootstrapFilePath, invalidBootstrap);
+        var service = new ApplicationSettingsService(new ApplicationSettingsStore(
+            localAppData,
+            new BootstrapFailingSettingsWriter(
+                new AtomicSettingsFileWriter(),
+                normalStore.BootstrapFilePath)));
+        var previousCurrent = service.Current;
+        var viewModel = new SettingsWorkspaceViewModel(
+            CreateReader(),
+            new SettingsWorkspaceRuntimePaths(
+                service.RuntimePaths,
+                service.RuntimePaths.LogsDirectory),
+            service);
+
+        viewModel.ResetSettingsCommand.Execute(null);
+
+        Assert.AreSame(previousCurrent, service.Current);
+        StringAssert.Contains(viewModel.SettingsStatusText, "could not be reset");
+        Assert.IsFalse(viewModel.SettingsStatusText.Contains(
+            "reset to defaults and saved",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.AreEqual(invalidBootstrap, File.ReadAllText(normalStore.BootstrapFilePath));
+        Assert.AreEqual(
+            ApplicationSettingsReadState.DefaultsBecauseBootstrapInvalid,
+            new ApplicationSettingsService(
+                new ApplicationSettingsStore(localAppData)).Startup.State);
     }
 
     [TestMethod]
@@ -473,6 +509,21 @@ public sealed class SettingsWorkspaceV03Tests
     {
         public void Write(string finalPath, ReadOnlyMemory<byte> content) =>
             throw new IOException("Injected settings reset failure.");
+    }
+
+    private sealed class BootstrapFailingSettingsWriter(
+        IAtomicSettingsFileWriter inner,
+        string bootstrapPath) : IAtomicSettingsFileWriter
+    {
+        public void Write(string finalPath, ReadOnlyMemory<byte> content)
+        {
+            if (string.Equals(finalPath, bootstrapPath, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new IOException("Injected bootstrap repair failure.");
+            }
+
+            inner.Write(finalPath, content);
+        }
     }
 
     private sealed class RecordingCleanupService : IManagedStorageCleanupService
