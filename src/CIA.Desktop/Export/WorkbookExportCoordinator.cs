@@ -8,6 +8,10 @@ using Microsoft.Extensions.Logging;
 
 namespace CIA.Desktop.Export;
 
+public sealed record WorkbookExportExecutionResult(
+    WorkflowCommandResult Command,
+    WorkbookExportBatchSummary? PublishedBatch);
+
 public sealed class WorkbookExportCoordinator(
     ExtractionCoordinator extractionCoordinator,
     IApplicationWorkflowCoordinator workflowCoordinator,
@@ -151,6 +155,19 @@ public sealed class WorkbookExportCoordinator(
         ExportConfigurationSnapshot configuration,
         CancellationToken cancellationToken = default)
     {
+        var execution = await ExportWithBatchAsync(
+                publicationPlan,
+                configuration,
+                cancellationToken)
+            .ConfigureAwait(false);
+        return execution.Command;
+    }
+
+    public async Task<WorkbookExportExecutionResult> ExportWithBatchAsync(
+        WorkbookPublicationPlan publicationPlan,
+        ExportConfigurationSnapshot configuration,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(publicationPlan);
         ArgumentNullException.ThrowIfNull(configuration);
 
@@ -161,7 +178,9 @@ public sealed class WorkbookExportCoordinator(
             publicationPlan);
         if (!readiness.NormalOperationReady || extractionResult is null)
         {
-            return readiness.ToCommandResult();
+            return new WorkbookExportExecutionResult(
+                readiness.ToCommandResult(),
+                PublishedBatch: null);
         }
 
         var begin = await workflowCoordinator
@@ -169,7 +188,7 @@ public sealed class WorkbookExportCoordinator(
             .ConfigureAwait(false);
         if (!begin.Accepted || begin.Operation is null)
         {
-            return begin;
+            return new WorkbookExportExecutionResult(begin, PublishedBatch: null);
         }
 
         try
@@ -194,22 +213,26 @@ public sealed class WorkbookExportCoordinator(
                 workflowCoordinator.CompleteOperation(
                     begin.Operation.OperationId,
                     OperationOutcome.Failed);
-                return WorkflowCommandResult.Reject(
-                    WorkflowRejectionCode.OperationMismatch,
-                    "The exported workbook does not match its captured Extraction Result and configuration.");
+                return new WorkbookExportExecutionResult(
+                    WorkflowCommandResult.Reject(
+                        WorkflowRejectionCode.OperationMismatch,
+                        "The exported workbook does not match its captured Extraction Result and configuration."),
+                    PublishedBatch: null);
             }
 
             var completion = workflowCoordinator.CompleteOperation(result.Completion);
             if (!completion.Accepted)
             {
-                return completion;
+                return new WorkbookExportExecutionResult(completion, PublishedBatch: null);
             }
 
             if (!result.Accepted || result.Batch is null)
             {
-                return WorkflowCommandResult.Reject(
-                    WorkflowRejectionCode.OperationFailed,
-                    result.FailureDescription ?? "The workbook was not published.");
+                return new WorkbookExportExecutionResult(
+                    WorkflowCommandResult.Reject(
+                        WorkflowRejectionCode.OperationFailed,
+                        result.FailureDescription ?? "The workbook was not published."),
+                    PublishedBatch: null);
             }
 
             lock (_stateGate)
@@ -217,7 +240,7 @@ public sealed class WorkbookExportCoordinator(
                 _lastBatch = result.Batch;
             }
 
-            return completion;
+            return new WorkbookExportExecutionResult(completion, result.Batch);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -235,9 +258,11 @@ public sealed class WorkbookExportCoordinator(
             workflowCoordinator.CompleteOperation(
                 begin.Operation.OperationId,
                 OperationOutcome.Failed);
-            return WorkflowCommandResult.Reject(
-                WorkflowRejectionCode.OperationFailed,
-                "Workbook export coordination failed.");
+            return new WorkbookExportExecutionResult(
+                WorkflowCommandResult.Reject(
+                    WorkflowRejectionCode.OperationFailed,
+                    "Workbook export coordination failed."),
+                PublishedBatch: null);
         }
     }
 

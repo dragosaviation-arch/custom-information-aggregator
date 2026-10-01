@@ -1,0 +1,56 @@
+<Window x:Class="CIA.Desktop.Views.PostExportPromptDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Export complete"
+        Width="520"
+        Height="260"
+        MinWidth="460"
+        MinHeight="230"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="{StaticResource CiaBackgroundBrush}"
+        Foreground="{StaticResource CiaTextPrimaryBrush}">
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock Style="{StaticResource CiaPanelTitleTextStyle}"
+                       Text="EXPORT COMPLETE" />
+            <TextBlock Margin="0,8,0,0"
+                       FontSize="16"
+                       FontWeight="SemiBold"
+                       Text="{Binding SummaryText}" />
+        </StackPanel>
+
+        <TextBlock Grid.Row="1"
+                   Margin="0,14,0,0"
+                   Style="{StaticResource CiaSecondaryTextStyle}"
+                   Text="{Binding OutputDirectory}"
+                   TextTrimming="CharacterEllipsis"
+                   TextWrapping="Wrap"
+                   ToolTip="{Binding OutputDirectory}" />
+
+        <StackPanel Grid.Row="2"
+                    Margin="0,18,0,0"
+                    HorizontalAlignment="Right"
+                    Orientation="Horizontal">
+            <Button Margin="0,0,8,0"
+                    Click="OnStatusOnlyClick"
+                    Content="Do nothing"
+                    IsCancel="True"
+                    Style="{StaticResource CiaGhostButtonStyle}" />
+            <Button Margin="0,0,8,0"
+                    Click="OnOpenFolderClick"
+                    Content="Open containing folder"
+                    Style="{StaticResource CiaButtonStyle}" />
+            <Button Click="OnOpenFilesClick"
+                    Content="Open exported workbook(s)"
+                    IsDefault="True"
+                    Style="{StaticResource CiaPrimaryButtonStyle}" />
+        </StackPanel>
+    </Grid>
+</Window>
