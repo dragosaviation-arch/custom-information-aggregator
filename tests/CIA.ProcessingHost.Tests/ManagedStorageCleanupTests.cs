@@ -2,6 +2,7 @@ using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.ManagedStorage;
 using CIA.Core.Runtime;
+using System.Diagnostics;
 
 namespace CIA.ProcessingHost.Tests;
 
@@ -35,6 +36,82 @@ public sealed class ManagedStorageCleanupTests
         Assert.IsFalse(Directory.Exists(sessionArtifact.Path));
         Assert.IsTrue(Directory.Exists(environment.Paths.TempDirectory));
         Assert.IsTrue(Directory.Exists(environment.Paths.WorkingDirectory));
+    }
+
+    [TestMethod]
+    public void ProductionDeleterDoesNotTraverseDescendantDirectoryJunction()
+    {
+        using var environment = new CleanupTestEnvironment();
+        var artifact = environment.CreateArtifact(
+            environment.Paths.TempDirectory,
+            "linked-descendant",
+            ManagedStorageArtifactKind.ManagedIntermediateArtifact,
+            ManagedStorageLifecycle.Intermediate);
+        var externalTarget = Path.Combine(environment.ExternalDirectory, "junction-target");
+        Directory.CreateDirectory(externalTarget);
+        var externalEvidence = Path.Combine(externalTarget, "must-survive.txt");
+        File.WriteAllText(externalEvidence, "external");
+        var junctionPath = Path.Combine(artifact.Path, "external-link");
+        CreateDirectoryJunction(junctionPath, externalTarget);
+        var service = environment.CreateService(ManagedStorageDependencySnapshot.Empty);
+
+        try
+        {
+            var result = service.Cleanup();
+
+            Assert.AreEqual(ManagedStorageCleanupOutcome.CompletedWithItemFailures, result.Outcome);
+            Assert.AreEqual(0, result.RemovedCount);
+            Assert.AreEqual(1, result.FailedCount);
+            Assert.IsTrue(Directory.Exists(artifact.Path));
+            Assert.IsTrue(Directory.Exists(externalTarget));
+            Assert.IsTrue(File.Exists(externalEvidence));
+            Assert.IsTrue(Directory.Exists(environment.Paths.TempDirectory));
+        }
+        finally
+        {
+            RemoveDirectoryJunction(junctionPath);
+        }
+    }
+
+    [TestMethod]
+    public void CandidateReplacedByJunctionAfterRevalidationFailsWithoutTraversingTarget()
+    {
+        using var environment = new CleanupTestEnvironment();
+        var artifact = environment.CreateArtifact(
+            environment.Paths.TempDirectory,
+            "root-swap",
+            ManagedStorageArtifactKind.ManagedIntermediateArtifact,
+            ManagedStorageLifecycle.Intermediate);
+        var externalTarget = Path.Combine(environment.ExternalDirectory, "swap-target");
+        Directory.CreateDirectory(externalTarget);
+        var externalEvidence = Path.Combine(externalTarget, "must-survive.txt");
+        File.WriteAllText(externalEvidence, "external");
+        var deleter = new RootJunctionSwapArtifactDeleter(artifact.Path, externalTarget);
+        var service = environment.CreateService(
+            new CallbackSnapshotProvider(_ => ManagedStorageDependencySnapshot.Empty),
+            deleter);
+
+        try
+        {
+            var result = service.Cleanup();
+
+            Assert.AreEqual(ManagedStorageCleanupOutcome.CompletedWithItemFailures, result.Outcome);
+            Assert.AreEqual(0, result.RemovedCount);
+            Assert.AreEqual(1, result.FailedCount);
+            Assert.AreEqual(
+                ManagedStorageCleanupItemState.FailedToRemove,
+                result.Items.Single().State);
+            Assert.IsTrue(Directory.Exists(artifact.Path));
+            Assert.AreNotEqual(
+                0,
+                (int)(File.GetAttributes(artifact.Path) & FileAttributes.ReparsePoint));
+            Assert.IsTrue(File.Exists(externalEvidence));
+            Assert.IsTrue(Directory.Exists(environment.Paths.TempDirectory));
+        }
+        finally
+        {
+            RemoveDirectoryJunction(artifact.Path);
+        }
     }
 
     [TestMethod]
@@ -358,6 +435,63 @@ public sealed class ManagedStorageCleanupTests
         }
 
         public bool Exists(string canonicalArtifactPath) => _inner.Exists(canonicalArtifactPath);
+    }
+
+    private sealed class RootJunctionSwapArtifactDeleter(
+        string candidatePath,
+        string externalTarget) : IManagedStorageArtifactDeleter
+    {
+        private readonly FileSystemManagedStorageArtifactDeleter _inner = new();
+
+        public void Delete(string canonicalArtifactPath)
+        {
+            Assert.AreEqual(
+                Path.GetFullPath(candidatePath),
+                Path.GetFullPath(canonicalArtifactPath),
+                ignoreCase: true);
+            Directory.Delete(canonicalArtifactPath, recursive: true);
+            CreateDirectoryJunction(canonicalArtifactPath, externalTarget);
+            _inner.Delete(canonicalArtifactPath);
+        }
+
+        public bool Exists(string canonicalArtifactPath) => _inner.Exists(canonicalArtifactPath);
+    }
+
+    private static void CreateDirectoryJunction(string junctionPath, string targetPath)
+    {
+        RunCommand($"mklink /J \"{junctionPath}\" \"{targetPath}\"", "create the test junction");
+    }
+
+    private static void RemoveDirectoryJunction(string junctionPath)
+    {
+        if (!Directory.Exists(junctionPath))
+        {
+            return;
+        }
+
+        RunCommand($"rmdir \"{junctionPath}\"", "remove the test junction");
+    }
+
+    private static void RunCommand(string command, string operation)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
+            Arguments = $"/d /c {command}",
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false
+        };
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start the junction creation process.");
+        var standardOutput = process.StandardOutput.ReadToEnd();
+        var standardError = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.AreEqual(
+            0,
+            process.ExitCode,
+            $"Could not {operation}. {standardOutput} {standardError}");
     }
 
     private sealed class CleanupTestEnvironment : IDisposable

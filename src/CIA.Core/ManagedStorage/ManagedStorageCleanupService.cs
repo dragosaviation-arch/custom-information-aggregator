@@ -192,8 +192,13 @@ public sealed class FileSystemManagedStorageArtifactDeleter : IManagedStorageArt
             throw new DirectoryNotFoundException("The managed artifact directory no longer exists.");
         }
 
-        EnsureSafeTree(root, root);
-        DeleteDirectory(root, root);
+        var attributes = File.GetAttributes(root);
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new IOException("Cleanup does not remove a candidate root that is a reparse point.");
+        }
+
+        Directory.Delete(root, recursive: true);
     }
 
     public bool Exists(string canonicalArtifactPath)
@@ -203,76 +208,6 @@ public sealed class FileSystemManagedStorageArtifactDeleter : IManagedStorageArt
         return Directory.Exists(path) || File.Exists(path);
     }
 
-    private static void EnsureSafeTree(string directory, string root)
-    {
-        EnsureContained(directory, root, allowRoot: true);
-        var attributes = File.GetAttributes(directory);
-        if ((attributes & FileAttributes.ReparsePoint) != 0)
-        {
-            throw new IOException("Cleanup does not follow or remove reparse points.");
-        }
-
-        foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
-        {
-            var canonicalEntry = EnsureContained(entry, root, allowRoot: false);
-            var entryAttributes = File.GetAttributes(canonicalEntry);
-            if ((entryAttributes & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new IOException("Cleanup does not follow or remove reparse points.");
-            }
-
-            if ((entryAttributes & FileAttributes.Directory) != 0)
-            {
-                EnsureSafeTree(canonicalEntry, root);
-            }
-        }
-    }
-
-    private static void DeleteDirectory(string directory, string root)
-    {
-        foreach (var entry in Directory.EnumerateFileSystemEntries(directory).ToArray())
-        {
-            var canonicalEntry = EnsureContained(entry, root, allowRoot: false);
-            var attributes = File.GetAttributes(canonicalEntry);
-            if ((attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new IOException("Cleanup does not follow or remove reparse points.");
-            }
-
-            if ((attributes & FileAttributes.Directory) != 0)
-            {
-                DeleteDirectory(canonicalEntry, root);
-            }
-            else
-            {
-                File.Delete(canonicalEntry);
-            }
-        }
-
-        Directory.Delete(directory, recursive: false);
-    }
-
-    private static string EnsureContained(string path, string root, bool allowRoot)
-    {
-        var canonicalPath = Canonicalize(path);
-        var canonicalRoot = Canonicalize(root);
-        if (allowRoot && PathsEqual(canonicalPath, canonicalRoot))
-        {
-            return canonicalPath;
-        }
-
-        var prefix = canonicalRoot + Path.DirectorySeparatorChar;
-        if (!canonicalPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new IOException("Cleanup encountered content outside the owned artifact root.");
-        }
-
-        return canonicalPath;
-    }
-
     private static string Canonicalize(string path) =>
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-
-    private static bool PathsEqual(string first, string second) =>
-        string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
 }
