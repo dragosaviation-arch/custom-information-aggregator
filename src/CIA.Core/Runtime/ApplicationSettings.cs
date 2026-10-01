@@ -36,6 +36,12 @@ public sealed record ApplicationSettings
 
     public required PostExportBehavior PostExportBehavior { get; init; }
 
+    public double? LoadPaneSplitRatio { get; init; }
+
+    public double? DiscoveryPaneSplitRatio { get; init; }
+
+    public double? DatabasePaneSplitRatio { get; init; }
+
     public static ApplicationSettings CreateDefault(string localApplicationDataDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localApplicationDataDirectory);
@@ -61,7 +67,10 @@ public sealed record ApplicationSettings
             PersistentArchiveExtractionEnabled = false,
             PersistentArchiveExtractionDirectory = null,
             LastUsedOutputDirectory = null,
-            PostExportBehavior = PostExportBehavior.StatusOnly
+            PostExportBehavior = PostExportBehavior.StatusOnly,
+            LoadPaneSplitRatio = null,
+            DiscoveryPaneSplitRatio = null,
+            DatabasePaneSplitRatio = null
         };
     }
 }

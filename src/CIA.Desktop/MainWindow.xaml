@@ -70,7 +70,10 @@
         <Grid Grid.Row="2"
               MinHeight="0"
               ClipToBounds="True">
-            <views:LoadWorkspaceView DataContext="{Binding LoadWorkspace, ElementName=WindowRoot}">
+            <views:LoadWorkspaceView x:Name="LoadWorkspaceView"
+                                     DataContext="{Binding LoadWorkspace, ElementName=WindowRoot}"
+                                     DiscoveryWorkspace="{Binding DiscoveryWorkspace, ElementName=WindowRoot}"
+                                     SettingsService="{Binding SettingsService, ElementName=WindowRoot}">
                 <views:LoadWorkspaceView.Style>
                     <Style TargetType="views:LoadWorkspaceView">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -84,7 +87,9 @@
                 </views:LoadWorkspaceView.Style>
             </views:LoadWorkspaceView>
 
-            <views:DiscoveryWorkspaceView DataContext="{Binding DiscoveryWorkspace, ElementName=WindowRoot}">
+            <views:DiscoveryWorkspaceView x:Name="DiscoveryWorkspaceView"
+                                          DataContext="{Binding DiscoveryWorkspace, ElementName=WindowRoot}"
+                                          SettingsService="{Binding SettingsService, ElementName=WindowRoot}">
                 <views:DiscoveryWorkspaceView.Style>
                     <Style TargetType="views:DiscoveryWorkspaceView">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -99,7 +104,8 @@
             </views:DiscoveryWorkspaceView>
 
             <views:DatabaseWorkspaceView x:Name="DatabaseWorkspaceView"
-                                         DataContext="{Binding DatabaseWorkspace, ElementName=WindowRoot}">
+                                         DataContext="{Binding DatabaseWorkspace, ElementName=WindowRoot}"
+                                         SettingsService="{Binding SettingsService, ElementName=WindowRoot}">
                 <views:DatabaseWorkspaceView.Style>
                     <Style TargetType="views:DatabaseWorkspaceView">
                         <Setter Property="Visibility" Value="Collapsed" />

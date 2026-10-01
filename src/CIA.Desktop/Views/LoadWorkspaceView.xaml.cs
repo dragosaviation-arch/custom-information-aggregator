@@ -1,8 +1,10 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using CIA.Contracts.Sources;
+using CIA.Core.Runtime;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 
@@ -11,6 +13,7 @@ namespace CIA.Desktop.Views;
 public partial class LoadWorkspaceView : UserControl
 {
     private const double CompactLayoutBreakpoint = 1180;
+    private const double DefaultPaneSplitRatio = 2d / 3d;
     private const double SourceRowHeight = 33;
     private const double DropOverlaySafeSpace = 20;
     private bool? _dropOverlayVisible;
@@ -18,6 +21,30 @@ public partial class LoadWorkspaceView : UserControl
     public LoadWorkspaceView()
     {
         InitializeComponent();
+    }
+
+    public static readonly DependencyProperty DiscoveryWorkspaceProperty =
+        DependencyProperty.Register(
+            nameof(DiscoveryWorkspace),
+            typeof(DiscoveryWorkspaceViewModel),
+            typeof(LoadWorkspaceView));
+
+    public static readonly DependencyProperty SettingsServiceProperty =
+        DependencyProperty.Register(
+            nameof(SettingsService),
+            typeof(ApplicationSettingsService),
+            typeof(LoadWorkspaceView));
+
+    public DiscoveryWorkspaceViewModel? DiscoveryWorkspace
+    {
+        get => (DiscoveryWorkspaceViewModel?)GetValue(DiscoveryWorkspaceProperty);
+        set => SetValue(DiscoveryWorkspaceProperty, value);
+    }
+
+    public ApplicationSettingsService? SettingsService
+    {
+        get => (ApplicationSettingsService?)GetValue(SettingsServiceProperty);
+        set => SetValue(SettingsServiceProperty, value);
     }
 
     private void OnViewLoaded(object sender, RoutedEventArgs e)
@@ -55,6 +82,7 @@ public partial class LoadWorkspaceView : UserControl
         LoadLeftColumn.MinWidth = 0;
         LoadLeftColumn.Width = new GridLength(1, GridUnitType.Star);
         LoadGapColumn.Width = new GridLength(0);
+        LoadPaneSplitter.Visibility = Visibility.Collapsed;
         LoadRightColumn.MinWidth = 0;
         LoadRightColumn.Width = new GridLength(0);
 
@@ -84,10 +112,14 @@ public partial class LoadWorkspaceView : UserControl
     private void ApplyWideLayout()
     {
         LoadLeftColumn.MinWidth = 600;
-        LoadLeftColumn.Width = new GridLength(2, GridUnitType.Star);
+        var splitRatio = ResolvePaneSplitRatio(
+            SettingsService?.Current.LoadPaneSplitRatio,
+            DefaultPaneSplitRatio);
+        LoadLeftColumn.Width = new GridLength(splitRatio, GridUnitType.Star);
         LoadGapColumn.Width = new GridLength(8);
         LoadRightColumn.MinWidth = 420;
-        LoadRightColumn.Width = new GridLength(1, GridUnitType.Star);
+        LoadRightColumn.Width = new GridLength(1 - splitRatio, GridUnitType.Star);
+        LoadPaneSplitter.Visibility = Visibility.Visible;
 
         LoadTopRow.Height = new GridLength(1, GridUnitType.Star);
         LoadStackGapRow.Height = new GridLength(0);
@@ -111,6 +143,25 @@ public partial class LoadWorkspaceView : UserControl
         Grid.SetRow(SettingsPanel, 2);
         Grid.SetColumn(SettingsPanel, 0);
     }
+
+    private void OnLoadPaneSplitterDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        var totalWidth = LoadLeftColumn.ActualWidth + LoadRightColumn.ActualWidth;
+        if (SettingsService is null || totalWidth <= 0)
+        {
+            return;
+        }
+
+        var ratio = ResolvePaneSplitRatio(
+            LoadLeftColumn.ActualWidth / totalWidth,
+            DefaultPaneSplitRatio);
+        SettingsService.Save(SettingsService.Current with { LoadPaneSplitRatio = ratio });
+    }
+
+    private static double ResolvePaneSplitRatio(double? ratio, double fallback) =>
+        ratio is >= 0.2 and <= 0.8 && double.IsFinite(ratio.Value)
+            ? ratio.Value
+            : fallback;
 
     private void OnSourceRowsLayoutUpdated(object? sender, EventArgs e)
     {

@@ -344,9 +344,17 @@ public sealed class ApplicationSettingsStore
             ProfilesDirectory = profilesDirectory,
             SettingsDirectory = settingsDirectory,
             PersistentArchiveExtractionDirectory = extractionDirectory,
-            LastUsedOutputDirectory = outputDirectory
+            LastUsedOutputDirectory = outputDirectory,
+            LoadPaneSplitRatio = NormalizePaneSplitRatio(settings.LoadPaneSplitRatio),
+            DiscoveryPaneSplitRatio = NormalizePaneSplitRatio(settings.DiscoveryPaneSplitRatio),
+            DatabasePaneSplitRatio = NormalizePaneSplitRatio(settings.DatabasePaneSplitRatio)
         };
     }
+
+    private static double? NormalizePaneSplitRatio(double? ratio) =>
+        ratio is >= 0.2 and <= 0.8 && double.IsFinite(ratio.Value)
+            ? ratio
+            : null;
 
     private static bool ArchiveNestingDepthIsValid(
         CIA.Contracts.Sources.ArchiveNestingDepth depth) => depth.Value >= 1;

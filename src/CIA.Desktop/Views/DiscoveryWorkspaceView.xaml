@@ -93,11 +93,6 @@
             </Grid.RowDefinitions>
 
             <WrapPanel VerticalAlignment="Center">
-                <Button Margin="0,0,6,0"
-                        AutomationProperties.Name="Run Discovery"
-                        Command="{Binding RunDiscoveryCommand}"
-                        Content="{Binding RunButtonText}"
-                        Style="{StaticResource CiaPrimaryButtonStyle}" />
                 <Border Margin="0,3,8,3"
                         Style="{StaticResource DiscoveryStateBadgeStyle}">
                     <TextBlock VerticalAlignment="Center"
@@ -434,6 +429,16 @@
                 </Grid>
             </Border>
         </Grid>
+
+        <GridSplitter x:Name="DiscoveryPaneSplitter"
+                      Grid.Row="0"
+                      Grid.Column="1"
+                      HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch"
+                      DragCompleted="OnDiscoveryPaneSplitterDragCompleted"
+                      ResizeBehavior="PreviousAndNext"
+                      ResizeDirection="Columns"
+                      ShowsPreview="False" />
 
         <Grid x:Name="DiscoveryRightRail"
               Grid.Row="0"
@@ -773,7 +778,11 @@
                                        VerticalAlignment="Center"
                                        Style="{StaticResource CiaSecondaryTextStyle}"
                                        Text="Build from the current selected Discovery mapping." />
-                            <Button Command="{Binding BuildDatabaseCommand}"
+                            <Button x:Name="BuildDatabaseButton"
+                                    Command="{Binding BuildDatabaseCommand}"
+                                    MinHeight="32"
+                                    Padding="14,5"
+                                    FontWeight="SemiBold"
                                     Style="{StaticResource CiaPrimaryButtonStyle}"
                                     Content="{Binding DatabaseBuildButtonText}"
                                     ToolTip="{Binding DatabaseBuildAvailabilityReason}" />

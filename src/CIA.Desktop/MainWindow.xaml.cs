@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using CIA.Core.Runtime;
 using CIA.Desktop.Presentation;
 
 namespace CIA.Desktop;
@@ -14,7 +15,8 @@ public partial class MainWindow : Window
         LoadWorkspaceViewModel loadWorkspace,
         DiscoveryWorkspaceViewModel discoveryWorkspace,
         DatabaseWorkspaceViewModel databaseWorkspace,
-        SettingsWorkspaceViewModel settingsWorkspace)
+        SettingsWorkspaceViewModel settingsWorkspace,
+        ApplicationSettingsService? settingsService = null)
     {
         ArgumentNullException.ThrowIfNull(viewModel);
         ArgumentNullException.ThrowIfNull(globalStatus);
@@ -28,6 +30,7 @@ public partial class MainWindow : Window
         DiscoveryWorkspace = discoveryWorkspace;
         DatabaseWorkspace = databaseWorkspace;
         SettingsWorkspace = settingsWorkspace;
+        SettingsService = settingsService;
         InitializeComponent();
         DataContext = viewModel;
     }
@@ -41,6 +44,8 @@ public partial class MainWindow : Window
     public DatabaseWorkspaceViewModel DatabaseWorkspace { get; }
 
     public SettingsWorkspaceViewModel SettingsWorkspace { get; }
+
+    public ApplicationSettingsService? SettingsService { get; }
 
     private void OnWindowSizeChanged(object sender, SizeChangedEventArgs e)
     {

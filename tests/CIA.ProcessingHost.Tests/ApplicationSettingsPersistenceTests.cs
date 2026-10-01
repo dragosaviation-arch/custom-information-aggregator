@@ -63,6 +63,36 @@ public sealed class ApplicationSettingsPersistenceTests
     }
 
     [TestMethod]
+    public void WorkspacePaneRatiosPersistAndInvalidValuesFallBackToDefaults()
+    {
+        using var environment = new SettingsTestEnvironment();
+        var service = environment.CreateService();
+
+        Assert.IsTrue(service.Save(service.Current with
+        {
+            LoadPaneSplitRatio = 0.61,
+            DiscoveryPaneSplitRatio = 0.57,
+            DatabasePaneSplitRatio = 0.46
+        }).Succeeded);
+        var reopened = environment.CreateService();
+
+        Assert.AreEqual(0.61, reopened.Current.LoadPaneSplitRatio);
+        Assert.AreEqual(0.57, reopened.Current.DiscoveryPaneSplitRatio);
+        Assert.AreEqual(0.46, reopened.Current.DatabasePaneSplitRatio);
+
+        Assert.IsTrue(reopened.Save(reopened.Current with
+        {
+            LoadPaneSplitRatio = double.NaN,
+            DiscoveryPaneSplitRatio = 0.05,
+            DatabasePaneSplitRatio = 0.95
+        }).Succeeded);
+
+        Assert.IsNull(reopened.Current.LoadPaneSplitRatio);
+        Assert.IsNull(reopened.Current.DiscoveryPaneSplitRatio);
+        Assert.IsNull(reopened.Current.DatabasePaneSplitRatio);
+    }
+
+    [TestMethod]
     public void ResetToDefaultsPersistsTheCompleteCanonicalConfiguration()
     {
         using var environment = new SettingsTestEnvironment();

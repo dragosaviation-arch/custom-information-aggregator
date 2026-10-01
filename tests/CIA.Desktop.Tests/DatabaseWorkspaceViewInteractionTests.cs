@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
@@ -114,6 +115,9 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var workbookExportStatus = (TextBlock)view.FindName("WorkbookExportStatusText");
             var prepareButton = (Button)view.FindName("PrepareForExportButton");
             var extractionState = (TextBlock)view.FindName("ExtractionReviewStateText");
+            var paneSplitter = (GridSplitter)view.FindName("DatabasePaneSplitter");
+            var paneSizeFeedback = (Border)view.FindName("DatabasePaneSizeFeedback");
+            var paneSizeFeedbackText = (TextBlock)view.FindName("DatabasePaneSizeFeedbackText");
 
             Assert.AreEqual(2, dynamicHeaders.Items.Count);
             Assert.AreEqual(2, reviewRows.Items.Count);
@@ -145,6 +149,20 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.IsNull(view.FindName("GlobalSourceIdExportField"));
             Assert.IsNull(view.FindName("SingleSheetMode"));
             Assert.IsNull(view.FindName("MultipleSheetsMode"));
+            Assert.AreEqual(Visibility.Visible, paneSplitter.Visibility);
+            Assert.AreEqual(Visibility.Collapsed, paneSizeFeedback.Visibility);
+
+            paneSplitter.RaiseEvent(new DragStartedEventArgs(0, 0)
+            {
+                RoutedEvent = Thumb.DragStartedEvent
+            });
+            Assert.AreEqual(Visibility.Visible, paneSizeFeedback.Visibility);
+            StringAssert.Contains(paneSizeFeedbackText.Text, " / ");
+            paneSplitter.RaiseEvent(new DragCompletedEventArgs(0, 0, false)
+            {
+                RoutedEvent = Thumb.DragCompletedEvent
+            });
+            Assert.AreEqual(Visibility.Collapsed, paneSizeFeedback.Visibility);
 
             var collisionId = WorkbookDefinitionId.CreateNew();
             var collisionDialog = new WorkbookCollisionDialog(
@@ -173,6 +191,8 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.AreEqual(Visibility.Visible, lowerTabs.Visibility);
             Assert.AreEqual(Visibility.Visible, exportFields.Visibility);
             Assert.AreEqual(Visibility.Collapsed, excelExport.Visibility);
+            Assert.AreEqual(Visibility.Collapsed, paneSplitter.Visibility);
+            Assert.AreEqual(Visibility.Collapsed, paneSizeFeedback.Visibility);
 
             var excelTab = (Button)view.FindName("ExcelExportTabButton");
             excelTab.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));

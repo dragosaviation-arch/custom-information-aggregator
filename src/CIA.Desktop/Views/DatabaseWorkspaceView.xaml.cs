@@ -1,18 +1,33 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
+using CIA.Core.Runtime;
 
 namespace CIA.Desktop.Views;
 
 public partial class DatabaseWorkspaceView : UserControl
 {
     private const double CompactLayoutBreakpoint = 1180;
+    private const double DefaultPaneSplitRatio = 0.5;
     private bool _isCompact;
     private bool _showExcelExport;
 
     public DatabaseWorkspaceView()
     {
         InitializeComponent();
+    }
+
+    public static readonly DependencyProperty SettingsServiceProperty =
+        DependencyProperty.Register(
+            nameof(SettingsService),
+            typeof(ApplicationSettingsService),
+            typeof(DatabaseWorkspaceView));
+
+    public ApplicationSettingsService? SettingsService
+    {
+        get => (ApplicationSettingsService?)GetValue(SettingsServiceProperty);
+        set => SetValue(SettingsServiceProperty, value);
     }
 
     private void OnViewLoaded(object sender, RoutedEventArgs e)
@@ -68,9 +83,15 @@ public partial class DatabaseWorkspaceView : UserControl
     private void ApplyWideLayout()
     {
         LowerTabs.Visibility = Visibility.Collapsed;
-        ExportFieldsColumn.Width = new GridLength(1, GridUnitType.Star);
+        var splitRatio = ResolvePaneSplitRatio(
+            SettingsService?.Current.DatabasePaneSplitRatio,
+            DefaultPaneSplitRatio);
+        ExportFieldsColumn.MinWidth = 360;
+        ExportFieldsColumn.Width = new GridLength(splitRatio, GridUnitType.Star);
         LowerPanelGapColumn.Width = new GridLength(8);
-        ExcelExportColumn.Width = new GridLength(1, GridUnitType.Star);
+        ExcelExportColumn.MinWidth = 360;
+        ExcelExportColumn.Width = new GridLength(1 - splitRatio, GridUnitType.Star);
+        DatabasePaneSplitter.Visibility = Visibility.Visible;
         Grid.SetColumn(ExportFieldsPanel, 0);
         Grid.SetColumn(ExcelExportPanel, 2);
         ExportFieldsPanel.Visibility = Visibility.Visible;
@@ -91,9 +112,13 @@ public partial class DatabaseWorkspaceView : UserControl
     private void ApplyCompactLayout()
     {
         LowerTabs.Visibility = Visibility.Visible;
+        ExportFieldsColumn.MinWidth = 0;
         ExportFieldsColumn.Width = new GridLength(1, GridUnitType.Star);
         LowerPanelGapColumn.Width = new GridLength(0);
+        ExcelExportColumn.MinWidth = 0;
         ExcelExportColumn.Width = new GridLength(0);
+        DatabasePaneSplitter.Visibility = Visibility.Collapsed;
+        DatabasePaneSizeFeedback.Visibility = Visibility.Collapsed;
         Grid.SetColumn(ExportFieldsPanel, 0);
         Grid.SetColumn(ExcelExportPanel, 0);
 
@@ -134,4 +159,56 @@ public partial class DatabaseWorkspaceView : UserControl
         button.Foreground = (Brush)FindResource(
             isActive ? "CiaAccentBrush" : "CiaTextSecondaryBrush");
     }
+
+    private void OnDatabasePaneSplitterDragStarted(object sender, DragStartedEventArgs e)
+    {
+        if (_isCompact)
+        {
+            return;
+        }
+
+        UpdateDatabasePaneSizeFeedback();
+        DatabasePaneSizeFeedback.Visibility = Visibility.Visible;
+    }
+
+    private void OnDatabasePaneSplitterDragDelta(object sender, DragDeltaEventArgs e)
+    {
+        if (!_isCompact)
+        {
+            UpdateDatabasePaneSizeFeedback();
+        }
+    }
+
+    private void OnDatabasePaneSplitterDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (_isCompact)
+        {
+            return;
+        }
+
+        UpdateDatabasePaneSizeFeedback();
+        DatabasePaneSizeFeedback.Visibility = Visibility.Collapsed;
+        var totalWidth = ExportFieldsColumn.ActualWidth + ExcelExportColumn.ActualWidth;
+        if (SettingsService is null || totalWidth <= 0)
+        {
+            return;
+        }
+
+        var ratio = ResolvePaneSplitRatio(
+            ExportFieldsColumn.ActualWidth / totalWidth,
+            DefaultPaneSplitRatio);
+        SettingsService.Save(
+            SettingsService.Current with { DatabasePaneSplitRatio = ratio });
+    }
+
+    private void UpdateDatabasePaneSizeFeedback()
+    {
+        DatabasePaneSizeFeedbackText.Text =
+            $"{ExportFieldsColumn.ActualWidth:0} / {ExcelExportColumn.ActualWidth:0}";
+    }
+
+    private static double ResolvePaneSplitRatio(double? ratio, double fallback) =>
+        ratio is >= 0.2 and <= 0.8 && double.IsFinite(ratio.Value)
+            ? ratio.Value
+            : fallback;
 }

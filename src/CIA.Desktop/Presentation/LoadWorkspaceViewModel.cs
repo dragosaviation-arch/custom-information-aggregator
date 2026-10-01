@@ -107,13 +107,13 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
 
         AddXmlFileCommand = new AsyncRelayCommand(
-            () => AddSelectedPathAsync(SourceSelectionKind.XmlFile, _pathPicker.PickXmlFile),
+            () => AddSelectedPathsAsync(SourceSelectionKind.XmlFile, _pathPicker.PickXmlFiles),
             () => !IsBusy);
         AddFolderCommand = new AsyncRelayCommand(
-            () => AddSelectedPathAsync(SourceSelectionKind.Folder, _pathPicker.PickFolder),
+            () => AddSelectedPathsAsync(SourceSelectionKind.Folder, _pathPicker.PickFolders),
             () => !IsBusy);
         AddArchiveCommand = new AsyncRelayCommand(
-            () => AddSelectedPathAsync(SourceSelectionKind.Archive, _pathPicker.PickArchive),
+            () => AddSelectedPathsAsync(SourceSelectionKind.Archive, _pathPicker.PickArchives),
             () => !IsBusy);
         _toggleSourceInclusionCommand = new RelayCommand<LoadedSourceItem>(
             ToggleSourceInclusion,
@@ -393,25 +393,41 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         SourceSelectionKind selectionKind,
         SourceSetDefinition? targetSourceSet)
     {
-        Func<string?> pickPath = selectionKind switch
+        Func<IReadOnlyList<string>> pickPaths = selectionKind switch
         {
-            SourceSelectionKind.XmlFile => _pathPicker.PickXmlFile,
-            SourceSelectionKind.Folder => _pathPicker.PickFolder,
-            SourceSelectionKind.Archive => _pathPicker.PickArchive,
+            SourceSelectionKind.XmlFile => _pathPicker.PickXmlFiles,
+            SourceSelectionKind.Folder => _pathPicker.PickFolders,
+            SourceSelectionKind.Archive => _pathPicker.PickArchives,
             _ => throw new ArgumentOutOfRangeException(nameof(selectionKind))
         };
-        var path = pickPath();
-        if (path is null)
+        var paths = pickPaths();
+        if (paths.Count == 0)
         {
             return;
         }
 
-        await AddPathAsync(
-            selectionKind,
-            path,
-            allowNavigation: true,
-            targetSourceSet,
-            createNewSourceSet: targetSourceSet is null);
+        var acceptedAny = false;
+        var resolvedTargetSourceSet = targetSourceSet;
+        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var createNewSourceSet = resolvedTargetSourceSet is null;
+            var accepted = await AddPathAsync(
+                selectionKind,
+                path,
+                allowNavigation: false,
+                resolvedTargetSourceSet,
+                createNewSourceSet);
+            acceptedAny |= accepted;
+            if (accepted && createNewSourceSet)
+            {
+                resolvedTargetSourceSet = ActiveSourceSet;
+            }
+        }
+
+        if (acceptedAny && OpenDiscoveryWhenLoadingCompletes)
+        {
+            NavigateToDiscovery();
+        }
     }
 
     public void ReassignHighlightedSources(SourceSetDefinition? targetSourceSet)
@@ -469,13 +485,22 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task AddSelectedPathAsync(SourceSelectionKind selectionKind, Func<string?> pickPath)
+    private async Task AddSelectedPathsAsync(
+        SourceSelectionKind selectionKind,
+        Func<IReadOnlyList<string>> pickPaths)
     {
-        var path = pickPath();
-
-        if (path is not null)
+        var acceptedAny = false;
+        foreach (var path in pickPaths().Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            await AddPathAsync(selectionKind, path, allowNavigation: true);
+            acceptedAny |= await AddPathAsync(
+                selectionKind,
+                path,
+                allowNavigation: false);
+        }
+
+        if (acceptedAny && OpenDiscoveryWhenLoadingCompletes)
+        {
+            NavigateToDiscovery();
         }
     }
 
