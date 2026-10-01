@@ -468,6 +468,9 @@ public sealed class ApplicationSettingsService
         return result;
     }
 
+    public ApplicationSettingsSaveResult ResetToDefaults() =>
+        Save(ApplicationSettings.CreateDefault(RuntimePaths.LocalApplicationDataDirectory));
+
     private static bool PathsEqual(string first, string second) =>
         string.Equals(
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(first)),

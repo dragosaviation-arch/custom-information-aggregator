@@ -63,6 +63,69 @@ public sealed class ApplicationSettingsPersistenceTests
     }
 
     [TestMethod]
+    public void ResetToDefaultsPersistsTheCompleteCanonicalConfiguration()
+    {
+        using var environment = new SettingsTestEnvironment();
+        var initial = environment.CreateService();
+        var configured = initial.Current with
+        {
+            TemporaryDirectory = environment.PathFor("Configured", "Temp"),
+            WorkingDirectory = environment.PathFor("Configured", "Working"),
+            ProfilesDirectory = environment.PathFor("Configured", "Profiles"),
+            SettingsDirectory = environment.PathFor("Configured", "Settings"),
+            TraverseSubfolders = false,
+            MaximumArchiveNestingDepth = ArchiveNestingDepth.From(9),
+            PersistentArchiveExtractionEnabled = true,
+            PersistentArchiveExtractionDirectory = environment.PathFor("Configured", "Extraction"),
+            LastUsedOutputDirectory = environment.CreateDirectory("Configured", "Output"),
+            PostExportBehavior = PostExportBehavior.AskEachTime
+        };
+        Assert.IsTrue(initial.Save(configured).Succeeded);
+        var service = environment.CreateService();
+        var expected = ApplicationSettings.CreateDefault(environment.LocalApplicationData);
+
+        var result = service.ResetToDefaults();
+
+        Assert.IsTrue(result.Succeeded, result.FailureDescription);
+        Assert.AreEqual(expected, result.Settings);
+        Assert.AreEqual(expected, service.Current);
+        Assert.IsNull(service.Current.LastUsedOutputDirectory);
+        Assert.AreEqual(PostExportBehavior.StatusOnly, service.Current.PostExportBehavior);
+        Assert.IsTrue(service.Current.TraverseSubfolders);
+        Assert.AreEqual(ArchiveNestingDepth.Default, service.Current.MaximumArchiveNestingDepth);
+        Assert.IsFalse(service.Current.PersistentArchiveExtractionEnabled);
+        Assert.IsNull(service.Current.PersistentArchiveExtractionDirectory);
+        Assert.IsTrue(service.IsRestartRequired);
+        Assert.AreEqual(configured.SettingsDirectory, service.RuntimePaths.SettingsDirectory);
+        Assert.AreEqual(expected, environment.CreateService().Current);
+    }
+
+    [TestMethod]
+    public void ResetPublicationFailurePreservesCurrentAndPersistedConfiguration()
+    {
+        using var environment = new SettingsTestEnvironment();
+        var initial = environment.CreateService();
+        var configured = initial.Current with
+        {
+            MaximumArchiveNestingDepth = ArchiveNestingDepth.From(8),
+            LastUsedOutputDirectory = environment.CreateDirectory("Output"),
+            PostExportBehavior = PostExportBehavior.OpenExportedFile
+        };
+        Assert.IsTrue(initial.Save(configured).Succeeded);
+        var settingsPath = environment.CreateService().Startup.SettingsFilePath;
+        var persistedBytes = File.ReadAllBytes(settingsPath);
+        var service = new ApplicationSettingsService(
+            environment.CreateStore(new AlwaysFailingWriter()));
+
+        var result = service.ResetToDefaults();
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreEqual(configured, service.Current);
+        CollectionAssert.AreEqual(persistedBytes, File.ReadAllBytes(settingsPath));
+        Assert.AreEqual(configured, environment.CreateService().Current);
+    }
+
+    [TestMethod]
     public void AtomicWriteFailurePreservesPreviouslyPublishedSettings()
     {
         using var environment = new SettingsTestEnvironment();

@@ -811,6 +811,35 @@ public sealed class BlacklistProfileCoordinatorTests
     }
 
     [TestMethod]
+    public async Task BlacklistConfirmationRemainsBoundToOriginalProfileWhenSelectionChanges()
+    {
+        using var environment = await BlacklistEnvironment.CreateAsync();
+        var identity = Identity(SourceSetId.CreateNew(), "/catalog/code", "code");
+        environment.Configuration.Synchronize([identity]);
+        var first = environment.Coordinator.SaveNew("First").Profile!;
+        var second = environment.Coordinator.SaveNew("Second").Profile!;
+        var confirmation = new InApplicationProfileDeleteConfirmation();
+        using var viewModel = CreateViewModel(
+            environment,
+            environment.Coordinator,
+            confirmation);
+        viewModel.SelectedBlacklistProfile =
+            viewModel.BlacklistProfiles.Single(profile => profile.Name == "First");
+
+        var deletion = viewModel.DeleteBlacklistProfileCommand.ExecuteAsync(null);
+        Assert.IsTrue(confirmation.IsOpen);
+        Assert.AreEqual("First", confirmation.ProfileName);
+        viewModel.SelectedBlacklistProfile =
+            viewModel.BlacklistProfiles.Single(profile => profile.Name == "Second");
+        confirmation.Accept();
+        await deletion;
+
+        Assert.IsFalse(File.Exists(first.Path));
+        Assert.IsTrue(File.Exists(second.Path));
+        Assert.HasCount(1, viewModel.BlacklistProfiles);
+    }
+
+    [TestMethod]
     public async Task ConfirmedStaleBlacklistDeletePreservesReplacement()
     {
         using var environment = await BlacklistEnvironment.CreateAsync();
