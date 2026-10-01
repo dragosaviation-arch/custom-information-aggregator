@@ -64,6 +64,10 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ManagedStorageInventoryService>();
         builder.Services.AddSingleton<IManagedStorageDependencySnapshotProvider,
             ManagedStorageDependencySnapshotProvider>();
+        builder.Services.AddSingleton<IManagedStorageArtifactDeleter,
+            FileSystemManagedStorageArtifactDeleter>();
+        builder.Services.AddSingleton<IManagedStorageCleanupService,
+            ManagedStorageCleanupService>();
         builder.Services.AddSingleton<ISourceIntakeClient, ProcessingHostSourceIntakeClient>();
         builder.Services.AddSingleton<SourceLoadingCoordinator>();
         builder.Services.AddSingleton<ISourcePathPicker, WindowsSourcePathPicker>();

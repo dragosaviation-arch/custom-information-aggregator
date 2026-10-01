@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Operations;
 using CIA.Core.Diagnostics;
+using CIA.Core.ManagedStorage;
 using CIA.Core.Runtime;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Views;
@@ -12,6 +13,8 @@ namespace CIA.Desktop.Tests;
 [TestClass]
 public sealed class SettingsWorkspaceV03Tests
 {
+    private static readonly TimeSpan CleanupTestTimeout = TimeSpan.FromSeconds(20);
+
     [TestMethod]
     public void UnifiedViewerUsesRealActivityAndIssueRecordsWithoutFabricatingRawLogs()
     {
@@ -177,6 +180,41 @@ public sealed class SettingsWorkspaceV03Tests
     }
 
     [TestMethod]
+    public async Task CleanupCommandInvokesOnceAndReportsTruthfulOutcomeCounts()
+    {
+        var cleanup = new BlockingCleanupService(new ManagedStorageCleanupResult(
+            ManagedStorageCleanupOutcome.CompletedWithItemFailures,
+            [
+                CreateCleanupItem(ManagedStorageCleanupItemState.Removed, "removed"),
+                CreateCleanupItem(ManagedStorageCleanupItemState.SkippedNoLongerEligible, "skipped"),
+                CreateCleanupItem(ManagedStorageCleanupItemState.FailedToRemove, "failed")
+            ],
+            FailureDescription: null));
+        var localAppData = Path.Combine(Path.GetTempPath(), "CIA.Settings.Cleanup", Guid.NewGuid().ToString("N"));
+        var paths = ApplicationPaths.FromLocalApplicationData(localAppData);
+        var viewModel = new SettingsWorkspaceViewModel(
+            CreateReader(),
+            new SettingsWorkspaceRuntimePaths(paths, paths.LogsDirectory),
+            managedStorageCleanupService: cleanup);
+
+        var firstInvocation = viewModel.CleanupManagedStorageCommand.ExecuteAsync(null);
+        await cleanup.Started.Task.WaitAsync(CleanupTestTimeout);
+        Assert.IsTrue(viewModel.IsCleanupRunning);
+        Assert.IsFalse(viewModel.CleanupManagedStorageCommand.CanExecute(null));
+
+        var duplicateInvocation = viewModel.CleanupManagedStorageCommand.ExecuteAsync(null);
+        cleanup.Release.TrySetResult();
+        await Task.WhenAll(firstInvocation, duplicateInvocation).WaitAsync(CleanupTestTimeout);
+
+        Assert.AreEqual(1, cleanup.CallCount);
+        Assert.IsFalse(viewModel.IsCleanupRunning);
+        StringAssert.Contains(viewModel.CleanupStatusText, "completed with item failures");
+        StringAssert.Contains(viewModel.CleanupStatusText, "1 removed");
+        StringAssert.Contains(viewModel.CleanupStatusText, "1 skipped/protected");
+        StringAssert.Contains(viewModel.CleanupStatusText, "1 failed");
+    }
+
+    [TestMethod]
     public void PersistentSettingsAreaValidatesSavesAndReportsRestartBoundary()
     {
         using var root = new TemporarySettingsDirectory();
@@ -297,6 +335,38 @@ public sealed class SettingsWorkspaceV03Tests
             "Test stage",
             correlation.InitiatedAtUtc.AddSeconds(1),
             completion);
+    }
+
+    private static ManagedStorageCleanupItemResult CreateCleanupItem(
+        ManagedStorageCleanupItemState state,
+        string name) =>
+        new(
+            ManagedStorageArtifactId.CreateNew(),
+            Path.GetFullPath(name),
+            state,
+            ProtectionReasons: [],
+            Problem: null);
+
+    private sealed class BlockingCleanupService(ManagedStorageCleanupResult result)
+        : IManagedStorageCleanupService
+    {
+        private int _callCount;
+
+        public TaskCompletionSource Started { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int CallCount => Volatile.Read(ref _callCount);
+
+        public ManagedStorageCleanupResult Cleanup()
+        {
+            Interlocked.Increment(ref _callCount);
+            Started.TrySetResult();
+            Release.Task.GetAwaiter().GetResult();
+            return result;
+        }
     }
 
     private static IProcessingHistoryReader CreateReader()

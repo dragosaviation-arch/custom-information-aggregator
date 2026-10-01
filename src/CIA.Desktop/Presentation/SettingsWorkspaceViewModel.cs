@@ -6,6 +6,7 @@ using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Contracts.WorkingState;
 using CIA.Core.Diagnostics;
+using CIA.Core.ManagedStorage;
 using CIA.Core.Runtime;
 using CIA.Desktop.Workflow;
 using CIA.Desktop.WorkingState;
@@ -35,12 +36,14 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     private readonly IWorkingStateCoordinator? _workingStateCoordinator;
     private readonly IApplicationWorkflowCoordinator? _workflowCoordinator;
     private readonly ISavedWorkingStateDeleteConfirmation _deleteConfirmation;
+    private readonly IManagedStorageCleanupService? _managedStorageCleanupService;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly AsyncRelayCommand _saveStateCommand;
     private readonly AsyncRelayCommand _restoreStateCommand;
     private readonly AsyncRelayCommand _deleteStateCommand;
     private readonly RelayCommand _confirmDeleteStateCommand;
     private readonly RelayCommand _cancelDeleteStateCommand;
+    private readonly AsyncRelayCommand _cleanupManagedStorageCommand;
     private IReadOnlyList<ProcessingAttemptPresentation> _attempts = [];
     private IReadOnlyList<ProcessingIssuePresentation> _issues = [];
     private IReadOnlyList<SettingsLogEntryPresentation> _entries = [];
@@ -76,6 +79,8 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     private string? _savedStateNameProblem;
     private string _savedStateStatusText = "No saved states have been created yet.";
     private bool _isSavedStateActionRunning;
+    private bool _isCleanupRunning;
+    private string _cleanupStatusText = "No cleanup has been run.";
 
     public SettingsWorkspaceViewModel(
         IProcessingHistoryReader historyReader,
@@ -85,7 +90,8 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         SavedWorkingStateLibrary? savedStateLibrary = null,
         IWorkingStateCoordinator? workingStateCoordinator = null,
         IApplicationWorkflowCoordinator? workflowCoordinator = null,
-        ISavedWorkingStateDeleteConfirmation? deleteConfirmation = null)
+        ISavedWorkingStateDeleteConfirmation? deleteConfirmation = null,
+        IManagedStorageCleanupService? managedStorageCleanupService = null)
     {
         _historyReader = historyReader ?? throw new ArgumentNullException(nameof(historyReader));
         ArgumentNullException.ThrowIfNull(runtimePaths);
@@ -103,6 +109,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         _workflowCoordinator = workflowCoordinator;
         _deleteConfirmation = deleteConfirmation
             ?? new InApplicationSavedWorkingStateDeleteConfirmation();
+        _managedStorageCleanupService = managedStorageCleanupService;
         _uiSynchronizationContext = SynchronizationContext.Current;
         _deleteConfirmation.Changed += OnDeleteConfirmationChanged;
         if (_workflowCoordinator is not null)
@@ -147,6 +154,9 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         _cancelDeleteStateCommand = new RelayCommand(
             _deleteConfirmation.Decline,
             () => _deleteConfirmation.IsOpen);
+        _cleanupManagedStorageCommand = new AsyncRelayCommand(
+            CleanupManagedStorageAsync,
+            () => _managedStorageCleanupService is not null && !IsCleanupRunning);
         BrowseTemporaryDirectoryCommand = CreateBrowseCommand(
             "Choose CIA Temporary directory",
             () => TemporaryDirectory,
@@ -204,6 +214,8 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public IRelayCommand ConfirmDeleteStateCommand => _confirmDeleteStateCommand;
 
     public IRelayCommand CancelDeleteStateCommand => _cancelDeleteStateCommand;
+
+    public IAsyncRelayCommand CleanupManagedStorageCommand => _cleanupManagedStorageCommand;
 
     public IRelayCommand BrowseTemporaryDirectoryCommand { get; }
 
@@ -423,6 +435,24 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public bool IsPersistentSettingsAvailable => true;
 
     public bool AreFutureSettingsActionsAvailable => false;
+
+    public bool IsCleanupRunning
+    {
+        get => _isCleanupRunning;
+        private set
+        {
+            if (SetProperty(ref _isCleanupRunning, value))
+            {
+                _cleanupManagedStorageCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public string CleanupStatusText
+    {
+        get => _cleanupStatusText;
+        private set => SetProperty(ref _cleanupStatusText, value);
+    }
 
     public int DefaultArchiveNestingDepth => ArchiveNestingDepth.DefaultValue;
 
@@ -817,6 +847,43 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     private bool CanDeleteState() =>
         !IsSavedStateActionRunning
         && SelectedSavedState is not null;
+
+    private async Task CleanupManagedStorageAsync()
+    {
+        if (_managedStorageCleanupService is null || IsCleanupRunning)
+        {
+            return;
+        }
+
+        IsCleanupRunning = true;
+        CleanupStatusText = "Cleaning eligible CIA-managed temporary and session data...";
+        try
+        {
+            var result = await Task.Run(_managedStorageCleanupService.Cleanup);
+            CleanupStatusText = result.Outcome == ManagedStorageCleanupOutcome.Failed
+                ? result.FailureDescription ?? "Managed-storage cleanup failed."
+                : $"Cleanup {FormatCleanupOutcome(result.Outcome)}: "
+                    + $"{result.RemovedCount} removed, "
+                    + $"{result.SkippedCount} skipped/protected, "
+                    + $"{result.FailedCount} failed.";
+        }
+        catch (Exception exception)
+        {
+            CleanupStatusText = $"Managed-storage cleanup failed ({exception.Message}).";
+        }
+        finally
+        {
+            IsCleanupRunning = false;
+        }
+    }
+
+    private static string FormatCleanupOutcome(ManagedStorageCleanupOutcome outcome) =>
+        outcome switch
+        {
+            ManagedStorageCleanupOutcome.CompletedSuccessfully => "completed successfully",
+            ManagedStorageCleanupOutcome.CompletedWithItemFailures => "completed with item failures",
+            _ => "failed"
+        };
 
     private async Task SaveStateAsync()
     {
