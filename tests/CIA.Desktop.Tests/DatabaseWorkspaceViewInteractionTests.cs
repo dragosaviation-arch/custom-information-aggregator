@@ -1,11 +1,14 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Media;
 using System.Windows.Threading;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Runtime;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Extraction;
@@ -33,6 +36,9 @@ public sealed class DatabaseWorkspaceViewInteractionTests
 
     private static async Task VerifyInteractionAsync()
     {
+        var settingsRoot = Directory.CreateTempSubdirectory("CIA.SPR191.DatabaseColumns.");
+        var settings = new ApplicationSettingsService(
+            new ApplicationSettingsStore(settingsRoot.FullName));
         using var workflow = new ApplicationWorkflowCoordinator(
             new ReadyProcessingHostSupervisor(),
             new RecordingProcessingHistoryRecorder());
@@ -78,7 +84,8 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             workflow,
             databaseCoordinator,
             new StaticDatabaseReviewClient(sourceId, databaseClient),
-            extractionCoordinator);
+            extractionCoordinator,
+            settingsService: settings);
         Assert.IsTrue((await databaseCoordinator.BuildAsync()).Accepted);
         var view = new DatabaseWorkspaceView
         {
@@ -99,6 +106,7 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
 
             var dynamicHeaders = (ItemsControl)view.FindName("DynamicDatabaseHeaders");
+            var metadataHeaders = (ItemsControl)view.FindName("DatabaseMetadataHeaders");
             var reviewRows = (ItemsControl)view.FindName("DatabaseReviewRows");
             var lowerTabs = (Grid)view.FindName("LowerTabs");
             var exportFields = (Border)view.FindName("ExportFieldsPanel");
@@ -114,8 +122,12 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var workbookExportStatus = (TextBlock)view.FindName("WorkbookExportStatusText");
             var prepareButton = (Button)view.FindName("PrepareForExportButton");
             var extractionState = (TextBlock)view.FindName("ExtractionReviewStateText");
+            var columnSizeFeedback = (Border)view.FindName("DatabaseColumnSizeFeedback");
+            var columnSizeFeedbackText = (TextBlock)view.FindName("DatabaseColumnSizeFeedbackText");
 
             Assert.AreEqual(2, dynamicHeaders.Items.Count);
+            Assert.AreEqual(viewModel.VisibleMetadataColumns.Count, metadataHeaders.Items.Count);
+            Assert.IsGreaterThan(0, metadataHeaders.Items.Count);
             Assert.AreEqual(2, reviewRows.Items.Count);
             var firstRow = (DatabaseReviewRowPresentation)reviewRows.Items[0];
             Assert.AreEqual("A1", firstRow.Cells[0].DisplayValue);
@@ -145,6 +157,90 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.IsNull(view.FindName("GlobalSourceIdExportField"));
             Assert.IsNull(view.FindName("SingleSheetMode"));
             Assert.IsNull(view.FindName("MultipleSheetsMode"));
+            Assert.AreEqual(Visibility.Collapsed, columnSizeFeedback.Visibility);
+            dynamicHeaders.UpdateLayout();
+            var firstHeader = (DependencyObject)dynamicHeaders.ItemContainerGenerator
+                .ContainerFromIndex(0);
+            var columnDivider = FindVisualChild<Thumb>(firstHeader);
+            Assert.IsNotNull(columnDivider);
+            var lastHeader = (DependencyObject)dynamicHeaders.ItemContainerGenerator
+                .ContainerFromIndex(dynamicHeaders.Items.Count - 1);
+            var lastColumnDivider = FindVisualChild<Thumb>(lastHeader);
+            Assert.IsNotNull(lastColumnDivider);
+            Assert.AreEqual(Visibility.Collapsed, lastColumnDivider.Visibility);
+            var firstWidth = viewModel.VisibleColumns[0].Width;
+            var secondWidth = viewModel.VisibleColumns[1].Width;
+
+            columnDivider.RaiseEvent(new DragStartedEventArgs(0, 0)
+            {
+                RoutedEvent = Thumb.DragStartedEvent
+            });
+            columnDivider.RaiseEvent(new DragDeltaEventArgs(24, 0)
+            {
+                RoutedEvent = Thumb.DragDeltaEvent
+            });
+            Assert.AreEqual(firstWidth + 24, viewModel.VisibleColumns[0].Width);
+            Assert.AreEqual(secondWidth - 24, viewModel.VisibleColumns[1].Width);
+            Assert.AreEqual(Visibility.Visible, columnSizeFeedback.Visibility);
+            StringAssert.Contains(columnSizeFeedbackText.Text, " / ");
+            columnDivider.RaiseEvent(new DragCompletedEventArgs(24, 0, false)
+            {
+                RoutedEvent = Thumb.DragCompletedEvent
+            });
+            Assert.AreEqual(Visibility.Collapsed, columnSizeFeedback.Visibility);
+            Assert.IsTrue(settings.Current.ColumnWidths.Values.Contains(firstWidth + 24));
+            Assert.IsTrue(settings.Current.ColumnWidths.Values.Contains(secondWidth - 24));
+
+            metadataHeaders.UpdateLayout();
+            var firstMetadataHeader = (DependencyObject)metadataHeaders.ItemContainerGenerator
+                .ContainerFromIndex(0);
+            var metadataDivider = FindVisualChild<Thumb>(firstMetadataHeader);
+            Assert.IsNotNull(metadataDivider);
+            Assert.AreEqual(Visibility.Visible, metadataDivider.Visibility);
+            var firstMetadataWidth = viewModel.VisibleMetadataColumns[0].Width;
+            var nextVisibleWidth = viewModel.VisibleMetadataColumns.Count > 1
+                ? viewModel.VisibleMetadataColumns[1].Width
+                : viewModel.VisibleColumns[0].Width;
+            metadataDivider.RaiseEvent(new DragStartedEventArgs(0, 0)
+            {
+                RoutedEvent = Thumb.DragStartedEvent
+            });
+            metadataDivider.RaiseEvent(new DragDeltaEventArgs(50, 0)
+            {
+                RoutedEvent = Thumb.DragDeltaEvent
+            });
+            Assert.AreEqual(firstMetadataWidth + 50, viewModel.VisibleMetadataColumns[0].Width);
+            Assert.AreEqual(
+                nextVisibleWidth - 50,
+                viewModel.VisibleMetadataColumns.Count > 1
+                    ? viewModel.VisibleMetadataColumns[1].Width
+                    : viewModel.VisibleColumns[0].Width);
+            Assert.AreEqual(Visibility.Visible, columnSizeFeedback.Visibility);
+            metadataDivider.RaiseEvent(new DragCompletedEventArgs(50, 0, false)
+            {
+                RoutedEvent = Thumb.DragCompletedEvent
+            });
+            Assert.AreEqual(Visibility.Collapsed, columnSizeFeedback.Visibility);
+
+            var restoredCoordinator = new DatabaseBuildCoordinator(
+                configuration,
+                sourceSet,
+                workflow,
+                new SuccessfulDatabaseClient(),
+                NullLogger<DatabaseBuildCoordinator>.Instance);
+            using var restoredViewModel = new DatabaseWorkspaceViewModel(
+                configuration,
+                workflow,
+                restoredCoordinator,
+                settingsService: settings);
+            Assert.IsTrue(workflow.RecordDiscoveryConfigurationChanged().Accepted);
+            Assert.IsTrue((await restoredCoordinator.BuildAsync()).Accepted);
+            CollectionAssert.AreEqual(
+                viewModel.VisibleColumns.Select(column => column.Width).ToArray(),
+                restoredViewModel.VisibleColumns.Select(column => column.Width).ToArray());
+            CollectionAssert.AreEqual(
+                viewModel.VisibleMetadataColumns.Select(column => column.Width).ToArray(),
+                restoredViewModel.VisibleMetadataColumns.Select(column => column.Width).ToArray());
 
             var collisionId = WorkbookDefinitionId.CreateNew();
             var collisionDialog = new WorkbookCollisionDialog(
@@ -173,6 +269,7 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.AreEqual(Visibility.Visible, lowerTabs.Visibility);
             Assert.AreEqual(Visibility.Visible, exportFields.Visibility);
             Assert.AreEqual(Visibility.Collapsed, excelExport.Visibility);
+            Assert.AreEqual(Visibility.Collapsed, columnSizeFeedback.Visibility);
 
             var excelTab = (Button)view.FindName("ExcelExportTabButton");
             excelTab.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -184,7 +281,28 @@ public sealed class DatabaseWorkspaceViewInteractionTests
         finally
         {
             window.Close();
+            settingsRoot.Delete(recursive: true);
         }
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent)
+        where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            if (FindVisualChild<T>(child) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
     }
 
     private static async Task CompleteSuccessfullyAsync(

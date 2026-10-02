@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using CIA.Contracts.Sources;
@@ -18,6 +19,18 @@ public partial class LoadWorkspaceView : UserControl
     public LoadWorkspaceView()
     {
         InitializeComponent();
+    }
+
+    public static readonly DependencyProperty DiscoveryWorkspaceProperty =
+        DependencyProperty.Register(
+            nameof(DiscoveryWorkspace),
+            typeof(DiscoveryWorkspaceViewModel),
+            typeof(LoadWorkspaceView));
+
+    public DiscoveryWorkspaceViewModel? DiscoveryWorkspace
+    {
+        get => (DiscoveryWorkspaceViewModel?)GetValue(DiscoveryWorkspaceProperty);
+        set => SetValue(DiscoveryWorkspaceProperty, value);
     }
 
     private void OnViewLoaded(object sender, RoutedEventArgs e)
@@ -124,6 +137,44 @@ public partial class LoadWorkspaceView : UserControl
             viewModel.SetHighlightedSources(
                 SourceRowsList.SelectedItems.Cast<LoadedSourceItem>());
         }
+    }
+
+    private void OnLoadColumnDividerDragDelta(object sender, DragDeltaEventArgs e)
+    {
+        if (DataContext is LoadWorkspaceViewModel viewModel
+            && sender is Thumb { Tag: string tag }
+            && TryParseColumnPair(tag, out var leftKey, out var rightKey))
+        {
+            viewModel.ResizeColumns(leftKey, rightKey, e.HorizontalChange);
+        }
+    }
+
+    private void OnLoadColumnDividerDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (DataContext is LoadWorkspaceViewModel viewModel
+            && sender is Thumb { Tag: string tag }
+            && TryParseColumnPair(tag, out var leftKey, out var rightKey))
+        {
+            viewModel.PersistColumnWidths(leftKey, rightKey);
+        }
+    }
+
+    private static bool TryParseColumnPair(
+        string value,
+        out string leftKey,
+        out string rightKey)
+    {
+        var separator = value.IndexOf('|', StringComparison.Ordinal);
+        if (separator <= 0 || separator >= value.Length - 1)
+        {
+            leftKey = string.Empty;
+            rightKey = string.Empty;
+            return false;
+        }
+
+        leftKey = value[..separator];
+        rightKey = value[(separator + 1)..];
+        return true;
     }
 
     private void OnAddFilesSetMenuClick(object sender, RoutedEventArgs e)

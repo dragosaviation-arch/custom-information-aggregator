@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using CIA.Contracts.Database;
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Sources;
 using CIA.ProcessingHost.Database;
@@ -379,8 +380,23 @@ public sealed class ProcessingHostLifetimeService(
                     break;
 
                 case RunDiscoveryCommand command when established:
+                    var discoveryProgress = new InlineProgress<DiscoveryProgressSnapshot>(snapshot =>
+                        connection.SendAsync(
+                                new DiscoveryProgressEvent(
+                                    Guid.CreateVersion7(),
+                                    DateTimeOffset.UtcNow,
+                                    command.MessageId,
+                                    snapshot),
+                                cancellationToken)
+                            .AsTask()
+                            .GetAwaiter()
+                            .GetResult());
                     var discoveryResult = await discovery
-                        .RunAsync(command.Correlation, command.Sources, cancellationToken)
+                        .RunAsync(
+                            command.Correlation,
+                            command.Sources,
+                            discoveryProgress,
+                            cancellationToken)
                         .ConfigureAwait(false);
                     await connection.SendAsync(
                             new RunDiscoveryResponse(

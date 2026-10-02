@@ -571,8 +571,11 @@ public sealed class LoadedSourceItem : ObservableObject
 
     private static string FormatFileSize(long length)
     {
-        const double bytesPerMegabyte = 1024d * 1024d;
-        return $"{length / bytesPerMegabyte:0.00} MB";
+        const double bytesPerKilobyte = 1024d;
+        var displayedKilobytes = length == 0
+            ? 0
+            : Math.Ceiling(length / bytesPerKilobyte);
+        return $"{displayedKilobytes:N0} KB";
     }
 
     private sealed record SourceFileMetadata(

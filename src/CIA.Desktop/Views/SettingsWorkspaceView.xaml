@@ -233,6 +233,7 @@
                                       AutomationProperties.Name="Retained log and diagnostic entries"
                                       ItemContainerStyle="{StaticResource SettingsLogRowStyle}"
                                       ItemsSource="{Binding VisibleEntries}"
+                                      PreviewMouseLeftButtonUp="OnLogEntriesPreviewMouseLeftButtonUp"
                                       SelectedItem="{Binding SelectedEntry, Mode=TwoWay}"
                                       Style="{StaticResource SettingsLogListStyle}">
                                 <ListView.View>

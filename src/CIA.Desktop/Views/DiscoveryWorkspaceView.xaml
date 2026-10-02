@@ -62,6 +62,12 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="DiscoveryColumnResizeThumbStyle"
+               TargetType="Thumb"
+               BasedOn="{StaticResource CiaColumnResizeThumbStyle}">
+            <EventSetter Event="DragDelta" Handler="OnColumnResizeDragDelta" />
+            <EventSetter Event="DragCompleted" Handler="OnColumnResizeDragCompleted" />
+        </Style>
     </UserControl.Resources>
 
     <Grid x:Name="DiscoveryLayout"
@@ -93,11 +99,6 @@
             </Grid.RowDefinitions>
 
             <WrapPanel VerticalAlignment="Center">
-                <Button Margin="0,0,6,0"
-                        AutomationProperties.Name="Run Discovery"
-                        Command="{Binding RunDiscoveryCommand}"
-                        Content="{Binding RunButtonText}"
-                        Style="{StaticResource CiaPrimaryButtonStyle}" />
                 <Border Margin="0,3,8,3"
                         Style="{StaticResource DiscoveryStateBadgeStyle}">
                     <TextBlock VerticalAlignment="Center"
@@ -174,12 +175,12 @@
                         <Grid Margin="6,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="34" />
-                                <ColumnDefinition Width="0.8*" MinWidth="72" />
-                                <ColumnDefinition Width="0.75*" MinWidth="70" />
-                                <ColumnDefinition Width="0.9*" MinWidth="82" />
-                                <ColumnDefinition Width="72" />
-                                <ColumnDefinition Width="54" />
-                                <ColumnDefinition Width="1.4*" MinWidth="110" />
+                                <ColumnDefinition Width="{Binding SourceSetColumnWidth}" MinWidth="60" />
+                                <ColumnDefinition Width="{Binding TagColumnWidth}" MinWidth="55" />
+                                <ColumnDefinition Width="{Binding DatabaseTagColumnWidth}" MinWidth="64" />
+                                <ColumnDefinition Width="{Binding OccurrencesColumnWidth}" MinWidth="52" />
+                                <ColumnDefinition Width="{Binding SourcesColumnWidth}" MinWidth="44" />
+                                <ColumnDefinition Width="{Binding SampleColumnWidth}" MinWidth="72" />
                                 <ColumnDefinition Width="76" />
                             </Grid.ColumnDefinitions>
                             <Button Grid.Column="1"
@@ -215,6 +216,11 @@
                             <TextBlock Grid.Column="7"
                                        Style="{StaticResource CiaSourceHeaderTextStyle}"
                                        Text="Blacklist" />
+                            <Thumb Grid.Column="1" Tag="discovery.sourceSet|discovery.tag" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="2" Tag="discovery.tag|discovery.databaseTag" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="3" Tag="discovery.databaseTag|discovery.occurrences" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="4" Tag="discovery.occurrences|discovery.sources" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="5" Tag="discovery.sources|discovery.sample" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                         </Grid>
                     </Border>
 
@@ -274,12 +280,12 @@
                                     <Grid Margin="6,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="34" />
-                                            <ColumnDefinition Width="0.8*" MinWidth="72" />
-                                            <ColumnDefinition Width="0.75*" MinWidth="70" />
-                                            <ColumnDefinition Width="0.9*" MinWidth="82" />
-                                            <ColumnDefinition Width="72" />
-                                            <ColumnDefinition Width="54" />
-                                            <ColumnDefinition Width="1.4*" MinWidth="110" />
+                                            <ColumnDefinition Width="{Binding DataContext.SourceSetColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="60" />
+                                            <ColumnDefinition Width="{Binding DataContext.TagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="55" />
+                                            <ColumnDefinition Width="{Binding DataContext.DatabaseTagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="64" />
+                                            <ColumnDefinition Width="{Binding DataContext.OccurrencesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="52" />
+                                            <ColumnDefinition Width="{Binding DataContext.SourcesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="44" />
+                                            <ColumnDefinition Width="{Binding DataContext.SampleColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
                                             <ColumnDefinition Width="76" />
                                         </Grid.ColumnDefinitions>
                                         <CheckBox HorizontalAlignment="Center"
@@ -420,16 +426,16 @@
                     </Grid>
                     <ProgressBar Grid.Row="1"
                                  Height="5"
-                                 BorderThickness="0"
-                                 IsIndeterminate="{Binding IsBusy}"
-                                 Maximum="100"
-                                 Value="100" />
+                                 IsIndeterminate="{Binding IsProgressIndeterminate}"
+                                 Maximum="{Binding ProgressMaximum}"
+                                 Style="{StaticResource CiaDeterminateProgressBarStyle}"
+                                 Value="{Binding ProgressValue, Mode=OneWay}" />
                     <Grid Grid.Row="2">
                         <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
                                    Text="{Binding ProgressStage}" />
                         <TextBlock HorizontalAlignment="Right"
                                    Style="{StaticResource CiaSecondaryTextStyle}"
-                                   Text="{Binding ResultSummary}" />
+                                   Text="{Binding ProgressPercentText}" />
                     </Grid>
                 </Grid>
             </Border>
@@ -630,9 +636,10 @@
                                                    Foreground="{StaticResource CiaAccentBrush}"
                                                    Text="WORKFLOW" />
                                         <CheckBox Margin="0,4"
-                                                  IsEnabled="False"
                                                   Content="Open Database when creation completes"
-                                                  ToolTip="Database creation is outside SPR-69." />
+                                                  IsChecked="{Binding OpenDatabaseWhenCreationCompletes}"
+                                                  ToolTipService.InitialShowDelay="500"
+                                                  ToolTip="Navigate to Database after a successful explicit Database creation or update." />
                                         <CheckBox Margin="0,4"
                                                   IsChecked="True"
                                                   IsEnabled="False"
@@ -773,7 +780,11 @@
                                        VerticalAlignment="Center"
                                        Style="{StaticResource CiaSecondaryTextStyle}"
                                        Text="Build from the current selected Discovery mapping." />
-                            <Button Command="{Binding BuildDatabaseCommand}"
+                            <Button x:Name="BuildDatabaseButton"
+                                    Command="{Binding BuildDatabaseCommand}"
+                                    MinHeight="32"
+                                    Padding="14,5"
+                                    FontWeight="SemiBold"
                                     Style="{StaticResource CiaPrimaryButtonStyle}"
                                     Content="{Binding DatabaseBuildButtonText}"
                                     ToolTip="{Binding DatabaseBuildAvailabilityReason}" />

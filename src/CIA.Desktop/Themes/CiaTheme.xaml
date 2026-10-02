@@ -61,6 +61,61 @@
     <CornerRadius x:Key="CiaControlCornerRadius">7</CornerRadius>
     <Visibility x:Key="CiaNavigationSubtitleVisibility">Visible</Visibility>
 
+    <Style x:Key="CiaDeterminateProgressBarStyle" TargetType="ProgressBar">
+        <Setter Property="Background" Value="{StaticResource CiaProgressTrackBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource CiaAccentBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ProgressBar">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="2"
+                            SnapsToDevicePixels="True">
+                        <Grid x:Name="PART_Track" ClipToBounds="True">
+                            <Border x:Name="PART_Indicator"
+                                    HorizontalAlignment="Left"
+                                    Background="{TemplateBinding Foreground}"
+                                    CornerRadius="2" />
+                        </Grid>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="CiaColumnResizeThumbStyle" TargetType="Thumb">
+        <Setter Property="Width" Value="9" />
+        <Setter Property="HorizontalAlignment" Value="Right" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="Cursor" Value="SizeWE" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Panel.ZIndex" Value="3" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Thumb">
+                    <Border Background="Transparent"
+                            SnapsToDevicePixels="True">
+                        <Border x:Name="ResizeGuide"
+                                Width="1"
+                                HorizontalAlignment="Center"
+                                Background="{StaticResource CiaAccentBrush}"
+                                Opacity="0" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="ResizeGuide" Property="Opacity" Value="0.22" />
+                        </Trigger>
+                        <Trigger Property="IsDragging" Value="True">
+                            <Setter TargetName="ResizeGuide" Property="Opacity" Value="0.8" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <Style x:Key="CiaPanelStyle" TargetType="Border">
         <Setter Property="Background" Value="{StaticResource CiaPanelBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource CiaBorderBrush}" />

@@ -1,6 +1,9 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
+using CIA.Desktop.Presentation;
 
 namespace CIA.Desktop.Views;
 
@@ -18,7 +21,54 @@ public partial class SettingsWorkspaceView : UserControl
 
     private void OnViewLoaded(object sender, RoutedEventArgs e)
     {
+        RestoreLogColumnWidths();
         ApplyResponsiveLayout();
+    }
+
+    private void RestoreLogColumnWidths()
+    {
+        if (DataContext is not SettingsWorkspaceViewModel viewModel
+            || LogEntriesList.View is not GridView gridView)
+        {
+            return;
+        }
+
+        var widths = viewModel.GetLogColumnWidths();
+        for (var index = 0; index < gridView.Columns.Count && index < widths.Count; index++)
+        {
+            gridView.Columns[index].Width = widths[index];
+        }
+    }
+
+    private void OnLogEntriesPreviewMouseLeftButtonUp(
+        object sender,
+        MouseButtonEventArgs e)
+    {
+        if (FindVisualParent<Thumb>(e.OriginalSource as DependencyObject) is null
+            || DataContext is not SettingsWorkspaceViewModel viewModel
+            || LogEntriesList.View is not GridView gridView)
+        {
+            return;
+        }
+
+        viewModel.PersistLogColumnWidths(
+            gridView.Columns.Select(column => column.ActualWidth).ToArray());
+    }
+
+    private static T? FindVisualParent<T>(DependencyObject? source)
+        where T : DependencyObject
+    {
+        while (source is not null)
+        {
+            if (source is T match)
+            {
+                return match;
+            }
+
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return null;
     }
 
     private void OnViewSizeChanged(object sender, SizeChangedEventArgs e)

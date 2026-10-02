@@ -6,6 +6,7 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Profiles;
+using CIA.Core.Runtime;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Profiles;
@@ -18,6 +19,13 @@ namespace CIA.Desktop.Presentation;
 
 public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 {
+    internal const string SourceSetColumnKey = "discovery.sourceSet";
+    internal const string TagColumnKey = "discovery.tag";
+    internal const string DatabaseTagColumnKey = "discovery.databaseTag";
+    internal const string OccurrencesColumnKey = "discovery.occurrences";
+    internal const string SourcesColumnKey = "discovery.sources";
+    internal const string SampleColumnKey = "discovery.sample";
+    private const double MaximumColumnWidth = 2000;
     private readonly IDiscoveryClient _discoveryClient;
     private readonly ActiveDiscoveryConfiguration _activeConfiguration;
     private readonly ActiveLoadedSourceSet _sourceSet;
@@ -51,6 +59,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly IBlacklistProfileCoordinator? _blacklistProfileCoordinator;
     private readonly ReusableProfileSessionState _reusableProfileSessionState;
     private readonly IProfileDeleteConfirmation _profileDeleteConfirmation;
+    private readonly MainWindowViewModel? _shell;
+    private readonly ApplicationSettingsService? _settingsService;
     private readonly RelayCommand _refreshBlacklistProfilesCommand;
     private readonly RelayCommand _loadBlacklistProfileCommand;
     private readonly RelayCommand _saveNewBlacklistProfileCommand;
@@ -76,6 +86,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool _showOnlySelected;
     private bool _showOnlyDatabaseTagOverrides;
     private int _issueCount;
+    private int _progressCompletedSourceCount;
+    private int _progressTotalSourceCount = 1;
     private string _progressStage = "Stage: Ready";
     private WorkflowArtifactStatus _discoveryStatus;
     private string _statusTitle = "Discovery ready";
@@ -102,6 +114,13 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private string _newBlacklistProfileName = string.Empty;
     private string _blacklistProfileStatusText = "Refresh to view blacklist profiles.";
     private int _disposed;
+    private bool _openDatabaseWhenCreationCompletes;
+    private double _sourceSetColumnWidth;
+    private double _tagColumnWidth;
+    private double _databaseTagColumnWidth;
+    private double _occurrencesColumnWidth;
+    private double _sourcesColumnWidth;
+    private double _sampleColumnWidth;
 
     public DiscoveryWorkspaceViewModel(
         IDiscoveryClient discoveryClient,
@@ -112,7 +131,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         IInformationSelectionProfileCoordinator? profileCoordinator = null,
         IProfileDeleteConfirmation? profileDeleteConfirmation = null,
         IBlacklistProfileCoordinator? blacklistProfileCoordinator = null,
-        ReusableProfileSessionState? reusableProfileSessionState = null)
+        ReusableProfileSessionState? reusableProfileSessionState = null,
+        MainWindowViewModel? shell = null,
+        ApplicationSettingsService? settingsService = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryClient);
         ArgumentNullException.ThrowIfNull(activeConfiguration);
@@ -130,6 +151,16 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             ?? new ReusableProfileSessionState();
         _profileDeleteConfirmation = profileDeleteConfirmation
             ?? new InApplicationProfileDeleteConfirmation();
+        _shell = shell;
+        _settingsService = settingsService;
+        _openDatabaseWhenCreationCompletes =
+            settingsService?.Current.OpenDatabaseWhenCreationCompletes == true;
+        _sourceSetColumnWidth = ResolveColumnWidth(SourceSetColumnKey, 100, 60);
+        _tagColumnWidth = ResolveColumnWidth(TagColumnKey, 110, 55);
+        _databaseTagColumnWidth = ResolveColumnWidth(DatabaseTagColumnKey, 120, 64);
+        _occurrencesColumnWidth = ResolveColumnWidth(OccurrencesColumnKey, 90, 52);
+        _sourcesColumnWidth = ResolveColumnWidth(SourcesColumnKey, 64, 44);
+        _sampleColumnWidth = ResolveColumnWidth(SampleColumnKey, 170, 72);
         _profileDeleteConfirmation.Changed += OnProfileDeleteConfirmationChanged;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
         _uiSynchronizationContext = SynchronizationContext.Current;
@@ -674,6 +705,69 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public string ProgressStage => IsBusy ? "Stage: Interpreting sources" : _progressStage;
 
+    public bool IsProgressIndeterminate => false;
+
+    public double ProgressMaximum => Math.Max(1, _progressTotalSourceCount);
+
+    public double ProgressValue => _progressCompletedSourceCount;
+
+    public string ProgressPercentText => string.Format(
+        CultureInfo.CurrentCulture,
+        "{0:0}%",
+        Math.Clamp(ProgressValue / ProgressMaximum, 0, 1) * 100);
+
+    public bool OpenDatabaseWhenCreationCompletes
+    {
+        get => _openDatabaseWhenCreationCompletes;
+        set
+        {
+            if (SetProperty(ref _openDatabaseWhenCreationCompletes, value)
+                && _settingsService is not null)
+            {
+                _settingsService.Save(_settingsService.Current with
+                {
+                    OpenDatabaseWhenCreationCompletes = value
+                });
+            }
+        }
+    }
+
+    public double SourceSetColumnWidth
+    {
+        get => _sourceSetColumnWidth;
+        private set => SetProperty(ref _sourceSetColumnWidth, value);
+    }
+
+    public double TagColumnWidth
+    {
+        get => _tagColumnWidth;
+        private set => SetProperty(ref _tagColumnWidth, value);
+    }
+
+    public double DatabaseTagColumnWidth
+    {
+        get => _databaseTagColumnWidth;
+        private set => SetProperty(ref _databaseTagColumnWidth, value);
+    }
+
+    public double OccurrencesColumnWidth
+    {
+        get => _occurrencesColumnWidth;
+        private set => SetProperty(ref _occurrencesColumnWidth, value);
+    }
+
+    public double SourcesColumnWidth
+    {
+        get => _sourcesColumnWidth;
+        private set => SetProperty(ref _sourcesColumnWidth, value);
+    }
+
+    public double SampleColumnWidth
+    {
+        get => _sampleColumnWidth;
+        private set => SetProperty(ref _sampleColumnWidth, value);
+    }
+
     public string ResultSummary => string.Format(
         CultureInfo.CurrentCulture,
         "{0:N0} tags · {1:N0} issues",
@@ -713,6 +807,29 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         SelectedInformation is not null && CanChangeConfiguration();
 
     public bool CanConfigureRepeatedDataLayout => CanChangeConfiguration();
+
+    internal void ResizeColumns(string leftKey, string rightKey, double horizontalChange)
+    {
+        var leftWidth = GetColumnWidth(leftKey);
+        var rightWidth = GetColumnWidth(rightKey);
+        var appliedChange = ColumnWidthPreferences.ApplyAdjacentDelta(
+            leftWidth,
+            rightWidth,
+            horizontalChange,
+            GetColumnMinimum(leftKey),
+            GetColumnMinimum(rightKey),
+            MaximumColumnWidth);
+        SetColumnWidth(leftKey, leftWidth + appliedChange);
+        SetColumnWidth(rightKey, rightWidth - appliedChange);
+    }
+
+    internal void PersistColumnWidths(string leftKey, string rightKey)
+    {
+        ColumnWidthPreferences.Save(
+            _settingsService,
+            (leftKey, GetColumnWidth(leftKey)),
+            (rightKey, GetColumnWidth(rightKey)));
+    }
 
     public string DatabaseTagOverrideActionText =>
         SelectedInformation?.HasDatabaseTagOverride == true ? "Revert" : "Default";
@@ -857,6 +974,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             StatusTitle = "Database created";
             StatusDetail = "The published Database is current and available in the Database workspace.";
+            NavigateToWorkspaceIfConfigured(
+                OpenDatabaseWhenCreationCompletes,
+                WorkspaceArea.Database);
             return;
         }
 
@@ -876,6 +996,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         IsBusy = true;
+        _progressCompletedSourceCount = 0;
+        _progressTotalSourceCount = sources.Count;
         StatusTitle = "Discovering information";
         StatusDetail = "Interpreting the current active source set in the Processing Host.";
         NotifyProgressChanged();
@@ -894,7 +1016,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             }
 
             operation = begin.Operation;
-            var result = await _discoveryClient.RunAsync(operation, sources);
+            var progress = new InlineProgress<DiscoveryProgressSnapshot>(snapshot =>
+                DispatchToUi(() => ApplyDiscoveryProgress(snapshot)));
+            var result = await _discoveryClient.RunAsync(operation, sources, progress);
             var completion = _workflowCoordinator.CompleteOperation(result.Completion);
             SynchronizeDiscoveryStatus();
 
@@ -933,6 +1057,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 result.Information);
             _issueCount = result.Issues.Count;
             _progressStage = "Stage: Complete";
+            _progressCompletedSourceCount = _progressTotalSourceCount;
             _hasCompletedDiscovery = true;
             _currentPage = 1;
             RefreshPresentation();
@@ -942,6 +1067,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 : "Discovery complete with issues";
             StatusDetail = "Current result available for the active source set.";
             OnPropertyChanged(nameof(RunButtonText));
+            NavigateToWorkspaceIfConfigured(
+                _settingsService?.Current.OpenDiscoveryWhenGenerationCompletes == true,
+                WorkspaceArea.Discovery);
         }
         catch (OperationCanceledException)
         {
@@ -2109,7 +2237,91 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private void NotifyProgressChanged()
     {
         OnPropertyChanged(nameof(ProgressStage));
+        OnPropertyChanged(nameof(IsProgressIndeterminate));
+        OnPropertyChanged(nameof(ProgressMaximum));
+        OnPropertyChanged(nameof(ProgressValue));
+        OnPropertyChanged(nameof(ProgressPercentText));
         OnPropertyChanged(nameof(ResultSummary));
+    }
+
+    private void ApplyDiscoveryProgress(DiscoveryProgressSnapshot progress)
+    {
+        if (!IsBusy
+            || progress.TotalSourceCount != _progressTotalSourceCount
+            || progress.CompletedSourceCount < _progressCompletedSourceCount)
+        {
+            return;
+        }
+
+        _progressCompletedSourceCount = progress.CompletedSourceCount;
+        NotifyProgressChanged();
+    }
+
+    private void NavigateToWorkspaceIfConfigured(bool enabled, WorkspaceArea area)
+    {
+        if (!enabled || _shell is null)
+        {
+            return;
+        }
+
+        _shell.SelectedWorkspace = _shell.Workspaces.Single(workspace => workspace.Area == area);
+    }
+
+    private double ResolveColumnWidth(string key, double defaultWidth, double minimumWidth) =>
+        ColumnWidthPreferences.Resolve(
+            _settingsService,
+            key,
+            defaultWidth,
+            minimumWidth,
+            MaximumColumnWidth);
+
+    private double GetColumnWidth(string key) => key switch
+    {
+        SourceSetColumnKey => SourceSetColumnWidth,
+        TagColumnKey => TagColumnWidth,
+        DatabaseTagColumnKey => DatabaseTagColumnWidth,
+        OccurrencesColumnKey => OccurrencesColumnWidth,
+        SourcesColumnKey => SourcesColumnWidth,
+        SampleColumnKey => SampleColumnWidth,
+        _ => throw new ArgumentOutOfRangeException(nameof(key))
+    };
+
+    private static double GetColumnMinimum(string key) => key switch
+    {
+        SourceSetColumnKey => 60,
+        TagColumnKey => 55,
+        DatabaseTagColumnKey => 64,
+        OccurrencesColumnKey => 52,
+        SourcesColumnKey => 44,
+        SampleColumnKey => 72,
+        _ => throw new ArgumentOutOfRangeException(nameof(key))
+    };
+
+    private void SetColumnWidth(string key, double width)
+    {
+        switch (key)
+        {
+            case SourceSetColumnKey:
+                SourceSetColumnWidth = width;
+                break;
+            case TagColumnKey:
+                TagColumnWidth = width;
+                break;
+            case DatabaseTagColumnKey:
+                DatabaseTagColumnWidth = width;
+                break;
+            case OccurrencesColumnKey:
+                OccurrencesColumnWidth = width;
+                break;
+            case SourcesColumnKey:
+                SourcesColumnWidth = width;
+                break;
+            case SampleColumnKey:
+                SampleColumnWidth = width;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(key));
+        }
     }
 
     private void NotifyHeaderTextChanged()
@@ -2192,6 +2404,14 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return x is string left && y is string right
                 ? StringComparer.OrdinalIgnoreCase.Compare(left, right)
                 : Comparer<object>.Default.Compare(x, y);
+        }
+    }
+
+    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value)
+        {
+            report(value);
         }
     }
 

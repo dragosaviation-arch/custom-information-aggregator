@@ -40,6 +40,151 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    [DataRow(SourceSelectionKind.XmlFile)]
+    [DataRow(SourceSelectionKind.Folder)]
+    [DataRow(SourceSelectionKind.Archive)]
+    public async Task NativePickerMultiSelectionReusesNormalIngestionPipeline(
+        SourceSelectionKind selectionKind)
+    {
+        var extension = selectionKind == SourceSelectionKind.Archive ? ".zip" : ".xml";
+        var firstPath = Path.GetFullPath("selected-first" + extension);
+        var secondPath = Path.GetFullPath("selected-second" + extension);
+        var firstSource = CreateXml(Path.GetFullPath("loaded-first.xml"));
+        var secondSource = CreateXml(Path.GetFullPath("loaded-second.xml"));
+        var client = new SequencedSourceIntakeClient(
+            Accept(firstSource),
+            Accept(secondSource));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var loadingCoordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        using var viewModel = new LoadWorkspaceViewModel(
+            new MultiSourcePathPicker(selectionKind, [firstPath, secondPath, firstPath]),
+            loadingCoordinator,
+            sourceSet,
+            workflow,
+            new MainWindowViewModel(new ApplicationSession()));
+
+        var command = selectionKind switch
+        {
+            SourceSelectionKind.XmlFile => viewModel.AddXmlFileCommand,
+            SourceSelectionKind.Folder => viewModel.AddFolderCommand,
+            SourceSelectionKind.Archive => viewModel.AddArchiveCommand,
+            _ => throw new ArgumentOutOfRangeException(nameof(selectionKind))
+        };
+        await command.ExecuteAsync(null);
+
+        CollectionAssert.AreEqual(
+            new[] { firstPath, secondPath },
+            client.LoadRequests.Select(request => request.Path).ToArray());
+        Assert.IsTrue(client.LoadRequests.All(request => request.Kind == selectionKind));
+        Assert.HasCount(2, sourceSet.Items);
+        Assert.HasCount(1, sourceSet.SourceSets);
+        Assert.IsTrue(sourceSet.Items.All(item =>
+            item.SourceSetId == sourceSet.ActiveSourceSet!.SourceSetId));
+    }
+
+    [TestMethod]
+    public async Task MultiSelectionAddsEveryAcceptedPathToTheExplicitExistingSet()
+    {
+        var initialPath = Path.GetFullPath("initial.xml");
+        var firstPath = Path.GetFullPath("first-selected.xml");
+        var secondPath = Path.GetFullPath("second-selected.xml");
+        var client = new SequencedSourceIntakeClient(
+            Accept(CreateXml(initialPath)),
+            Accept(CreateXml(firstPath)),
+            Accept(CreateXml(secondPath)));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        Assert.IsTrue((await coordinator.AddAsync(
+            SourceSelectionKind.XmlFile,
+            initialPath)).Accepted);
+        var setOne = sourceSet.ActiveSourceSet!;
+        Assert.IsTrue(coordinator.CreateSourceSet("Set 2").Accepted);
+        using var viewModel = new LoadWorkspaceViewModel(
+            new MultiSourcePathPicker(
+                SourceSelectionKind.XmlFile,
+                [firstPath, secondPath]),
+            coordinator,
+            sourceSet,
+            workflow,
+            new MainWindowViewModel(new ApplicationSession()));
+
+        await viewModel.AddUsingSourceSetAsync(SourceSelectionKind.XmlFile, setOne);
+
+        Assert.AreSame(setOne, sourceSet.ActiveSourceSet);
+        Assert.AreEqual(setOne.SourceSetId, sourceSet.Items.Single(item =>
+            item.Path == firstPath).SourceSetId);
+        Assert.AreEqual(setOne.SourceSetId, sourceSet.Items.Single(item =>
+            item.Path == secondPath).SourceSetId);
+    }
+
+    [TestMethod]
+    public async Task MultiSelectionCreateNewSetCreatesOnceAndKeepsEveryAcceptedPathTogether()
+    {
+        var initialPath = Path.GetFullPath("initial.xml");
+        var firstPath = Path.GetFullPath("first-selected.xml");
+        var secondPath = Path.GetFullPath("second-selected.xml");
+        var client = new SequencedSourceIntakeClient(
+            Accept(CreateXml(initialPath)),
+            Accept(CreateXml(firstPath)),
+            Accept(CreateXml(secondPath)));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        var coordinator = new SourceLoadingCoordinator(client, sourceSet, workflow);
+        Assert.IsTrue((await coordinator.AddAsync(
+            SourceSelectionKind.XmlFile,
+            initialPath)).Accepted);
+        using var viewModel = new LoadWorkspaceViewModel(
+            new MultiSourcePathPicker(
+                SourceSelectionKind.XmlFile,
+                [firstPath, secondPath]),
+            coordinator,
+            sourceSet,
+            workflow,
+            new MainWindowViewModel(new ApplicationSession()));
+
+        await viewModel.AddUsingSourceSetAsync(
+            SourceSelectionKind.XmlFile,
+            targetSourceSet: null);
+
+        Assert.HasCount(2, sourceSet.SourceSets);
+        var createdSet = sourceSet.ActiveSourceSet!;
+        Assert.AreEqual("Set 2", createdSet.Name);
+        Assert.IsTrue(sourceSet.Items.Where(item =>
+            item.Path == firstPath || item.Path == secondPath).All(item =>
+                item.SourceSetId == createdSet.SourceSetId));
+    }
+
+    [TestMethod]
+    public async Task SmallSourceSizeUsesExplorerStyleKilobytesWithoutChangingBytes()
+    {
+        var directory = Directory.CreateTempSubdirectory("CIA.SPR191.Size.");
+        try
+        {
+            var path = Path.Combine(directory.FullName, "small.xml");
+            await File.WriteAllBytesAsync(path, new byte[1025]);
+            var sourceSet = new ActiveLoadedSourceSet();
+            using var workflow = CreateWorkflowCoordinator();
+            var coordinator = new SourceLoadingCoordinator(
+                new StubSourceIntakeClient(Accept(CreateXml(path))),
+                sourceSet,
+                workflow);
+
+            Assert.IsTrue((await coordinator.AddAsync(
+                SourceSelectionKind.XmlFile,
+                path)).Accepted);
+
+            Assert.AreEqual(1025, sourceSet.Items.Single().SizeBytes);
+            Assert.AreEqual("2 KB", sourceSet.Items.Single().SizeText);
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [TestMethod]
     [TestCategory("AlphaRegressionGate")]
     public async Task FirstSuccessfulLoadCreatesSetOneAndCarriesItsIdentityDownstream()
     {
@@ -326,7 +471,7 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
-    public async Task SuccessfulLoadCanNavigateToDiscoveryWithoutStartingIt()
+    public async Task SuccessfulLoadNeverNavigatesToDiscoveryBeforeGeneration()
     {
         var path = Path.GetFullPath("source.xml");
         var client = new StubSourceIntakeClient(Accept(CreateXml(path)));
@@ -340,12 +485,12 @@ public sealed class SourceLoadingCoordinatorTests
             workflow,
             shell)
         {
-            OpenDiscoveryWhenLoadingCompletes = true
+            OpenDiscoveryWhenGenerationCompletes = true
         };
 
         await viewModel.AddXmlFileCommand.ExecuteAsync(null);
 
-        Assert.AreEqual(WorkspaceArea.Discovery, shell.SelectedWorkspace.Area);
+        Assert.AreEqual(WorkspaceArea.Load, shell.SelectedWorkspace.Area);
         Assert.IsNull(workflow.Current.ActiveOperation);
     }
 
@@ -495,7 +640,9 @@ public sealed class SourceLoadingCoordinatorTests
         client.ProgressReported.Task.GetAwaiter().GetResult();
 
         Assert.IsTrue(viewModel.IsBusy);
-        Assert.IsTrue(viewModel.IsProgressIndeterminate);
+        Assert.IsFalse(viewModel.IsProgressIndeterminate);
+        Assert.AreEqual(100, viewModel.ProgressMaximum);
+        Assert.AreEqual(0, viewModel.ProgressValue);
         Assert.AreEqual("Archive: inner.zip · Level 2", viewModel.CurrentArchiveText);
         StringAssert.Contains(viewModel.SourceSummary, "Found 30");
         StringAssert.Contains(viewModel.SourceSummary, "Loaded 4");
@@ -519,6 +666,7 @@ public sealed class SourceLoadingCoordinatorTests
 
         Assert.IsFalse(viewModel.IsBusy);
         Assert.IsFalse(viewModel.IsProgressIndeterminate);
+        Assert.AreEqual(100, viewModel.ProgressValue);
         Assert.AreEqual("Completed with issues", viewModel.ProgressText);
         Assert.AreEqual("Archive: progress.zip · Level 2", viewModel.CurrentArchiveText);
         StringAssert.Contains(viewModel.SourceSummary, "Issues 1");
@@ -1567,12 +1715,15 @@ public sealed class SourceLoadingCoordinatorTests
 
         public List<LoadedSourceContract> RefreshRequests { get; } = [];
 
+        public List<(SourceSelectionKind Kind, string Path)> LoadRequests { get; } = [];
+
         public Task<SourceIntakeClientResult> LoadAsync(
             SourceSelectionKind selectionKind,
             string path,
             SourceLoadSettings settings,
             CancellationToken cancellationToken = default)
         {
+            LoadRequests.Add((selectionKind, path));
             return Task.FromResult(results[_index++]);
         }
 
@@ -1683,6 +1834,26 @@ public sealed class SourceLoadingCoordinatorTests
         public string? PickFolder() => path;
 
         public string? PickArchive() => path;
+    }
+
+    private sealed class MultiSourcePathPicker(
+        SourceSelectionKind selectionKind,
+        IReadOnlyList<string> paths) : ISourcePathPicker
+    {
+        public string? PickXmlFile() => null;
+
+        public IReadOnlyList<string> PickXmlFiles() =>
+            selectionKind == SourceSelectionKind.XmlFile ? paths : [];
+
+        public string? PickFolder() => null;
+
+        public IReadOnlyList<string> PickFolders() =>
+            selectionKind == SourceSelectionKind.Folder ? paths : [];
+
+        public string? PickArchive() => null;
+
+        public IReadOnlyList<string> PickArchives() =>
+            selectionKind == SourceSelectionKind.Archive ? paths : [];
     }
 
     private sealed class StubProcessingHostSupervisor : IProcessingHostSupervisor

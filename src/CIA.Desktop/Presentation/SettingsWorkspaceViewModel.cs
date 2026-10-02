@@ -21,6 +21,20 @@ public sealed record SettingsWorkspaceRuntimePaths(
 
 public sealed class SettingsWorkspaceViewModel : ObservableObject
 {
+    private static readonly (string Key, double DefaultWidth, double MinimumWidth)[]
+        LogColumnDefinitions =
+        [
+            ("settings.log.time", 110, 80),
+            ("settings.log.type", 64, 50),
+            ("settings.log.severity", 64, 55),
+            ("settings.log.area", 105, 70),
+            ("settings.log.outcome", 135, 90),
+            ("settings.log.stage", 125, 90),
+            ("settings.log.stream", 75, 60),
+            ("settings.log.item", 150, 90),
+            ("settings.log.message", 270, 140)
+        ];
+    private const double MaximumLogColumnWidth = 2000;
     public const string NoHistoryMessage = "No processing history has been recorded yet.";
     public const string NoIssuesMessage = "No recorded processing issues.";
     public const string AllEntryTypes = "All types";
@@ -817,6 +831,36 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         {
             SettingsStatusText = exception.Message;
         }
+    }
+
+    internal IReadOnlyList<double> GetLogColumnWidths()
+    {
+        return LogColumnDefinitions
+            .Select(definition => ColumnWidthPreferences.Resolve(
+                _settingsService,
+                definition.Key,
+                definition.DefaultWidth,
+                definition.MinimumWidth,
+                MaximumLogColumnWidth))
+            .ToArray();
+    }
+
+    internal void PersistLogColumnWidths(IReadOnlyList<double> widths)
+    {
+        ArgumentNullException.ThrowIfNull(widths);
+        if (widths.Count != LogColumnDefinitions.Length)
+        {
+            return;
+        }
+
+        ColumnWidthPreferences.Save(
+            _settingsService,
+            LogColumnDefinitions.Select((definition, index) => (
+                definition.Key,
+                Math.Clamp(
+                    widths[index],
+                    definition.MinimumWidth,
+                    MaximumLogColumnWidth))).ToArray());
     }
 
     private void ResetSettings()

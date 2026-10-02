@@ -55,6 +55,15 @@
             <Setter Property="Margin" Value="8,0" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
+        <Style x:Key="DatabaseColumnResizeThumbStyle"
+               TargetType="Thumb"
+               BasedOn="{StaticResource CiaColumnResizeThumbStyle}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding CanResizeWithNext}" Value="False">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="DatabaseExcelHeaderInputStyle"
                TargetType="TextBox"
                BasedOn="{StaticResource CiaTextInputStyle}">
@@ -236,12 +245,10 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="24" />
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="60" />
                                     <ColumnDefinition Width="54" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="1" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Column" />
-                                <TextBlock Grid.Column="2" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Width" />
-                                <TextBlock Grid.Column="3" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Order" />
+                                <TextBlock Grid.Column="2" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Order" />
                             </Grid>
                             <ScrollViewer Grid.Row="3"
                                           MaxHeight="300"
@@ -253,7 +260,6 @@
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="24" />
                                                     <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="60" />
                                                     <ColumnDefinition Width="54" />
                                                 </Grid.ColumnDefinitions>
                                                 <CheckBox VerticalAlignment="Center"
@@ -264,14 +270,7 @@
                                                            VerticalAlignment="Center"
                                                            Text="{Binding DatabaseField}"
                                                            TextTrimming="CharacterEllipsis" />
-                                                <TextBox Grid.Column="2"
-                                                         Width="56"
-                                                         Height="24"
-                                                         Padding="4,0"
-                                                         HorizontalContentAlignment="Right"
-                                                         VerticalContentAlignment="Center"
-                                                         Text="{Binding Width, UpdateSourceTrigger=LostFocus}" />
-                                                <StackPanel Grid.Column="3"
+                                                <StackPanel Grid.Column="2"
                                                             HorizontalAlignment="Right"
                                                             Orientation="Horizontal">
                                                     <Button Width="24"
@@ -356,7 +355,8 @@
                                                    Style="{StaticResource DatabaseGridHeaderTextStyle}"
                                                    Text="Include / #" />
                                     </Border>
-                                    <ItemsControl ItemsSource="{Binding VisibleMetadataColumns}">
+                                    <ItemsControl x:Name="DatabaseMetadataHeaders"
+                                                  ItemsSource="{Binding VisibleMetadataColumns}">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate>
                                                 <StackPanel Orientation="Horizontal" />
@@ -364,11 +364,17 @@
                                         </ItemsControl.ItemsPanel>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Border Width="140"
+                                                <Border Width="{Binding Width}"
                                                         BorderBrush="{StaticResource CiaDividerBrush}"
                                                         BorderThickness="0,0,1,0">
-                                                    <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
-                                                               Text="{Binding DisplayName}" />
+                                                    <Grid>
+                                                        <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
+                                                                   Text="{Binding DisplayName}" />
+                                                        <Thumb Style="{StaticResource DatabaseColumnResizeThumbStyle}"
+                                                               DragStarted="OnDatabaseColumnResizeStarted"
+                                                               DragDelta="OnDatabaseColumnResizeDelta"
+                                                               DragCompleted="OnDatabaseColumnResizeCompleted" />
+                                                    </Grid>
                                                 </Border>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
@@ -385,8 +391,14 @@
                                                 <Border Width="{Binding Width}"
                                                         BorderBrush="{StaticResource CiaDividerBrush}"
                                                         BorderThickness="0,0,1,0">
-                                                    <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
-                                                               Text="{Binding DatabaseField}" />
+                                                    <Grid>
+                                                        <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
+                                                                   Text="{Binding DatabaseField}" />
+                                                        <Thumb Style="{StaticResource DatabaseColumnResizeThumbStyle}"
+                                                               DragStarted="OnDatabaseColumnResizeStarted"
+                                                               DragDelta="OnDatabaseColumnResizeDelta"
+                                                               DragCompleted="OnDatabaseColumnResizeCompleted" />
+                                                    </Grid>
                                                 </Border>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
@@ -435,7 +447,7 @@
                                                     </ItemsControl.ItemsPanel>
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
-                                                            <Border Width="140"
+                                                            <Border Width="{Binding Column.Width}"
                                                                     BorderBrush="{StaticResource CiaDividerBrush}"
                                                                     BorderThickness="0,0,1,1"
                                                                     ToolTip="{Binding Value}">
@@ -486,6 +498,19 @@
                             </ScrollViewer>
                         </Grid>
                     </ScrollViewer>
+                    <Border x:Name="DatabaseColumnSizeFeedback"
+                            Margin="0,34,12,0"
+                            Padding="8,4"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Top"
+                            Panel.ZIndex="4"
+                            Background="{StaticResource CiaTextPrimaryBrush}"
+                            CornerRadius="5"
+                            IsHitTestVisible="False"
+                            Visibility="Collapsed">
+                        <TextBlock x:Name="DatabaseColumnSizeFeedbackText"
+                                   Foreground="White" />
+                    </Border>
                     <StackPanel Margin="0,30,0,0"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
