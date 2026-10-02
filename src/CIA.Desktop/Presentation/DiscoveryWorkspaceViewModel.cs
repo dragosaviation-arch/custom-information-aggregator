@@ -25,7 +25,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     internal const string OccurrencesColumnKey = "discovery.occurrences";
     internal const string SourcesColumnKey = "discovery.sources";
     internal const string SampleColumnKey = "discovery.sample";
-    private const double MaximumColumnWidth = 800;
+    private const double MaximumColumnWidth = 2000;
     private readonly IDiscoveryClient _discoveryClient;
     private readonly ActiveDiscoveryConfiguration _activeConfiguration;
     private readonly ActiveLoadedSourceSet _sourceSet;
@@ -155,12 +155,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _settingsService = settingsService;
         _openDatabaseWhenCreationCompletes =
             settingsService?.Current.OpenDatabaseWhenCreationCompletes == true;
-        _sourceSetColumnWidth = ResolveColumnWidth(SourceSetColumnKey, 100, 72);
-        _tagColumnWidth = ResolveColumnWidth(TagColumnKey, 110, 70);
-        _databaseTagColumnWidth = ResolveColumnWidth(DatabaseTagColumnKey, 120, 82);
-        _occurrencesColumnWidth = ResolveColumnWidth(OccurrencesColumnKey, 90, 72);
-        _sourcesColumnWidth = ResolveColumnWidth(SourcesColumnKey, 64, 54);
-        _sampleColumnWidth = ResolveColumnWidth(SampleColumnKey, 170, 110);
+        _sourceSetColumnWidth = ResolveColumnWidth(SourceSetColumnKey, 100, 60);
+        _tagColumnWidth = ResolveColumnWidth(TagColumnKey, 110, 55);
+        _databaseTagColumnWidth = ResolveColumnWidth(DatabaseTagColumnKey, 120, 64);
+        _occurrencesColumnWidth = ResolveColumnWidth(OccurrencesColumnKey, 90, 52);
+        _sourcesColumnWidth = ResolveColumnWidth(SourcesColumnKey, 64, 44);
+        _sampleColumnWidth = ResolveColumnWidth(SampleColumnKey, 170, 72);
         _profileDeleteConfirmation.Changed += OnProfileDeleteConfirmationChanged;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
         _uiSynchronizationContext = SynchronizationContext.Current;
@@ -2288,12 +2288,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     private static double GetColumnMinimum(string key) => key switch
     {
-        SourceSetColumnKey => 72,
-        TagColumnKey => 70,
-        DatabaseTagColumnKey => 82,
-        OccurrencesColumnKey => 72,
-        SourcesColumnKey => 54,
-        SampleColumnKey => 110,
+        SourceSetColumnKey => 60,
+        TagColumnKey => 55,
+        DatabaseTagColumnKey => 64,
+        OccurrencesColumnKey => 52,
+        SourcesColumnKey => 44,
+        SampleColumnKey => 72,
         _ => throw new ArgumentOutOfRangeException(nameof(key))
     };
 

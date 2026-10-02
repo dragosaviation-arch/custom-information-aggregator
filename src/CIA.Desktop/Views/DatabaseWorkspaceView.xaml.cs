@@ -140,7 +140,7 @@ public partial class DatabaseWorkspaceView : UserControl
 
     private void OnDatabaseColumnResizeStarted(object sender, DragStartedEventArgs e)
     {
-        if (sender is not Thumb { DataContext: DatabaseColumnPresentation column }
+        if (sender is not Thumb { DataContext: { } column }
             || DataContext is not DatabaseWorkspaceViewModel viewModel)
         {
             return;
@@ -152,7 +152,7 @@ public partial class DatabaseWorkspaceView : UserControl
 
     private void OnDatabaseColumnResizeDelta(object sender, DragDeltaEventArgs e)
     {
-        if (sender is not Thumb { DataContext: DatabaseColumnPresentation column }
+        if (sender is not Thumb { DataContext: { } column }
             || DataContext is not DatabaseWorkspaceViewModel viewModel)
         {
             return;
@@ -167,7 +167,7 @@ public partial class DatabaseWorkspaceView : UserControl
         if (_columnResize is { } resize
             && DataContext is DatabaseWorkspaceViewModel viewModel)
         {
-            viewModel.PersistDatabaseColumnWidths([resize.LeftColumn, resize.RightColumn]);
+            viewModel.PersistDatabaseColumnWidths(resize);
         }
 
         _columnResize = null;

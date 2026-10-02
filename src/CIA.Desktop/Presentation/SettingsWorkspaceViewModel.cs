@@ -34,7 +34,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
             ("settings.log.item", 150, 90),
             ("settings.log.message", 270, 140)
         ];
-    private const double MaximumLogColumnWidth = 1000;
+    private const double MaximumLogColumnWidth = 2000;
     public const string NoHistoryMessage = "No processing history has been recorded yet.";
     public const string NoIssuesMessage = "No recorded processing issues.";
     public const string AllEntryTypes = "All types";

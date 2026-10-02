@@ -77,10 +77,14 @@ public sealed class UiUxBatch1Tests
         var discovery = ReadDesktopFile("Views", "DiscoveryWorkspaceView.xaml");
         var database = ReadDesktopFile("Views", "DatabaseWorkspaceView.xaml");
         var settings = ReadDesktopFile("Views", "SettingsWorkspaceView.xaml");
+        var theme = ReadDesktopFile("Themes", "CiaTheme.xaml");
         var loadCode = ReadDesktopFile("Views", "LoadWorkspaceView.xaml.cs");
         var discoveryCode = ReadDesktopFile("Views", "DiscoveryWorkspaceView.xaml.cs");
         var databaseCode = ReadDesktopFile("Views", "DatabaseWorkspaceView.xaml.cs");
         var settingsCode = ReadDesktopFile("Views", "SettingsWorkspaceView.xaml.cs");
+        var loadViewModel = ReadDesktopFile("Presentation", "LoadWorkspaceViewModel.cs");
+        var discoveryViewModel = ReadDesktopFile("Presentation", "DiscoveryWorkspaceViewModel.cs");
+        var databaseViewModel = ReadDesktopFile("Presentation", "DatabaseWorkspaceViewModel.cs");
 
         Assert.IsFalse(load.Contains("LoadPaneSplitter", StringComparison.Ordinal));
         Assert.IsFalse(discovery.Contains("DiscoveryPaneSplitter", StringComparison.Ordinal));
@@ -93,7 +97,17 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(discoveryCode, "DiscoveryRightColumn.MinWidth = 360");
         StringAssert.Contains(load, "LoadColumnResizeThumbStyle");
         StringAssert.Contains(discovery, "DiscoveryColumnResizeThumbStyle");
+        Assert.HasCount(5, Regex.Matches(load, "Tag=\"load\\.").Cast<Match>());
+        Assert.HasCount(5, Regex.Matches(discovery, "Tag=\"discovery\\.").Cast<Match>());
+        StringAssert.Contains(theme, "x:Key=\"CiaColumnResizeThumbStyle\"");
+        StringAssert.Contains(theme, "x:Name=\"ResizeGuide\"");
+        StringAssert.Contains(theme, "Opacity=\"0\"");
+        StringAssert.Contains(theme, "Property=\"IsMouseOver\" Value=\"True\"");
+        StringAssert.Contains(theme, "Property=\"IsDragging\" Value=\"True\"");
         StringAssert.Contains(database, "OnDatabaseColumnResizeDelta");
+        StringAssert.Contains(database, "x:Name=\"DatabaseMetadataHeaders\"");
+        StringAssert.Contains(database, "Width=\"{Binding Column.Width}\"");
+        StringAssert.Contains(database, "Style=\"{StaticResource DatabaseColumnResizeThumbStyle}\"");
         StringAssert.Contains(database, "x:Name=\"DatabaseColumnSizeFeedback\"");
         StringAssert.Contains(databaseCode, "DatabaseColumnSizeFeedback.Visibility = Visibility.Visible");
         StringAssert.Contains(databaseCode, "DatabaseColumnSizeFeedback.Visibility = Visibility.Collapsed");
@@ -101,6 +115,12 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(settings, "OnLogEntriesPreviewMouseLeftButtonUp");
         StringAssert.Contains(settingsCode, "PersistLogColumnWidths");
         Assert.IsFalse(database.Contains("Text=\"{Binding Width, UpdateSourceTrigger=LostFocus}\"", StringComparison.Ordinal));
+        Assert.IsFalse(load.Contains("<Thumb Width=", StringComparison.Ordinal));
+        Assert.IsFalse(discovery.Contains("<Thumb Width=", StringComparison.Ordinal));
+        Assert.IsFalse(database.Contains("<Thumb Width=", StringComparison.Ordinal));
+        StringAssert.Contains(loadViewModel, "MaximumColumnWidth = 2000");
+        StringAssert.Contains(discoveryViewModel, "MaximumColumnWidth = 2000");
+        StringAssert.Contains(databaseViewModel, "MaximumWidth = 2000");
         Assert.IsFalse(loadCode.Contains("PaneSplitRatio", StringComparison.Ordinal));
         Assert.IsFalse(discoveryCode.Contains("PaneSplitRatio", StringComparison.Ordinal));
         Assert.IsFalse(databaseCode.Contains("PaneSplitRatio", StringComparison.Ordinal));

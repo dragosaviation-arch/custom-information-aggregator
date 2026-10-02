@@ -106,6 +106,7 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
 
             var dynamicHeaders = (ItemsControl)view.FindName("DynamicDatabaseHeaders");
+            var metadataHeaders = (ItemsControl)view.FindName("DatabaseMetadataHeaders");
             var reviewRows = (ItemsControl)view.FindName("DatabaseReviewRows");
             var lowerTabs = (Grid)view.FindName("LowerTabs");
             var exportFields = (Border)view.FindName("ExportFieldsPanel");
@@ -125,6 +126,8 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var columnSizeFeedbackText = (TextBlock)view.FindName("DatabaseColumnSizeFeedbackText");
 
             Assert.AreEqual(2, dynamicHeaders.Items.Count);
+            Assert.AreEqual(viewModel.VisibleMetadataColumns.Count, metadataHeaders.Items.Count);
+            Assert.IsGreaterThan(0, metadataHeaders.Items.Count);
             Assert.AreEqual(2, reviewRows.Items.Count);
             var firstRow = (DatabaseReviewRowPresentation)reviewRows.Items[0];
             Assert.AreEqual("A1", firstRow.Cells[0].DisplayValue);
@@ -160,6 +163,11 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                 .ContainerFromIndex(0);
             var columnDivider = FindVisualChild<Thumb>(firstHeader);
             Assert.IsNotNull(columnDivider);
+            var lastHeader = (DependencyObject)dynamicHeaders.ItemContainerGenerator
+                .ContainerFromIndex(dynamicHeaders.Items.Count - 1);
+            var lastColumnDivider = FindVisualChild<Thumb>(lastHeader);
+            Assert.IsNotNull(lastColumnDivider);
+            Assert.AreEqual(Visibility.Collapsed, lastColumnDivider.Visibility);
             var firstWidth = viewModel.VisibleColumns[0].Width;
             var secondWidth = viewModel.VisibleColumns[1].Width;
 
@@ -183,6 +191,37 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.IsTrue(settings.Current.ColumnWidths.Values.Contains(firstWidth + 24));
             Assert.IsTrue(settings.Current.ColumnWidths.Values.Contains(secondWidth - 24));
 
+            metadataHeaders.UpdateLayout();
+            var firstMetadataHeader = (DependencyObject)metadataHeaders.ItemContainerGenerator
+                .ContainerFromIndex(0);
+            var metadataDivider = FindVisualChild<Thumb>(firstMetadataHeader);
+            Assert.IsNotNull(metadataDivider);
+            Assert.AreEqual(Visibility.Visible, metadataDivider.Visibility);
+            var firstMetadataWidth = viewModel.VisibleMetadataColumns[0].Width;
+            var nextVisibleWidth = viewModel.VisibleMetadataColumns.Count > 1
+                ? viewModel.VisibleMetadataColumns[1].Width
+                : viewModel.VisibleColumns[0].Width;
+            metadataDivider.RaiseEvent(new DragStartedEventArgs(0, 0)
+            {
+                RoutedEvent = Thumb.DragStartedEvent
+            });
+            metadataDivider.RaiseEvent(new DragDeltaEventArgs(50, 0)
+            {
+                RoutedEvent = Thumb.DragDeltaEvent
+            });
+            Assert.AreEqual(firstMetadataWidth + 50, viewModel.VisibleMetadataColumns[0].Width);
+            Assert.AreEqual(
+                nextVisibleWidth - 50,
+                viewModel.VisibleMetadataColumns.Count > 1
+                    ? viewModel.VisibleMetadataColumns[1].Width
+                    : viewModel.VisibleColumns[0].Width);
+            Assert.AreEqual(Visibility.Visible, columnSizeFeedback.Visibility);
+            metadataDivider.RaiseEvent(new DragCompletedEventArgs(50, 0, false)
+            {
+                RoutedEvent = Thumb.DragCompletedEvent
+            });
+            Assert.AreEqual(Visibility.Collapsed, columnSizeFeedback.Visibility);
+
             var restoredCoordinator = new DatabaseBuildCoordinator(
                 configuration,
                 sourceSet,
@@ -199,6 +238,9 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             CollectionAssert.AreEqual(
                 viewModel.VisibleColumns.Select(column => column.Width).ToArray(),
                 restoredViewModel.VisibleColumns.Select(column => column.Width).ToArray());
+            CollectionAssert.AreEqual(
+                viewModel.VisibleMetadataColumns.Select(column => column.Width).ToArray(),
+                restoredViewModel.VisibleMetadataColumns.Select(column => column.Width).ToArray());
 
             var collisionId = WorkbookDefinitionId.CreateNew();
             var collisionDialog = new WorkbookCollisionDialog(

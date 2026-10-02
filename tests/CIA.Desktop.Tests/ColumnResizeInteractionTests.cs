@@ -72,18 +72,18 @@ public sealed class ColumnResizeInteractionTests
             window.Show();
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             var loadDivider = FindThumb(loadView, "load.source|load.path");
-            Drag(loadDivider, 25);
-            Assert.AreEqual(185, loadViewModel.SourceColumnWidth);
-            Assert.AreEqual(165, loadViewModel.PathColumnWidth);
+            Drag(loadDivider, 80);
+            Assert.AreEqual(240, loadViewModel.SourceColumnWidth);
+            Assert.AreEqual(110, loadViewModel.PathColumnWidth);
 
             window.Content = discoveryView;
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             var discoveryDivider = FindThumb(
                 discoveryView,
                 "discovery.tag|discovery.databaseTag");
-            Drag(discoveryDivider, 20);
-            Assert.AreEqual(130, discoveryViewModel.TagColumnWidth);
-            Assert.AreEqual(100, discoveryViewModel.DatabaseTagColumnWidth);
+            Drag(discoveryDivider, 50);
+            Assert.AreEqual(160, discoveryViewModel.TagColumnWidth);
+            Assert.AreEqual(70, discoveryViewModel.DatabaseTagColumnWidth);
         }
         finally
         {
@@ -106,10 +106,10 @@ public sealed class ColumnResizeInteractionTests
             shell: shell,
             settingsService: reopened);
 
-        Assert.AreEqual(185, restoredLoad.SourceColumnWidth);
-        Assert.AreEqual(165, restoredLoad.PathColumnWidth);
-        Assert.AreEqual(130, restoredDiscovery.TagColumnWidth);
-        Assert.AreEqual(100, restoredDiscovery.DatabaseTagColumnWidth);
+        Assert.AreEqual(240, restoredLoad.SourceColumnWidth);
+        Assert.AreEqual(110, restoredLoad.PathColumnWidth);
+        Assert.AreEqual(160, restoredDiscovery.TagColumnWidth);
+        Assert.AreEqual(70, restoredDiscovery.DatabaseTagColumnWidth);
         root.Delete(recursive: true);
     }
 

@@ -62,11 +62,9 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
-        <Style x:Key="DiscoveryColumnResizeThumbStyle" TargetType="Thumb">
-            <Setter Property="Width" Value="7" />
-            <Setter Property="HorizontalAlignment" Value="Right" />
-            <Setter Property="Cursor" Value="SizeWE" />
-            <Setter Property="Background" Value="Transparent" />
+        <Style x:Key="DiscoveryColumnResizeThumbStyle"
+               TargetType="Thumb"
+               BasedOn="{StaticResource CiaColumnResizeThumbStyle}">
             <EventSetter Event="DragDelta" Handler="OnColumnResizeDragDelta" />
             <EventSetter Event="DragCompleted" Handler="OnColumnResizeDragCompleted" />
         </Style>
@@ -177,12 +175,12 @@
                         <Grid Margin="6,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="34" />
-                                <ColumnDefinition Width="{Binding SourceSetColumnWidth}" MinWidth="72" />
-                                <ColumnDefinition Width="{Binding TagColumnWidth}" MinWidth="70" />
-                                <ColumnDefinition Width="{Binding DatabaseTagColumnWidth}" MinWidth="82" />
-                                <ColumnDefinition Width="{Binding OccurrencesColumnWidth}" MinWidth="72" />
-                                <ColumnDefinition Width="{Binding SourcesColumnWidth}" MinWidth="54" />
-                                <ColumnDefinition Width="{Binding SampleColumnWidth}" MinWidth="110" />
+                                <ColumnDefinition Width="{Binding SourceSetColumnWidth}" MinWidth="60" />
+                                <ColumnDefinition Width="{Binding TagColumnWidth}" MinWidth="55" />
+                                <ColumnDefinition Width="{Binding DatabaseTagColumnWidth}" MinWidth="64" />
+                                <ColumnDefinition Width="{Binding OccurrencesColumnWidth}" MinWidth="52" />
+                                <ColumnDefinition Width="{Binding SourcesColumnWidth}" MinWidth="44" />
+                                <ColumnDefinition Width="{Binding SampleColumnWidth}" MinWidth="72" />
                                 <ColumnDefinition Width="76" />
                             </Grid.ColumnDefinitions>
                             <Button Grid.Column="1"
@@ -282,12 +280,12 @@
                                     <Grid Margin="6,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="34" />
-                                            <ColumnDefinition Width="{Binding DataContext.SourceSetColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
-                                            <ColumnDefinition Width="{Binding DataContext.TagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="70" />
-                                            <ColumnDefinition Width="{Binding DataContext.DatabaseTagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="82" />
-                                            <ColumnDefinition Width="{Binding DataContext.OccurrencesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
-                                            <ColumnDefinition Width="{Binding DataContext.SourcesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="54" />
-                                            <ColumnDefinition Width="{Binding DataContext.SampleColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="110" />
+                                            <ColumnDefinition Width="{Binding DataContext.SourceSetColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="60" />
+                                            <ColumnDefinition Width="{Binding DataContext.TagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="55" />
+                                            <ColumnDefinition Width="{Binding DataContext.DatabaseTagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="64" />
+                                            <ColumnDefinition Width="{Binding DataContext.OccurrencesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="52" />
+                                            <ColumnDefinition Width="{Binding DataContext.SourcesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="44" />
+                                            <ColumnDefinition Width="{Binding DataContext.SampleColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
                                             <ColumnDefinition Width="76" />
                                         </Grid.ColumnDefinitions>
                                         <CheckBox HorizontalAlignment="Center"

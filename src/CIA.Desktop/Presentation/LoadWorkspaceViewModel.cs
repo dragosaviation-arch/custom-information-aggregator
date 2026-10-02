@@ -21,7 +21,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     internal const string LevelColumnKey = "load.level";
     internal const string SizeColumnKey = "load.size";
     internal const string StatusColumnKey = "load.status";
-    private const double MaximumColumnWidth = 800;
+    private const double MaximumColumnWidth = 2000;
     private static readonly IReadOnlyList<string> AvailableStatuses =
         ["All", "Ready", "Unavailable", "Unsupported", "Failed validation"];
 
@@ -108,12 +108,12 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _searchSubfolders = _startupSettings.TraverseSubfolders;
         _openDiscoveryWhenGenerationCompletes =
             settingsService?.Current.OpenDiscoveryWhenGenerationCompletes == true;
-        _sourceColumnWidth = ResolveColumnWidth(SourceColumnKey, 160, 110);
-        _pathColumnWidth = ResolveColumnWidth(PathColumnKey, 190, 135);
-        _sourceSetColumnWidth = ResolveColumnWidth(SourceSetColumnKey, 80, 64);
-        _levelColumnWidth = ResolveColumnWidth(LevelColumnKey, 42, 36);
-        _sizeColumnWidth = ResolveColumnWidth(SizeColumnKey, 72, 56);
-        _statusColumnWidth = ResolveColumnWidth(StatusColumnKey, 100, 80);
+        _sourceColumnWidth = ResolveColumnWidth(SourceColumnKey, 160, 72);
+        _pathColumnWidth = ResolveColumnWidth(PathColumnKey, 190, 90);
+        _sourceSetColumnWidth = ResolveColumnWidth(SourceSetColumnKey, 80, 55);
+        _levelColumnWidth = ResolveColumnWidth(LevelColumnKey, 42, 32);
+        _sizeColumnWidth = ResolveColumnWidth(SizeColumnKey, 72, 48);
+        _statusColumnWidth = ResolveColumnWidth(StatusColumnKey, 100, 64);
         _uiSynchronizationContext = SynchronizationContext.Current;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
 
@@ -1182,12 +1182,12 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
     private static double GetColumnMinimum(string key) => key switch
     {
-        SourceColumnKey => 110,
-        PathColumnKey => 135,
-        SourceSetColumnKey => 64,
-        LevelColumnKey => 36,
-        SizeColumnKey => 56,
-        StatusColumnKey => 80,
+        SourceColumnKey => 72,
+        PathColumnKey => 90,
+        SourceSetColumnKey => 55,
+        LevelColumnKey => 32,
+        SizeColumnKey => 48,
+        StatusColumnKey => 64,
         _ => throw new ArgumentOutOfRangeException(nameof(key))
     };
 

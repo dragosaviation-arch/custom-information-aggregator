@@ -118,6 +118,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 field,
                 GetMetadataFieldDisplayName(field),
                 IsUsefulMetadataField(field));
+            RestoreMetadataColumnWidth(presentation);
             presentation.PropertyChanged += OnMetadataFieldPropertyChanged;
             _metadataFields.Add(presentation);
         }
@@ -786,10 +787,15 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         {
             column.ResetPresentation();
         }
+        foreach (var metadataColumn in _metadataFields)
+        {
+            metadataColumn.ResetWidth();
+        }
 
         ReorderColumns(_publishedColumnOrder);
         UpdatePositionsAndPresentation();
         PersistDatabaseColumnWidths(_columns);
+        PersistMetadataColumnWidths(_metadataFields);
     }
 
     private void ResetHeaders()
@@ -936,6 +942,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             _visibleColumns.Add(column);
         }
 
+        UpdateResizeBoundaries();
         RebuildReviewRows();
         OnPropertyChanged(nameof(ColumnCountText));
     }
@@ -997,38 +1004,49 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     }
 
     internal DatabaseColumnWidthFeedback? ResizeAdjacentDatabaseColumns(
-        DatabaseColumnPresentation leftColumn,
+        object leftColumn,
         double horizontalChange)
     {
         ArgumentNullException.ThrowIfNull(leftColumn);
 
-        var leftIndex = _visibleColumns.IndexOf(leftColumn);
-        if (leftIndex < 0 || leftIndex >= _visibleColumns.Count - 1)
+        var columns = GetVisibleResizableColumns();
+        var leftIndex = Array.FindIndex(columns, column => ReferenceEquals(column, leftColumn));
+        if (leftIndex < 0 || leftIndex >= columns.Length - 1)
         {
             return null;
         }
 
-        var rightColumn = _visibleColumns[leftIndex + 1];
+        var rightColumn = columns[leftIndex + 1];
+        var leftWidth = GetResizableColumnWidth(leftColumn);
+        var rightWidth = GetResizableColumnWidth(rightColumn);
         var appliedChange = ColumnWidthPreferences.ApplyAdjacentDelta(
-            leftColumn.Width,
-            rightColumn.Width,
+            leftWidth,
+            rightWidth,
             horizontalChange,
-            DatabaseColumnPresentation.MinimumWidth,
-            DatabaseColumnPresentation.MinimumWidth,
+            GetResizableColumnMinimum(leftColumn),
+            GetResizableColumnMinimum(rightColumn),
             DatabaseColumnPresentation.MaximumWidth);
-        leftColumn.Width += appliedChange;
-        rightColumn.Width -= appliedChange;
+        SetResizableColumnWidth(leftColumn, leftWidth + appliedChange);
+        SetResizableColumnWidth(rightColumn, rightWidth - appliedChange);
         return new DatabaseColumnWidthFeedback(
             leftColumn,
             rightColumn,
-            leftColumn.Width,
-            rightColumn.Width);
+            GetResizableColumnWidth(leftColumn),
+            GetResizableColumnWidth(rightColumn));
     }
 
     internal DatabaseColumnWidthFeedback? GetAdjacentDatabaseColumnWidths(
-        DatabaseColumnPresentation leftColumn)
+        object leftColumn)
     {
         return ResizeAdjacentDatabaseColumns(leftColumn, horizontalChange: 0);
+    }
+
+    internal void PersistDatabaseColumnWidths(DatabaseColumnWidthFeedback feedback)
+    {
+        var widths = new List<(string Key, double Width)>(2);
+        AddColumnWidthPreference(widths, feedback.LeftColumn);
+        AddColumnWidthPreference(widths, feedback.RightColumn);
+        ColumnWidthPreferences.Save(_settingsService, widths.ToArray());
     }
 
     internal void PersistDatabaseColumnWidths(
@@ -1053,6 +1071,111 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private static string GetDatabaseColumnPreferenceKey(string mappingIdentity) =>
         $"database.review.{mappingIdentity}";
+
+    private void RestoreMetadataColumnWidth(DatabaseMetadataFieldPresentation column)
+    {
+        column.Width = ColumnWidthPreferences.Resolve(
+            _settingsService,
+            GetMetadataColumnPreferenceKey(column.Field),
+            DatabaseMetadataFieldPresentation.DefaultWidth,
+            DatabaseMetadataFieldPresentation.MinimumWidth,
+            DatabaseMetadataFieldPresentation.MaximumWidth);
+    }
+
+    private void PersistMetadataColumnWidths(
+        IEnumerable<DatabaseMetadataFieldPresentation> columns)
+    {
+        ColumnWidthPreferences.Save(
+            _settingsService,
+            columns.Select(column => (
+                GetMetadataColumnPreferenceKey(column.Field),
+                column.Width)).ToArray());
+    }
+
+    private static string GetMetadataColumnPreferenceKey(DatabaseMetadataField field) =>
+        $"database.metadata.{field}";
+
+    private object[] GetVisibleResizableColumns() =>
+        [.. _visibleMetadataFields.Cast<object>(), .. _visibleColumns.Cast<object>()];
+
+    private void UpdateResizeBoundaries()
+    {
+        foreach (var column in _metadataFields)
+        {
+            column.SetCanResizeWithNext(false);
+        }
+        foreach (var column in _columns)
+        {
+            column.SetCanResizeWithNext(false);
+        }
+
+        var columns = GetVisibleResizableColumns();
+        for (var index = 0; index < columns.Length - 1; index++)
+        {
+            SetCanResizeWithNext(columns[index], true);
+        }
+    }
+
+    private static double GetResizableColumnWidth(object column) => column switch
+    {
+        DatabaseMetadataFieldPresentation metadata => metadata.Width,
+        DatabaseColumnPresentation data => data.Width,
+        _ => throw new ArgumentOutOfRangeException(nameof(column))
+    };
+
+    private static double GetResizableColumnMinimum(object column) => column switch
+    {
+        DatabaseMetadataFieldPresentation => DatabaseMetadataFieldPresentation.MinimumWidth,
+        DatabaseColumnPresentation => DatabaseColumnPresentation.MinimumWidth,
+        _ => throw new ArgumentOutOfRangeException(nameof(column))
+    };
+
+    private static void SetResizableColumnWidth(object column, double width)
+    {
+        switch (column)
+        {
+            case DatabaseMetadataFieldPresentation metadata:
+                metadata.Width = width;
+                break;
+            case DatabaseColumnPresentation data:
+                data.Width = width;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(column));
+        }
+    }
+
+    private static void SetCanResizeWithNext(object column, bool value)
+    {
+        switch (column)
+        {
+            case DatabaseMetadataFieldPresentation metadata:
+                metadata.SetCanResizeWithNext(value);
+                break;
+            case DatabaseColumnPresentation data:
+                data.SetCanResizeWithNext(value);
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(column));
+        }
+    }
+
+    private static void AddColumnWidthPreference(
+        ICollection<(string Key, double Width)> widths,
+        object column)
+    {
+        switch (column)
+        {
+            case DatabaseMetadataFieldPresentation metadata:
+                widths.Add((GetMetadataColumnPreferenceKey(metadata.Field), metadata.Width));
+                break;
+            case DatabaseColumnPresentation data:
+                widths.Add((GetDatabaseColumnPreferenceKey(data.MappingIdentity), data.Width));
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(column));
+        }
+    }
 
     private void OnWorkflowStateChanged(object? sender, WorkflowStateSnapshot e)
     {
@@ -1169,6 +1292,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         {
             _visibleMetadataFields.Add(field);
         }
+        UpdateResizeBoundaries();
         OnPropertyChanged(nameof(VisibleMetadataFields));
         if (_reviewPage is not null)
         {
@@ -1590,8 +1714,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 row.Source,
                 row.HasConflict,
                 _visibleMetadataFields.Select(field => new DatabaseMetadataCellPresentation(
-                    field.Field,
-                    field.DisplayName,
+                    field,
                     DatabaseRowMetadataProjection.GetValue(
                         row.Source,
                         row.RecordHierarchy,
@@ -1891,13 +2014,22 @@ public sealed record DatabaseReviewRowPresentation(
     IReadOnlyList<DatabaseReviewCellPresentation> Cells);
 
 public sealed record DatabaseMetadataCellPresentation(
-    DatabaseMetadataField Field,
-    string DisplayName,
-    string Value);
+    DatabaseMetadataFieldPresentation Column,
+    string Value)
+{
+    public DatabaseMetadataField Field => Column.Field;
+
+    public string DisplayName => Column.DisplayName;
+}
 
 public sealed class DatabaseMetadataFieldPresentation : ObservableObject
 {
+    public const double DefaultWidth = 140;
+    internal const double MinimumWidth = 60;
+    internal const double MaximumWidth = 2000;
     private bool _isVisible;
+    private double _width = DefaultWidth;
+    private bool _canResizeWithNext;
 
     internal DatabaseMetadataFieldPresentation(
         DatabaseMetadataField field,
@@ -1917,6 +2049,28 @@ public sealed class DatabaseMetadataFieldPresentation : ObservableObject
     {
         get => _isVisible;
         set => SetProperty(ref _isVisible, value);
+    }
+
+    public double Width
+    {
+        get => _width;
+        set => SetProperty(ref _width, Math.Clamp(value, MinimumWidth, MaximumWidth));
+    }
+
+    public bool CanResizeWithNext
+    {
+        get => _canResizeWithNext;
+        private set => SetProperty(ref _canResizeWithNext, value);
+    }
+
+    internal void SetCanResizeWithNext(bool value)
+    {
+        CanResizeWithNext = value;
+    }
+
+    internal void ResetWidth()
+    {
+        Width = DefaultWidth;
     }
 }
 
@@ -1951,11 +2105,12 @@ public sealed class DatabaseColumnPresentation : ObservableObject
 {
     public const double DefaultWidth = 160;
     internal const double MinimumWidth = 60;
-    internal const double MaximumWidth = 500;
+    internal const double MaximumWidth = 2000;
     private string _databaseField;
     private bool _isVisible = true;
     private double _width = DefaultWidth;
     private int _position;
+    private bool _canResizeWithNext;
 
     internal DatabaseColumnPresentation(
         string mappingIdentity,
@@ -1999,6 +2154,12 @@ public sealed class DatabaseColumnPresentation : ObservableObject
         private set => SetProperty(ref _position, value);
     }
 
+    public bool CanResizeWithNext
+    {
+        get => _canResizeWithNext;
+        private set => SetProperty(ref _canResizeWithNext, value);
+    }
+
     internal void UpdateMapping(DatabaseColumnMapping mapping)
     {
         ArgumentNullException.ThrowIfNull(mapping);
@@ -2019,6 +2180,11 @@ public sealed class DatabaseColumnPresentation : ObservableObject
         Position = position;
     }
 
+    internal void SetCanResizeWithNext(bool value)
+    {
+        CanResizeWithNext = value;
+    }
+
     internal void ResetPresentation()
     {
         IsVisible = true;
@@ -2028,7 +2194,7 @@ public sealed class DatabaseColumnPresentation : ObservableObject
 }
 
 internal sealed record DatabaseColumnWidthFeedback(
-    DatabaseColumnPresentation LeftColumn,
-    DatabaseColumnPresentation RightColumn,
+    object LeftColumn,
+    object RightColumn,
     double LeftWidth,
     double RightWidth);

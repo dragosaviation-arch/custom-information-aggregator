@@ -55,6 +55,15 @@
             <Setter Property="Margin" Value="8,0" />
             <Setter Property="TextTrimming" Value="CharacterEllipsis" />
         </Style>
+        <Style x:Key="DatabaseColumnResizeThumbStyle"
+               TargetType="Thumb"
+               BasedOn="{StaticResource CiaColumnResizeThumbStyle}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding CanResizeWithNext}" Value="False">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="DatabaseExcelHeaderInputStyle"
                TargetType="TextBox"
                BasedOn="{StaticResource CiaTextInputStyle}">
@@ -346,7 +355,8 @@
                                                    Style="{StaticResource DatabaseGridHeaderTextStyle}"
                                                    Text="Include / #" />
                                     </Border>
-                                    <ItemsControl ItemsSource="{Binding VisibleMetadataColumns}">
+                                    <ItemsControl x:Name="DatabaseMetadataHeaders"
+                                                  ItemsSource="{Binding VisibleMetadataColumns}">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate>
                                                 <StackPanel Orientation="Horizontal" />
@@ -354,11 +364,17 @@
                                         </ItemsControl.ItemsPanel>
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Border Width="140"
+                                                <Border Width="{Binding Width}"
                                                         BorderBrush="{StaticResource CiaDividerBrush}"
                                                         BorderThickness="0,0,1,0">
-                                                    <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
-                                                               Text="{Binding DisplayName}" />
+                                                    <Grid>
+                                                        <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
+                                                                   Text="{Binding DisplayName}" />
+                                                        <Thumb Style="{StaticResource DatabaseColumnResizeThumbStyle}"
+                                                               DragStarted="OnDatabaseColumnResizeStarted"
+                                                               DragDelta="OnDatabaseColumnResizeDelta"
+                                                               DragCompleted="OnDatabaseColumnResizeCompleted" />
+                                                    </Grid>
                                                 </Border>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
@@ -378,10 +394,7 @@
                                                     <Grid>
                                                         <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
                                                                    Text="{Binding DatabaseField}" />
-                                                        <Thumb Width="7"
-                                                               HorizontalAlignment="Right"
-                                                               Background="Transparent"
-                                                               Cursor="SizeWE"
+                                                        <Thumb Style="{StaticResource DatabaseColumnResizeThumbStyle}"
                                                                DragStarted="OnDatabaseColumnResizeStarted"
                                                                DragDelta="OnDatabaseColumnResizeDelta"
                                                                DragCompleted="OnDatabaseColumnResizeCompleted" />
@@ -434,7 +447,7 @@
                                                     </ItemsControl.ItemsPanel>
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
-                                                            <Border Width="140"
+                                                            <Border Width="{Binding Column.Width}"
                                                                     BorderBrush="{StaticResource CiaDividerBrush}"
                                                                     BorderThickness="0,0,1,1"
                                                                     ToolTip="{Binding Value}">
