@@ -107,7 +107,9 @@ public sealed class DatabaseWorkspaceViewInteractionTests
 
             var dynamicHeaders = (ItemsControl)view.FindName("DynamicDatabaseHeaders");
             var metadataHeaders = (ItemsControl)view.FindName("DatabaseMetadataHeaders");
-            var reviewRows = (ItemsControl)view.FindName("DatabaseReviewRows");
+            var reviewRows = (ListBox)view.FindName("DatabaseReviewRows");
+            var sourceSetTabs = (ListBox)view.FindName("DatabaseSourceSetTabs");
+            var columnsButton = (Button)view.FindName("ColumnsButton");
             var lowerTabs = (Grid)view.FindName("LowerTabs");
             var exportFields = (Border)view.FindName("ExportFieldsPanel");
             var exportRows = (ItemsControl)view.FindName("ExportColumnRows");
@@ -127,14 +129,32 @@ public sealed class DatabaseWorkspaceViewInteractionTests
 
             Assert.AreEqual(2, dynamicHeaders.Items.Count);
             Assert.AreEqual(viewModel.VisibleMetadataColumns.Count, metadataHeaders.Items.Count);
-            Assert.IsGreaterThan(0, metadataHeaders.Items.Count);
-            Assert.AreEqual(2, reviewRows.Items.Count);
+            Assert.AreEqual(0, metadataHeaders.Items.Count);
+            Assert.IsTrue(viewModel.ColumnChoices.Where(choice => choice.IsGenerated)
+                .All(choice => choice.IsIncluded));
+            Assert.IsTrue(viewModel.ColumnChoices.Where(choice => !choice.IsGenerated)
+                .All(choice => !choice.IsIncluded));
+            Assert.HasCount(1, sourceSetTabs.Items);
+            Assert.AreSame(viewModel.SelectedDataset, sourceSetTabs.SelectedItem);
+            Assert.IsNotNull(columnsButton);
+            Assert.IsTrue(VirtualizingPanel.GetIsVirtualizing(reviewRows));
+            Assert.AreEqual(VirtualizationMode.Recycling,
+                VirtualizingPanel.GetVirtualizationMode(reviewRows));
+            Assert.AreEqual(250, reviewRows.Items.Count);
             var firstRow = (DatabaseReviewRowPresentation)reviewRows.Items[0];
             Assert.AreEqual("A1", firstRow.Cells[0].DisplayValue);
             StringAssert.Contains(firstRow.Cells[0].SourceContext!, sourceId.ToString());
             Assert.AreEqual("B1", firstRow.Cells[1].DisplayValue);
             Assert.AreEqual(string.Empty, ((DatabaseReviewRowPresentation)reviewRows.Items[1])
                 .Cells[1].DisplayValue);
+            Assert.IsTrue(((DatabaseReviewRowPresentation)reviewRows.Items[249]).IsLoading);
+            reviewRows.ScrollIntoView(reviewRows.Items[249]);
+            await WaitForAsync(() =>
+                !((DatabaseReviewRowPresentation)reviewRows.Items[249]).IsLoading);
+            Assert.AreEqual(
+                "A250",
+                ((DatabaseReviewRowPresentation)reviewRows.Items[249]).Cells[0].DisplayValue);
+            Assert.IsLessThanOrEqualTo(4, viewModel.CachedReviewPageCount);
             Assert.AreEqual(Visibility.Collapsed, lowerTabs.Visibility);
             Assert.AreEqual(Visibility.Visible, exportFields.Visibility);
             Assert.AreEqual(2, exportRows.Items.Count);
@@ -147,6 +167,17 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.IsTrue(viewModel.IsExportConfigurationValid);
             Assert.AreEqual(Visibility.Visible, excelExport.Visibility);
             Assert.IsFalse(exportButton.IsEnabled);
+
+            foreach (var metadataChoice in viewModel.ColumnChoices
+                         .Where(choice => !choice.IsGenerated)
+                         .Take(2)
+                         .ToArray())
+            {
+                metadataChoice.IsIncluded = true;
+            }
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            Assert.AreEqual(2, metadataHeaders.Items.Count);
+            Assert.AreEqual(2, viewModel.ExportMetadataFields.Count(field => field.IsExported));
             Assert.IsNotNull(exportButton.Command);
             Assert.IsNotNull(browseOutputFolder.Command);
             Assert.AreEqual(viewModel.WorkbookExportStatusText, workbookExportStatus.Text);
@@ -239,8 +270,8 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                 viewModel.VisibleColumns.Select(column => column.Width).ToArray(),
                 restoredViewModel.VisibleColumns.Select(column => column.Width).ToArray());
             CollectionAssert.AreEqual(
-                viewModel.VisibleMetadataColumns.Select(column => column.Width).ToArray(),
-                restoredViewModel.VisibleMetadataColumns.Select(column => column.Width).ToArray());
+                viewModel.MetadataFields.Select(column => column.Width).ToArray(),
+                restoredViewModel.MetadataFields.Select(column => column.Width).ToArray());
 
             var collisionId = WorkbookDefinitionId.CreateNew();
             var collisionDialog = new WorkbookCollisionDialog(
@@ -259,7 +290,7 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             collisionDialog.Close();
 
             Assert.IsNotNull(prepareButton.Command);
-            Assert.AreEqual(2, reviewRows.Items.Count);
+            Assert.AreEqual(250, reviewRows.Items.Count);
             Assert.IsFalse(exportButton.IsEnabled);
 
             window.Width = 1100;
@@ -314,6 +345,16 @@ public sealed class DatabaseWorkspaceViewInteractionTests
         Assert.IsTrue(workflow.CompleteOperation(
             begin.Operation!.OperationId,
             OperationOutcome.CompletedSuccessfully).Accepted);
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!condition())
+        {
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            await Task.Delay(15, timeout.Token);
+        }
     }
 
     private sealed class ReadyProcessingHostSupervisor : IProcessingHostSupervisor
@@ -401,8 +442,8 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                     dataset.DisplayName,
                     dataset.Ordinal,
                     dataset.RepeatedDataLayout,
-                    2,
-                    3,
+                    250,
+                    499,
                     columns,
                     dataset.Fields)]);
             return Task.FromResult(new DatabaseClientResult(
@@ -463,6 +504,23 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                         lineage,
                         column.Identity.RepeatCoordinates)]);
             }
+            var lastOrdinal = Math.Min(250, query.StartRowOrdinal + query.RowCount - 1);
+            var rows = Enumerable.Range(
+                    query.StartRowOrdinal,
+                    lastOrdinal - query.StartRowOrdinal + 1)
+                .Select(ordinal => new DatabaseReviewRow(
+                    ordinal,
+                    true,
+                    $"record-{ordinal}",
+                    source,
+                    ordinal == 2
+                        ? [Cell(0, "A2", 3)]
+                        :
+                        [
+                            Cell(0, $"A{ordinal}", (ordinal * 2) - 1),
+                            Cell(1, $"B{ordinal}", ordinal * 2)
+                        ]))
+                .ToArray();
             return Task.FromResult(new DatabaseReviewClientResult(
                 true,
                 new DatabaseReviewPage(
@@ -470,13 +528,8 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                     dataset,
                     query.StartRowOrdinal,
                     query.RowCount,
-                    2,
-                    [
-                        new DatabaseReviewRow(1, true, "record-1", source,
-                            [Cell(0, "A1", 1), Cell(1, "B1", 2)]),
-                        new DatabaseReviewRow(2, true, "record-2", source,
-                            [Cell(0, "A2", 3)])
-                    ]),
+                    250,
+                    rows),
                 FailureCode: null,
                 FailureDescription: null));
         }

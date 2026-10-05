@@ -12,6 +12,7 @@ namespace CIA.Desktop.Views;
 public partial class LoadWorkspaceView : UserControl
 {
     private const double CompactLayoutBreakpoint = 1180;
+    private const double LoadSettingsStackBreakpoint = 390;
     private const double SourceRowHeight = 33;
     private const double DropOverlaySafeSpace = 20;
     private bool? _dropOverlayVisible;
@@ -57,10 +58,12 @@ public partial class LoadWorkspaceView : UserControl
         if (hostWidth < CompactLayoutBreakpoint)
         {
             ApplyCompactLayout();
+            ApplyLoadSettingsLayout();
             return;
         }
 
         ApplyWideLayout();
+        ApplyLoadSettingsLayout();
     }
 
     private void ApplyCompactLayout()
@@ -115,14 +118,44 @@ public partial class LoadWorkspaceView : UserControl
         RightRailGapColumn.Width = new GridLength(0);
         SettingsColumn.Width = new GridLength(0);
 
-        DetailsRow.Height = new GridLength(56, GridUnitType.Star);
+        DetailsRow.Height = new GridLength(34, GridUnitType.Star);
         RightRailGapRow.Height = new GridLength(8);
-        SettingsRow.Height = new GridLength(44, GridUnitType.Star);
+        SettingsRow.Height = new GridLength(66, GridUnitType.Star);
 
         Grid.SetRow(DetailsPanel, 0);
         Grid.SetColumn(DetailsPanel, 0);
         Grid.SetRow(SettingsPanel, 2);
         Grid.SetColumn(SettingsPanel, 0);
+    }
+
+    private void ApplyLoadSettingsLayout()
+    {
+        var availableWidth = SettingsPanel.ActualWidth;
+        if (availableWidth > 0 && availableWidth < LoadSettingsStackBreakpoint)
+        {
+            WorkflowSettingsColumn.Width = new GridLength(1, GridUnitType.Star);
+            LoadSettingsLowerGapColumn.Width = new GridLength(0);
+            FolderSettingsColumn.Width = new GridLength(0);
+            LoadSettingsLowerTopRow.Height = GridLength.Auto;
+            LoadSettingsLowerStackGapRow.Height = new GridLength(8);
+            LoadSettingsLowerBottomRow.Height = GridLength.Auto;
+            Grid.SetRow(WorkflowSettingsSection, 0);
+            Grid.SetColumn(WorkflowSettingsSection, 0);
+            Grid.SetRow(FolderSettingsSection, 2);
+            Grid.SetColumn(FolderSettingsSection, 0);
+            return;
+        }
+
+        WorkflowSettingsColumn.Width = new GridLength(1, GridUnitType.Star);
+        LoadSettingsLowerGapColumn.Width = new GridLength(12);
+        FolderSettingsColumn.Width = new GridLength(1, GridUnitType.Star);
+        LoadSettingsLowerTopRow.Height = GridLength.Auto;
+        LoadSettingsLowerStackGapRow.Height = new GridLength(0);
+        LoadSettingsLowerBottomRow.Height = new GridLength(0);
+        Grid.SetRow(WorkflowSettingsSection, 0);
+        Grid.SetColumn(WorkflowSettingsSection, 0);
+        Grid.SetRow(FolderSettingsSection, 0);
+        Grid.SetColumn(FolderSettingsSection, 2);
     }
 
     private void OnSourceRowsLayoutUpdated(object? sender, EventArgs e)

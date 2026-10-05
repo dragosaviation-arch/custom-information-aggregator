@@ -95,6 +95,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <Border Style="{StaticResource CiaPanelHeaderStyle}">
@@ -138,12 +139,6 @@
                         BorderThickness="0,0,0,1">
                     <Grid>
                         <StackPanel Orientation="Horizontal">
-                            <ComboBox Width="150"
-                                      Margin="0,0,6,0"
-                                      AutomationProperties.Name="Database Source Set dataset"
-                                      DisplayMemberPath="DisplayName"
-                                      ItemsSource="{Binding Datasets}"
-                                      SelectedItem="{Binding SelectedDataset}" />
                             <TextBox Width="160"
                                      Margin="0,0,6,0"
                                      AutomationProperties.Name="Search Database rows"
@@ -177,33 +172,6 @@
                             <Button Margin="0,0,6,0"
                                     Command="{Binding ExcludeVisibleRowsCommand}"
                                     Content="Exclude visible"
-                                    Style="{StaticResource CiaGhostButtonStyle}" />
-                            <ComboBox Width="86"
-                                      Margin="0,0,6,0"
-                                      AutomationProperties.Name="Database metadata visibility"
-                                      ItemsSource="{Binding MetadataVisibilityModes}"
-                                      SelectedItem="{Binding MetadataVisibilityMode}" />
-                            <Button x:Name="MetadataButton"
-                                    Margin="0,0,6,0"
-                                    AutomationProperties.Name="Configure Database metadata fields"
-                                    Click="OnMetadataClick"
-                                    Content="Metadata..."
-                                    Style="{StaticResource CiaGhostButtonStyle}" />
-                            <Button x:Name="PreviousDatabasePageButton"
-                                    MinWidth="74"
-                                    AutomationProperties.Name="Previous Database review page"
-                                    Command="{Binding PreviousReviewPageCommand}"
-                                    Content="Previous"
-                                    Style="{StaticResource CiaGhostButtonStyle}" />
-                            <TextBlock Margin="8,0"
-                                       VerticalAlignment="Center"
-                                       Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="{Binding ReviewPageText}" />
-                            <Button x:Name="NextDatabasePageButton"
-                                    MinWidth="58"
-                                    AutomationProperties.Name="Next Database review page"
-                                    Command="{Binding NextReviewPageCommand}"
-                                    Content="Next"
                                     Style="{StaticResource CiaGhostButtonStyle}" />
                         </StackPanel>
                     </Grid>
@@ -240,7 +208,7 @@
                             <TextBlock Grid.Row="1"
                                        Margin="0,4,0,6"
                                        Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Visibility, order and width affect CIA presentation only." />
+                                       Text="Choose generated and metadata columns. Order and width affect CIA presentation only." />
                             <Grid Grid.Row="2" Margin="2,0,2,3">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="24" />
@@ -253,7 +221,7 @@
                             <ScrollViewer Grid.Row="3"
                                           MaxHeight="300"
                                           VerticalScrollBarVisibility="Auto">
-                                <ItemsControl ItemsSource="{Binding Columns}">
+                                <ItemsControl ItemsSource="{Binding ColumnChoices}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <Grid Height="33">
@@ -263,29 +231,41 @@
                                                     <ColumnDefinition Width="54" />
                                                 </Grid.ColumnDefinitions>
                                                 <CheckBox VerticalAlignment="Center"
-                                                          AutomationProperties.Name="Show Database column"
-                                                          IsChecked="{Binding IsVisible}" />
-                                                <TextBlock Grid.Column="1"
-                                                           Margin="2,0,4,0"
-                                                           VerticalAlignment="Center"
-                                                           Text="{Binding DatabaseField}"
-                                                           TextTrimming="CharacterEllipsis" />
+                                                          AutomationProperties.Name="Include Database column"
+                                                          IsChecked="{Binding IsIncluded}" />
+                                                <StackPanel Grid.Column="1" Margin="2,0,4,0" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding DisplayName}"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock FontSize="9"
+                                                               Foreground="{StaticResource CiaTextMutedBrush}"
+                                                               Text="{Binding Category}" />
+                                                </StackPanel>
                                                 <StackPanel Grid.Column="2"
                                                             HorizontalAlignment="Right"
                                                             Orientation="Horizontal">
+                                                    <StackPanel.Style>
+                                                        <Style TargetType="StackPanel">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsGenerated}" Value="False">
+                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </StackPanel.Style>
                                                     <Button Width="24"
                                                             Height="24"
                                                             Margin="0,0,2,0"
                                                             Padding="0"
                                                             Command="{Binding DataContext.MoveColumnUpCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding}"
+                                                            CommandParameter="{Binding DataColumn}"
                                                             Content="↑"
                                                             Style="{StaticResource CiaButtonStyle}" />
                                                     <Button Width="24"
                                                             Height="24"
                                                             Padding="0"
                                                             Command="{Binding DataContext.MoveColumnDownCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding}"
+                                                            CommandParameter="{Binding DataColumn}"
                                                             Content="↓"
                                                             Style="{StaticResource CiaButtonStyle}" />
                                                 </StackPanel>
@@ -301,38 +281,6 @@
                                     Content="Reset layout"
                                     Style="{StaticResource CiaGhostButtonStyle}" />
                         </Grid>
-                    </Border>
-                </Popup>
-
-                <Popup x:Name="MetadataPopup"
-                       AllowsTransparency="True"
-                       Placement="Bottom"
-                       PlacementTarget="{Binding ElementName=MetadataButton}"
-                       StaysOpen="False">
-                    <Border Width="270"
-                            Margin="0,4,0,0"
-                            Padding="9"
-                            Background="{StaticResource CiaPanelBrush}"
-                            BorderBrush="{StaticResource CiaBorderBrush}"
-                            BorderThickness="1"
-                            CornerRadius="9">
-                        <StackPanel>
-                            <TextBlock Style="{StaticResource DatabaseSectionTextStyle}"
-                                       Text="ROW METADATA" />
-                            <TextBlock Margin="0,4,0,7"
-                                       Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Visibility is presentation-only; retained metadata is unchanged."
-                                       TextWrapping="Wrap" />
-                            <ItemsControl ItemsSource="{Binding MetadataFields}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <CheckBox Margin="0,2"
-                                                  Content="{Binding DisplayName}"
-                                                  IsChecked="{Binding IsVisible}" />
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
                     </Border>
                 </Popup>
 
@@ -405,12 +353,39 @@
                                     </ItemsControl>
                                 </StackPanel>
                             </Border>
-                            <ScrollViewer Grid.Row="1"
-                                          HorizontalScrollBarVisibility="Disabled"
-                                          VerticalScrollBarVisibility="Auto">
-                                <ItemsControl x:Name="DatabaseReviewRows"
-                                              ItemsSource="{Binding Records}">
-                                    <ItemsControl.ItemTemplate>
+                            <ListBox x:Name="DatabaseReviewRows"
+                                     Grid.Row="1"
+                                     ItemsSource="{Binding Records}"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     ScrollViewer.CanContentScroll="True"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.ScrollChanged="OnDatabaseReviewScrollChanged"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.ScrollUnit="Pixel"
+                                     VirtualizingPanel.VirtualizationMode="Recycling">
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <VirtualizingStackPanel />
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Padding" Value="0" />
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        <Setter Property="IsTabStop" Value="False" />
+                                        <Setter Property="Focusable" Value="False" />
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="ListBoxItem">
+                                                    <ContentPresenter />
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
                                         <DataTemplate>
                                             <Border Height="30">
                                                 <Border.Style>
@@ -432,7 +407,18 @@
                                                         <CheckBox VerticalAlignment="Center"
                                                                   IsChecked="{Binding IsIncluded, Mode=OneWay}"
                                                                   Command="{Binding DataContext.SetRowIncludedCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                                  CommandParameter="{Binding}" />
+                                                                  CommandParameter="{Binding}">
+                                                            <CheckBox.Style>
+                                                                <Style TargetType="CheckBox">
+                                                                    <Setter Property="IsEnabled" Value="True" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsLoading}" Value="True">
+                                                                            <Setter Property="IsEnabled" Value="False" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </CheckBox.Style>
+                                                        </CheckBox>
                                                         <TextBlock Margin="5,0,0,0"
                                                                    VerticalAlignment="Center"
                                                                    Foreground="{StaticResource CiaTextMutedBrush}"
@@ -493,9 +479,8 @@
                                             </StackPanel>
                                             </Border>
                                         </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </Grid>
                     </ScrollViewer>
                     <Border x:Name="DatabaseColumnSizeFeedback"
@@ -536,6 +521,52 @@
                                    TextWrapping="Wrap" />
                     </StackPanel>
                 </Grid>
+                <Border Grid.Row="3"
+                        Padding="8,4,8,0"
+                        Background="{StaticResource CiaPanelAlternateBrush}"
+                        BorderBrush="{StaticResource CiaBorderBrush}"
+                        BorderThickness="0,1,0,0">
+                    <ListBox x:Name="DatabaseSourceSetTabs"
+                             ItemsSource="{Binding Datasets}"
+                             SelectedItem="{Binding SelectedDataset, Mode=TwoWay}"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                             ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="MinWidth" Value="108" />
+                                <Setter Property="Margin" Value="0,0,4,0" />
+                                <Setter Property="Padding" Value="10,5" />
+                                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Foreground" Value="{StaticResource CiaTextSecondaryBrush}" />
+                                <Setter Property="BorderBrush" Value="Transparent" />
+                                <Setter Property="BorderThickness" Value="0,0,0,2" />
+                                <Style.Triggers>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="{StaticResource CiaPanelBrush}" />
+                                        <Setter Property="Foreground" Value="{StaticResource CiaAccentBrush}" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource CiaAccentBrush}" />
+                                        <Setter Property="FontWeight" Value="Bold" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding DisplayName}"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding Context}" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Border>
             </Grid>
         </Border>
 
@@ -576,7 +607,6 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
-                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <Border Padding="8,6" Style="{StaticResource CiaPanelHeaderStyle}">
@@ -662,16 +692,15 @@
                                     <ColumnDefinition Width="88" />
                                     <ColumnDefinition Width="1.1*" />
                                     <ColumnDefinition Width="1.2*" />
-                                    <ColumnDefinition Width="48" />
                                     <ColumnDefinition Width="58" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Export order" />
-                                <TextBlock Grid.Column="1" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Database Field" />
+                                <TextBlock Grid.Column="1" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Column" />
                                 <TextBlock Grid.Column="2" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Excel Header (Override)" />
-                                <TextBlock Grid.Column="3" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Value" />
-                                <TextBlock Grid.Column="4" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="SourceId" />
+                                <TextBlock Grid.Column="3" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="SourceId" />
                             </Grid>
                             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                                <StackPanel>
                                 <ItemsControl x:Name="ExportColumnRows" ItemsSource="{Binding ExportColumns}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
@@ -680,7 +709,6 @@
                                                     <ColumnDefinition Width="88" />
                                                     <ColumnDefinition Width="1.1*" />
                                                     <ColumnDefinition Width="1.2*" />
-                                                    <ColumnDefinition Width="48" />
                                                     <ColumnDefinition Width="58" />
                                                 </Grid.ColumnDefinitions>
                                                 <StackPanel Orientation="Horizontal">
@@ -718,11 +746,6 @@
                                                 <CheckBox Grid.Column="3"
                                                           HorizontalAlignment="Center"
                                                           VerticalAlignment="Center"
-                                                          AutomationProperties.Name="Export Database column"
-                                                          IsChecked="{Binding IsExported}" />
-                                                <CheckBox Grid.Column="4"
-                                                          HorizontalAlignment="Center"
-                                                          VerticalAlignment="Center"
                                                           AutomationProperties.Name="Export SourceId companion"
                                                           IsChecked="{Binding IsSourceIdExported}"
                                                           IsEnabled="{Binding IsExported}"
@@ -731,45 +754,44 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                            </ScrollViewer>
-                        </Grid>
-                        <Border Grid.Row="3"
-                                Padding="8,5"
-                                BorderBrush="{StaticResource CiaDividerBrush}"
-                                BorderThickness="0,1,0,0">
-                            <StackPanel>
-                                <TextBlock Style="{StaticResource DatabaseSectionTextStyle}"
-                                           Text="OPTIONAL METADATA COLUMNS" />
                                 <ItemsControl x:Name="ExportMetadataRows"
-                                              Margin="0,4,0,0"
                                               ItemsSource="{Binding ExportMetadataFields}">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <WrapPanel />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <StackPanel Width="185" Margin="0,0,8,4" Orientation="Horizontal">
-                                                <CheckBox VerticalAlignment="Center"
-                                                          IsChecked="{Binding IsExported}" />
-                                                <TextBlock Width="78"
-                                                           Margin="4,0"
+                                            <Grid Height="34" Margin="7,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="88" />
+                                                    <ColumnDefinition Width="1.1*" />
+                                                    <ColumnDefinition Width="1.2*" />
+                                                    <ColumnDefinition Width="58" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock VerticalAlignment="Center"
+                                                           Foreground="{StaticResource CiaTextMutedBrush}"
+                                                           Text="Metadata" />
+                                                <TextBlock Grid.Column="1"
+                                                           Margin="0,0,8,0"
                                                            VerticalAlignment="Center"
-                                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                                           FontWeight="SemiBold"
                                                            Text="{Binding DisplayName}"
                                                            TextTrimming="CharacterEllipsis" />
-                                                <TextBox Width="84"
+                                                <TextBox Grid.Column="2"
+                                                         Margin="0,4,8,4"
                                                          AutomationProperties.Name="Metadata Excel header"
                                                          Style="{StaticResource DatabaseExcelHeaderInputStyle}"
                                                          Text="{Binding ExcelHeader, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
-                                            </StackPanel>
+                                                <TextBlock Grid.Column="3"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"
+                                                           Foreground="{StaticResource CiaTextMutedBrush}"
+                                                           Text="â€”" />
+                                            </Grid>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                            </StackPanel>
-                        </Border>
-                        <Border Grid.Row="4"
+                                </StackPanel>
+                            </ScrollViewer>
+                        </Grid>
+                        <Border Grid.Row="3"
                                 Padding="8,6"
                                 BorderBrush="{StaticResource CiaDividerBrush}"
                                 BorderThickness="0,1,0,0">

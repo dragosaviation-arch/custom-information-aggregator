@@ -9,6 +9,7 @@ namespace CIA.Desktop.Views;
 public partial class DatabaseWorkspaceView : UserControl
 {
     private const double CompactLayoutBreakpoint = 1180;
+    private const double DatabaseReviewRowHeight = 30;
     private bool _isCompact;
     private bool _showExcelExport;
     private DatabaseColumnWidthFeedback? _columnResize;
@@ -31,11 +32,6 @@ public partial class DatabaseWorkspaceView : UserControl
     private void OnColumnsClick(object sender, RoutedEventArgs e)
     {
         ColumnsPopup.IsOpen = !ColumnsPopup.IsOpen;
-    }
-
-    private void OnMetadataClick(object sender, RoutedEventArgs e)
-    {
-        MetadataPopup.IsOpen = !MetadataPopup.IsOpen;
     }
 
     private void OnExportFieldsTabClick(object sender, RoutedEventArgs e)
@@ -172,6 +168,19 @@ public partial class DatabaseWorkspaceView : UserControl
 
         _columnResize = null;
         DatabaseColumnSizeFeedback.Visibility = Visibility.Collapsed;
+    }
+
+    private async void OnDatabaseReviewScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (DataContext is not DatabaseWorkspaceViewModel viewModel
+            || e.ViewportHeight <= 0)
+        {
+            return;
+        }
+
+        var firstVisibleOrdinal = (int)Math.Floor(e.VerticalOffset / DatabaseReviewRowHeight) + 1;
+        var visibleRowCount = (int)Math.Ceiling(e.ViewportHeight / DatabaseReviewRowHeight) + 2;
+        await viewModel.EnsureReviewRowsAvailableAsync(firstVisibleOrdinal, visibleRowCount);
     }
 
     private void ShowColumnSizeFeedback(DatabaseColumnWidthFeedback? feedback)

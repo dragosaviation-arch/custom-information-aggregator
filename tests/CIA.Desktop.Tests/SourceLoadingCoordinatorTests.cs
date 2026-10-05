@@ -977,7 +977,7 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
-    public async Task ExplicitRefreshUsesHighlightedRowsAndPreservesSourceIdentityInPlace()
+    public async Task UnderlyingRefreshPreservesSourceIdentityInPlace()
     {
         var firstPath = Path.GetFullPath("first.xml");
         var secondPath = Path.GetFullPath("second.xml");
@@ -997,9 +997,7 @@ public sealed class SourceLoadingCoordinatorTests
         var firstItem = sourceSet.Items[0];
         var secondItem = sourceSet.Items[1];
         coordinator.SetInclusion([firstItem], isIncluded: false);
-        viewModel.SetHighlightedSources([firstItem]);
-
-        await viewModel.RefreshSelectedCommand.ExecuteAsync(null);
+        await coordinator.RefreshAsync(firstItem);
 
         Assert.AreEqual(2, client.CallCount);
         Assert.AreSame(firstItem, sourceSet.Items[0]);

@@ -61,13 +61,73 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(load, "Value=\"{Binding ProgressValue, Mode=OneWay}\"");
         StringAssert.Contains(load, "IsIndeterminate=\"{Binding IsProgressIndeterminate, Mode=OneWay}\"");
         StringAssert.Contains(load, "Style=\"{StaticResource CiaDeterminateProgressBarStyle}\"");
-        StringAssert.Contains(load, "ToolTip=\"Include supported XML files found in the selected folder.\"");
-        StringAssert.Contains(load, "ToolTip=\"Include supported archives found inside the selected folder. Add Archive is unaffected.\"");
-        StringAssert.Contains(load, "ToolTip=\"Traverse subfolders recursively when a folder is added.\"");
-        StringAssert.Contains(load, "Content=\"Open Discovery when generation completes\"");
-        StringAssert.Contains(load, "ToolTip=\"Navigate to Discovery after a successful explicit Discovery generation or update.\"");
-        StringAssert.Contains(load, "ToolTip=\"Remove checked entries immediately without showing the confirmation dialog. Source files are never deleted.\"");
+        StringAssert.Contains(load, "ToolTip=\"Load supported XML files found in the selected folder.\"");
+        StringAssert.Contains(load, "ToolTip=\"Load supported archives found inside the selected folder.\"");
+        StringAssert.Contains(load, "ToolTip=\"Traverse subfolders recursively while loading a folder.\"");
+        StringAssert.Contains(load, "Content=\"Open Discovery after run\"");
+        StringAssert.Contains(load, "ToolTip=\"Open the Discovery tab only after Discovery generation/update completes successfully.\"");
+        StringAssert.Contains(load, "Content=\"Skip remove warning\"");
+        StringAssert.Contains(load, "ToolTip=\"Remove checked entries from the current session without showing the confirmation dialog.\"");
         Assert.IsFalse(load.Contains("Skip the confirmation modal; files are never deleted.", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void ApprovedConvergenceStructureIsPresentWithoutDuplicateControls()
+    {
+        var load = ReadDesktopFile("Views", "LoadWorkspaceView.xaml");
+        var loadCode = ReadDesktopFile("Views", "LoadWorkspaceView.xaml.cs");
+        var loadViewModel = ReadDesktopFile("Presentation", "LoadWorkspaceViewModel.cs");
+        var discovery = ReadDesktopFile("Views", "DiscoveryWorkspaceView.xaml");
+        var database = ReadDesktopFile("Views", "DatabaseWorkspaceView.xaml");
+        var databaseViewModel = ReadDesktopFile("Presentation", "DatabaseWorkspaceViewModel.cs");
+        var discoveryDocument = XDocument.Parse(discovery);
+        var presentationNamespace = discoveryDocument.Root!.Name.Namespace;
+
+        StringAssert.Contains(load, "x:Name=\"SourceSetSettingsSection\"");
+        StringAssert.Contains(load, "x:Name=\"LoadSettingsLowerGrid\" Grid.Row=\"2\"");
+        StringAssert.Contains(load, "x:Name=\"WorkflowSettingsSection\"");
+        StringAssert.Contains(load, "x:Name=\"FolderSettingsSection\" Grid.Column=\"2\"");
+        StringAssert.Contains(loadCode, "LoadSettingsStackBreakpoint");
+        StringAssert.Contains(loadCode, "Grid.SetRow(FolderSettingsSection, 2)");
+        StringAssert.Contains(load, "x:Name=\"ReassignSetMenuButton\"");
+        Assert.IsFalse(load.Contains("Content=\"Refresh selected\"", StringComparison.Ordinal));
+        Assert.IsFalse(load.Contains("Content=\"Refresh\"", StringComparison.Ordinal));
+        Assert.IsFalse(loadViewModel.Contains("RefreshSelectedCommand", StringComparison.Ordinal));
+        StringAssert.Contains(load, "Content=\"Relink...\"");
+        StringAssert.Contains(loadCode, "DetailsRow.Height = new GridLength(34");
+        StringAssert.Contains(loadCode, "SettingsRow.Height = new GridLength(66");
+
+        var layoutTab = discoveryDocument.Descendants(presentationNamespace + "TabItem")
+            .Single(tab => string.Equals(tab.Attribute("Header")?.Value, "Layout", StringComparison.Ordinal));
+        var generalTab = discoveryDocument.Descendants(presentationNamespace + "TabItem")
+            .Single(tab => string.Equals(tab.Attribute("Header")?.Value, "General", StringComparison.Ordinal));
+        Assert.IsTrue(layoutTab.Descendants().Any(element =>
+            string.Equals(element.Attribute("Text")?.Value, "REPEATED DATA LAYOUT", StringComparison.Ordinal)));
+        Assert.IsFalse(generalTab.Descendants().Any(element =>
+            string.Equals(element.Attribute("Text")?.Value, "REPEATED DATA LAYOUT", StringComparison.Ordinal)));
+        StringAssert.Contains(discovery, "Command=\"{Binding DataContext.ToggleBlacklistCommand");
+        StringAssert.Contains(discovery, "Content=\"{Binding BlacklistActionText}\"");
+        StringAssert.Contains(discovery, "x:Name=\"PreviewRow\" Height=\"11*\"");
+        StringAssert.Contains(discovery, "Text=\"{Binding OccurrencePreviewText}\"");
+        StringAssert.Contains(discovery, "Command=\"{Binding PreviousOccurrenceCommand}\"");
+        StringAssert.Contains(discovery, "Command=\"{Binding NextOccurrenceCommand}\"");
+        StringAssert.Contains(discovery, "AutomationProperties.Name=\"Database Tag Name Override\"");
+
+        StringAssert.Contains(database, "x:Name=\"DatabaseSourceSetTabs\"");
+        StringAssert.Contains(database, "SelectedItem=\"{Binding SelectedDataset, Mode=TwoWay}\"");
+        StringAssert.Contains(database, "x:Name=\"DatabaseReviewRows\"");
+        StringAssert.Contains(database, "VirtualizingPanel.IsVirtualizing=\"True\"");
+        StringAssert.Contains(database, "VirtualizingPanel.VirtualizationMode=\"Recycling\"");
+        StringAssert.Contains(database, "HorizontalScrollBarVisibility=\"Auto\"");
+        Assert.IsFalse(database.Contains("PreviousReviewPageCommand", StringComparison.Ordinal));
+        Assert.IsFalse(database.Contains("NextReviewPageCommand", StringComparison.Ordinal));
+        Assert.IsFalse(database.Contains("ReviewPageText", StringComparison.Ordinal));
+        StringAssert.Contains(database, "ItemsSource=\"{Binding ColumnChoices}\"");
+        StringAssert.Contains(database, "Text=\"{Binding Category}\"");
+        Assert.IsFalse(database.Contains("OPTIONAL METADATA COLUMNS", StringComparison.Ordinal));
+        Assert.IsFalse(database.Contains("AutomationProperties.Name=\"Export Database column\"", StringComparison.Ordinal));
+        StringAssert.Contains(databaseViewModel, "DatabaseMetadataVisibilityMode.None");
+        StringAssert.Contains(databaseViewModel, "VirtualizedDatabaseReviewCollection");
     }
 
     [TestMethod]

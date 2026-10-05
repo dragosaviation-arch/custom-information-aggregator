@@ -38,9 +38,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _removeCheckedCommand;
     private readonly RelayCommand _confirmRemovalCommand;
     private readonly RelayCommand _cancelRemovalCommand;
-    private readonly AsyncRelayCommand<LoadedSourceItem> _refreshSourceCommand;
     private readonly AsyncRelayCommand<LoadedSourceItem> _relinkSourceCommand;
-    private readonly AsyncRelayCommand _refreshSelectedCommand;
     private readonly RelayCommand _createSourceSetCommand;
     private readonly RelayCommand _renameActiveSourceSetCommand;
     private IReadOnlyList<LoadedSourceItem> _highlightedSources = [];
@@ -151,15 +149,9 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _removeCheckedCommand = new RelayCommand(RemoveChecked, CanRemoveChecked);
         _confirmRemovalCommand = new RelayCommand(ConfirmRemoval);
         _cancelRemovalCommand = new RelayCommand(CancelRemoval);
-        _refreshSourceCommand = new AsyncRelayCommand<LoadedSourceItem>(
-            RefreshSourceAsync,
-            source => source is not null && !IsBusy);
         _relinkSourceCommand = new AsyncRelayCommand<LoadedSourceItem>(
             RelinkSourceAsync,
             CanRelinkSource);
-        _refreshSelectedCommand = new AsyncRelayCommand(
-            RefreshSelectedAsync,
-            () => !IsBusy && _highlightedSources.Count > 0);
         _createSourceSetCommand = new RelayCommand(
             CreateSourceSet,
             () => !IsBusy && HasSourceSets);
@@ -184,9 +176,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand RemoveCheckedCommand => _removeCheckedCommand;
     public IRelayCommand ConfirmRemovalCommand => _confirmRemovalCommand;
     public IRelayCommand CancelRemovalCommand => _cancelRemovalCommand;
-    public IAsyncRelayCommand RefreshSourceCommand => _refreshSourceCommand;
     public IAsyncRelayCommand RelinkSourceCommand => _relinkSourceCommand;
-    public IAsyncRelayCommand RefreshSelectedCommand => _refreshSelectedCommand;
     public IRelayCommand CreateSourceSetCommand => _createSourceSetCommand;
     public IRelayCommand RenameActiveSourceSetCommand => _renameActiveSourceSetCommand;
     public IRelayCommand ToggleFilterOptionsCommand { get; }
@@ -551,7 +541,6 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     {
         ArgumentNullException.ThrowIfNull(sources);
         _highlightedSources = sources.Where(Sources.Contains).Distinct().ToArray();
-        _refreshSelectedCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(HasHighlightedSources));
     }
 
@@ -964,28 +953,6 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             : $"Removed {result.RemovedCount} entries from this session. Source files were not deleted.";
     }
 
-    private async Task RefreshSourceAsync(LoadedSourceItem? source)
-    {
-        if (source is null)
-        {
-            return;
-        }
-
-        BeginOperationProgress(1);
-        StatusTitle = "Refreshing source";
-        StatusDetail = $"Reloading {source.DisplayName} through the Processing Host…";
-
-        try
-        {
-            ApplyRefreshResult(source, await _loadingCoordinator.RefreshAsync(source));
-            AdvanceOperationProgress();
-        }
-        finally
-        {
-            EndOperationProgress();
-        }
-    }
-
     private async Task RelinkSourceAsync(LoadedSourceItem? source)
     {
         if (source is null || source.Status != LoadedSourceStatus.Unavailable)
@@ -1024,54 +991,6 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task RefreshSelectedAsync()
-    {
-        var targets = _highlightedSources.Where(Sources.Contains).ToArray();
-
-        if (targets.Length == 0)
-        {
-            return;
-        }
-
-        BeginOperationProgress(targets.Length);
-        StatusTitle = targets.Length == 1 ? "Refreshing source" : "Refreshing selected sources";
-        StatusDetail = "Reloading highlighted source rows through the Processing Host…";
-
-        try
-        {
-            var refreshedCount = 0;
-            var failedCount = 0;
-
-            foreach (var source in targets)
-            {
-                var result = await _loadingCoordinator.RefreshAsync(source);
-                refreshedCount += result.Accepted ? 1 : 0;
-                failedCount += result.Accepted ? 0 : 1;
-                AdvanceOperationProgress();
-            }
-
-            RefreshVisibleSources();
-            StatusTitle = failedCount == 0
-                ? "Selected sources refreshed"
-                : "Source refresh completed with issues";
-            StatusDetail = $"Refreshed {refreshedCount}; {failedCount} could not be refreshed.";
-        }
-        finally
-        {
-            EndOperationProgress();
-        }
-    }
-
-    private void ApplyRefreshResult(LoadedSourceItem source, SourceRefreshResult result)
-    {
-        RefreshVisibleSources();
-        NotifySourceCountsChanged();
-        StatusTitle = result.Accepted ? "Source refreshed" : "Source refresh failed";
-        StatusDetail = result.Accepted
-            ? $"Reloaded {source.DisplayName}; its source identity was retained."
-            : result.FailureDescription ?? "The selected source could not be refreshed.";
-    }
-
     private bool CanChangeVisibleInclusion() => !IsBusy && !VisibleSources.IsEmpty;
 
     private bool CanRelinkSource(LoadedSourceItem? source) =>
@@ -1094,9 +1013,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _includeVisibleCommand.NotifyCanExecuteChanged();
         _excludeVisibleCommand.NotifyCanExecuteChanged();
         _removeCheckedCommand.NotifyCanExecuteChanged();
-        _refreshSourceCommand.NotifyCanExecuteChanged();
         _relinkSourceCommand.NotifyCanExecuteChanged();
-        _refreshSelectedCommand.NotifyCanExecuteChanged();
         _createSourceSetCommand.NotifyCanExecuteChanged();
         _renameActiveSourceSetCommand.NotifyCanExecuteChanged();
     }

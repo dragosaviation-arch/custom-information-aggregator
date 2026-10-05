@@ -6,6 +6,7 @@ using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
+using CIA.Contracts.Sources;
 using CIA.Core.Database;
 using CIA.Core.Runtime;
 using CIA.Desktop.Database;
@@ -39,22 +40,26 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private readonly ObservableCollection<ExportFieldPresentation> _exportColumns = [];
     private readonly ObservableCollection<ExportMetadataFieldPresentation> _exportMetadataFields = [];
     private readonly ObservableCollection<DatabaseColumnPresentation> _visibleColumns = [];
-    private readonly ObservableCollection<DatabaseReviewRowPresentation> _records = [];
+    private readonly VirtualizedDatabaseReviewCollection _records;
     private readonly ObservableCollection<DatabaseDatasetPresentation> _datasets = [];
     private readonly ObservableCollection<DatabaseMetadataFieldPresentation> _metadataFields = [];
     private readonly ObservableCollection<DatabaseMetadataFieldPresentation> _visibleMetadataFields = [];
+    private readonly ObservableCollection<DatabaseColumnChoicePresentation> _columnChoices = [];
     private WorkflowArtifactStatus _databaseStatus;
-    private DatabaseReviewPage? _reviewPage;
     private OperationId? _publishedGenerationId;
     private CancellationTokenSource? _reviewCancellation;
+    private readonly SemaphoreSlim _reviewLoadGate = new(1, 1);
+    private readonly HashSet<int> _loadingReviewPages = [];
     private bool _isReviewLoading;
     private string? _reviewFailureDescription;
+    private int _firstVisibleReviewOrdinal = 1;
+    private int _visibleReviewRowCount = DatabaseReviewLimits.MaximumRowsPerPage;
     private int _publishedValueCount;
     private DatabaseGenerationSummary? _publishedGeneration;
     private DatabaseDatasetPresentation? _selectedDataset;
     private string? _searchText;
     private DatabaseRowInclusionFilter _rowInclusionFilter;
-    private DatabaseMetadataVisibilityMode _metadataVisibilityMode = DatabaseMetadataVisibilityMode.Useful;
+    private DatabaseMetadataVisibilityMode _metadataVisibilityMode = DatabaseMetadataVisibilityMode.None;
     private bool _synchronizingMetadataVisibility;
     private WorkflowArtifactStatus _extractionStatus;
     private WorkflowOperationStatus? _latestExtractionAttempt;
@@ -104,20 +109,23 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             _exportMetadataFields);
         WorkbookDefinitions = _exportRouting.Workbooks;
         _exportRouting.Changed += OnExportRoutingChanged;
+        _records = new VirtualizedDatabaseReviewCollection(CreateReviewRowPresentation);
         VisibleColumns = new ReadOnlyObservableCollection<DatabaseColumnPresentation>(
             _visibleColumns);
-        Records = new ReadOnlyObservableCollection<DatabaseReviewRowPresentation>(_records);
+        Records = _records;
         Datasets = new ReadOnlyObservableCollection<DatabaseDatasetPresentation>(_datasets);
         MetadataFields = new ReadOnlyObservableCollection<DatabaseMetadataFieldPresentation>(
             _metadataFields);
         VisibleMetadataColumns = new ReadOnlyObservableCollection<DatabaseMetadataFieldPresentation>(
             _visibleMetadataFields);
+        ColumnChoices = new ReadOnlyObservableCollection<DatabaseColumnChoicePresentation>(
+            _columnChoices);
         foreach (var field in Enum.GetValues<DatabaseMetadataField>())
         {
             var presentation = new DatabaseMetadataFieldPresentation(
                 field,
                 GetMetadataFieldDisplayName(field),
-                IsUsefulMetadataField(field));
+                isVisible: false);
             RestoreMetadataColumnWidth(presentation);
             presentation.PropertyChanged += OnMetadataFieldPropertyChanged;
             _metadataFields.Add(presentation);
@@ -145,12 +153,6 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         ResetColumnLayoutCommand = new RelayCommand(ResetColumnLayout, HasColumns);
         ResetHeadersCommand = new RelayCommand(ResetHeaders, HasSelectedDataset);
         ResetExportCommand = new RelayCommand(ResetExport, HasSelectedDataset);
-        PreviousReviewPageCommand = new AsyncRelayCommand(
-            PreviousReviewPageAsync,
-            CanMoveToPreviousReviewPage);
-        NextReviewPageCommand = new AsyncRelayCommand(
-            NextReviewPageAsync,
-            CanMoveToNextReviewPage);
         PrepareForExportCommand = new AsyncRelayCommand(
             PrepareForExportAsync,
             CanPrepareForExport);
@@ -203,13 +205,15 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     public ReadOnlyObservableCollection<DatabaseColumnPresentation> VisibleColumns { get; }
 
-    public ReadOnlyObservableCollection<DatabaseReviewRowPresentation> Records { get; }
+    public IReadOnlyList<DatabaseReviewRowPresentation> Records { get; }
 
     public ReadOnlyObservableCollection<DatabaseDatasetPresentation> Datasets { get; }
 
     public ReadOnlyObservableCollection<DatabaseMetadataFieldPresentation> MetadataFields { get; }
 
     public ReadOnlyObservableCollection<DatabaseMetadataFieldPresentation> VisibleMetadataColumns { get; }
+
+    public ReadOnlyObservableCollection<DatabaseColumnChoicePresentation> ColumnChoices { get; }
 
     public IRelayCommand<DatabaseColumnPresentation> MoveColumnUpCommand { get; }
 
@@ -230,10 +234,6 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand ResetHeadersCommand { get; }
 
     public IRelayCommand ResetExportCommand { get; }
-
-    public IAsyncRelayCommand PreviousReviewPageCommand { get; }
-
-    public IAsyncRelayCommand NextReviewPageCommand { get; }
 
     public IAsyncRelayCommand PrepareForExportCommand { get; }
 
@@ -259,7 +259,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             ApplyDataset(value.Summary);
             ApplyExportDataset(value.Summary);
             OnPropertyChanged(nameof(RecordCountText));
-            _ = LoadReviewPageAsync(_publishedGeneration.OperationId, 1);
+            _ = BeginReviewSessionAsync(_publishedGeneration.OperationId);
         }
     }
 
@@ -271,7 +271,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _searchText, value) && _publishedGenerationId is { } generationId
                 && SelectedDataset is not null)
             {
-                _ = LoadReviewPageAsync(generationId, 1);
+                _ = BeginReviewSessionAsync(generationId);
             }
         }
     }
@@ -284,7 +284,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _rowInclusionFilter, value) && _publishedGenerationId is { } generationId
                 && SelectedDataset is not null)
             {
-                _ = LoadReviewPageAsync(generationId, 1);
+                _ = BeginReviewSessionAsync(generationId);
             }
         }
     }
@@ -369,12 +369,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     public string EmptyStateDetail => DatabaseStatus switch
     {
         _ when IsReviewLoading =>
-            "Reading a bounded page from the active published Database.",
+            "Reading the first bounded chunk from the active published Database.",
         _ when _reviewFailureDescription is not null => _reviewFailureDescription,
         WorkflowArtifactStatus.Stale =>
             "The retained published Database remains available for review but is out of date.",
         WorkflowArtifactStatus.Current =>
-            "The active published Database has no values on this review page.",
+            "The active published Database has no reviewable values.",
         _ => "Database records will appear after a later Database creation/update workflow."
     };
 
@@ -397,30 +397,11 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    public string ReviewPageText
-    {
-        get
-        {
-            if (_reviewPage is null)
-            {
-                return "Page 0 of 0";
-            }
-
-            var pageNumber = ((_reviewPage.StartRowOrdinal - 1)
-                / DatabaseReviewLimits.MaximumRowsPerPage) + 1;
-            var pageCount = Math.Max(
-                1,
-                (int)Math.Ceiling(
-                    _reviewPage.TotalPresentationRowCount
-                    / (double)DatabaseReviewLimits.MaximumRowsPerPage));
-            return $"Page {pageNumber:N0} of {pageCount:N0}";
-        }
-    }
-
-    public string ColumnCountText => $"{VisibleColumns.Count} / {Columns.Count} columns";
+    public string ColumnCountText =>
+        $"{VisibleColumns.Count + VisibleMetadataColumns.Count} / {Columns.Count + MetadataFields.Count} columns";
 
     public string ExportFieldCountText =>
-        $"{ExportColumns.Count(column => column.IsExported)} / {ExportColumns.Count} fields";
+        $"{ExportColumns.Count(column => column.IsExported) + ExportMetadataFields.Count(column => column.IsExported)} / {ExportColumns.Count + ExportMetadataFields.Count} fields";
 
     public string WorkbookExportFieldCountText =>
         SelectedDataset is null
@@ -672,6 +653,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
         var reviewCancellation = Interlocked.Exchange(ref _reviewCancellation, null);
         reviewCancellation?.Cancel();
+        reviewCancellation?.Dispose();
         foreach (var column in _columnCache.Values)
         {
             column.PropertyChanged -= OnColumnPropertyChanged;
@@ -787,6 +769,10 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         {
             column.ResetPresentation();
         }
+        foreach (var choice in _columnChoices.Where(choice => choice.IsGenerated).ToArray())
+        {
+            choice.IsIncluded = true;
+        }
         foreach (var metadataColumn in _metadataFields)
         {
             metadataColumn.ResetWidth();
@@ -796,6 +782,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         UpdatePositionsAndPresentation();
         PersistDatabaseColumnWidths(_columns);
         PersistMetadataColumnWidths(_metadataFields);
+        RebuildColumnChoices();
     }
 
     private void ResetHeaders()
@@ -1222,9 +1209,11 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _publishedGeneration = null;
         _publishedGenerationId = null;
         _publishedValueCount = 0;
-        _reviewPage = null;
+        var cancellation = Interlocked.Exchange(ref _reviewCancellation, null);
+        cancellation?.Cancel();
+        cancellation?.Dispose();
         _reviewFailureDescription = null;
-        _records.Clear();
+        _records.ClearReview();
         _datasets.Clear();
         SelectedDataset = null;
         NotifyReviewChanged();
@@ -1242,9 +1231,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _publishedGeneration = generation;
         _publishedGenerationId = generation.OperationId;
         _publishedValueCount = generation.ValueCount;
-        _reviewPage = null;
         _reviewFailureDescription = null;
-        _records.Clear();
+        _records.ClearReview();
         _datasets.Clear();
         if (generation.IsHierarchyAware)
         {
@@ -1294,7 +1282,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
         UpdateResizeBoundaries();
         OnPropertyChanged(nameof(VisibleMetadataFields));
-        if (_reviewPage is not null)
+        if (_records.Count > 0)
         {
             RebuildReviewRows();
         }
@@ -1338,32 +1326,58 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             }
         }
 
+        RebuildColumnChoices();
         NotifyExportRoutingPropertiesChanged();
     }
 
-    private async Task PreviousReviewPageAsync()
+    private void RebuildColumnChoices()
     {
-        if (_publishedGenerationId is not { } generationId || _reviewPage is null)
+        _columnChoices.Clear();
+        foreach (var column in _columns)
         {
-            return;
+            var exportField = _exportColumns.SingleOrDefault(field =>
+                CreateColumnIdentity(field.DatabaseColumnIdentity) == column.MappingIdentity);
+            if (exportField is null)
+            {
+                continue;
+            }
+
+            column.IsVisible = exportField.IsExported;
+            _columnChoices.Add(new DatabaseColumnChoicePresentation(
+                column.DatabaseField,
+                "Generated",
+                isIncluded: () => column.IsVisible,
+                setIncluded: value =>
+                {
+                    column.IsVisible = value;
+                    exportField.IsExported = value;
+                },
+                column));
         }
 
-        var startRowOrdinal = Math.Max(
-            1,
-            _reviewPage.StartRowOrdinal - DatabaseReviewLimits.MaximumRowsPerPage);
-        await LoadReviewPageAsync(generationId, startRowOrdinal).ConfigureAwait(false);
-    }
-
-    private async Task NextReviewPageAsync()
-    {
-        if (_publishedGenerationId is not { } generationId || _reviewPage is null)
+        foreach (var metadata in _metadataFields)
         {
-            return;
+            var exportField = _exportMetadataFields.SingleOrDefault(field =>
+                field.MetadataField == metadata.Field);
+            if (exportField is null)
+            {
+                continue;
+            }
+
+            metadata.IsVisible = exportField.IsExported;
+            _columnChoices.Add(new DatabaseColumnChoicePresentation(
+                metadata.DisplayName,
+                "Metadata",
+                isIncluded: () => metadata.IsVisible,
+                setIncluded: value =>
+                {
+                    metadata.IsVisible = value;
+                    exportField.IsExported = value;
+                },
+                dataColumn: null));
         }
 
-        var startRowOrdinal = checked(
-            _reviewPage.StartRowOrdinal + DatabaseReviewLimits.MaximumRowsPerPage);
-        await LoadReviewPageAsync(generationId, startRowOrdinal).ConfigureAwait(false);
+        OnPropertyChanged(nameof(ColumnCountText));
     }
 
     private bool CanPrepareForExport()
@@ -1593,24 +1607,47 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         return result.Succeeded;
     }
 
-    private bool CanMoveToPreviousReviewPage()
+    public int CachedReviewPageCount => _records.CachedPageCount;
+
+    public async Task EnsureReviewRowsAvailableAsync(
+        int firstVisibleOrdinal,
+        int visibleRowCount)
     {
-        return !IsReviewLoading && _reviewPage?.StartRowOrdinal > 1;
+        if (_publishedGenerationId is not { } generationId
+            || SelectedDataset is not { } dataset
+            || _reviewCancellation is not { } cancellation
+            || Records.Count == 0)
+        {
+            return;
+        }
+
+        var first = Math.Clamp(firstVisibleOrdinal, 1, Records.Count);
+        var last = Math.Clamp(
+            first + Math.Max(visibleRowCount, 1) - 1,
+            first,
+            Records.Count);
+        _firstVisibleReviewOrdinal = first;
+        _visibleReviewRowCount = last - first + 1;
+        DispatchToUi(NotifyRowInclusionCommandsChanged);
+        var firstPage = VirtualizedDatabaseReviewCollection.GetPageStart(first);
+        var lastPage = VirtualizedDatabaseReviewCollection.GetPageStart(last);
+        for (var pageStart = firstPage;
+             pageStart <= lastPage;
+             pageStart += DatabaseReviewLimits.MaximumRowsPerPage)
+        {
+            await LoadReviewChunkAsync(
+                    generationId,
+                    dataset.Summary.SourceSetId,
+                    pageStart,
+                    cancellation,
+                    isInitial: false)
+                .ConfigureAwait(false);
+        }
     }
 
-    private bool CanMoveToNextReviewPage()
+    private async Task BeginReviewSessionAsync(OperationId generationId)
     {
-        return !IsReviewLoading
-            && _reviewPage is { } page
-            && page.StartRowOrdinal + DatabaseReviewLimits.MaximumRowsPerPage
-                <= page.TotalPresentationRowCount;
-    }
-
-    private async Task LoadReviewPageAsync(
-        OperationId generationId,
-        int startRowOrdinal)
-    {
-        if (_databaseReviewClient is null)
+        if (_databaseReviewClient is null || SelectedDataset is not { } dataset)
         {
             return;
         }
@@ -1620,64 +1657,155 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             ref _reviewCancellation,
             cancellation);
         previousCancellation?.Cancel();
-        DispatchToUi(() => IsReviewLoading = true);
-
-        try
+        previousCancellation?.Dispose();
+        lock (_loadingReviewPages)
         {
-            var result = await _databaseReviewClient.ReadPageAsync(
-                    new DatabaseReviewQuery(
-                        generationId,
-                        SelectedDataset?.Summary.SourceSetId
-                            ?? throw new InvalidOperationException("A Database dataset must be selected."),
-                        startRowOrdinal,
-                        DatabaseReviewLimits.MaximumRowsPerPage,
-                        SearchText,
-                        RowInclusionFilter),
-                    cancellation.Token)
-                .ConfigureAwait(false);
-            if (cancellation.IsCancellationRequested)
+            _loadingReviewPages.Clear();
+        }
+        DispatchToUi(() =>
+        {
+            _records.ClearReview();
+            _firstVisibleReviewOrdinal = 1;
+            _visibleReviewRowCount = DatabaseReviewLimits.MaximumRowsPerPage;
+            _reviewFailureDescription = null;
+            IsReviewLoading = true;
+            NotifyReviewChanged();
+        });
+
+        await LoadReviewChunkAsync(
+                generationId,
+                dataset.Summary.SourceSetId,
+                startRowOrdinal: 1,
+                cancellation,
+                isInitial: true)
+            .ConfigureAwait(false);
+    }
+
+    private async Task LoadReviewChunkAsync(
+        OperationId generationId,
+        SourceSetId sourceSetId,
+        int startRowOrdinal,
+        CancellationTokenSource cancellation,
+        bool isInitial)
+    {
+        if (_databaseReviewClient is null || (!isInitial && _records.IsPageLoaded(startRowOrdinal)))
+        {
+            return;
+        }
+
+        lock (_loadingReviewPages)
+        {
+            if (!_loadingReviewPages.Add(startRowOrdinal))
             {
                 return;
             }
+        }
 
-            DispatchToUi(() =>
+        try
+        {
+            await _reviewLoadGate.WaitAsync(cancellation.Token).ConfigureAwait(false);
+            try
             {
-                if (_publishedGenerationId != generationId)
+                var result = await _databaseReviewClient.ReadPageAsync(
+                        new DatabaseReviewQuery(
+                            generationId,
+                            sourceSetId,
+                            startRowOrdinal,
+                            DatabaseReviewLimits.MaximumRowsPerPage,
+                            SearchText,
+                            RowInclusionFilter),
+                        cancellation.Token)
+                    .ConfigureAwait(false);
+                if (cancellation.IsCancellationRequested)
                 {
                     return;
                 }
 
-                if (!result.Accepted
-                    || result.Page is null
-                    || result.Page.GenerationId != generationId
-                    || !PageMatchesPublishedColumns(result.Page))
+                DispatchToUi(() =>
                 {
-                    _reviewPage = null;
-                    _records.Clear();
-                    _reviewFailureDescription = result.FailureDescription
-                        ?? "The active published Database could not provide this review page.";
-                }
-                else
-                {
-                    _reviewPage = result.Page;
-                    _reviewFailureDescription = null;
-                    RebuildReviewRows();
-                }
+                    var contextIsCurrent = _publishedGenerationId == generationId
+                        && SelectedDataset?.Summary.SourceSetId == sourceSetId
+                        && ReferenceEquals(_reviewCancellation, cancellation);
+                    if (!contextIsCurrent)
+                    {
+                        return;
+                    }
 
-                IsReviewLoading = false;
-                NotifyReviewChanged();
-            });
+                    if (!result.Accepted
+                        || result.Page is null
+                        || result.Page.GenerationId != generationId
+                        || result.Page.Dataset.SourceSetId != sourceSetId
+                        || (!isInitial
+                            && result.Page.TotalPresentationRowCount != _records.Count)
+                        || !PageMatchesPublishedColumns(result.Page))
+                    {
+                        if (isInitial)
+                        {
+                            _records.ClearReview();
+                        }
+                        _reviewFailureDescription = result.FailureDescription
+                            ?? "The active published Database could not provide this review chunk.";
+                    }
+                    else if (isInitial)
+                    {
+                        _records.Reset(
+                            result.Page.TotalPresentationRowCount,
+                            result.Page.StartRowOrdinal,
+                            result.Page.Rows);
+                        _reviewFailureDescription = null;
+                    }
+                    else
+                    {
+                        _records.SetPage(
+                            result.Page.StartRowOrdinal,
+                            result.Page.Rows,
+                            result.Page.TotalPresentationRowCount);
+                        _reviewFailureDescription = null;
+                    }
+
+                    if (isInitial)
+                    {
+                        IsReviewLoading = false;
+                    }
+                    NotifyReviewChanged();
+                });
+            }
+            finally
+            {
+                _reviewLoadGate.Release();
+            }
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
         }
+        catch (Exception)
+        {
+            DispatchToUi(() =>
+            {
+                var contextIsCurrent = _publishedGenerationId == generationId
+                    && SelectedDataset?.Summary.SourceSetId == sourceSetId
+                    && ReferenceEquals(_reviewCancellation, cancellation);
+                if (!contextIsCurrent)
+                {
+                    return;
+                }
+
+                if (isInitial)
+                {
+                    _records.ClearReview();
+                    IsReviewLoading = false;
+                }
+                _reviewFailureDescription =
+                    "The active published Database could not provide this review chunk.";
+                NotifyReviewChanged();
+            });
+        }
         finally
         {
-            Interlocked.CompareExchange(
-                ref _reviewCancellation,
-                null,
-                cancellation);
-            cancellation.Dispose();
+            lock (_loadingReviewPages)
+            {
+                _loadingReviewPages.Remove(startRowOrdinal);
+            }
         }
     }
 
@@ -1692,49 +1820,44 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private void RebuildReviewRows()
     {
-        _records.Clear();
-        if (_reviewPage is null || _visibleColumns.Count == 0)
-        {
-            NotifyReviewChanged();
-            return;
-        }
-
-        foreach (var row in _reviewPage.Rows)
-        {
-            var cells = _visibleColumns.Select(column =>
-            {
-                var cell = row.Cells.SingleOrDefault(value =>
-                    string.Equals(CreateColumnIdentity(value.ColumnIdentity), column.MappingIdentity, StringComparison.Ordinal));
-                return new DatabaseReviewCellPresentation(column, cell);
-            }).ToArray();
-            _records.Add(new DatabaseReviewRowPresentation(
-                row.Ordinal,
-                row.IsIncluded,
-                row.RecordIdentity,
-                row.Source,
-                row.HasConflict,
-                _visibleMetadataFields.Select(field => new DatabaseMetadataCellPresentation(
-                    field,
-                    DatabaseRowMetadataProjection.GetValue(
-                        row.Source,
-                        row.RecordHierarchy,
-                        row.Cells.SelectMany(cell => cell.Values).Select(value =>
-                            new DatabaseRowMetadataValue(value.DetailedIdentity, value.Lineage)),
-                        field.Field))).ToArray(),
-                cells));
-        }
-
+        _records.Reproject(CreateReviewRowPresentation);
         NotifyReviewChanged();
+    }
+
+    private DatabaseReviewRowPresentation CreateReviewRowPresentation(DatabaseReviewRow row)
+    {
+        var cells = _visibleColumns.Select(column =>
+        {
+            var cell = row.Cells.SingleOrDefault(value =>
+                string.Equals(
+                    CreateColumnIdentity(value.ColumnIdentity),
+                    column.MappingIdentity,
+                    StringComparison.Ordinal));
+            return new DatabaseReviewCellPresentation(column, cell);
+        }).ToArray();
+        return new DatabaseReviewRowPresentation(
+            row.Ordinal,
+            row.IsIncluded,
+            row.RecordIdentity,
+            row.Source,
+            row.HasConflict,
+            _visibleMetadataFields.Select(field => new DatabaseMetadataCellPresentation(
+                field,
+                DatabaseRowMetadataProjection.GetValue(
+                    row.Source,
+                    row.RecordHierarchy,
+                    row.Cells.SelectMany(cell => cell.Values).Select(value =>
+                        new DatabaseRowMetadataValue(value.DetailedIdentity, value.Lineage)),
+                    field.Field))).ToArray(),
+            cells,
+            IsLoading: false);
     }
 
     private void NotifyReviewChanged()
     {
         OnPropertyChanged(nameof(HasReviewRows));
-        OnPropertyChanged(nameof(ReviewPageText));
         OnPropertyChanged(nameof(EmptyStateTitle));
         OnPropertyChanged(nameof(EmptyStateDetail));
-        PreviousReviewPageCommand.NotifyCanExecuteChanged();
-        NextReviewPageCommand.NotifyCanExecuteChanged();
         NotifyRowInclusionCommandsChanged();
     }
 
@@ -1881,13 +2004,24 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     }
 
     private Task SetVisibleRowsIncludedAsync(bool included) =>
-        SetRowsIncludedAsync(_records.ToArray(), included);
+        SetRowsIncludedAsync(VisibleLoadedReviewRows(), included);
+
+    private IReadOnlyList<DatabaseReviewRowPresentation> VisibleLoadedReviewRows()
+    {
+        var lastVisibleOrdinal = _firstVisibleReviewOrdinal + _visibleReviewRowCount - 1;
+        return _records.LoadedRows
+            .Where(row => row.Ordinal >= _firstVisibleReviewOrdinal
+                && row.Ordinal <= lastVisibleOrdinal)
+            .ToArray();
+    }
 
     private async Task SetRowsIncludedAsync(
         IReadOnlyList<DatabaseReviewRowPresentation> rows,
         bool included)
     {
-        var rowsToChange = rows.Where(row => row.IsIncluded != included).ToArray();
+        var rowsToChange = rows
+            .Where(row => !row.IsLoading && row.IsIncluded != included)
+            .ToArray();
         if (_databaseReviewClient is null || _publishedGenerationId is not { } generationId
             || SelectedDataset is null || rowsToChange.Length == 0)
         {
@@ -1906,19 +2040,33 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 rowsToChange.Select(row => row.Ordinal).ToArray(), included)).ConfigureAwait(false);
         if (result.Accepted && result.ChangedRowCount > 0)
         {
-            await LoadReviewPageAsync(generationId, _reviewPage?.StartRowOrdinal ?? 1)
-                .ConfigureAwait(false);
+            _records.InvalidateOrdinals(rowsToChange.Select(row => row.Ordinal));
+            foreach (var pageStart in rowsToChange
+                         .Select(row => VirtualizedDatabaseReviewCollection.GetPageStart(row.Ordinal))
+                         .Distinct())
+            {
+                if (_reviewCancellation is { } cancellation)
+                {
+                    await LoadReviewChunkAsync(
+                            generationId,
+                            SelectedDataset.Summary.SourceSetId,
+                            pageStart,
+                            cancellation,
+                            isInitial: false)
+                        .ConfigureAwait(false);
+                }
+            }
         }
     }
 
     private bool CanSetRowIncluded(DatabaseReviewRowPresentation? row) =>
-        row is not null && CanChangeRowInclusion();
+        row is { IsLoading: false } && CanChangeRowInclusion();
 
     private bool CanIncludeVisibleRows() =>
-        CanChangeRowInclusion() && _records.Any(row => !row.IsIncluded);
+        CanChangeRowInclusion() && VisibleLoadedReviewRows().Any(row => !row.IsIncluded);
 
     private bool CanExcludeVisibleRows() =>
-        CanChangeRowInclusion() && _records.Any(row => row.IsIncluded);
+        CanChangeRowInclusion() && VisibleLoadedReviewRows().Any(row => row.IsIncluded);
 
     private bool CanChangeRowInclusion() =>
         _databaseReviewClient is not null
@@ -2008,10 +2156,22 @@ public sealed record DatabaseReviewRowPresentation(
     int Ordinal,
     bool IsIncluded,
     string RecordIdentity,
-    DatabaseSourceMetadata Source,
+    DatabaseSourceMetadata? Source,
     bool HasConflict,
     IReadOnlyList<DatabaseMetadataCellPresentation> MetadataCells,
-    IReadOnlyList<DatabaseReviewCellPresentation> Cells);
+    IReadOnlyList<DatabaseReviewCellPresentation> Cells,
+    bool IsLoading)
+{
+    internal static DatabaseReviewRowPresentation CreateLoading(int ordinal) => new(
+        ordinal,
+        IsIncluded: false,
+        RecordIdentity: string.Empty,
+        Source: null,
+        HasConflict: false,
+        MetadataCells: [],
+        Cells: [],
+        IsLoading: true);
+}
 
 public sealed record DatabaseMetadataCellPresentation(
     DatabaseMetadataFieldPresentation Column,
@@ -2020,6 +2180,49 @@ public sealed record DatabaseMetadataCellPresentation(
     public DatabaseMetadataField Field => Column.Field;
 
     public string DisplayName => Column.DisplayName;
+}
+
+public sealed class DatabaseColumnChoicePresentation : ObservableObject
+{
+    private readonly Func<bool> _isIncluded;
+    private readonly Action<bool> _setIncluded;
+
+    internal DatabaseColumnChoicePresentation(
+        string displayName,
+        string category,
+        Func<bool> isIncluded,
+        Action<bool> setIncluded,
+        DatabaseColumnPresentation? dataColumn)
+    {
+        DisplayName = displayName;
+        Category = category;
+        _isIncluded = isIncluded;
+        _setIncluded = setIncluded;
+        DataColumn = dataColumn;
+    }
+
+    public string DisplayName { get; }
+
+    public string Category { get; }
+
+    public bool IsGenerated => DataColumn is not null;
+
+    public DatabaseColumnPresentation? DataColumn { get; }
+
+    public bool IsIncluded
+    {
+        get => _isIncluded();
+        set
+        {
+            if (value == _isIncluded())
+            {
+                return;
+            }
+
+            _setIncluded(value);
+            OnPropertyChanged();
+        }
+    }
 }
 
 public sealed class DatabaseMetadataFieldPresentation : ObservableObject

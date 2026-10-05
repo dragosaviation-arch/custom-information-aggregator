@@ -129,9 +129,9 @@ public partial class DiscoveryWorkspaceView : UserControl
         PreviewColumn.Width = new GridLength(1, GridUnitType.Star);
         RightRailGapColumn.Width = new GridLength(0);
         SettingsColumn.Width = new GridLength(0);
-        PreviewRow.Height = new GridLength(3, GridUnitType.Star);
+        PreviewRow.Height = new GridLength(11, GridUnitType.Star);
         RightRailGapRow.Height = new GridLength(8);
-        SettingsRow.Height = new GridLength(2, GridUnitType.Star);
+        SettingsRow.Height = new GridLength(10, GridUnitType.Star);
 
         Grid.SetRow(PreviewPanel, 0);
         Grid.SetColumn(PreviewPanel, 0);

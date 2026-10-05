@@ -253,26 +253,27 @@ public sealed class DatabaseBuildCoordinatorTests
             firstSourceId.ToString());
         Assert.AreEqual("4 rows · 7 values", viewModel.RecordCountText);
 
-        CollectionAssert.AreEquivalent(
-            new[]
-            {
-                DatabaseMetadataField.SourceFile,
-                DatabaseMetadataField.SourceKind,
-                DatabaseMetadataField.RecordHierarchy
-            },
-            viewModel.VisibleMetadataFields.ToArray());
+        Assert.IsEmpty(viewModel.VisibleMetadataFields);
+        Assert.IsTrue(viewModel.ColumnChoices.Any(choice => choice.Category == "Generated"));
+        Assert.IsTrue(viewModel.ColumnChoices.Any(choice => choice.Category == "Metadata"));
         var generationId = coordinator.CurrentGeneration!.OperationId;
-        viewModel.MetadataVisibilityMode = DatabaseMetadataVisibilityMode.None;
         Assert.IsTrue(viewModel.Records.All(row => row.MetadataCells.Count == 0));
-        viewModel.MetadataFields.Single(metadata =>
-            metadata.Field == DatabaseMetadataField.SourceId).IsVisible = true;
+        viewModel.ColumnChoices.Single(choice =>
+            choice.DisplayName == "Source ID").IsIncluded = true;
         Assert.AreEqual(DatabaseMetadataVisibilityMode.Custom, viewModel.MetadataVisibilityMode);
+        Assert.IsTrue(viewModel.ExportMetadataFields.Single(field =>
+            field.MetadataField == DatabaseMetadataField.SourceId).IsExported);
         Assert.IsTrue(viewModel.Records.All(row =>
-            row.MetadataCells.Single().Value == row.Source.SourceId.ToString()));
-        viewModel.MetadataVisibilityMode = DatabaseMetadataVisibilityMode.All;
-        Assert.HasCount(
-            Enum.GetValues<DatabaseMetadataField>().Length,
-            viewModel.Records[0].MetadataCells);
+            row.MetadataCells.Single().Value == row.Source!.SourceId.ToString()));
+        var gammaChoice = viewModel.ColumnChoices.Single(choice =>
+            choice.IsGenerated && choice.DisplayName == "Gamma override");
+        gammaChoice.IsIncluded = false;
+        Assert.IsFalse(viewModel.ExportColumns.Single(field =>
+            field.DatabaseField == "Gamma override").IsExported);
+        Assert.IsFalse(viewModel.Columns.Single(column =>
+            column.DatabaseField == "Gamma override").IsVisible);
+        viewModel.ColumnChoices.Single(choice =>
+            choice.IsGenerated && choice.DisplayName == "Gamma override").IsIncluded = true;
         Assert.AreEqual(generationId, coordinator.CurrentGeneration.OperationId);
         Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Database);
 
@@ -293,12 +294,12 @@ public sealed class DatabaseBuildCoordinatorTests
     {
         var context = await BuildContext.CreateAsync();
         var databaseClient = new RecordingHierarchyDatabaseClient((correlation, specification) =>
-            HierarchySuccess(correlation, specification, rowCount: 150, valueCount: 150));
+            HierarchySuccess(correlation, specification, rowCount: 650, valueCount: 650));
         var sourceId = SourceId.CreateNew();
         var reviewClient = new RecordingHierarchyDatabaseReviewClient(query =>
         {
             var generation = databaseClient.PublishedGeneration!;
-            var last = Math.Min(150, query.StartRowOrdinal + query.RowCount - 1);
+            var last = Math.Min(650, query.StartRowOrdinal + query.RowCount - 1);
             var rows = Enumerable.Range(query.StartRowOrdinal, last - query.StartRowOrdinal + 1)
                 .Select(ordinal => (sourceId, new[] { ("DatabaseName", $"Value {ordinal}") }))
                 .ToArray();
@@ -306,7 +307,7 @@ public sealed class DatabaseBuildCoordinatorTests
                 generation.OperationId,
                 generation.Datasets.Single(),
                 query,
-                150,
+                650,
                 rows);
         });
         var coordinator = context.CreateCoordinator(databaseClient);
@@ -317,17 +318,21 @@ public sealed class DatabaseBuildCoordinatorTests
             reviewClient);
 
         Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
-        await WaitForAsync(() => viewModel.Records.Count == 100);
+        await WaitForAsync(() => viewModel.Records.Count == 650);
         Assert.AreEqual(DatabaseReviewLimits.MaximumRowsPerPage, reviewClient.Requests[0].RowCount);
         Assert.AreEqual(1, viewModel.Records[0].Ordinal);
-        Assert.AreEqual("Page 1 of 2", viewModel.ReviewPageText);
+        Assert.IsFalse(viewModel.Records[0].IsLoading);
+        Assert.IsTrue(viewModel.Records[^1].IsLoading);
 
-        await viewModel.NextReviewPageCommand.ExecuteAsync(null);
-        await WaitForAsync(() => viewModel.Records.FirstOrDefault()?.Ordinal == 101);
-        Assert.HasCount(50, viewModel.Records);
-        Assert.AreEqual("Value 150", viewModel.Records[^1].Cells[0].DisplayValue);
-        Assert.AreEqual("Page 2 of 2", viewModel.ReviewPageText);
-        Assert.HasCount(2, reviewClient.Requests);
+        foreach (var ordinal in new[] { 150, 250, 350, 450, 550, 650 })
+        {
+            await viewModel.EnsureReviewRowsAvailableAsync(ordinal, 1);
+        }
+        await WaitForAsync(() => !viewModel.Records[^1].IsLoading);
+        Assert.AreEqual("Value 650", viewModel.Records[^1].Cells[0].DisplayValue);
+        Assert.HasCount(7, reviewClient.Requests);
+        Assert.IsLessThanOrEqualTo(4, viewModel.CachedReviewPageCount);
+        Assert.IsTrue(viewModel.Records[0].IsLoading);
     }
 
     [TestMethod]
@@ -667,9 +672,11 @@ public sealed class DatabaseBuildCoordinatorTests
         CollectionAssert.AreEqual(
             new[] { "Set 1", "Set 2" },
             viewModel.Datasets.Select(dataset => dataset.DisplayName).ToArray());
+        var membershipsBeforeTabSwitch = sources.Items
+            .ToDictionary(source => source.SourceId, source => source.SourceSetId);
         var firstColumn = viewModel.Columns.Single();
         firstColumn.Width = 260;
-        firstColumn.IsVisible = false;
+        viewModel.ColumnChoices.Single(choice => choice.IsGenerated).IsIncluded = false;
 
         viewModel.SelectedDataset = viewModel.Datasets[1];
         await WaitForAsync(() => viewModel.Records.FirstOrDefault()?.Cells[0].DisplayValue == "second");
@@ -688,6 +695,29 @@ public sealed class DatabaseBuildCoordinatorTests
         CollectionAssert.AreEqual(
             new[] { sets[0].SourceSetId, sets[1].SourceSetId, sets[0].SourceSetId },
             reviewClient.SourceSetRequests.TakeLast(3).ToArray());
+        CollectionAssert.AreEquivalent(
+            membershipsBeforeTabSwitch.ToArray(),
+            sources.Items.Select(source => new KeyValuePair<SourceId, SourceSetId>(
+                source.SourceId,
+                source.SourceSetId)).ToArray());
+
+        Assert.IsTrue(loading.RenameSourceSet(sets[1].SourceSetId, "Renamed Set").Accepted);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Database);
+        Assert.IsTrue(viewModel.Datasets.Any(dataset => dataset.DisplayName == "Set 2"));
+        var rerun = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
+        Assert.IsTrue(rerun.Accepted);
+        Assert.IsTrue(workflow.CompleteOperation(
+            rerun.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully).Accepted);
+        Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
+        await WaitForAsync(() => viewModel.Datasets.Any(dataset =>
+            dataset.Summary.SourceSetId == sets[1].SourceSetId
+            && dataset.DisplayName == "Renamed Set"));
+        CollectionAssert.AreEquivalent(
+            membershipsBeforeTabSwitch.ToArray(),
+            sources.Items.Select(source => new KeyValuePair<SourceId, SourceSetId>(
+                source.SourceId,
+                source.SourceSetId)).ToArray());
     }
 
     private static DatabaseReviewClientResult AcceptedHierarchyReview(

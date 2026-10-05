@@ -451,9 +451,9 @@
                 <ColumnDefinition x:Name="SettingsColumn" Width="0" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
-                <RowDefinition x:Name="PreviewRow" Height="3*" />
+                <RowDefinition x:Name="PreviewRow" Height="11*" />
                 <RowDefinition x:Name="RightRailGapRow" Height="8" />
-                <RowDefinition x:Name="SettingsRow" Height="2*" />
+                <RowDefinition x:Name="SettingsRow" Height="10*" />
             </Grid.RowDefinitions>
 
             <Border x:Name="PreviewPanel"
@@ -645,30 +645,6 @@
                                                   IsEnabled="False"
                                                   Content="Confirm before re-running Discovery when Database is current"
                                                   ToolTip="Database-current confirmation is implemented by a later story." />
-                                        <TextBlock Margin="0,12,0,5"
-                                                   FontSize="10"
-                                                   FontWeight="Bold"
-                                                   Foreground="{StaticResource CiaAccentBrush}"
-                                                   Text="REPEATED DATA LAYOUT" />
-                                        <ItemsControl ItemsSource="{Binding SourceSetLayouts}">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <StackPanel Margin="0,0,0,7">
-                                                        <TextBlock Margin="0,0,0,3"
-                                                                   FontWeight="SemiBold"
-                                                                   Text="{Binding SourceSetName}"
-                                                                   TextTrimming="CharacterEllipsis"
-                                                                   ToolTip="{Binding SourceSetName}" />
-                                                        <ComboBox Height="28"
-                                                                  DisplayMemberPath="DisplayName"
-                                                                  IsEnabled="{Binding DataContext.CanConfigureRepeatedDataLayout, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                                  ItemsSource="{Binding Options}"
-                                                                  SelectedValue="{Binding SelectedLayout, Mode=TwoWay}"
-                                                                  SelectedValuePath="Mode" />
-                                                    </StackPanel>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
                                         <TextBlock Margin="0,0,0,5"
@@ -687,6 +663,44 @@
                                                   IsChecked="{Binding ShowOnlyDatabaseTagOverrides}" />
                                     </StackPanel>
                                 </Grid>
+                            </ScrollViewer>
+                        </TabItem>
+                        <TabItem Header="Layout">
+                            <ScrollViewer Padding="10,8" VerticalScrollBarVisibility="Auto">
+                                <StackPanel>
+                                    <TextBlock FontSize="10"
+                                               FontWeight="Bold"
+                                               Foreground="{StaticResource CiaAccentBrush}"
+                                               Text="REPEATED DATA LAYOUT" />
+                                    <TextBlock Margin="0,4,0,8"
+                                               Style="{StaticResource CiaSecondaryTextStyle}"
+                                               Text="Choose how repeated structures will be represented for each Source Set."
+                                               TextWrapping="Wrap" />
+                                    <ItemsControl ItemsSource="{Binding SourceSetLayouts}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Width="250" Margin="0,0,12,8">
+                                                    <TextBlock Margin="0,0,0,3"
+                                                               FontWeight="SemiBold"
+                                                               Text="{Binding SourceSetName}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               ToolTip="{Binding SourceSetName}" />
+                                                    <ComboBox Height="28"
+                                                              DisplayMemberPath="DisplayName"
+                                                              IsEnabled="{Binding DataContext.CanConfigureRepeatedDataLayout, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                              ItemsSource="{Binding Options}"
+                                                              SelectedValue="{Binding SelectedLayout, Mode=TwoWay}"
+                                                              SelectedValuePath="Mode" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
                             </ScrollViewer>
                         </TabItem>
                         <TabItem Header="Profiles">
