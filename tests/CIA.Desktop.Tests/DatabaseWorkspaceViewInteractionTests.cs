@@ -162,7 +162,7 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.AreEqual(1, workbookSelector.Items.Count);
             Assert.IsTrue(createWorkbook.IsEnabled);
             Assert.AreEqual(viewModel.SelectedWorksheetName, worksheetName.Text);
-            Assert.AreEqual(Enum.GetValues<DatabaseMetadataField>().Length, metadataRows.Items.Count);
+            Assert.HasCount(0, metadataRows.Items);
             Assert.IsTrue(viewModel.IsExportConfigurationValid);
             Assert.AreEqual(Visibility.Visible, excelExport.Visibility);
             Assert.IsFalse(exportButton.IsEnabled);
@@ -176,7 +176,7 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             }
             await Dispatcher.Yield(DispatcherPriority.DataBind);
             Assert.AreEqual(2, metadataHeaders.Items.Count);
-            Assert.AreEqual(2, viewModel.ExportMetadataFields.Count(field => field.IsExported));
+            Assert.HasCount(2, viewModel.ExportMetadataFields);
             Assert.IsNotNull(exportButton.Command);
             Assert.IsNotNull(browseOutputFolder.Command);
             Assert.AreEqual(viewModel.WorkbookExportStatusText, workbookExportStatus.Text);

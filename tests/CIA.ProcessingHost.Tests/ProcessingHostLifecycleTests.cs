@@ -347,10 +347,18 @@ public sealed class ProcessingHostLifecycleTests
         using var databaseWorkspace = new DatabaseWorkspaceViewModel(
             configuration, workflow, coordinator, databaseClient);
 
-        var build = await coordinator.BuildAsync(timeout.Token);
+        var progress = new RecordingProgress<DatabaseBuildProgressSnapshot>();
+        var build = await coordinator.BuildAsync(timeout.Token, progress);
         await WaitForAsync(() => databaseWorkspace.Records.Count > 0, timeout.Token);
 
         Assert.IsTrue(build.Accepted);
+        Assert.IsGreaterThan(2, progress.Values.Count);
+        Assert.AreEqual(0, progress.Values[0].CompletedWorkCount);
+        Assert.AreEqual(
+            progress.Values[^1].TotalWorkCount,
+            progress.Values[^1].CompletedWorkCount);
+        Assert.IsTrue(progress.Values.All(snapshot =>
+            snapshot.OperationId == coordinator.CurrentGeneration!.OperationId));
         Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Database);
         Assert.IsTrue(coordinator.CurrentGeneration?.IsHierarchyAware);
         Assert.AreEqual(2, coordinator.CurrentGeneration?.ValueCount);
@@ -893,17 +901,56 @@ public sealed class ProcessingHostLifecycleTests
     }
 
     private sealed class PipeDatabaseClient(NamedPipeIpcConnection connection)
-        : IDatabaseClient, IDatabaseReviewClient
+        : IDatabaseBuildProgressClient, IDatabaseReviewClient
     {
         public async Task<DatabaseClientResult> BuildAsync(
             OperationCorrelation correlation,
             DatabaseBuildSpecification specification,
             CancellationToken cancellationToken = default)
         {
-            await connection.SendAsync(new BuildDatabaseCommand(
-                Guid.CreateVersion7(), DateTimeOffset.UtcNow, correlation, specification), cancellationToken);
-            var response = Assert.IsInstanceOfType<BuildDatabaseResponse>(
-                await connection.ReceiveAsync(cancellationToken));
+            return await BuildCoreAsync(
+                correlation,
+                specification,
+                progress: null,
+                cancellationToken);
+        }
+
+        public async Task<DatabaseClientResult> BuildAsync(
+            OperationCorrelation correlation,
+            DatabaseBuildSpecification specification,
+            IProgress<DatabaseBuildProgressSnapshot> progress,
+            CancellationToken cancellationToken = default)
+        {
+            return await BuildCoreAsync(
+                correlation,
+                specification,
+                progress,
+                cancellationToken);
+        }
+
+        private async Task<DatabaseClientResult> BuildCoreAsync(
+            OperationCorrelation correlation,
+            DatabaseBuildSpecification specification,
+            IProgress<DatabaseBuildProgressSnapshot>? progress,
+            CancellationToken cancellationToken)
+        {
+            var command = new BuildDatabaseCommand(
+                Guid.CreateVersion7(), DateTimeOffset.UtcNow, correlation, specification);
+            await connection.SendAsync(command, cancellationToken);
+            BuildDatabaseResponse response;
+            while (true)
+            {
+                var message = await connection.ReceiveAsync(cancellationToken);
+                if (message is DatabaseBuildProgressEvent progressEvent)
+                {
+                    Assert.AreEqual(command.MessageId, progressEvent.CommandMessageId);
+                    progress?.Report(progressEvent.Progress);
+                    continue;
+                }
+
+                response = Assert.IsInstanceOfType<BuildDatabaseResponse>(message);
+                break;
+            }
             return new DatabaseClientResult(
                 response.Acceptance == CommandAcceptance.Accepted,
                 response.Completion,
@@ -926,6 +973,13 @@ public sealed class ProcessingHostLifecycleTests
                 response.Failure?.Code,
                 response.Failure?.Description);
         }
+    }
+
+    private sealed class RecordingProgress<T> : IProgress<T>
+    {
+        public List<T> Values { get; } = [];
+
+        public void Report(T value) => Values.Add(value);
     }
 
     private sealed class StaticSourceIntakeClient(LoadedSourceContract source)

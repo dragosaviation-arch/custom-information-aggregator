@@ -488,6 +488,20 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         DatabaseBuildSpecification specification,
         CancellationToken cancellationToken = default)
     {
+        return await RequestDatabaseBuildAsync(
+                correlation,
+                specification,
+                progress: null,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<BuildDatabaseResponse> RequestDatabaseBuildAsync(
+        OperationCorrelation correlation,
+        DatabaseBuildSpecification specification,
+        IProgress<DatabaseBuildProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(specification);
         ThrowIfDisposed();
@@ -521,6 +535,14 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                 {
                     var response = await connection.ReceiveAsync(cancellationToken)
                         .ConfigureAwait(false);
+                    if (response is DatabaseBuildProgressEvent progressEvent
+                        && progressEvent.CommandMessageId == command.MessageId
+                        && progressEvent.Progress.OperationId == correlation.OperationId)
+                    {
+                        TryReportDatabaseBuildProgress(progress, progressEvent.Progress);
+                        continue;
+                    }
+
                     if (response is BuildDatabaseResponse databaseResponse
                         && databaseResponse.CommandMessageId == command.MessageId
                         && databaseResponse.Completion.Correlation == correlation)
@@ -556,6 +578,20 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         finally
         {
             _lifecycleGate.Release();
+        }
+    }
+
+    private static void TryReportDatabaseBuildProgress(
+        IProgress<DatabaseBuildProgressSnapshot>? progress,
+        DatabaseBuildProgressSnapshot snapshot)
+    {
+        try
+        {
+            progress?.Report(snapshot);
+        }
+        catch (Exception)
+        {
+            // Progress observers cannot alter the Database-build outcome.
         }
     }
 

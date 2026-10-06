@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
+using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -984,8 +985,16 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         StatusDetail = "Building hierarchy-aware Source Set datasets in the Processing Host.";
         var progressUpdateId = _globalProgress?.Begin(
             "Database build",
-            "Building hierarchy-aware datasets");
-        var result = await _databaseBuildCoordinator.BuildAsync();
+            "Preparing Database build");
+        var buildProgress = progressUpdateId is { } updateId
+            ? new InlineProgress<DatabaseBuildProgressSnapshot>(snapshot => DispatchToUi(() =>
+                _globalProgress?.Report(
+                    updateId,
+                    snapshot.Stage,
+                    snapshot.CompletedWorkCount,
+                    snapshot.TotalWorkCount)))
+            : null;
+        var result = await _databaseBuildCoordinator.BuildAsync(progress: buildProgress);
         if (result.Accepted)
         {
             if (progressUpdateId is { } completedUpdateId)
@@ -1011,10 +1020,16 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         if (progressUpdateId is { } failedUpdateId)
         {
+            var terminalState = _workflowCoordinator.Current.LatestOperation?.State
+                == WorkflowOperationState.Cancelled
+                ? GlobalOperationProgressState.Cancelled
+                : GlobalOperationProgressState.Failed;
             _globalProgress?.Complete(
                 failedUpdateId,
-                GlobalOperationProgressState.Failed,
-                "failed");
+                terminalState,
+                terminalState == GlobalOperationProgressState.Cancelled
+                    ? "cancelled"
+                    : "failed");
         }
         StatusTitle = "Database creation failed";
         StatusDetail = result.Rejection?.Reason

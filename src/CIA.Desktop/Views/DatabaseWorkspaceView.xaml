@@ -610,7 +610,7 @@
                         <Border Padding="8,6" Style="{StaticResource CiaPanelHeaderStyle}">
                             <Grid>
                                 <TextBlock Style="{StaticResource CiaPanelTitleTextStyle}"
-                                           Text="EXPORT COLUMN CONFIGURATION" />
+                                           Text="EXCEL OUTPUT CONFIGURATION" />
                                 <TextBlock HorizontalAlignment="Right"
                                            Style="{StaticResource CiaSecondaryTextStyle}"
                                            Text="{Binding ExportFieldCountText}" />
@@ -669,13 +669,13 @@
                                     <Button Width="27"
                                             AutomationProperties.Name="Move worksheet earlier"
                                             Command="{Binding MoveWorksheetUpCommand}"
-                                            Content="â†‘"
+                                            Content="&#x2191;"
                                             Style="{StaticResource CiaGhostButtonStyle}" />
                                     <Button Width="27"
                                             Margin="3,0,0,0"
                                             AutomationProperties.Name="Move worksheet later"
                                             Command="{Binding MoveWorksheetDownCommand}"
-                                            Content="â†“"
+                                            Content="&#x2193;"
                                             Style="{StaticResource CiaGhostButtonStyle}" />
                                 </StackPanel>
                             </Grid>
@@ -687,105 +687,69 @@
                             </Grid.RowDefinitions>
                             <Grid Margin="7,0">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="88" />
                                     <ColumnDefinition Width="1.1*" />
                                     <ColumnDefinition Width="1.2*" />
                                     <ColumnDefinition Width="58" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Export order" />
-                                <TextBlock Grid.Column="1" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Column" />
-                                <TextBlock Grid.Column="2" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Excel Header (Override)" />
-                                <TextBlock Grid.Column="3" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="SourceId" />
+                                <TextBlock Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Column" />
+                                <TextBlock Grid.Column="1" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Excel Header (Override)" />
+                                <TextBlock Grid.Column="2" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="SourceId" />
                             </Grid>
                             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
                                 <StackPanel>
-                                <ItemsControl x:Name="ExportColumnRows" ItemsSource="{Binding ExportColumns}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Grid Height="34" Margin="7,0">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="88" />
-                                                    <ColumnDefinition Width="1.1*" />
-                                                    <ColumnDefinition Width="1.2*" />
-                                                    <ColumnDefinition Width="58" />
-                                                </Grid.ColumnDefinitions>
-                                                <StackPanel Orientation="Horizontal">
-                                                    <TextBlock Width="18"
+                                    <ItemsControl x:Name="ExportColumnRows" ItemsSource="{Binding ExportColumns}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Height="34" Margin="7,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="1.1*" />
+                                                        <ColumnDefinition Width="1.2*" />
+                                                        <ColumnDefinition Width="58" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Margin="0,0,8,0"
                                                                VerticalAlignment="Center"
-                                                               Foreground="{StaticResource CiaTextMutedBrush}"
-                                                               Text="{Binding ExportPosition}" />
-                                                    <Button Width="29"
-                                                            Height="25"
-                                                            Margin="0,0,3,0"
-                                                            AutomationProperties.Name="Move export field earlier"
-                                                            Command="{Binding DataContext.MoveExportFieldUpCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding}"
-                                                            Content="↑"
-                                                            Style="{StaticResource CiaGhostButtonStyle}" />
-                                                    <Button Width="29"
-                                                            Height="25"
-                                                            AutomationProperties.Name="Move export field later"
-                                                            Command="{Binding DataContext.MoveExportFieldDownCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding}"
-                                                            Content="↓"
-                                                            Style="{StaticResource CiaGhostButtonStyle}" />
-                                                </StackPanel>
-                                                <TextBlock Grid.Column="1"
-                                                           Margin="0,0,8,0"
-                                                           VerticalAlignment="Center"
-                                                           FontWeight="SemiBold"
-                                                           Text="{Binding DatabaseField}"
-                                                           TextTrimming="CharacterEllipsis" />
-                                                <TextBox Grid.Column="2"
-                                                         Margin="0,4,8,4"
-                                                         AutomationProperties.Name="Excel Header Override"
-                                                         Style="{StaticResource DatabaseExcelHeaderInputStyle}"
-                                                         Text="{Binding ExcelHeader, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
-                                                <CheckBox Grid.Column="3"
-                                                          HorizontalAlignment="Center"
-                                                          VerticalAlignment="Center"
-                                                          AutomationProperties.Name="Export SourceId companion"
-                                                          IsChecked="{Binding IsSourceIdExported}"
-                                                          IsEnabled="{Binding IsExported}"
-                                                          ToolTip="{Binding SourceIdExportHeader}" />
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                                <ItemsControl x:Name="ExportMetadataRows"
-                                              ItemsSource="{Binding ExportMetadataFields}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Grid Height="34" Margin="7,0">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="88" />
-                                                    <ColumnDefinition Width="1.1*" />
-                                                    <ColumnDefinition Width="1.2*" />
-                                                    <ColumnDefinition Width="58" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock VerticalAlignment="Center"
-                                                           Foreground="{StaticResource CiaTextMutedBrush}"
-                                                           Text="Metadata" />
-                                                <TextBlock Grid.Column="1"
-                                                           Margin="0,0,8,0"
-                                                           VerticalAlignment="Center"
-                                                           FontWeight="SemiBold"
-                                                           Text="{Binding DisplayName}"
-                                                           TextTrimming="CharacterEllipsis" />
-                                                <TextBox Grid.Column="2"
-                                                         Margin="0,4,8,4"
-                                                         AutomationProperties.Name="Metadata Excel header"
-                                                         Style="{StaticResource DatabaseExcelHeaderInputStyle}"
-                                                         Text="{Binding ExcelHeader, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
-                                                <TextBlock Grid.Column="3"
-                                                           HorizontalAlignment="Center"
-                                                           VerticalAlignment="Center"
-                                                           Foreground="{StaticResource CiaTextMutedBrush}"
-                                                           Text="â€”" />
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                                               FontWeight="SemiBold"
+                                                               Text="{Binding DatabaseField}"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBox Grid.Column="1"
+                                                             Margin="0,4,8,4"
+                                                             AutomationProperties.Name="Excel Header Override"
+                                                             Style="{StaticResource DatabaseExcelHeaderInputStyle}"
+                                                             Text="{Binding ExcelHeader, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
+                                                    <CheckBox Grid.Column="2"
+                                                              HorizontalAlignment="Center"
+                                                              VerticalAlignment="Center"
+                                                              AutomationProperties.Name="Export SourceId companion"
+                                                              IsChecked="{Binding IsSourceIdExported}"
+                                                              ToolTip="{Binding SourceIdExportHeader}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <ItemsControl x:Name="ExportMetadataRows"
+                                                  ItemsSource="{Binding ExportMetadataFields}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Height="34" Margin="7,0">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="1.1*" />
+                                                        <ColumnDefinition Width="1.2*" />
+                                                        <ColumnDefinition Width="58" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Margin="0,0,8,0"
+                                                               VerticalAlignment="Center"
+                                                               FontWeight="SemiBold"
+                                                               Text="{Binding DisplayName}"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBox Grid.Column="1"
+                                                             Margin="0,4,8,4"
+                                                             AutomationProperties.Name="Metadata Excel header"
+                                                             Style="{StaticResource DatabaseExcelHeaderInputStyle}"
+                                                             Text="{Binding ExcelHeader, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" />
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
                                 </StackPanel>
                             </ScrollViewer>
                         </Grid>
@@ -799,12 +763,8 @@
                                            Style="{StaticResource CiaSecondaryTextStyle}"
                                            Text="{Binding ExportConfigurationValidationText}" />
                                 <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
-                                    <Button Margin="0,0,4,0"
-                                            Command="{Binding ResetHeadersCommand}"
+                                    <Button Command="{Binding ResetHeadersCommand}"
                                             Content="Reset headers"
-                                            Style="{StaticResource CiaGhostButtonStyle}" />
-                                    <Button Command="{Binding ResetExportCommand}"
-                                            Content="Reset export"
                                             Style="{StaticResource CiaGhostButtonStyle}" />
                                 </StackPanel>
                             </Grid>

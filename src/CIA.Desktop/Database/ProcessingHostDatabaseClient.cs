@@ -9,7 +9,7 @@ namespace CIA.Desktop.Database;
 public sealed class ProcessingHostDatabaseClient(
     IProcessingHostSupervisor hostSupervisor,
     ProcessingHostSupervisor requestClient,
-    ILogger<ProcessingHostDatabaseClient> logger) : IDatabaseClient, IDatabaseReviewClient
+    ILogger<ProcessingHostDatabaseClient> logger) : IDatabaseBuildProgressClient, IDatabaseReviewClient
 {
     public async Task<DatabaseClientResult> BuildAsync(
         OperationCorrelation correlation,
@@ -31,6 +31,61 @@ public sealed class ProcessingHostDatabaseClient(
             var response = await requestClient.RequestDatabaseBuildAsync(
                     correlation,
                     specification,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return new DatabaseClientResult(
+                response.Acceptance == CommandAcceptance.Accepted,
+                response.Completion,
+                response.PublishedGeneration,
+                response.Failure?.Code,
+                response.Failure?.Description);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Database build could not be completed by the Processing Host for operation {OperationId}",
+                correlation.OperationId);
+            return Reject(correlation, specification, "processing-host-unavailable");
+        }
+    }
+
+    public Task<DatabaseClientResult> BuildAsync(
+        OperationCorrelation correlation,
+        DatabaseBuildSpecification specification,
+        IProgress<DatabaseBuildProgressSnapshot> progress,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(progress);
+        return BuildWithProgressAsync(correlation, specification, progress, cancellationToken);
+    }
+
+    private async Task<DatabaseClientResult> BuildWithProgressAsync(
+        OperationCorrelation correlation,
+        DatabaseBuildSpecification specification,
+        IProgress<DatabaseBuildProgressSnapshot> progress,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(correlation);
+        ArgumentNullException.ThrowIfNull(specification);
+
+        try
+        {
+            var host = await hostSupervisor.EnsureAvailableAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (host.State != ProcessingHostLifecycleState.Ready)
+            {
+                return Reject(correlation, specification, "processing-host-unavailable");
+            }
+
+            var response = await requestClient.RequestDatabaseBuildAsync(
+                    correlation,
+                    specification,
+                    progress,
                     cancellationToken)
                 .ConfigureAwait(false);
             return new DatabaseClientResult(

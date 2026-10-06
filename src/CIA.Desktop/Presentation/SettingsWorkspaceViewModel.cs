@@ -92,7 +92,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     private SavedWorkingStateEntry? _selectedSavedState;
     private string _savedStateName = string.Empty;
     private string? _savedStateNameProblem;
-    private string _savedStateStatusText = "No saved states have been created yet.";
+    private string _savedStateStatusText = string.Empty;
     private bool _isSavedStateActionRunning;
     private bool _isCleanupRunning;
     private string _cleanupStatusText = "No cleanup has been run.";
@@ -1139,7 +1139,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
             SavedStateStatusText = inventory.Problems.Count > 0
                 ? inventory.Problems[0].Description
                 : SavedStates.Count == 0
-                    ? "No saved states have been created yet."
+                    ? string.Empty
                     : $"{SavedStates.Count} saved state(s) available.";
         }
 

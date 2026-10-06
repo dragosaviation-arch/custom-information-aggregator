@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
@@ -27,6 +28,128 @@ public sealed class LoadWorkspaceViewInteractionTests
     public async Task RelocatedMoveMenuMovesOnlyHighlightedRowsToNewAndExistingSets()
     {
         await WpfTestApplication.RunAsync(VerifyInteractionAsync).WaitAsync(TestTimeout);
+    }
+
+    [TestMethod]
+    public async Task NativeExtendedSelectionKeepsDetailsAndCheckboxActionsIndependent()
+    {
+        await WpfTestApplication.RunAsync(VerifyExtendedSelectionAsync).WaitAsync(TestTimeout);
+    }
+
+    private static async Task VerifyExtendedSelectionAsync()
+    {
+        var sources = Enumerable.Range(1, 7)
+            .Select(index => CreateSource($"source-{index}.xml"))
+            .ToArray();
+        using var workflow = new ApplicationWorkflowCoordinator(
+            new ReadyProcessingHostSupervisor(),
+            new RecordingProcessingHistoryRecorder());
+        var activeSources = new ActiveLoadedSourceSet();
+        var loading = new SourceLoadingCoordinator(
+            new StaticSourceIntakeClient(sources),
+            activeSources,
+            workflow);
+        Assert.IsTrue((await loading.AddAsync(
+            SourceSelectionKind.Folder,
+            Path.GetFullPath("extended-selection"))).Accepted);
+        var originalSet = activeSources.SourceSets.Single();
+        var shell = new MainWindowViewModel(new ApplicationSession());
+        using var viewModel = new LoadWorkspaceViewModel(
+            new EmptySourcePathPicker(),
+            loading,
+            activeSources,
+            workflow,
+            shell);
+        var view = new LoadWorkspaceView { DataContext = viewModel };
+        var window = new Window
+        {
+            Width = 1400,
+            Height = 760,
+            Content = view,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None
+        };
+
+        try
+        {
+            window.Show();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            var rows = (ListBox)view.FindName("SourceRowsList");
+            rows.UpdateLayout();
+
+            GetSelectionProvider(rows, 0).Select();
+            GetSelectionProvider(rows, 2).AddToSelection();
+            GetSelectionProvider(rows, 6).AddToSelection();
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            AssertSelected(rows, sources[0], sources[2], sources[6]);
+
+            GetSelectionProvider(rows, 2).RemoveFromSelection();
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            AssertSelected(rows, sources[0], sources[6]);
+
+            GetSelectionProvider(rows, 1).Select();
+            foreach (var index in Enumerable.Range(2, 4))
+            {
+                GetSelectionProvider(rows, index).AddToSelection();
+            }
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            AssertSelected(rows, sources.Skip(1).Take(5).ToArray());
+
+            var fourthRow = GetRow(rows, 3);
+            RaiseRowPreviewClick(fourthRow);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            AssertSelected(rows, sources.Skip(1).Take(5).ToArray());
+            Assert.AreEqual(sources[3].SourceId, viewModel.SelectedSource!.SourceId);
+
+            GetSelectionProvider(rows, 0).Select();
+            GetSelectionProvider(rows, 3).AddToSelection();
+            GetSelectionProvider(rows, 6).AddToSelection();
+            var firstCheckbox = FindVisualChild<CheckBox>(GetRow(rows, 0))!;
+            RaiseCheckboxClick(firstCheckbox);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            AssertSelected(rows, sources[0], sources[3], sources[6]);
+            Assert.IsTrue(new[] { 0, 3, 6 }.All(index =>
+                !activeSources.Items.Single(item => item.SourceId == sources[index].SourceId).IsIncluded));
+            Assert.AreEqual(sources[0].SourceId, viewModel.SelectedSource!.SourceId);
+
+            RaiseCheckboxClick(firstCheckbox);
+            var middleCheckbox = FindVisualChild<CheckBox>(GetRow(rows, 3))!;
+            RaiseCheckboxClick(middleCheckbox);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            AssertSelected(rows, sources[0], sources[3], sources[6]);
+            Assert.IsTrue(new[] { 0, 3, 6 }.All(index =>
+                !activeSources.Items.Single(item => item.SourceId == sources[index].SourceId).IsIncluded));
+            Assert.AreEqual(sources[3].SourceId, viewModel.SelectedSource!.SourceId);
+
+            var outsideCheckbox = FindVisualChild<CheckBox>(GetRow(rows, 1))!;
+            RaiseCheckboxClick(outsideCheckbox);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            AssertSelected(rows, sources[1]);
+            Assert.IsFalse(activeSources.Items.Single(item =>
+                item.SourceId == sources[1].SourceId).IsIncluded);
+
+            var memberships = activeSources.Items.ToDictionary(
+                source => source.SourceId,
+                source => source.SourceSetId);
+            var createSet = (Button)view.FindName("CreateSourceSetButton");
+            ((IInvokeProvider)new ButtonAutomationPeer(createSet)
+                .GetPattern(PatternInterface.Invoke)!).Invoke();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            Assert.HasCount(2, activeSources.SourceSets);
+            Assert.AreNotEqual(
+                originalSet.SourceSetId,
+                activeSources.ActiveSourceSet!.SourceSetId);
+            CollectionAssert.AreEquivalent(
+                memberships.ToArray(),
+                activeSources.Items.Select(source => new KeyValuePair<SourceId, SourceSetId>(
+                    source.SourceId,
+                    source.SourceSetId)).ToArray());
+            AssertSelected(rows, sources[1]);
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     private static async Task VerifyInteractionAsync()
@@ -208,6 +331,44 @@ public sealed class LoadWorkspaceViewInteractionTests
         });
         Assert.IsNotNull(checkbox.Command);
         checkbox.Command.Execute(checkbox.CommandParameter);
+    }
+
+    private static void RaiseRowPreviewClick(ListBoxItem row)
+    {
+        row.RaiseEvent(new MouseButtonEventArgs(
+            Mouse.PrimaryDevice,
+            Environment.TickCount,
+            MouseButton.Left)
+        {
+            RoutedEvent = UIElement.PreviewMouseDownEvent,
+            Source = row
+        });
+    }
+
+    private static ISelectionItemProvider GetSelectionProvider(ListBox rows, int index)
+    {
+        GetRow(rows, index);
+        var selectorPeer = UIElementAutomationPeer.CreatePeerForElement(rows)
+            as SelectorAutomationPeer ?? new ListBoxAutomationPeer(rows);
+        var peer = new ListBoxItemAutomationPeer(rows.Items[index], selectorPeer);
+        return (ISelectionItemProvider)peer.GetPattern(PatternInterface.SelectionItem)!;
+    }
+
+    private static ListBoxItem GetRow(ListBox rows, int index)
+    {
+        rows.ScrollIntoView(rows.Items[index]);
+        rows.UpdateLayout();
+        return (ListBoxItem)rows.ItemContainerGenerator.ContainerFromIndex(index);
+    }
+
+    private static void AssertSelected(
+        ListBox rows,
+        params LoadedSourceContract[] expected)
+    {
+        CollectionAssert.AreEquivalent(
+            expected.Select(source => source.SourceId).ToArray(),
+            rows.SelectedItems.Cast<LoadedSourceItem>()
+                .Select(source => source.SourceId).ToArray());
     }
 
     private static T? FindVisualChild<T>(DependencyObject parent)

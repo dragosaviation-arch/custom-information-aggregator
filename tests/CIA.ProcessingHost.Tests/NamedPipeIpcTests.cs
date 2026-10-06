@@ -137,6 +137,15 @@ public sealed class NamedPipeIpcTests
             completion,
             new DatabaseGenerationSummary(correlation.OperationId, [datasetSummary]),
             Failure: null);
+        var progress = new DatabaseBuildProgressEvent(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            command.MessageId,
+            new DatabaseBuildProgressSnapshot(
+                correlation.OperationId,
+                "Processed 1 of 1 sources",
+                1,
+                2));
         var reviewCommand = new GetDatabaseReviewPageCommand(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
@@ -165,12 +174,15 @@ public sealed class NamedPipeIpcTests
         await using var stream = new MemoryStream();
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, progress);
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, reviewCommand);
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, reviewResponse);
         stream.Position = 0;
 
         var commandResult = (BuildDatabaseCommand)await LengthPrefixedJsonMessageFramer
+            .ReadAsync(stream);
+        var progressResult = (DatabaseBuildProgressEvent)await LengthPrefixedJsonMessageFramer
             .ReadAsync(stream);
         var responseResult = (BuildDatabaseResponse)await LengthPrefixedJsonMessageFramer
             .ReadAsync(stream);
@@ -179,6 +191,9 @@ public sealed class NamedPipeIpcTests
         var reviewResponseResult = (GetDatabaseReviewPageResponse)await
             LengthPrefixedJsonMessageFramer.ReadAsync(stream);
         Assert.AreEqual(correlation, commandResult.Correlation);
+        Assert.AreEqual(command.MessageId, progressResult.CommandMessageId);
+        Assert.AreEqual(correlation.OperationId, progressResult.Progress.OperationId);
+        Assert.AreEqual(1, progressResult.Progress.CompletedWorkCount);
         Assert.AreEqual(source, commandResult.Specification.Datasets.Single().Sources.Single());
         Assert.AreEqual(
             "DatabaseName",

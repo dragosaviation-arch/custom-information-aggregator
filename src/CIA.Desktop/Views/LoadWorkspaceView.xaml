@@ -319,7 +319,6 @@
                                  LayoutUpdated="OnSourceRowsLayoutUpdated"
                                  SelectionChanged="OnSourceSelectionChanged"
                                  SelectionMode="Extended"
-                                 SelectedItem="{Binding SelectedSource, Mode=TwoWay}"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ListBox.ContextMenu>
@@ -353,7 +352,7 @@
                                                     <Trigger Property="IsSelected" Value="True">
                                                         <Setter TargetName="RowBackground"
                                                                 Property="Background"
-                                                                Value="{StaticResource CiaSelectedRowBrush}" />
+                                                                Value="{StaticResource CiaLoadSelectedRowBrush}" />
                                                     </Trigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>

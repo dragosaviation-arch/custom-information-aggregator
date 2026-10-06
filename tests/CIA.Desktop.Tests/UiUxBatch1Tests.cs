@@ -90,6 +90,11 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(loadCode, "LoadSettingsStackBreakpoint");
         StringAssert.Contains(loadCode, "Grid.SetRow(FolderSettingsSection, 2)");
         StringAssert.Contains(load, "x:Name=\"ReassignSetMenuButton\"");
+        StringAssert.Contains(load, "SelectionMode=\"Extended\"");
+        Assert.IsFalse(load.Contains(
+            "SelectedItem=\"{Binding SelectedSource",
+            StringComparison.Ordinal));
+        StringAssert.Contains(load, "CiaLoadSelectedRowBrush");
         Assert.IsFalse(load.Contains("Content=\"Refresh selected\"", StringComparison.Ordinal));
         Assert.IsFalse(load.Contains("Content=\"Refresh\"", StringComparison.Ordinal));
         Assert.IsFalse(loadViewModel.Contains("RefreshSelectedCommand", StringComparison.Ordinal));
@@ -129,6 +134,11 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(database, "Text=\"{Binding Category}\"");
         Assert.IsFalse(database.Contains("OPTIONAL METADATA COLUMNS", StringComparison.Ordinal));
         Assert.IsFalse(database.Contains("AutomationProperties.Name=\"Export Database column\"", StringComparison.Ordinal));
+        StringAssert.Contains(database, "Text=\"EXCEL OUTPUT CONFIGURATION\"");
+        Assert.IsFalse(database.Contains("Text=\"Export order\"", StringComparison.Ordinal));
+        Assert.IsFalse(database.Contains("MoveExportField", StringComparison.Ordinal));
+        Assert.IsFalse(databaseViewModel.Contains("MoveExportField", StringComparison.Ordinal));
+        Assert.IsFalse(database.Contains("ResetExportCommand", StringComparison.Ordinal));
         StringAssert.Contains(databaseViewModel, "DatabaseMetadataVisibilityMode.None");
         StringAssert.Contains(databaseViewModel, "VirtualizedDatabaseReviewCollection");
     }
@@ -249,6 +259,34 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(settings, "CommandParameter=\"Database\"");
         StringAssert.Contains(settings, "CommandParameter=\"Logs\"");
         StringAssert.Contains(settings, "Text=\"Restart required\"");
+    }
+
+    [TestMethod]
+    public void SettingsKeepsActionsAndStateWhileRemovingPermanentInstructionalCopy()
+    {
+        var settings = ReadDesktopFile("Views", "SettingsWorkspaceView.xaml");
+
+        Assert.IsFalse(settings.Contains(
+            "Save and restore explicit CIA working-state packages",
+            StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains(
+            "Missing-source relinking is not available yet",
+            StringComparison.Ordinal));
+        Assert.HasCount(1, Regex.Matches(settings, "No saved states\\.").Cast<Match>());
+        Assert.IsFalse(settings.Contains(
+            "Remove only currently eligible CIA-owned temporary and session artifacts",
+            StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("Activity and issues in one viewer", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains(
+            "One detail surface for retained entry types",
+            StringComparison.Ordinal));
+        StringAssert.Contains(settings, "x:Name=\"SaveStateButton\"");
+        StringAssert.Contains(settings, "x:Name=\"RestoreSavedStateButton\"");
+        StringAssert.Contains(settings, "x:Name=\"DeleteSavedStateButton\"");
+        StringAssert.Contains(settings, "x:Name=\"CleanTemporaryDataButton\"");
+        StringAssert.Contains(settings, "Persistent and protected data is preserved.");
+        StringAssert.Contains(settings, "Text=\"{Binding SavedStateNameProblem}\"");
+        StringAssert.Contains(settings, "Text=\"{Binding CleanupStatusText}\"");
     }
 
     [TestMethod]

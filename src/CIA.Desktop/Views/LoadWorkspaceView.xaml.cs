@@ -170,6 +170,10 @@ public partial class LoadWorkspaceView : UserControl
         {
             viewModel.SetHighlightedSources(
                 SourceRowsList.SelectedItems.Cast<LoadedSourceItem>());
+            if (e.AddedItems.OfType<LoadedSourceItem>().LastOrDefault() is { } current)
+            {
+                viewModel.SelectedSource = current;
+            }
         }
     }
 

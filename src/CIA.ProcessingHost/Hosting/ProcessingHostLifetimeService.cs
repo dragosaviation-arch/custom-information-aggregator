@@ -462,11 +462,21 @@ public sealed class ProcessingHostLifetimeService(
         SemaphoreSlim sendGate,
         CancellationToken cancellationToken)
     {
+        var progress = new InlineProgress<DatabaseBuildProgressSnapshot>(snapshot =>
+            SendDatabaseBuildProgressAsync(
+                    connection,
+                    command.MessageId,
+                    snapshot,
+                    sendGate,
+                    cancellationToken)
+                .GetAwaiter()
+                .GetResult());
         var result = await databaseGeneration
             .BuildAsync(
                 command.Correlation,
                 command.Specification,
-                cancellationToken)
+                cancellationToken,
+                progress)
             .ConfigureAwait(false);
         var response = new BuildDatabaseResponse(
             Guid.CreateVersion7(),
@@ -483,6 +493,31 @@ public sealed class ProcessingHostLifetimeService(
         try
         {
             await connection.SendAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            sendGate.Release();
+        }
+    }
+
+    private static async Task SendDatabaseBuildProgressAsync(
+        NamedPipeIpcConnection connection,
+        Guid commandMessageId,
+        DatabaseBuildProgressSnapshot progress,
+        SemaphoreSlim sendGate,
+        CancellationToken cancellationToken)
+    {
+        await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await connection.SendAsync(
+                    new DatabaseBuildProgressEvent(
+                        Guid.CreateVersion7(),
+                        DateTimeOffset.UtcNow,
+                        commandMessageId,
+                        progress),
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {

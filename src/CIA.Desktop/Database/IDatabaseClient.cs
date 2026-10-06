@@ -11,6 +11,15 @@ public interface IDatabaseClient
         CancellationToken cancellationToken = default);
 }
 
+public interface IDatabaseBuildProgressClient : IDatabaseClient
+{
+    Task<DatabaseClientResult> BuildAsync(
+        OperationCorrelation correlation,
+        DatabaseBuildSpecification specification,
+        IProgress<DatabaseBuildProgressSnapshot> progress,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record DatabaseClientResult(
     bool Accepted,
     OperationCompletion Completion,

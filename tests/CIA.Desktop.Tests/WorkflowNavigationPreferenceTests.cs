@@ -78,6 +78,52 @@ public sealed class WorkflowNavigationPreferenceTests
         Assert.AreEqual("100%", viewModel.ProgressPercentText);
     }
 
+    [TestMethod]
+    public async Task DatabaseBuildPublishesHostWorkToGlobalProgress()
+    {
+        var snapshots = new List<GlobalOperationProgressSnapshot>();
+
+        await RunDatabaseScenarioAsync(
+            databaseSucceeds: true,
+            enabled: false,
+            snapshots);
+
+        Assert.IsTrue(snapshots.Any(snapshot =>
+            snapshot.IsActive
+            && snapshot.OperationName == "Database build"
+            && snapshot.CompletedWork == 1
+            && snapshot.TotalWork == 2));
+        Assert.AreEqual(
+            GlobalOperationProgressState.CompletedSuccessfully,
+            snapshots[^1].State);
+        Assert.AreEqual(2, snapshots[^1].CompletedWork);
+    }
+
+    [TestMethod]
+    public async Task UnsuccessfulDatabaseBuildDoesNotCompleteGlobalProgressAsSuccess()
+    {
+        var failedSnapshots = new List<GlobalOperationProgressSnapshot>();
+        await RunDatabaseScenarioAsync(
+            databaseSucceeds: false,
+            enabled: false,
+            failedSnapshots);
+
+        Assert.AreEqual(GlobalOperationProgressState.Failed, failedSnapshots[^1].State);
+        Assert.AreEqual(1, failedSnapshots[^1].CompletedWork);
+        Assert.AreEqual(2, failedSnapshots[^1].TotalWork);
+
+        var cancelledSnapshots = new List<GlobalOperationProgressSnapshot>();
+        await RunDatabaseScenarioAsync(
+            databaseSucceeds: false,
+            enabled: false,
+            cancelledSnapshots,
+            unsuccessfulOutcome: OperationOutcome.Cancelled);
+
+        Assert.AreEqual(GlobalOperationProgressState.Cancelled, cancelledSnapshots[^1].State);
+        Assert.AreEqual(1, cancelledSnapshots[^1].CompletedWork);
+        Assert.AreEqual(2, cancelledSnapshots[^1].TotalWork);
+    }
+
     private static async Task<WorkspaceArea> RunDiscoveryScenarioAsync(
         DiscoveryScenario scenario,
         bool enabled)
@@ -113,7 +159,9 @@ public sealed class WorkflowNavigationPreferenceTests
 
     private static async Task<WorkspaceArea> RunDatabaseScenarioAsync(
         bool databaseSucceeds,
-        bool enabled)
+        bool enabled,
+        ICollection<GlobalOperationProgressSnapshot>? progressSnapshots = null,
+        OperationOutcome unsuccessfulOutcome = OperationOutcome.Failed)
     {
         var root = Directory.CreateTempSubdirectory("CIA.SPR191.DatabaseNav.");
         try
@@ -131,9 +179,14 @@ public sealed class WorkflowNavigationPreferenceTests
                 configuration,
                 activeSources,
                 workflow,
-                new NavigationDatabaseClient(databaseSucceeds),
+                new NavigationDatabaseClient(databaseSucceeds, unsuccessfulOutcome),
                 NullLogger<DatabaseBuildCoordinator>.Instance);
             var shell = new MainWindowViewModel(new ApplicationSession());
+            var globalProgress = new GlobalOperationProgress();
+            if (progressSnapshots is not null)
+            {
+                globalProgress.Changed += (_, snapshot) => progressSnapshots.Add(snapshot);
+            }
             using var viewModel = new DiscoveryWorkspaceViewModel(
                 new NavigationDiscoveryClient(DiscoveryScenario.Success),
                 configuration,
@@ -141,7 +194,8 @@ public sealed class WorkflowNavigationPreferenceTests
                 workflow,
                 database,
                 shell: shell,
-                settingsService: settings);
+                settingsService: settings,
+                globalProgress: globalProgress);
             await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
             viewModel.ToggleSelectionCommand.Execute(viewModel.Information.Single());
             shell.SelectedWorkspace = shell.Workspaces.Single(workspace =>
@@ -314,24 +368,57 @@ public sealed class WorkflowNavigationPreferenceTests
         public void Complete() => _completion.TrySetResult();
     }
 
-    private sealed class NavigationDatabaseClient(bool succeeds) : IDatabaseClient
+    private sealed class NavigationDatabaseClient(
+        bool succeeds,
+        OperationOutcome unsuccessfulOutcome) : IDatabaseBuildProgressClient
     {
         public Task<DatabaseClientResult> BuildAsync(
             OperationCorrelation correlation,
             DatabaseBuildSpecification specification,
             CancellationToken cancellationToken = default)
         {
+            return Build(correlation, specification);
+        }
+
+        public Task<DatabaseClientResult> BuildAsync(
+            OperationCorrelation correlation,
+            DatabaseBuildSpecification specification,
+            IProgress<DatabaseBuildProgressSnapshot> progress,
+            CancellationToken cancellationToken = default)
+        {
+            progress.Report(new DatabaseBuildProgressSnapshot(
+                correlation.OperationId,
+                "Preparing candidate Database",
+                0,
+                2));
+            progress.Report(new DatabaseBuildProgressSnapshot(
+                correlation.OperationId,
+                "Processed 1 of 1 sources",
+                1,
+                2));
+            return Build(correlation, specification);
+        }
+
+        private Task<DatabaseClientResult> Build(
+            OperationCorrelation correlation,
+            DatabaseBuildSpecification specification)
+        {
             var dataset = specification.Datasets.Single();
             if (!succeeds)
             {
+                var item = unsuccessfulOutcome == OperationOutcome.Cancelled
+                    ? OperationItemStatus.Unprocessed(
+                        dataset.Sources[0].SourceId.ToString(),
+                        "test-cancelled")
+                    : OperationItemStatus.Failed(
+                        dataset.Sources[0].SourceId.ToString(),
+                        "test-failure");
                 return Task.FromResult(new DatabaseClientResult(
                     false,
                     OperationCompletion.FromTerminalOutcome(
                         correlation,
-                        OperationOutcome.Failed,
-                        [OperationItemStatus.Failed(
-                            dataset.Sources[0].SourceId.ToString(),
-                            "test-failure")]),
+                        unsuccessfulOutcome,
+                        [item]),
                     PublishedGeneration: null,
                     "test-failure",
                     "Database creation failed for the navigation regression."));

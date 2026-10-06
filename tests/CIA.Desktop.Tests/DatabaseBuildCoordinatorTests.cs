@@ -268,8 +268,10 @@ public sealed class DatabaseBuildCoordinatorTests
         var gammaChoice = viewModel.ColumnChoices.Single(choice =>
             choice.IsGenerated && choice.DisplayName == "Gamma override");
         gammaChoice.IsIncluded = false;
-        Assert.IsFalse(viewModel.ExportColumns.Single(field =>
-            field.DatabaseField == "Gamma override").IsExported);
+        Assert.IsFalse(viewModel.ExportColumns.Any(field =>
+            field.DatabaseField == "Gamma override"));
+        Assert.IsFalse(viewModel.CaptureExportConfiguration().SourceSets.Single().Fields
+            .Single(field => field.ExcelHeader == "Gamma override").IsValueIncluded);
         Assert.IsFalse(viewModel.Columns.Single(column =>
             column.DatabaseField == "Gamma override").IsVisible);
         viewModel.ColumnChoices.Single(choice =>
@@ -282,6 +284,20 @@ public sealed class DatabaseBuildCoordinatorTests
         viewModel.MoveColumnDownCommand.Execute(combined);
         viewModel.Columns.Single(column => column.DatabaseField == "Gamma override").IsVisible =
             false;
+        var includedOutputField = viewModel.ExportColumns.Single();
+        includedOutputField.ExcelHeader = "Combined Excel";
+        includedOutputField.IsSourceIdExported = true;
+        var exportConfiguration = viewModel.CaptureExportConfiguration();
+        CollectionAssert.AreEqual(
+            new[] { "Gamma override", "Combined Excel" },
+            exportConfiguration.SourceSets.Single().Fields
+                .Select(field => field.ExcelHeader).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "Combined Excel", "Combined Excel SourceId", "Source ID" },
+            exportConfiguration.CreateIncludedOutputColumns(
+                viewModel.SelectedDataset!.Summary.SourceSetId)
+                .Select(column => column.Header).ToArray());
+        Assert.AreEqual("Combined", combined.DatabaseField);
         Assert.HasCount(1, reviewClient.Requests);
         Assert.IsTrue(viewModel.Records.All(row => row.Cells.Count == 1));
         CollectionAssert.AreEqual(

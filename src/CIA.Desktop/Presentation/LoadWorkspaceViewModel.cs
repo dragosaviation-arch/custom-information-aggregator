@@ -1133,11 +1133,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             StringComparison.Ordinal)
             ? null
             : ActiveSourceSetName;
-        var result = _highlightedSources.Count == 0
-            ? _loadingCoordinator.CreateSourceSet(requestedName)
-            : _loadingCoordinator.ReassignSourcesToNewSet(
-                _highlightedSources,
-                requestedName);
+        var result = _loadingCoordinator.CreateSourceSet(requestedName);
         if (!result.Accepted)
         {
             StatusTitle = "Source Set not created";
@@ -1147,9 +1143,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
         NotifyActiveSourceSetChanged();
         StatusTitle = "Source Set created";
-        StatusDetail = result.ChangedCount == 0
-            ? $"{result.SourceSet!.Name} is now the active Source Set."
-            : $"Created {result.SourceSet!.Name} and moved {result.ChangedCount} selected source(s).";
+        StatusDetail = $"{result.SourceSet!.Name} is now the active Source Set.";
     }
 
     private void RenameActiveSourceSet()

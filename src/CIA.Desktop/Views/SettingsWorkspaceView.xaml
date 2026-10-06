@@ -161,12 +161,6 @@
                                                Foreground="{StaticResource CiaAccentBrush}"
                                                Text="Retained" />
                                 </Border>
-                                <TextBlock Grid.Column="2"
-                                           Margin="8,0"
-                                           HorizontalAlignment="Right"
-                                           VerticalAlignment="Center"
-                                           Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="Activity and issues in one viewer" />
                                 <Button Grid.Column="3"
                                         AutomationProperties.Name="Refresh log and diagnostics"
                                         Command="{Binding RefreshCommand}"
@@ -343,9 +337,6 @@
                             <Grid>
                                 <TextBlock Style="{StaticResource CiaPanelTitleTextStyle}"
                                            Text="SELECTED ENTRY &amp; VIEWER CONTROLS" />
-                                <TextBlock HorizontalAlignment="Right"
-                                           Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="One detail surface for retained entry types" />
                             </Grid>
                         </Border>
                         <Grid Grid.Row="1" Margin="8,7">
@@ -733,10 +724,7 @@
                                                 <TextBlock FontSize="10.7" FontWeight="Bold" Text="WORKING STATE &amp; RECOVERY" />
                                             </Border>
                                             <StackPanel Margin="8,7">
-                                                <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                                           Text="Save and restore explicit CIA working-state packages managed under the active runtime Working directory. Missing-source relinking is not available yet."
-                                                           TextWrapping="Wrap" />
-                                                <Grid Margin="0,6,0,0">
+                                                <Grid>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="*" />
                                                         <ColumnDefinition Width="Auto" />
@@ -822,7 +810,7 @@
                                                     </ListBox.ItemTemplate>
                                                 </ListBox>
                                                 <TextBlock Margin="0,5,0,0"
-                                                           Text="No saved states are available.">
+                                                           Text="No saved states.">
                                                     <TextBlock.Style>
                                                         <Style TargetType="TextBlock" BasedOn="{StaticResource CiaSecondaryTextStyle}">
                                                             <Setter Property="Visibility" Value="Collapsed" />
@@ -848,7 +836,8 @@
                                                             Command="{Binding DeleteStateCommand}"
                                                             Content="Delete"
                                                             FontSize="10.5"
-                                                            Style="{StaticResource CiaDangerButtonStyle}" />
+                                                            Style="{StaticResource CiaDangerButtonStyle}"
+                                                            ToolTip="Delete the selected saved working state after confirmation." />
                                                     <Button x:Name="RefreshSavedStatesButton"
                                                             Margin="0,0,0,5"
                                                             Command="{Binding RefreshSavedStatesCommand}"
@@ -868,15 +857,13 @@
                                                 <TextBlock FontSize="10.7" FontWeight="Bold" Text="MAINTENANCE &amp; CLEANUP" />
                                             </Border>
                                             <StackPanel Margin="8,7">
-                                                <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                                           Text="Remove only currently eligible CIA-owned temporary and session artifacts. Protected and persistent data is preserved."
-                                                           TextWrapping="Wrap" />
-                                                <WrapPanel Margin="0,6,0,0">
+                                                <WrapPanel>
                                                     <Button x:Name="CleanTemporaryDataButton"
                                                             Margin="0,0,5,5"
                                                             Command="{Binding CleanupManagedStorageCommand}"
                                                             Content="Clean eligible data"
-                                                            Style="{StaticResource SettingsCompactButtonStyle}" />
+                                                            Style="{StaticResource SettingsCompactButtonStyle}"
+                                                            ToolTip="Removes only CIA-owned temporary/session artifacts that are currently eligible for cleanup. Persistent and protected data is preserved." />
                                                 </WrapPanel>
                                                 <TextBlock FontSize="9.4"
                                                            Foreground="{StaticResource CiaTextSecondaryBrush}"

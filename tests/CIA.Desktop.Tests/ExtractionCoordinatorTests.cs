@@ -926,11 +926,11 @@ public sealed class ExtractionCoordinatorTests
         File.Delete(conflictingPath);
         Assert.IsTrue(export.EvaluateReadiness().NormalOperationReady);
 
-        viewModel.ExportColumns.Single().IsExported = false;
+        viewModel.ColumnChoices.Single(choice => choice.IsGenerated).IsIncluded = false;
         Assert.IsFalse(viewModel.IsExportAvailable);
         Assert.IsFalse(export.EvaluateReadiness().NormalOperationReady);
         Assert.IsFalse(recovery.Current?.NormalOperationReady);
-        viewModel.ExportColumns.Single().IsExported = true;
+        viewModel.ColumnChoices.Single(choice => choice.IsGenerated).IsIncluded = true;
         Assert.IsTrue(viewModel.IsExportAvailable);
         Assert.IsTrue(export.EvaluateReadiness().NormalOperationReady);
 

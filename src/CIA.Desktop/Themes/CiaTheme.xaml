@@ -21,6 +21,7 @@
     <SolidColorBrush x:Key="CiaDisabledBackgroundBrush" Color="#FFF0F2F5" />
     <SolidColorBrush x:Key="CiaDisabledTextBrush" Color="#FF9AA3B2" />
     <SolidColorBrush x:Key="CiaSelectedRowBrush" Color="#FFF1F0FF" />
+    <SolidColorBrush x:Key="CiaLoadSelectedRowBrush" Color="#FFE4E1F7" />
     <SolidColorBrush x:Key="CiaHoverBrush" Color="#FFF8F9FC" />
     <SolidColorBrush x:Key="CiaDividerBrush" Color="#FFEEF1F5" />
     <SolidColorBrush x:Key="CiaProgressTrackBrush" Color="#FFECEFF4" />

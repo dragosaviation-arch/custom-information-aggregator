@@ -304,6 +304,7 @@ public sealed class ExportSourceSetPresentation
     private WorkbookDefinitionId _workbookDefinitionId;
     private string _worksheetName;
     private int _worksheetOrder;
+    private bool _suppressChildChanges;
 
     internal ExportSourceSetPresentation(
         DatabaseDatasetSummary dataset,
@@ -420,6 +421,53 @@ public sealed class ExportSourceSetPresentation
         OnChanged();
     }
 
+    internal void ApplyDatabaseColumnState(
+        IReadOnlyList<DatabaseExportFieldState> fields,
+        IReadOnlyList<DatabaseExportMetadataState> metadataFields)
+    {
+        ArgumentNullException.ThrowIfNull(fields);
+        ArgumentNullException.ThrowIfNull(metadataFields);
+
+        _suppressChildChanges = true;
+        try
+        {
+            var fieldsByIdentity = _fields.ToDictionary(field => field.DatabaseColumnIdentity);
+            var ordered = new List<ExportFieldPresentation>(_fields.Count);
+            foreach (var state in fields)
+            {
+                if (fieldsByIdentity.TryGetValue(state.Identity, out var field))
+                {
+                    field.IsExported = state.IsIncluded;
+                    ordered.Add(field);
+                }
+            }
+
+            ordered.AddRange(_fields.Where(field => !ordered.Contains(field)));
+            _fields.Clear();
+            foreach (var field in ordered)
+            {
+                _fields.Add(field);
+            }
+
+            var metadataByField = metadataFields.ToDictionary(state => state.Field);
+            foreach (var field in _metadataFields)
+            {
+                if (metadataByField.TryGetValue(field.MetadataField, out var state))
+                {
+                    field.IsExported = state.IsIncluded;
+                }
+            }
+
+            UpdateFieldPositions();
+        }
+        finally
+        {
+            _suppressChildChanges = false;
+        }
+
+        OnChanged();
+    }
+
     internal void UpdateDataset(DatabaseDatasetSummary dataset)
     {
         _displayName = dataset.DisplayName;
@@ -482,7 +530,13 @@ public sealed class ExportSourceSetPresentation
     private void Subscribe(INotifyPropertyChanged child) =>
         child.PropertyChanged += OnChildPropertyChanged;
 
-    private void OnChildPropertyChanged(object? sender, PropertyChangedEventArgs e) => OnChanged();
+    private void OnChildPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!_suppressChildChanges)
+        {
+            OnChanged();
+        }
+    }
 
     private void UpdateFieldPositions()
     {
@@ -540,25 +594,13 @@ public sealed class ExportFieldPresentation : ObservableObject
     public bool IsExported
     {
         get => _isExported;
-        set
-        {
-            if (SetProperty(ref _isExported, value) && !value)
-            {
-                IsSourceIdExported = false;
-            }
-        }
+        set => SetProperty(ref _isExported, value);
     }
 
     public bool IsSourceIdExported
     {
         get => _isSourceIdExported;
-        set
-        {
-            if (!value || IsExported)
-            {
-                SetProperty(ref _isSourceIdExported, value);
-            }
-        }
+        set => SetProperty(ref _isSourceIdExported, value);
     }
 
     public string SourceIdExportHeader => $"{ExcelHeader} SourceId";
@@ -589,8 +631,16 @@ public sealed class ExportFieldPresentation : ObservableObject
         DatabaseColumnIdentity,
         IsExported,
         ExcelHeader,
-        IsSourceIdExported);
+        IsExported && IsSourceIdExported);
 }
+
+internal sealed record DatabaseExportFieldState(
+    DatabaseColumnIdentity Identity,
+    bool IsIncluded);
+
+internal sealed record DatabaseExportMetadataState(
+    DatabaseMetadataField Field,
+    bool IsIncluded);
 
 public sealed class ExportMetadataFieldPresentation : ObservableObject
 {
