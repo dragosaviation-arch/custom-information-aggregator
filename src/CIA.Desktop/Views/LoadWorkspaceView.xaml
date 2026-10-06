@@ -118,8 +118,8 @@
                 </StackPanel>
                 <Button Command="{Binding RemoveCheckedCommand}"
                         Style="{StaticResource CiaDangerButtonStyle}"
-                        Content="− Remove"
-                        ToolTip="Remove checked entries from this session only." />
+                        Content="− Remove selected"
+                        ToolTip="Remove highlighted rows from this session only." />
             </StackPanel>
 
             <WrapPanel Grid.Row="2"
@@ -322,8 +322,17 @@
                                  SelectedItem="{Binding SelectedSource, Mode=TwoWay}"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <ListBox.ContextMenu>
+                                <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                    <MenuItem Command="{Binding ReloadHighlightedSourcesCommand}"
+                                              Header="Reload selected sources"
+                                              ToolTip="Deliberately re-read the highlighted sources from disk." />
+                                </ContextMenu>
+                            </ListBox.ContextMenu>
                             <ListBox.ItemContainerStyle>
                                 <Style TargetType="ListBoxItem">
+                                    <EventSetter Event="PreviewMouseDown"
+                                                 Handler="OnSourceRowPreviewMouseDown" />
                                     <Setter Property="Height" Value="33" />
                                     <Setter Property="Padding" Value="0" />
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -380,6 +389,7 @@
                                             </Grid.ColumnDefinitions>
                                             <CheckBox HorizontalAlignment="Center"
                                                       VerticalAlignment="Center"
+                                                      PreviewMouseLeftButtonDown="OnSourceInclusionPreviewMouseLeftButtonDown"
                                                       Command="{Binding DataContext.ToggleSourceInclusionCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
                                                       CommandParameter="{Binding}"
                                                       IsChecked="{Binding IsIncluded, Mode=OneWay}" />
@@ -519,12 +529,6 @@
                                    Style="{StaticResource CiaSecondaryTextStyle}"
                                    Text="{Binding ProgressText}" />
                     </Grid>
-                    <ProgressBar Height="5"
-                                 Margin="0,6,0,0"
-                                 Maximum="{Binding ProgressMaximum, Mode=OneWay}"
-                                 IsIndeterminate="{Binding IsProgressIndeterminate, Mode=OneWay}"
-                                 Value="{Binding ProgressValue, Mode=OneWay}"
-                                 Style="{StaticResource CiaDeterminateProgressBarStyle}" />
                     <Grid Margin="0,6,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -891,7 +895,7 @@
                                               FontWeight="SemiBold"
                                               IsChecked="{Binding DontWarnWhenRemovingEntries}"
                                               ToolTipService.InitialShowDelay="500"
-                                              ToolTip="Remove checked entries from the current session without showing the confirmation dialog." />
+                                              ToolTip="Remove highlighted rows from the current session without showing the confirmation dialog." />
                                 </StackPanel>
                                 <StackPanel x:Name="FolderSettingsSection" Grid.Column="2">
                                     <TextBlock Margin="0,3,0,3"

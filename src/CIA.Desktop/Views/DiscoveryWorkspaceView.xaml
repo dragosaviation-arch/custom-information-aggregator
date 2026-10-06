@@ -181,7 +181,7 @@
                                 <ColumnDefinition Width="{Binding OccurrencesColumnWidth}" MinWidth="52" />
                                 <ColumnDefinition Width="{Binding SourcesColumnWidth}" MinWidth="44" />
                                 <ColumnDefinition Width="{Binding SampleColumnWidth}" MinWidth="72" />
-                                <ColumnDefinition Width="76" />
+                                <ColumnDefinition Width="{Binding BlacklistColumnWidth}" MinWidth="88" />
                             </Grid.ColumnDefinitions>
                             <Button Grid.Column="1"
                                     Command="{Binding SortCommand}"
@@ -221,6 +221,7 @@
                             <Thumb Grid.Column="3" Tag="discovery.databaseTag|discovery.occurrences" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="4" Tag="discovery.occurrences|discovery.sources" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="5" Tag="discovery.sources|discovery.sample" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="6" Tag="discovery.sample|discovery.blacklist" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                         </Grid>
                     </Border>
 
@@ -286,7 +287,7 @@
                                             <ColumnDefinition Width="{Binding DataContext.OccurrencesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="52" />
                                             <ColumnDefinition Width="{Binding DataContext.SourcesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="44" />
                                             <ColumnDefinition Width="{Binding DataContext.SampleColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
-                                            <ColumnDefinition Width="76" />
+                                            <ColumnDefinition Width="{Binding DataContext.BlacklistColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="88" />
                                         </Grid.ColumnDefinitions>
                                         <CheckBox HorizontalAlignment="Center"
                                                   VerticalAlignment="Center"
@@ -394,50 +395,12 @@
             <Border Grid.Row="6"
                     Padding="9,6"
                     Style="{StaticResource CiaPanelStyle}">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="5" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel>
-                            <TextBlock FontWeight="Bold" Text="{Binding StatusTitle}" />
-                            <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="{Binding StatusDetail}" />
-                        </StackPanel>
-                        <TextBlock Grid.Column="1"
-                                   VerticalAlignment="Top"
-                                   Text="100%">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock" BasedOn="{StaticResource CiaSecondaryTextStyle}">
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsBusy}" Value="True">
-                                            <Setter Property="Text" Value="Working" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                    </Grid>
-                    <ProgressBar Grid.Row="1"
-                                 Height="5"
-                                 IsIndeterminate="{Binding IsProgressIndeterminate}"
-                                 Maximum="{Binding ProgressMaximum}"
-                                 Style="{StaticResource CiaDeterminateProgressBarStyle}"
-                                 Value="{Binding ProgressValue, Mode=OneWay}" />
-                    <Grid Grid.Row="2">
-                        <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                   Text="{Binding ProgressStage}" />
-                        <TextBlock HorizontalAlignment="Right"
-                                   Style="{StaticResource CiaSecondaryTextStyle}"
-                                   Text="{Binding ProgressPercentText}" />
-                    </Grid>
-                </Grid>
+                <StackPanel>
+                    <TextBlock FontWeight="Bold" Text="{Binding StatusTitle}" />
+                    <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
+                               Text="{Binding StatusDetail}"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
             </Border>
         </Grid>
 
@@ -451,9 +414,9 @@
                 <ColumnDefinition x:Name="SettingsColumn" Width="0" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
-                <RowDefinition x:Name="PreviewRow" Height="11*" />
+                <RowDefinition x:Name="PreviewRow" Height="2*" />
                 <RowDefinition x:Name="RightRailGapRow" Height="8" />
-                <RowDefinition x:Name="SettingsRow" Height="10*" />
+                <RowDefinition x:Name="SettingsRow" Height="3*" />
             </Grid.RowDefinitions>
 
             <Border x:Name="PreviewPanel"
@@ -640,11 +603,6 @@
                                                   IsChecked="{Binding OpenDatabaseWhenCreationCompletes}"
                                                   ToolTipService.InitialShowDelay="500"
                                                   ToolTip="Navigate to Database after a successful explicit Database creation or update." />
-                                        <CheckBox Margin="0,4"
-                                                  IsChecked="True"
-                                                  IsEnabled="False"
-                                                  Content="Confirm before re-running Discovery when Database is current"
-                                                  ToolTip="Database-current confirmation is implemented by a later story." />
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
                                         <TextBlock Margin="0,0,0,5"

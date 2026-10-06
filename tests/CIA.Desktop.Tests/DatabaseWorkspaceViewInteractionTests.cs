@@ -122,7 +122,6 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var exportButton = (Button)view.FindName("ExportToExcelButton");
             var browseOutputFolder = (Button)view.FindName("BrowseOutputFolderButton");
             var workbookExportStatus = (TextBlock)view.FindName("WorkbookExportStatusText");
-            var prepareButton = (Button)view.FindName("PrepareForExportButton");
             var extractionState = (TextBlock)view.FindName("ExtractionReviewStateText");
             var columnSizeFeedback = (Border)view.FindName("DatabaseColumnSizeFeedback");
             var columnSizeFeedbackText = (TextBlock)view.FindName("DatabaseColumnSizeFeedbackText");
@@ -181,7 +180,7 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.IsNotNull(exportButton.Command);
             Assert.IsNotNull(browseOutputFolder.Command);
             Assert.AreEqual(viewModel.WorkbookExportStatusText, workbookExportStatus.Text);
-            Assert.IsTrue(prepareButton.IsEnabled);
+            Assert.IsNull(view.FindName("PrepareForExportButton"));
             Assert.AreEqual("Not prepared", extractionState.Text);
             Assert.IsNull(view.FindName("DatabaseFiltersButton"));
             Assert.IsNull(view.FindName("ExtractionReviewRows"));
@@ -198,7 +197,7 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                 .ContainerFromIndex(dynamicHeaders.Items.Count - 1);
             var lastColumnDivider = FindVisualChild<Thumb>(lastHeader);
             Assert.IsNotNull(lastColumnDivider);
-            Assert.AreEqual(Visibility.Collapsed, lastColumnDivider.Visibility);
+            Assert.AreEqual(Visibility.Visible, lastColumnDivider.Visibility);
             var firstWidth = viewModel.VisibleColumns[0].Width;
             var secondWidth = viewModel.VisibleColumns[1].Width;
 
@@ -289,7 +288,6 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                 collisionDialog.Rows[0].SelectedOption.Action);
             collisionDialog.Close();
 
-            Assert.IsNotNull(prepareButton.Command);
             Assert.AreEqual(250, reviewRows.Items.Count);
             Assert.IsFalse(exportButton.IsEnabled);
 

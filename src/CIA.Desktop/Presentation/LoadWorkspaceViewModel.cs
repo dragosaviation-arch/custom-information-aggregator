@@ -31,6 +31,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly ApplicationSettingsService? _settingsService;
     private readonly ApplicationSettings _startupSettings;
+    private readonly GlobalOperationProgress? _globalProgress;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly RelayCommand<LoadedSourceItem> _toggleSourceInclusionCommand;
     private readonly RelayCommand _includeVisibleCommand;
@@ -39,6 +40,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _confirmRemovalCommand;
     private readonly RelayCommand _cancelRemovalCommand;
     private readonly AsyncRelayCommand<LoadedSourceItem> _relinkSourceCommand;
+    private readonly AsyncRelayCommand _reloadHighlightedSourcesCommand;
     private readonly RelayCommand _createSourceSetCommand;
     private readonly RelayCommand _renameActiveSourceSetCommand;
     private IReadOnlyList<LoadedSourceItem> _highlightedSources = [];
@@ -72,6 +74,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private int _operationProgressCompleted;
     private int _operationProgressTotal = 1;
     private double _operationProgressCurrentFraction;
+    private Guid? _globalProgressUpdateId;
+    private bool _operationHadFailure;
     private double _sourceColumnWidth;
     private double _pathColumnWidth;
     private double _sourceSetColumnWidth;
@@ -87,7 +91,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         ActiveLoadedSourceSet sourceSet,
         IApplicationWorkflowCoordinator workflowCoordinator,
         MainWindowViewModel shell,
-        ApplicationSettingsService? settingsService = null)
+        ApplicationSettingsService? settingsService = null,
+        GlobalOperationProgress? globalProgress = null)
     {
         ArgumentNullException.ThrowIfNull(pathPicker);
         ArgumentNullException.ThrowIfNull(loadingCoordinator);
@@ -100,6 +105,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _sourceSet = sourceSet;
         _workflowCoordinator = workflowCoordinator;
         _settingsService = settingsService;
+        _globalProgress = globalProgress;
         _startupSettings = settingsService?.Startup.Settings
             ?? ApplicationSettings.CreateDefault(
                 ApplicationPaths.ForCurrentUser().LocalApplicationDataDirectory);
@@ -152,6 +158,9 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _relinkSourceCommand = new AsyncRelayCommand<LoadedSourceItem>(
             RelinkSourceAsync,
             CanRelinkSource);
+        _reloadHighlightedSourcesCommand = new AsyncRelayCommand(
+            ReloadHighlightedSourcesAsync,
+            CanReloadHighlightedSources);
         _createSourceSetCommand = new RelayCommand(
             CreateSourceSet,
             () => !IsBusy && HasSourceSets);
@@ -177,6 +186,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand ConfirmRemovalCommand => _confirmRemovalCommand;
     public IRelayCommand CancelRemovalCommand => _cancelRemovalCommand;
     public IAsyncRelayCommand RelinkSourceCommand => _relinkSourceCommand;
+    public IAsyncRelayCommand ReloadHighlightedSourcesCommand =>
+        _reloadHighlightedSourcesCommand;
     public IRelayCommand CreateSourceSetCommand => _createSourceSetCommand;
     public IRelayCommand RenameActiveSourceSetCommand => _renameActiveSourceSetCommand;
     public IRelayCommand ToggleFilterOptionsCommand { get; }
@@ -186,6 +197,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public bool HasSources => Sources.Count > 0;
     public bool HasSourceSets => SourceSets.Count > 0;
     public bool HasHighlightedSources => _highlightedSources.Count > 0;
+    public int HighlightedSourceCount => _highlightedSources.Count;
     public int IncludedCount => Sources.Count(source => source.IsIncluded);
     public string IncludedSummary => $"{IncludedCount} / {Sources.Count} included";
 
@@ -542,6 +554,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         ArgumentNullException.ThrowIfNull(sources);
         _highlightedSources = sources.Where(Sources.Contains).Distinct().ToArray();
         OnPropertyChanged(nameof(HasHighlightedSources));
+        OnPropertyChanged(nameof(HighlightedSourceCount));
+        NotifySourceCommandsCanExecuteChanged();
     }
 
     internal void ResizeColumns(string leftKey, string rightKey, double horizontalChange)
@@ -650,10 +664,12 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
                         progress);
             _lastIntakeIssueCount = result.Issues.Count;
             _lastIntakeFailureCount = result.Accepted ? 0 : 1;
+            _operationHadFailure |= result.Issues.Count > 0;
             OnPropertyChanged(nameof(SourceSummary));
 
             if (!result.Accepted)
             {
+                _operationHadFailure = true;
                 StatusTitle = "Source not added";
                 StatusDetail = result.FailureDescription ?? "The selected source could not be loaded.";
                 ProgressText = "Stopped";
@@ -731,6 +747,10 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             ? "Archive: —"
             : $"Archive: {Path.GetFileName(progress.CurrentArchivePath)} · Level {progress.CurrentArchiveNestingLevel}";
         NotifyProgressChanged();
+        var stage = progress.TotalItemCount is > 0
+            ? $"Processing {progress.EncounteredItemCount:N0} of {progress.TotalItemCount.Value:N0}"
+            : $"Processing {Path.GetFileName(progress.CurrentArchivePath) ?? "source"}";
+        ReportGlobalProgress(stage);
     }
 
     private void NotifyProgressChanged()
@@ -741,11 +761,17 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(ProgressValue));
     }
 
-    private void BeginOperationProgress(int totalWorkUnits)
+    private void BeginOperationProgress(int totalWorkUnits, string operationName = "Loading sources")
     {
         _operationProgressTotal = Math.Max(1, totalWorkUnits);
         _operationProgressCompleted = 0;
         _operationProgressCurrentFraction = 0;
+        _operationHadFailure = false;
+        _globalProgressUpdateId = _globalProgress?.Begin(
+            operationName,
+            $"Processing item 1 of {_operationProgressTotal:N0}",
+            0,
+            100);
         IsBusy = totalWorkUnits > 0;
         NotifyProgressChanged();
     }
@@ -757,6 +783,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             _operationProgressCompleted + 1);
         _operationProgressCurrentFraction = 0;
         NotifyProgressChanged();
+        ReportGlobalProgress(
+            $"Processing item {Math.Min(_operationProgressCompleted + 1, _operationProgressTotal):N0} of {_operationProgressTotal:N0}");
     }
 
     private void EndOperationProgress()
@@ -764,6 +792,24 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _liveProgress = null;
         IsBusy = false;
         NotifyProgressChanged();
+        if (_globalProgressUpdateId is { } updateId)
+        {
+            _globalProgress?.Complete(
+                updateId,
+                _operationHadFailure
+                    ? GlobalOperationProgressState.CompletedWithIssues
+                    : GlobalOperationProgressState.CompletedSuccessfully,
+                _operationHadFailure ? "completed with issues" : "completed successfully");
+            _globalProgressUpdateId = null;
+        }
+    }
+
+    private void ReportGlobalProgress(string stageText)
+    {
+        if (_globalProgressUpdateId is { } updateId)
+        {
+            _globalProgress?.Report(updateId, stageText, ProgressValue, 100);
+        }
     }
 
     private bool MatchesFilter(object item)
@@ -860,7 +906,10 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     {
         if (source is not null)
         {
-            ApplyInclusionResult(_loadingCoordinator.SetInclusion([source], !source.IsIncluded));
+            var targets = _highlightedSources.Contains(source)
+                ? _highlightedSources
+                : [source];
+            ApplyInclusionResult(_loadingCoordinator.SetInclusion(targets, !source.IsIncluded));
         }
     }
 
@@ -887,7 +936,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
     private void RemoveChecked()
     {
-        var targets = Sources.Where(source => source.IsIncluded).ToArray();
+        var targets = _highlightedSources.Where(Sources.Contains).ToArray();
 
         if (targets.Length == 0)
         {
@@ -946,6 +995,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         {
             SelectedSource = Sources.FirstOrDefault();
         }
+        SetHighlightedSources([]);
 
         StatusTitle = result.RemovedCount == 1 ? "Source removed" : "Sources removed";
         StatusDetail = result.RemovedCount == 1
@@ -969,7 +1019,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
-        BeginOperationProgress(1);
+        BeginOperationProgress(1, "Relinking source");
         StatusTitle = "Relinking source";
         StatusDetail = $"Validating a replacement for {source.DisplayName} through the Processing Host...";
 
@@ -979,6 +1029,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             RefreshVisibleSources();
             NotifySourceCountsChanged();
             StatusTitle = result.Accepted ? "Source relinked" : "Source relink failed";
+            _operationHadFailure = !result.Accepted;
             StatusDetail = result.Accepted
                 ? $"Relinked {source.DisplayName}; its source identity and Source Set were retained."
                 : result.FailureDescription
@@ -999,7 +1050,62 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         && !IsBusy
         && _workflowCoordinator.Current.ActiveOperation is null;
 
-    private bool CanRemoveChecked() => !IsBusy && Sources.Any(source => source.IsIncluded);
+    private async Task ReloadHighlightedSourcesAsync()
+    {
+        var targets = _highlightedSources.Where(Sources.Contains).ToArray();
+        if (targets.Length == 0)
+        {
+            return;
+        }
+
+        BeginOperationProgress(targets.Length, "Reloading sources");
+        var refreshed = 0;
+        var failed = 0;
+        try
+        {
+            foreach (var source in targets)
+            {
+                StatusTitle = "Reloading sources";
+                StatusDetail = $"Re-reading {source.DisplayName} from disk through the Processing Host...";
+                ReportGlobalProgress(
+                    $"Re-reading {refreshed + failed + 1:N0} of {targets.Length:N0}");
+                var result = await _loadingCoordinator.RefreshAsync(source);
+                if (result.Accepted)
+                {
+                    refreshed++;
+                }
+                else
+                {
+                    failed++;
+                    _operationHadFailure = true;
+                }
+
+                AdvanceOperationProgress();
+            }
+
+            DispatchToUi(() =>
+            {
+                RefreshVisibleSources();
+                NotifySourceCountsChanged();
+                StatusTitle = failed == 0
+                    ? "Sources reloaded"
+                    : "Source reload completed with issues";
+                StatusDetail = $"Re-read {refreshed:N0} selected source(s); {failed:N0} failed validation or became unavailable.";
+                ProgressText = failed == 0 ? "Completed" : "Completed with issues";
+            });
+        }
+        finally
+        {
+            EndOperationProgress();
+        }
+    }
+
+    private bool CanReloadHighlightedSources() =>
+        !IsBusy
+        && _highlightedSources.Count > 0
+        && _workflowCoordinator.Current.ActiveOperation is null;
+
+    private bool CanRemoveChecked() => !IsBusy && _highlightedSources.Count > 0;
 
     private void RefreshVisibleSources()
     {
@@ -1014,6 +1120,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _excludeVisibleCommand.NotifyCanExecuteChanged();
         _removeCheckedCommand.NotifyCanExecuteChanged();
         _relinkSourceCommand.NotifyCanExecuteChanged();
+        _reloadHighlightedSourcesCommand.NotifyCanExecuteChanged();
         _createSourceSetCommand.NotifyCanExecuteChanged();
         _renameActiveSourceSetCommand.NotifyCanExecuteChanged();
     }

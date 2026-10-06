@@ -27,6 +27,17 @@
             <Setter Property="Padding" Value="8,0" />
             <Setter Property="FontSize" Value="10.5" />
         </Style>
+        <Style x:Key="SettingsPathLabelButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource CiaGhostButtonStyle}">
+            <Setter Property="Height" Value="25" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="FontSize" Value="9.8" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{StaticResource CiaTextPrimaryBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+        </Style>
         <Style x:Key="SettingsLogListStyle" TargetType="ListView">
             <Setter Property="Background" Value="{StaticResource CiaPanelBrush}" />
             <Setter Property="BorderThickness" Value="0" />
@@ -482,11 +493,6 @@
                                            FontWeight="Bold"
                                            Foreground="{StaticResource CiaAccentBrush}"
                                            Text="VIEWER" />
-                                <CheckBox Margin="0,3"
-                                          Content="Auto-follow newest"
-                                          IsChecked="False"
-                                          IsEnabled="False"
-                                          ToolTip="Continuous raw-log following is not available." />
                                 <CheckBox x:Name="WrapLongMessagesCheckBox"
                                           Margin="0,3"
                                           Content="Wrap long messages"
@@ -540,18 +546,6 @@
                         <ScrollViewer HorizontalScrollBarVisibility="Disabled"
                                       VerticalScrollBarVisibility="Auto">
                             <StackPanel>
-                                <Border Margin="0,0,0,6"
-                                        Padding="6,5"
-                                        Background="{StaticResource CiaNoteBackgroundBrush}"
-                                        BorderBrush="{StaticResource CiaDividerBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="7">
-                                    <TextBlock FontSize="9.8"
-                                               Foreground="{StaticResource CiaTextSecondaryBrush}"
-                                               Text="{Binding SettingsPersistenceText}"
-                                               TextWrapping="Wrap" />
-                                </Border>
-
                                 <Border Style="{StaticResource SettingsCardStyle}">
                                     <Grid>
                                         <Grid.RowDefinitions>
@@ -640,63 +634,78 @@
                                         <StackPanel Grid.Row="1" Margin="8,6">
                                             <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                                <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Temporary" />
+                                                <Button Command="{Binding OpenManagedStorageFolderCommand}"
+                                                        CommandParameter="Temporary"
+                                                        Content="Temporary"
+                                                        Style="{StaticResource SettingsPathLabelButtonStyle}"
+                                                        ToolTip="Open current Temporary folder" />
                                                 <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding TemporaryDirectory, UpdateSourceTrigger=PropertyChanged}" />
                                                 <Button x:Name="BrowseTemporaryDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseTemporaryDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
                                             <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                                <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Working" />
+                                                <Button Command="{Binding OpenManagedStorageFolderCommand}"
+                                                        CommandParameter="Working"
+                                                        Content="Working"
+                                                        Style="{StaticResource SettingsPathLabelButtonStyle}"
+                                                        ToolTip="Open current Working folder" />
                                                 <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding WorkingDirectory, UpdateSourceTrigger=PropertyChanged}" />
                                                 <Button x:Name="BrowseWorkingDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseWorkingDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
                                             <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                                <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Profiles" />
+                                                <Button Command="{Binding OpenManagedStorageFolderCommand}"
+                                                        CommandParameter="Profiles"
+                                                        Content="Profiles"
+                                                        Style="{StaticResource SettingsPathLabelButtonStyle}"
+                                                        ToolTip="Open current Profiles folder" />
                                                 <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding ProfilesDirectory, UpdateSourceTrigger=PropertyChanged}" />
                                                 <Button x:Name="BrowseProfilesDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseProfilesDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
                                             <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                                <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="Settings" />
+                                                <Button Command="{Binding OpenManagedStorageFolderCommand}"
+                                                        CommandParameter="Settings"
+                                                        Content="Settings"
+                                                        Style="{StaticResource SettingsPathLabelButtonStyle}"
+                                                        ToolTip="Open current Settings folder" />
                                                 <TextBox Grid.Column="1" Style="{StaticResource CiaTextInputStyle}" Text="{Binding SettingsDirectory, UpdateSourceTrigger=PropertyChanged}" />
                                                 <Button x:Name="BrowseSettingsDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseSettingsDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
-                                            <ItemsControl Margin="0,4,0,0" ItemsSource="{Binding ManagedStoragePaths}">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Grid Margin="0,2">
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="65" />
-                                                            <ColumnDefinition Width="*" />
-                                                            <ColumnDefinition Width="Auto" />
-                                                        </Grid.ColumnDefinitions>
-                                                        <TextBlock VerticalAlignment="Center" FontSize="9.8" FontWeight="SemiBold" Text="{Binding Name}" />
-                                                        <Border Grid.Column="1"
-                                                                Height="25"
-                                                                Padding="6,0"
-                                                                Background="{StaticResource CiaPanelAlternateBrush}"
-                                                                BorderBrush="{StaticResource CiaBorderBrush}"
-                                                                BorderThickness="1"
-                                                                CornerRadius="6">
-                                                            <TextBlock VerticalAlignment="Center"
-                                                                       FontFamily="Consolas"
-                                                                       FontSize="9.2"
-                                                                       Text="{Binding Path}"
-                                                                       TextTrimming="CharacterEllipsis"
-                                                                       ToolTip="{Binding Path}" />
-                                                        </Border>
-                                                        <Button Grid.Column="2"
-                                                                Width="46"
-                                                                Margin="5,0,0,0"
-                                                                Command="{Binding DataContext.OpenLogsFolderCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                                Content="Open"
-                                                                IsEnabled="{Binding CanOpen}"
-                                                                Style="{StaticResource SettingsCompactButtonStyle}" />
-                                                    </Grid>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
+                                            <WrapPanel Margin="0,5,0,0">
+                                                <TextBlock Margin="0,0,5,0"
+                                                           VerticalAlignment="Center"
+                                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                                           Text="Open:" />
+                                                <Button Command="{Binding OpenManagedStorageFolderCommand}"
+                                                        CommandParameter="Database"
+                                                        Content="Database"
+                                                        Style="{StaticResource SettingsPathLabelButtonStyle}"
+                                                        ToolTip="Open current Database folder" />
+                                                <TextBlock Margin="4,0" VerticalAlignment="Center" Text="|" />
+                                                <Button Command="{Binding OpenManagedStorageFolderCommand}"
+                                                        CommandParameter="Logs"
+                                                        Content="Logs"
+                                                        Style="{StaticResource SettingsPathLabelButtonStyle}"
+                                                        ToolTip="Open current Logs folder" />
+                                            </WrapPanel>
+                                            <TextBlock Margin="0,4,0,0"
+                                                       FontSize="9.6"
+                                                       FontWeight="Bold"
+                                                       Foreground="{StaticResource CiaWarningBrush}"
+                                                       Text="Restart required"
+                                                       ToolTip="Managed storage location changes take effect after CIA restarts.">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsSettingsRestartRequired}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
                                             <TextBlock Margin="0,5,0,0"
                                                        Foreground="{StaticResource CiaTextSecondaryBrush}"
                                                        FontSize="9.4"

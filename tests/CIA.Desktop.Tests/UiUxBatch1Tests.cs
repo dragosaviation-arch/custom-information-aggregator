@@ -53,21 +53,21 @@ public sealed class UiUxBatch1Tests
     }
 
     [TestMethod]
-    public void LoadProgressAndSettingsRemainCompactAndTruthful()
+    public void LoadStatusAndSettingsRemainCompactAndTruthful()
     {
         var load = ReadDesktopFile("Views", "LoadWorkspaceView.xaml");
 
-        StringAssert.Contains(load, "Maximum=\"{Binding ProgressMaximum, Mode=OneWay}\"");
-        StringAssert.Contains(load, "Value=\"{Binding ProgressValue, Mode=OneWay}\"");
-        StringAssert.Contains(load, "IsIndeterminate=\"{Binding IsProgressIndeterminate, Mode=OneWay}\"");
-        StringAssert.Contains(load, "Style=\"{StaticResource CiaDeterminateProgressBarStyle}\"");
+        Assert.IsFalse(load.Contains("<ProgressBar", StringComparison.Ordinal));
+        StringAssert.Contains(load, "Text=\"{Binding StatusTitle}\"");
+        StringAssert.Contains(load, "Text=\"{Binding StatusDetail}\"");
+        StringAssert.Contains(load, "Text=\"{Binding ProgressText}\"");
         StringAssert.Contains(load, "ToolTip=\"Load supported XML files found in the selected folder.\"");
         StringAssert.Contains(load, "ToolTip=\"Load supported archives found inside the selected folder.\"");
         StringAssert.Contains(load, "ToolTip=\"Traverse subfolders recursively while loading a folder.\"");
         StringAssert.Contains(load, "Content=\"Open Discovery after run\"");
         StringAssert.Contains(load, "ToolTip=\"Open the Discovery tab only after Discovery generation/update completes successfully.\"");
         StringAssert.Contains(load, "Content=\"Skip remove warning\"");
-        StringAssert.Contains(load, "ToolTip=\"Remove checked entries from the current session without showing the confirmation dialog.\"");
+        StringAssert.Contains(load, "ToolTip=\"Remove highlighted rows from the current session without showing the confirmation dialog.\"");
         Assert.IsFalse(load.Contains("Skip the confirmation modal; files are never deleted.", StringComparison.Ordinal));
     }
 
@@ -93,9 +93,11 @@ public sealed class UiUxBatch1Tests
         Assert.IsFalse(load.Contains("Content=\"Refresh selected\"", StringComparison.Ordinal));
         Assert.IsFalse(load.Contains("Content=\"Refresh\"", StringComparison.Ordinal));
         Assert.IsFalse(loadViewModel.Contains("RefreshSelectedCommand", StringComparison.Ordinal));
+        StringAssert.Contains(load, "Header=\"Reload selected sources\"");
+        StringAssert.Contains(load, "Command=\"{Binding ReloadHighlightedSourcesCommand}\"");
         StringAssert.Contains(load, "Content=\"Relink...\"");
-        StringAssert.Contains(loadCode, "DetailsRow.Height = new GridLength(34");
-        StringAssert.Contains(loadCode, "SettingsRow.Height = new GridLength(66");
+        StringAssert.Contains(loadCode, "DetailsRow.Height = new GridLength(38");
+        StringAssert.Contains(loadCode, "SettingsRow.Height = new GridLength(62");
 
         var layoutTab = discoveryDocument.Descendants(presentationNamespace + "TabItem")
             .Single(tab => string.Equals(tab.Attribute("Header")?.Value, "Layout", StringComparison.Ordinal));
@@ -107,7 +109,8 @@ public sealed class UiUxBatch1Tests
             string.Equals(element.Attribute("Text")?.Value, "REPEATED DATA LAYOUT", StringComparison.Ordinal)));
         StringAssert.Contains(discovery, "Command=\"{Binding DataContext.ToggleBlacklistCommand");
         StringAssert.Contains(discovery, "Content=\"{Binding BlacklistActionText}\"");
-        StringAssert.Contains(discovery, "x:Name=\"PreviewRow\" Height=\"11*\"");
+        StringAssert.Contains(discovery, "x:Name=\"PreviewRow\" Height=\"2*\"");
+        StringAssert.Contains(discovery, "x:Name=\"SettingsRow\" Height=\"3*\"");
         StringAssert.Contains(discovery, "Text=\"{Binding OccurrencePreviewText}\"");
         StringAssert.Contains(discovery, "Command=\"{Binding PreviousOccurrenceCommand}\"");
         StringAssert.Contains(discovery, "Command=\"{Binding NextOccurrenceCommand}\"");
@@ -158,10 +161,11 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(load, "LoadColumnResizeThumbStyle");
         StringAssert.Contains(discovery, "DiscoveryColumnResizeThumbStyle");
         Assert.HasCount(5, Regex.Matches(load, "Tag=\"load\\.").Cast<Match>());
-        Assert.HasCount(5, Regex.Matches(discovery, "Tag=\"discovery\\.").Cast<Match>());
+        Assert.HasCount(6, Regex.Matches(discovery, "Tag=\"discovery\\.").Cast<Match>());
         StringAssert.Contains(theme, "x:Key=\"CiaColumnResizeThumbStyle\"");
         StringAssert.Contains(theme, "x:Name=\"ResizeGuide\"");
-        StringAssert.Contains(theme, "Opacity=\"0\"");
+        StringAssert.Contains(theme, "Background=\"{StaticResource CiaBorderStrongBrush}\"");
+        StringAssert.Contains(theme, "Opacity=\"0.55\"");
         StringAssert.Contains(theme, "Property=\"IsMouseOver\" Value=\"True\"");
         StringAssert.Contains(theme, "Property=\"IsDragging\" Value=\"True\"");
         StringAssert.Contains(database, "OnDatabaseColumnResizeDelta");
@@ -187,10 +191,11 @@ public sealed class UiUxBatch1Tests
     }
 
     [TestMethod]
-    public void ProgressBarsAreDeterminateBlueAndDiscoveryDatabasePreferenceIsEnabled()
+    public void GlobalProgressIsTheOnlyGraphicalProgressAndDiscoveryDatabasePreferenceIsEnabled()
     {
         var load = ReadDesktopFile("Views", "LoadWorkspaceView.xaml");
         var discovery = ReadDesktopFile("Views", "DiscoveryWorkspaceView.xaml");
+        var mainWindow = ReadDesktopFile("MainWindow.xaml");
         var theme = ReadDesktopFile("Themes", "CiaTheme.xaml");
 
         StringAssert.Contains(theme, "x:Key=\"CiaDeterminateProgressBarStyle\"");
@@ -199,13 +204,51 @@ public sealed class UiUxBatch1Tests
             && theme.Contains("CiaDeterminateProgressBarStyle", StringComparison.Ordinal)
             && theme.IndexOf("CiaSuccessBrush", StringComparison.Ordinal)
                 > theme.IndexOf("CiaDeterminateProgressBarStyle", StringComparison.Ordinal));
-        StringAssert.Contains(load, "IsIndeterminate=\"{Binding IsProgressIndeterminate, Mode=OneWay}\"");
-        StringAssert.Contains(discovery, "IsIndeterminate=\"{Binding IsProgressIndeterminate}\"");
-        StringAssert.Contains(discovery, "Maximum=\"{Binding ProgressMaximum}\"");
-        StringAssert.Contains(discovery, "Value=\"{Binding ProgressValue, Mode=OneWay}\"");
-        Assert.IsFalse(discovery.Contains("IsIndeterminate=\"{Binding IsBusy}\"", StringComparison.Ordinal));
+        Assert.IsFalse(load.Contains("<ProgressBar", StringComparison.Ordinal));
+        Assert.IsFalse(discovery.Contains("<ProgressBar", StringComparison.Ordinal));
+        Assert.HasCount(1, Regex.Matches(mainWindow, "<ProgressBar ").Cast<Match>());
+        StringAssert.Contains(mainWindow, "Maximum=\"{Binding GlobalStatus.ProgressMaximum, ElementName=WindowRoot, Mode=OneWay}\"");
+        StringAssert.Contains(mainWindow, "Value=\"{Binding GlobalStatus.ProgressValue, ElementName=WindowRoot, Mode=OneWay}\"");
+        StringAssert.Contains(mainWindow, "Text=\"{Binding GlobalStatus.ProgressPercentText, ElementName=WindowRoot}\"");
         StringAssert.Contains(discovery, "IsChecked=\"{Binding OpenDatabaseWhenCreationCompletes}\"");
         Assert.IsNotNull(FindNamedElement(discovery, "BuildDatabaseButton"));
+    }
+
+    [TestMethod]
+    public void IntegratedWindowChromeAndCompactGlobalStatusUseApprovedShellSurface()
+    {
+        var mainWindow = ReadDesktopFile("MainWindow.xaml");
+        var mainWindowCode = ReadDesktopFile("MainWindow.xaml.cs");
+
+        StringAssert.Contains(mainWindow, "WindowStyle=\"None\"");
+        StringAssert.Contains(mainWindow, "<shell:WindowChrome");
+        StringAssert.Contains(mainWindow, "x:Name=\"MinimizeButton\"");
+        StringAssert.Contains(mainWindow, "x:Name=\"MaximizeRestoreButton\"");
+        StringAssert.Contains(mainWindow, "x:Name=\"CloseButton\"");
+        StringAssert.Contains(mainWindow, "AutomationProperties.Name=\"Minimize window\"");
+        StringAssert.Contains(mainWindow, "AutomationProperties.Name=\"Maximize or restore window\"");
+        StringAssert.Contains(mainWindow, "AutomationProperties.Name=\"Close window\"");
+        StringAssert.Contains(mainWindowCode, "SystemCommands.ShowSystemMenu");
+        StringAssert.Contains(mainWindow, "StringFormat=Processing Host: {0}");
+        Assert.IsFalse(mainWindow.Contains("Host available", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(mainWindow.Contains("IncludedSummary", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void SettingsUsesConfiguredRowsWithoutDuplicateRuntimeListOrAutoFollow()
+    {
+        var settings = ReadDesktopFile("Views", "SettingsWorkspaceView.xaml");
+
+        Assert.IsFalse(settings.Contains("ItemsSource=\"{Binding ManagedStoragePaths}\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("Auto-follow newest", StringComparison.Ordinal));
+        StringAssert.Contains(settings, "Command=\"{Binding OpenManagedStorageFolderCommand}\"");
+        StringAssert.Contains(settings, "CommandParameter=\"Temporary\"");
+        StringAssert.Contains(settings, "CommandParameter=\"Working\"");
+        StringAssert.Contains(settings, "CommandParameter=\"Profiles\"");
+        StringAssert.Contains(settings, "CommandParameter=\"Settings\"");
+        StringAssert.Contains(settings, "CommandParameter=\"Database\"");
+        StringAssert.Contains(settings, "CommandParameter=\"Logs\"");
+        StringAssert.Contains(settings, "Text=\"Restart required\"");
     }
 
     [TestMethod]

@@ -3,6 +3,8 @@ using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -84,6 +86,53 @@ public sealed class LoadWorkspaceViewInteractionTests
             Assert.HasCount(2, rows.SelectedItems);
             Assert.IsTrue(viewModel.HasHighlightedSources);
             Assert.IsTrue(moveSelected.IsEnabled);
+
+            var firstRow = (ListBoxItem)rows.ItemContainerGenerator.ContainerFromIndex(0);
+            var firstCheckbox = FindVisualChild<CheckBox>(firstRow)!;
+            RaiseCheckboxClick(firstCheckbox);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            Assert.IsFalse(activeSources.Items.Single(item =>
+                item.SourceId == sources[0].SourceId).IsIncluded);
+            Assert.IsFalse(activeSources.Items.Single(item =>
+                item.SourceId == sources[1].SourceId).IsIncluded);
+            Assert.IsTrue(activeSources.Items.Single(item =>
+                item.SourceId == sources[2].SourceId).IsIncluded);
+            Assert.HasCount(2, rows.SelectedItems);
+            Assert.AreEqual(sources[0].SourceId, viewModel.SelectedSource!.SourceId);
+
+            RaiseCheckboxClick(firstCheckbox);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            Assert.IsTrue(activeSources.Items.Single(item =>
+                item.SourceId == sources[0].SourceId).IsIncluded);
+            Assert.IsTrue(activeSources.Items.Single(item =>
+                item.SourceId == sources[1].SourceId).IsIncluded);
+
+            rows.ScrollIntoView(rows.Items[2]);
+            rows.UpdateLayout();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            var thirdRow = (ListBoxItem)rows.ItemContainerGenerator.ContainerFromIndex(2);
+            var thirdCheckbox = FindVisualChild<CheckBox>(thirdRow)!;
+            RaiseCheckboxClick(thirdCheckbox);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            Assert.HasCount(1, rows.SelectedItems);
+            Assert.AreEqual(
+                sources[2].SourceId,
+                ((LoadedSourceItem)rows.SelectedItem).SourceId);
+            Assert.AreEqual(sources[2].SourceId, viewModel.SelectedSource!.SourceId);
+            Assert.IsTrue(activeSources.Items.Single(item =>
+                item.SourceId == sources[0].SourceId).IsIncluded);
+            Assert.IsTrue(activeSources.Items.Single(item =>
+                item.SourceId == sources[1].SourceId).IsIncluded);
+            Assert.IsFalse(activeSources.Items.Single(item =>
+                item.SourceId == sources[2].SourceId).IsIncluded);
+
+            RaiseCheckboxClick(thirdCheckbox);
+            rows.SelectedItems.Clear();
+            rows.SelectedItems.Add(rows.Items[0]);
+            rows.SelectedItems.Add(rows.Items[1]);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            Assert.IsTrue(activeSources.Items.All(source => source.IsIncluded));
+
             var moveSelectedPeer = new ButtonAutomationPeer(moveSelected);
             ((IInvokeProvider)moveSelectedPeer.GetPattern(PatternInterface.Invoke)!).Invoke();
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
@@ -145,6 +194,40 @@ public sealed class LoadWorkspaceViewInteractionTests
         {
             window.Close();
         }
+    }
+
+    private static void RaiseCheckboxClick(CheckBox checkbox)
+    {
+        checkbox.RaiseEvent(new MouseButtonEventArgs(
+            Mouse.PrimaryDevice,
+            Environment.TickCount,
+            MouseButton.Left)
+        {
+            RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent,
+            Source = checkbox
+        });
+        Assert.IsNotNull(checkbox.Command);
+        checkbox.Command.Execute(checkbox.CommandParameter);
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent)
+        where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T match)
+            {
+                return match;
+            }
+
+            if (FindVisualChild<T>(child) is { } nested)
+            {
+                return nested;
+            }
+        }
+
+        return null;
     }
 
     private static LoadedSourceContract CreateSource(string fileName) =>

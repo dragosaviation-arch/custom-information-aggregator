@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Shell;
 using CIA.Core.Diagnostics;
 using CIA.Core.ManagedStorage;
 using CIA.Desktop.Hosting;
@@ -51,6 +52,12 @@ public sealed class ApplicationStartupSmokeTests
 
             Assert.IsTrue(lifetime.ApplicationStarted.IsCancellationRequested);
             Assert.IsNotNull(window.Content);
+            Assert.AreEqual(WindowStyle.None, window.WindowStyle);
+            var windowChrome = WindowChrome.GetWindowChrome(window);
+            Assert.IsNotNull(windowChrome);
+            Assert.AreEqual(38d, windowChrome.CaptionHeight);
+            Assert.AreEqual(new Thickness(6), windowChrome.ResizeBorderThickness);
+            Assert.IsFalse(windowChrome.UseAeroCaptionButtons);
             Assert.AreSame(viewModel, window.DataContext);
             Assert.AreSame(globalStatus, window.GlobalStatus);
             Assert.AreSame(loadWorkspace, window.LoadWorkspace);

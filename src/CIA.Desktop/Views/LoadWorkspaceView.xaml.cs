@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using CIA.Contracts.Sources;
@@ -118,9 +119,9 @@ public partial class LoadWorkspaceView : UserControl
         RightRailGapColumn.Width = new GridLength(0);
         SettingsColumn.Width = new GridLength(0);
 
-        DetailsRow.Height = new GridLength(34, GridUnitType.Star);
+        DetailsRow.Height = new GridLength(38, GridUnitType.Star);
         RightRailGapRow.Height = new GridLength(8);
-        SettingsRow.Height = new GridLength(66, GridUnitType.Star);
+        SettingsRow.Height = new GridLength(62, GridUnitType.Star);
 
         Grid.SetRow(DetailsPanel, 0);
         Grid.SetColumn(DetailsPanel, 0);
@@ -170,6 +171,38 @@ public partial class LoadWorkspaceView : UserControl
             viewModel.SetHighlightedSources(
                 SourceRowsList.SelectedItems.Cast<LoadedSourceItem>());
         }
+    }
+
+    private void OnSourceRowPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left
+            && sender is ListBoxItem { DataContext: LoadedSourceItem source }
+            && DataContext is LoadWorkspaceViewModel viewModel)
+        {
+            viewModel.SelectedSource = source;
+        }
+    }
+
+    private void OnSourceInclusionPreviewMouseLeftButtonDown(
+        object sender,
+        MouseButtonEventArgs e)
+    {
+        if (sender is not CheckBox checkBox
+            || ItemsControl.ContainerFromElement(SourceRowsList, checkBox)
+                is not ListBoxItem { DataContext: LoadedSourceItem source } row
+            || DataContext is not LoadWorkspaceViewModel viewModel)
+        {
+            return;
+        }
+
+        if (!row.IsSelected)
+        {
+            SourceRowsList.SelectedItems.Clear();
+            row.IsSelected = true;
+        }
+
+        viewModel.SelectedSource = source;
+        viewModel.SetHighlightedSources(SourceRowsList.SelectedItems.Cast<LoadedSourceItem>());
     }
 
     private void OnLoadColumnDividerDragDelta(object sender, DragDeltaEventArgs e)

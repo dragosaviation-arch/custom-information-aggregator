@@ -84,6 +84,12 @@ public sealed class ColumnResizeInteractionTests
             Drag(discoveryDivider, 50);
             Assert.AreEqual(160, discoveryViewModel.TagColumnWidth);
             Assert.AreEqual(70, discoveryViewModel.DatabaseTagColumnWidth);
+            var blacklistDivider = FindThumb(
+                discoveryView,
+                "discovery.sample|discovery.blacklist");
+            Drag(blacklistDivider, -30);
+            Assert.AreEqual(140, discoveryViewModel.SampleColumnWidth);
+            Assert.AreEqual(134, discoveryViewModel.BlacklistColumnWidth);
         }
         finally
         {
@@ -110,6 +116,8 @@ public sealed class ColumnResizeInteractionTests
         Assert.AreEqual(110, restoredLoad.PathColumnWidth);
         Assert.AreEqual(160, restoredDiscovery.TagColumnWidth);
         Assert.AreEqual(70, restoredDiscovery.DatabaseTagColumnWidth);
+        Assert.AreEqual(140, restoredDiscovery.SampleColumnWidth);
+        Assert.AreEqual(134, restoredDiscovery.BlacklistColumnWidth);
         root.Delete(recursive: true);
     }
 

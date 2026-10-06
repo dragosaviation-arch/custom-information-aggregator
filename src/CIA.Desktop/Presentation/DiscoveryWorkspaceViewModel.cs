@@ -25,12 +25,14 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     internal const string OccurrencesColumnKey = "discovery.occurrences";
     internal const string SourcesColumnKey = "discovery.sources";
     internal const string SampleColumnKey = "discovery.sample";
+    internal const string BlacklistColumnKey = "discovery.blacklist";
     private const double MaximumColumnWidth = 2000;
     private readonly IDiscoveryClient _discoveryClient;
     private readonly ActiveDiscoveryConfiguration _activeConfiguration;
     private readonly ActiveLoadedSourceSet _sourceSet;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly DatabaseBuildCoordinator? _databaseBuildCoordinator;
+    private readonly GlobalOperationProgress? _globalProgress;
     private readonly ObservableCollection<DiscoveredInformationItemViewModel> _visibleInformation = [];
     private readonly ReadOnlyObservableCollection<DiscoveredInformationItemViewModel> _readOnlyInformation;
     private readonly ObservableCollection<SourceSetLayoutItemViewModel> _sourceSetLayouts = [];
@@ -121,6 +123,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private double _occurrencesColumnWidth;
     private double _sourcesColumnWidth;
     private double _sampleColumnWidth;
+    private double _blacklistColumnWidth;
+    private Guid? _discoveryProgressUpdateId;
 
     public DiscoveryWorkspaceViewModel(
         IDiscoveryClient discoveryClient,
@@ -133,7 +137,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         IBlacklistProfileCoordinator? blacklistProfileCoordinator = null,
         ReusableProfileSessionState? reusableProfileSessionState = null,
         MainWindowViewModel? shell = null,
-        ApplicationSettingsService? settingsService = null)
+        ApplicationSettingsService? settingsService = null,
+        GlobalOperationProgress? globalProgress = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryClient);
         ArgumentNullException.ThrowIfNull(activeConfiguration);
@@ -145,6 +150,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _sourceSet = sourceSet;
         _workflowCoordinator = workflowCoordinator;
         _databaseBuildCoordinator = databaseBuildCoordinator;
+        _globalProgress = globalProgress;
         _profileCoordinator = profileCoordinator;
         _blacklistProfileCoordinator = blacklistProfileCoordinator;
         _reusableProfileSessionState = reusableProfileSessionState
@@ -161,6 +167,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _occurrencesColumnWidth = ResolveColumnWidth(OccurrencesColumnKey, 90, 52);
         _sourcesColumnWidth = ResolveColumnWidth(SourcesColumnKey, 64, 44);
         _sampleColumnWidth = ResolveColumnWidth(SampleColumnKey, 170, 72);
+        _blacklistColumnWidth = ResolveColumnWidth(BlacklistColumnKey, 104, 88);
         _profileDeleteConfirmation.Changed += OnProfileDeleteConfirmationChanged;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
         _uiSynchronizationContext = SynchronizationContext.Current;
@@ -768,6 +775,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _sampleColumnWidth, value);
     }
 
+    public double BlacklistColumnWidth
+    {
+        get => _blacklistColumnWidth;
+        private set => SetProperty(ref _blacklistColumnWidth, value);
+    }
+
     public string ResultSummary => string.Format(
         CultureInfo.CurrentCulture,
         "{0:N0} tags · {1:N0} issues",
@@ -969,9 +982,25 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         StatusTitle = "Creating Database";
         StatusDetail = "Building hierarchy-aware Source Set datasets in the Processing Host.";
+        var progressUpdateId = _globalProgress?.Begin(
+            "Database build",
+            "Building hierarchy-aware datasets");
         var result = await _databaseBuildCoordinator.BuildAsync();
         if (result.Accepted)
         {
+            if (progressUpdateId is { } completedUpdateId)
+            {
+                _globalProgress?.Complete(
+                    completedUpdateId,
+                    _workflowCoordinator.Current.LatestOperation?.State
+                        == WorkflowOperationState.CompletedWithIssues
+                        ? GlobalOperationProgressState.CompletedWithIssues
+                        : GlobalOperationProgressState.CompletedSuccessfully,
+                    _workflowCoordinator.Current.LatestOperation?.State
+                        == WorkflowOperationState.CompletedWithIssues
+                        ? "completed with issues"
+                        : "completed successfully");
+            }
             StatusTitle = "Database created";
             StatusDetail = "The published Database is current and available in the Database workspace.";
             NavigateToWorkspaceIfConfigured(
@@ -980,6 +1009,13 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
+        if (progressUpdateId is { } failedUpdateId)
+        {
+            _globalProgress?.Complete(
+                failedUpdateId,
+                GlobalOperationProgressState.Failed,
+                "failed");
+        }
         StatusTitle = "Database creation failed";
         StatusDetail = result.Rejection?.Reason
             ?? "The Database could not be created from the current Discovery configuration.";
@@ -1016,6 +1052,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             }
 
             operation = begin.Operation;
+            _discoveryProgressUpdateId = _globalProgress?.Begin(
+                "Discovery",
+                $"Processing source 0 of {sources.Count:N0}",
+                0,
+                sources.Count);
             var progress = new InlineProgress<DiscoveryProgressSnapshot>(snapshot =>
                 DispatchToUi(() => ApplyDiscoveryProgress(snapshot)));
             var result = await _discoveryClient.RunAsync(operation, sources, progress);
@@ -1030,6 +1071,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                     result.FailureDescription
                     ?? completion.Rejection?.Reason
                     ?? "Discovery did not produce a usable result.");
+                CompleteDiscoveryGlobalProgress(
+                    GlobalOperationProgressState.Failed,
+                    "failed");
                 return;
             }
 
@@ -1066,6 +1110,13 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 ? "Discovery complete"
                 : "Discovery complete with issues";
             StatusDetail = "Current result available for the active source set.";
+            CompleteDiscoveryGlobalProgress(
+                result.Issues.Count == 0
+                    ? GlobalOperationProgressState.CompletedSuccessfully
+                    : GlobalOperationProgressState.CompletedWithIssues,
+                result.Issues.Count == 0
+                    ? "completed successfully"
+                    : "completed with issues");
             OnPropertyChanged(nameof(RunButtonText));
             NavigateToWorkspaceIfConfigured(
                 _settingsService?.Current.OpenDiscoveryWhenGenerationCompletes == true,
@@ -1084,6 +1135,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             StatusTitle = "Discovery cancelled";
             StatusDetail = "The Discovery operation was cancelled.";
             _progressStage = "Stage: Cancelled";
+            CompleteDiscoveryGlobalProgress(
+                GlobalOperationProgressState.Cancelled,
+                "cancelled");
         }
         catch (Exception)
         {
@@ -1097,6 +1151,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
             _progressStage = "Stage: Failed";
             PresentFailure("Discovery could not be completed by the Processing Host.");
+            CompleteDiscoveryGlobalProgress(
+                GlobalOperationProgressState.Failed,
+                "failed");
         }
         finally
         {
@@ -2255,6 +2312,27 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         _progressCompletedSourceCount = progress.CompletedSourceCount;
         NotifyProgressChanged();
+        if (_discoveryProgressUpdateId is { } updateId)
+        {
+            _globalProgress?.Report(
+                updateId,
+                $"Processing source {progress.CompletedSourceCount:N0} of {progress.TotalSourceCount:N0}",
+                progress.CompletedSourceCount,
+                progress.TotalSourceCount);
+        }
+    }
+
+    private void CompleteDiscoveryGlobalProgress(
+        GlobalOperationProgressState state,
+        string terminalText)
+    {
+        if (_discoveryProgressUpdateId is not { } updateId)
+        {
+            return;
+        }
+
+        _globalProgress?.Complete(updateId, state, terminalText);
+        _discoveryProgressUpdateId = null;
     }
 
     private void NavigateToWorkspaceIfConfigured(bool enabled, WorkspaceArea area)
@@ -2283,6 +2361,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         OccurrencesColumnKey => OccurrencesColumnWidth,
         SourcesColumnKey => SourcesColumnWidth,
         SampleColumnKey => SampleColumnWidth,
+        BlacklistColumnKey => BlacklistColumnWidth,
         _ => throw new ArgumentOutOfRangeException(nameof(key))
     };
 
@@ -2294,6 +2373,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         OccurrencesColumnKey => 52,
         SourcesColumnKey => 44,
         SampleColumnKey => 72,
+        BlacklistColumnKey => 88,
         _ => throw new ArgumentOutOfRangeException(nameof(key))
     };
 
@@ -2318,6 +2398,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 break;
             case SampleColumnKey:
                 SampleColumnWidth = width;
+                break;
+            case BlacklistColumnKey:
+                BlacklistColumnWidth = width;
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(key));

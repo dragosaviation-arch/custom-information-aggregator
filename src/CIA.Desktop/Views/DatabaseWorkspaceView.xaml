@@ -154,6 +154,14 @@
                                     Click="OnColumnsClick"
                                     Content="▥ Columns"
                                     Style="{StaticResource CiaButtonStyle}" />
+                            <Button Margin="4,0,0,0"
+                                    Command="{Binding IncludeVisibleRowsCommand}"
+                                    Content="Include visible"
+                                    Style="{StaticResource CiaGhostButtonStyle}" />
+                            <Button Margin="0,0,6,0"
+                                    Command="{Binding ExcludeVisibleRowsCommand}"
+                                    Content="Exclude visible"
+                                    Style="{StaticResource CiaGhostButtonStyle}" />
                             <TextBlock Margin="8,0,0,0"
                                        VerticalAlignment="Center"
                                        FontWeight="Bold"
@@ -163,16 +171,6 @@
                                        VerticalAlignment="Center"
                                        Style="{StaticResource CiaSecondaryTextStyle}"
                                        Text="{Binding ColumnCountText}" />
-                        </StackPanel>
-                        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
-                            <Button Margin="0,0,4,0"
-                                    Command="{Binding IncludeVisibleRowsCommand}"
-                                    Content="Include visible"
-                                    Style="{StaticResource CiaGhostButtonStyle}" />
-                            <Button Margin="0,0,6,0"
-                                    Command="{Binding ExcludeVisibleRowsCommand}"
-                                    Content="Exclude visible"
-                                    Style="{StaticResource CiaGhostButtonStyle}" />
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -303,30 +301,6 @@
                                                    Style="{StaticResource DatabaseGridHeaderTextStyle}"
                                                    Text="Include / #" />
                                     </Border>
-                                    <ItemsControl x:Name="DatabaseMetadataHeaders"
-                                                  ItemsSource="{Binding VisibleMetadataColumns}">
-                                        <ItemsControl.ItemsPanel>
-                                            <ItemsPanelTemplate>
-                                                <StackPanel Orientation="Horizontal" />
-                                            </ItemsPanelTemplate>
-                                        </ItemsControl.ItemsPanel>
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <Border Width="{Binding Width}"
-                                                        BorderBrush="{StaticResource CiaDividerBrush}"
-                                                        BorderThickness="0,0,1,0">
-                                                    <Grid>
-                                                        <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
-                                                                   Text="{Binding DisplayName}" />
-                                                        <Thumb Style="{StaticResource DatabaseColumnResizeThumbStyle}"
-                                                               DragStarted="OnDatabaseColumnResizeStarted"
-                                                               DragDelta="OnDatabaseColumnResizeDelta"
-                                                               DragCompleted="OnDatabaseColumnResizeCompleted" />
-                                                    </Grid>
-                                                </Border>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
                                     <ItemsControl x:Name="DynamicDatabaseHeaders"
                                                   ItemsSource="{Binding VisibleColumns}">
                                         <ItemsControl.ItemsPanel>
@@ -342,6 +316,30 @@
                                                     <Grid>
                                                         <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
                                                                    Text="{Binding DatabaseField}" />
+                                                        <Thumb Style="{StaticResource DatabaseColumnResizeThumbStyle}"
+                                                               DragStarted="OnDatabaseColumnResizeStarted"
+                                                               DragDelta="OnDatabaseColumnResizeDelta"
+                                                               DragCompleted="OnDatabaseColumnResizeCompleted" />
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <ItemsControl x:Name="DatabaseMetadataHeaders"
+                                                  ItemsSource="{Binding VisibleMetadataColumns}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Orientation="Horizontal" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Width="{Binding Width}"
+                                                        BorderBrush="{StaticResource CiaDividerBrush}"
+                                                        BorderThickness="0,0,1,0">
+                                                    <Grid>
+                                                        <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
+                                                                   Text="{Binding DisplayName}" />
                                                         <Thumb Style="{StaticResource DatabaseColumnResizeThumbStyle}"
                                                                DragStarted="OnDatabaseColumnResizeStarted"
                                                                DragDelta="OnDatabaseColumnResizeDelta"
@@ -425,27 +423,6 @@
                                                                    Text="{Binding Ordinal}" />
                                                     </StackPanel>
                                                 </Border>
-                                                <ItemsControl ItemsSource="{Binding MetadataCells}">
-                                                    <ItemsControl.ItemsPanel>
-                                                        <ItemsPanelTemplate>
-                                                            <StackPanel Orientation="Horizontal" />
-                                                        </ItemsPanelTemplate>
-                                                    </ItemsControl.ItemsPanel>
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate>
-                                                            <Border Width="{Binding Column.Width}"
-                                                                    BorderBrush="{StaticResource CiaDividerBrush}"
-                                                                    BorderThickness="0,0,1,1"
-                                                                    ToolTip="{Binding Value}">
-                                                                <TextBlock Margin="8,0"
-                                                                           VerticalAlignment="Center"
-                                                                           Foreground="{StaticResource CiaTextMutedBrush}"
-                                                                           Text="{Binding Value}"
-                                                                           TextTrimming="CharacterEllipsis" />
-                                                            </Border>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
                                                 <ItemsControl ItemsSource="{Binding Cells}">
                                                     <ItemsControl.ItemsPanel>
                                                         <ItemsPanelTemplate>
@@ -471,6 +448,27 @@
                                                                            VerticalAlignment="Center"
                                                                            Foreground="{StaticResource CiaTextPrimaryBrush}"
                                                                            Text="{Binding DisplayValue}"
+                                                                           TextTrimming="CharacterEllipsis" />
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                                <ItemsControl ItemsSource="{Binding MetadataCells}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <StackPanel Orientation="Horizontal" />
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border Width="{Binding Column.Width}"
+                                                                    BorderBrush="{StaticResource CiaDividerBrush}"
+                                                                    BorderThickness="0,0,1,1"
+                                                                    ToolTip="{Binding Value}">
+                                                                <TextBlock Margin="8,0"
+                                                                           VerticalAlignment="Center"
+                                                                           Foreground="{StaticResource CiaTextMutedBrush}"
+                                                                           Text="{Binding Value}"
                                                                            TextTrimming="CharacterEllipsis" />
                                                             </Border>
                                                         </DataTemplate>
@@ -833,10 +831,6 @@
                                 BorderBrush="{StaticResource CiaDividerBrush}"
                                 BorderThickness="0,0,0,1">
                             <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
                                 <StackPanel Margin="0,0,10,0">
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock VerticalAlignment="Center"
@@ -858,12 +852,6 @@
                                                TextTrimming="CharacterEllipsis"
                                                ToolTip="{Binding ExtractionReviewContext}" />
                                 </StackPanel>
-                                <Button x:Name="PrepareForExportButton"
-                                        Grid.Column="1"
-                                        AutomationProperties.Name="Prepare current Database for export"
-                                        Command="{Binding PrepareForExportCommand}"
-                                        Content="Prepare for export"
-                                        Style="{StaticResource CiaButtonStyle}" />
                             </Grid>
                         </Border>
                         <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">

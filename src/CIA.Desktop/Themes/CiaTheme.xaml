@@ -100,14 +100,16 @@
                         <Border x:Name="ResizeGuide"
                                 Width="1"
                                 HorizontalAlignment="Center"
-                                Background="{StaticResource CiaAccentBrush}"
-                                Opacity="0" />
+                                Background="{StaticResource CiaBorderStrongBrush}"
+                                Opacity="0.55" />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="ResizeGuide" Property="Opacity" Value="0.22" />
+                            <Setter TargetName="ResizeGuide" Property="Background" Value="{StaticResource CiaAccentBrush}" />
+                            <Setter TargetName="ResizeGuide" Property="Opacity" Value="0.7" />
                         </Trigger>
                         <Trigger Property="IsDragging" Value="True">
+                            <Setter TargetName="ResizeGuide" Property="Background" Value="{StaticResource CiaAccentBrush}" />
                             <Setter TargetName="ResizeGuide" Property="Opacity" Value="0.8" />
                         </Trigger>
                     </ControlTemplate.Triggers>

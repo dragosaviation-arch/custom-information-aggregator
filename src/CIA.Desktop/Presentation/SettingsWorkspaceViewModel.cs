@@ -44,6 +44,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public const string AllStreams = "All streams";
     private readonly IProcessingHistoryReader _historyReader;
     private readonly string _logDirectory;
+    private readonly ApplicationPaths _runtimeApplicationPaths;
     private readonly ApplicationSettingsService _settingsService;
     private readonly ISettingsFolderPicker? _settingsFolderPicker;
     private readonly SavedWorkingStateLibrary _savedStateLibrary;
@@ -113,6 +114,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         ArgumentException.ThrowIfNullOrWhiteSpace(runtimePaths.LogDirectory);
 
         _logDirectory = Path.GetFullPath(runtimePaths.LogDirectory);
+        _runtimeApplicationPaths = runtimePaths.ApplicationPaths;
         _settingsService = settingsService ?? new ApplicationSettingsService(
             new ApplicationSettingsStore(
                 runtimePaths.ApplicationPaths.LocalApplicationDataDirectory));
@@ -156,6 +158,9 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
             _logDirectory);
         RefreshCommand = new RelayCommand(Refresh);
         OpenLogsFolderCommand = new RelayCommand(OpenLogsFolder);
+        OpenManagedStorageFolderCommand = new RelayCommand<string>(
+            OpenManagedStorageFolder,
+            name => ResolveRuntimeDirectory(name) is not null);
         SaveSettingsCommand = new RelayCommand(SaveSettings);
         ResetSettingsCommand = new RelayCommand(ResetSettings);
         RefreshSavedStatesCommand = new RelayCommand(
@@ -215,6 +220,8 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public IRelayCommand RefreshCommand { get; }
 
     public IRelayCommand OpenLogsFolderCommand { get; }
+
+    public IRelayCommand<string> OpenManagedStorageFolderCommand { get; }
 
     public IRelayCommand SaveSettingsCommand { get; }
 
@@ -756,22 +763,45 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
 
     private void OpenLogsFolder()
     {
+        OpenDirectory(_logDirectory, "Logs");
+    }
+
+    private void OpenManagedStorageFolder(string? name)
+    {
+        if (ResolveRuntimeDirectory(name) is { } path)
+        {
+            OpenDirectory(path, name!);
+        }
+    }
+
+    private string? ResolveRuntimeDirectory(string? name) => name switch
+    {
+        "Temporary" => _runtimeApplicationPaths.TempDirectory,
+        "Working" => _runtimeApplicationPaths.WorkingDirectory,
+        "Profiles" => _runtimeApplicationPaths.ProfilesDirectory,
+        "Settings" => _runtimeApplicationPaths.SettingsDirectory,
+        "Database" => _runtimeApplicationPaths.DatabaseDirectory,
+        "Logs" => _logDirectory,
+        _ => null
+    };
+
+    private void OpenDirectory(string path, string name)
+    {
         try
         {
-            Directory.CreateDirectory(_logDirectory);
-            Process.Start(
-                new ProcessStartInfo
-                {
-                    FileName = _logDirectory,
-                    UseShellExecute = true
-                });
+            Directory.CreateDirectory(path);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true
+            });
             FolderOpenProblem = null;
         }
         catch (Exception exception) when (exception is IOException
                                           or UnauthorizedAccessException
                                           or System.ComponentModel.Win32Exception)
         {
-            FolderOpenProblem = "The Logs folder could not be opened.";
+            FolderOpenProblem = $"The {name} folder could not be opened.";
         }
     }
 

@@ -841,7 +841,7 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
-    public async Task RemoveTargetsCheckedEntriesRatherThanHighlightedRowsAndNeverDeletesFiles()
+    public async Task RemoveTargetsHighlightedEntriesRatherThanIncludedRowsAndNeverDeletesFiles()
     {
         var tempDirectory = Directory.CreateTempSubdirectory("cia-spr62-remove-");
 
@@ -880,15 +880,45 @@ public sealed class SourceLoadingCoordinatorTests
 
             Assert.IsFalse(viewModel.IsRemovalConfirmationOpen);
             Assert.HasCount(1, sourceSet.Items);
-            Assert.AreSame(highlightedSource, sourceSet.Items[0]);
+            Assert.AreSame(checkedSource, sourceSet.Items[0]);
             Assert.IsTrue(File.Exists(checkedPath));
             Assert.IsTrue(File.Exists(highlightedPath));
-            Assert.IsFalse(workflow.Current.HasValidSourceSelection);
+            Assert.IsTrue(workflow.Current.HasValidSourceSelection);
         }
         finally
         {
             tempDirectory.Delete(recursive: true);
         }
+    }
+
+    [TestMethod]
+    public async Task ReloadTargetsExactlyTheHighlightedRowsThroughExistingRefreshPath()
+    {
+        var paths = new[]
+        {
+            Path.GetFullPath("reload-first.xml"),
+            Path.GetFullPath("reload-second.xml"),
+            Path.GetFullPath("reload-third.xml")
+        };
+        var client = new StubSourceIntakeClient(Accept(paths.Select(CreateXml).ToArray()));
+        var sourceSet = new ActiveLoadedSourceSet();
+        using var workflow = CreateWorkflowCoordinator();
+        using var viewModel = new LoadWorkspaceViewModel(
+            new StubSourcePathPicker(Path.GetFullPath("folder")),
+            new SourceLoadingCoordinator(client, sourceSet, workflow),
+            sourceSet,
+            workflow,
+            new MainWindowViewModel(new ApplicationSession()));
+        await viewModel.AddFolderCommand.ExecuteAsync(null);
+        var targets = new[] { sourceSet.Items[0], sourceSet.Items[2] };
+        viewModel.SetHighlightedSources(targets);
+
+        await viewModel.ReloadHighlightedSourcesCommand.ExecuteAsync(null);
+
+        CollectionAssert.AreEqual(
+            targets.Select(item => item.SourceId).ToArray(),
+            client.RefreshRequests.Select(item => item.SourceId).ToArray());
+        Assert.AreEqual("Sources reloaded", viewModel.StatusTitle);
     }
 
     [TestMethod]
@@ -907,6 +937,7 @@ public sealed class SourceLoadingCoordinatorTests
             workflow,
             new MainWindowViewModel(new ApplicationSession()));
         await viewModel.AddXmlFileCommand.ExecuteAsync(null);
+        viewModel.SetHighlightedSources(sourceSet.Items);
 
         viewModel.RemoveCheckedCommand.Execute(null);
         Assert.IsTrue(viewModel.IsRemovalConfirmationOpen);
@@ -1629,6 +1660,8 @@ public sealed class SourceLoadingCoordinatorTests
 
         public SourceLoadSettings? LastSettings { get; private set; }
 
+        public List<LoadedSourceContract> RefreshRequests { get; } = [];
+
         public Task<SourceIntakeClientResult> LoadAsync(
             SourceSelectionKind selectionKind,
             string path,
@@ -1645,6 +1678,7 @@ public sealed class SourceLoadingCoordinatorTests
             CancellationToken cancellationToken = default)
         {
             CallCount++;
+            RefreshRequests.Add(source);
             return Task.FromResult(ToRefreshResult(result, source));
         }
     }

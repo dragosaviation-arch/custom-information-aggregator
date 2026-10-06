@@ -31,6 +31,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private readonly IWorkbookCollisionResolver? _workbookCollisionResolver;
     private readonly ApplicationSettingsService? _settingsService;
     private readonly PostExportBehaviorCoordinator? _postExportBehaviorCoordinator;
+    private readonly GlobalOperationProgress? _globalProgress;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly ExportRoutingConfigurationPresentation _exportRouting = new();
     private readonly Dictionary<string, DatabaseColumnPresentation> _columnCache = new(
@@ -81,7 +82,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         IExportFolderPicker? exportFolderPicker = null,
         IWorkbookCollisionResolver? workbookCollisionResolver = null,
         ApplicationSettingsService? settingsService = null,
-        PostExportBehaviorCoordinator? postExportBehaviorCoordinator = null)
+        PostExportBehaviorCoordinator? postExportBehaviorCoordinator = null,
+        GlobalOperationProgress? globalProgress = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryConfiguration);
         ArgumentNullException.ThrowIfNull(workflowCoordinator);
@@ -96,6 +98,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _workbookCollisionResolver = workbookCollisionResolver;
         _settingsService = settingsService;
         _postExportBehaviorCoordinator = postExportBehaviorCoordinator;
+        _globalProgress = globalProgress;
         if (settingsService?.Startup.Settings.LastUsedOutputDirectory is { } rememberedOutput
             && Directory.Exists(rememberedOutput))
         {
@@ -161,7 +164,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             () => _exportFolderPicker is not null);
         ExportToExcelCommand = new AsyncRelayCommand(
             ExportToExcelAsync,
-            () => IsExportAvailable);
+            CanRunExportFlow);
         SetRowIncludedCommand = new AsyncRelayCommand<DatabaseReviewRowPresentation>(
             SetRowIncludedAsync,
             CanSetRowIncluded);
@@ -1083,7 +1086,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         $"database.metadata.{field}";
 
     private object[] GetVisibleResizableColumns() =>
-        [.. _visibleMetadataFields.Cast<object>(), .. _visibleColumns.Cast<object>()];
+        [.. _visibleColumns.Cast<object>(), .. _visibleMetadataFields.Cast<object>()];
 
     private void UpdateResizeBoundaries()
     {
@@ -1405,14 +1408,95 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
+    private bool CanRunExportFlow()
+    {
+        if (_workflowCoordinator.Current.ActiveOperation is not null
+            || _extractionCoordinator is null
+            || _workbookExportCoordinator is null
+            || _workbookCollisionResolver is null)
+        {
+            return false;
+        }
+
+        var validation = CurrentExportValidation;
+        if (!validation.IsValid
+            || validation.RunnableWorkbooks.Count == 0
+            || !CaptureExportConfiguration().SourceSets.Any(set =>
+                set.IsEnabled && set.Fields.Any(field => field.IsValueIncluded)))
+        {
+            return false;
+        }
+
+        return IsExportAvailable || _extractionCoordinator.CanExtract();
+    }
+
     private async Task ExportToExcelAsync()
     {
         if (_workbookExportCoordinator is null
             || _workbookCollisionResolver is null
-            || _extractionCoordinator?.CurrentResult is not { } extractionResult)
+            || _extractionCoordinator is null)
         {
             return;
         }
+
+        var initialValidation = CurrentExportValidation;
+        if (!initialValidation.IsValid
+            || initialValidation.RunnableWorkbooks.Count == 0
+            || !CaptureExportConfiguration().SourceSets.Any(set =>
+                set.IsEnabled && set.Fields.Any(field => field.IsValueIncluded)))
+        {
+            WorkbookExportStatusText = initialValidation.Failures.FirstOrDefault()?.Description
+                ?? "At least one value field must be included for export.";
+            return;
+        }
+
+        if (_workflowCoordinator.Current.Extraction != WorkflowArtifactStatus.Current
+            || !ExtractionBasisMatchesReviewedDatabase
+            || _extractionCoordinator.CurrentResult is null)
+        {
+            WorkbookExportStatusText = "Preparing the current Database for export...";
+            var preparationProgress = _globalProgress?.Begin(
+                "Preparing export",
+                "Extracting current Database");
+            var preparation = await _extractionCoordinator.ExtractAsync();
+            if (!preparation.Accepted
+                || _workflowCoordinator.Current.Extraction != WorkflowArtifactStatus.Current
+                || !ExtractionBasisMatchesReviewedDatabase
+                || _extractionCoordinator.CurrentResult is null)
+            {
+                if (preparationProgress is { } failedPreparation)
+                {
+                    var cancelled = _workflowCoordinator.Current.LatestOperation?.State
+                        == WorkflowOperationState.Cancelled;
+                    _globalProgress?.Complete(
+                        failedPreparation,
+                        cancelled
+                            ? GlobalOperationProgressState.Cancelled
+                            : GlobalOperationProgressState.Failed,
+                        cancelled ? "cancelled" : "failed");
+                }
+                WorkbookExportStatusText = preparation.Rejection?.Reason
+                    ?? "Export preparation did not publish a current matching Extraction Result.";
+                NotifyExportReadinessChanged();
+                return;
+            }
+
+            if (preparationProgress is { } completedPreparation)
+            {
+                _globalProgress?.Complete(
+                    completedPreparation,
+                    _extractionCoordinator.CurrentCompletion?.Outcome
+                        == OperationOutcome.CompletedWithIssues
+                        ? GlobalOperationProgressState.CompletedWithIssues
+                        : GlobalOperationProgressState.CompletedSuccessfully,
+                    _extractionCoordinator.CurrentCompletion?.Outcome
+                        == OperationOutcome.CompletedWithIssues
+                        ? "completed with issues"
+                        : "completed successfully");
+            }
+        }
+
+        var extractionResult = _extractionCoordinator.CurrentResult!;
 
         if (AlwaysAskWhereToExport)
         {
@@ -1564,10 +1648,39 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
         WorkbookExportStatusText = "Exporting workbook batch...";
         NotifyExportReadinessChanged();
+        var exportProgress = _globalProgress?.Begin(
+            "Exporting to Excel",
+            publicationPlan.Targets.Count == 1
+                ? $"Publishing {Path.GetFileName(publicationPlan.Targets[0].FinalPath)}"
+                : $"Publishing {publicationPlan.Targets.Count:N0} workbooks");
         var execution = await _workbookExportCoordinator.ExportWithBatchAsync(
                 publicationPlan,
                 configuration)
             .ConfigureAwait(false);
+        var publishedBatchMatchesOperation = execution.Command.Accepted
+            && execution.PublishedBatch is { } publishedBatch
+            && execution.Command.Operation?.OperationId == publishedBatch.OperationId;
+        if (exportProgress is { } exportUpdateId)
+        {
+            var cancelled = _workflowCoordinator.Current.LatestOperation?.State
+                == WorkflowOperationState.Cancelled;
+            _globalProgress?.Complete(
+                exportUpdateId,
+                publishedBatchMatchesOperation
+                    ? _workflowCoordinator.Current.LatestOperation?.State
+                        == WorkflowOperationState.CompletedWithIssues
+                        ? GlobalOperationProgressState.CompletedWithIssues
+                        : GlobalOperationProgressState.CompletedSuccessfully
+                    : cancelled
+                        ? GlobalOperationProgressState.Cancelled
+                        : GlobalOperationProgressState.Failed,
+                publishedBatchMatchesOperation
+                    ? _workflowCoordinator.Current.LatestOperation?.State
+                        == WorkflowOperationState.CompletedWithIssues
+                        ? "completed with issues"
+                        : "completed successfully"
+                    : cancelled ? "cancelled" : "failed");
+        }
         DispatchToUi(() =>
         {
             var batch = execution.PublishedBatch;

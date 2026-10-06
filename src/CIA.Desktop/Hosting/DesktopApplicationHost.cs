@@ -44,6 +44,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton(settingsService);
         builder.Services.AddSingleton(applicationPaths);
         builder.Services.AddSingleton<ApplicationSession>();
+        builder.Services.AddSingleton<GlobalOperationProgress>();
         builder.Services.AddSingleton<GlobalStatusViewModel>();
         builder.Services.AddSingleton<MainWindowViewModel>();
         builder.Services.AddSingleton<LoadWorkspaceViewModel>();
