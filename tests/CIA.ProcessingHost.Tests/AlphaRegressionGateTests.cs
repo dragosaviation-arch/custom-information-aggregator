@@ -250,6 +250,117 @@ public sealed class AlphaRegressionGateTests
 
     [TestMethod]
     [TestCategory(GateCategory)]
+    public async Task SameLeafDifferentAncestryRemainsFilterableThroughExtractionAndExcel()
+    {
+        using var workspace = new AlphaWorkspace();
+        var (source, specification) = await workspace.CreateSameLeafSpecificationAsync(
+            RepeatedDataLayout.StructuralRows);
+        var discovered = await workspace.Discovery.RunAsync(
+            OperationCorrelation.CreateNew(),
+            [source]);
+        Assert.IsTrue(discovered.Accepted, discovered.Failure?.Description);
+        var logicalPartNumber = DiscoveredInformationItemViewModel.CreateLogicalItems(
+                discovered.Information,
+                _ => "Tools",
+                _ => DiscoveryInformationDisposition.Selected,
+                identity => identity.InformationType == "pnr" ? "Part Number" : null)
+            .Single(item => item.InformationType == "pnr");
+        Assert.HasCount(2, logicalPartNumber.DetailedIdentities);
+        Assert.AreEqual("Part Number", logicalPartNumber.DatabaseTag);
+        var built = await workspace.Database.BuildAsync(
+            OperationCorrelation.CreateNew(),
+            specification);
+        Assert.IsTrue(built.Accepted, built.Failure?.Description);
+        var databasePage = (await workspace.ReadAllDatabasePagesAsync(
+            built.PublishedGeneration!)).Single();
+        Assert.HasCount(2, databasePage.Rows);
+
+        var extracted = await workspace.Extraction.ExtractAsync(
+            OperationCorrelation.CreateNew(),
+            built.PublishedGeneration!);
+        Assert.IsTrue(extracted.Accepted, extracted.Failure?.Description);
+        var extractionRows = await workspace.ReadAllExtractionRowsAsync(extracted.PublishedResult!);
+        Assert.HasCount(2, extractionRows);
+        Assert.IsTrue(extractionRows.All(row =>
+            row.Source.SourceId == source.SourceId
+            && RowValues(row).Contains("KIT")));
+        Assert.IsFalse(extractionRows.Any(row =>
+            RowValues(row).Contains("MAIN-001") && RowValues(row).Contains("ALT-001")));
+
+        var dataset = extracted.PublishedResult!.Datasets.Single();
+        var workbookId = WorkbookDefinitionId.CreateNew();
+        var worksheetId = WorksheetDefinitionId.CreateNew();
+        var configuration = new ExportConfigurationSnapshot(
+            [new WorkbookDefinition(
+                workbookId,
+                "Structural origins.xlsx",
+                1,
+                [new WorksheetDefinition(
+                    worksheetId,
+                    workbookId,
+                    dataset.SourceSetId,
+                    "Results",
+                    1)])],
+            [new SourceSetExportConfiguration(
+                dataset.SourceSetId,
+                true,
+                worksheetId,
+                dataset.Columns.Select(column => new ExportFieldConfiguration(
+                    column.Identity,
+                    true,
+                    column.EffectiveName,
+                    false)).ToArray(),
+                [new ExportMetadataFieldConfiguration(
+                     DatabaseMetadataField.ValuePath,
+                     true,
+                     "Value / XML Path"),
+                 new ExportMetadataFieldConfiguration(
+                     DatabaseMetadataField.StructuralIdentity,
+                     true,
+                     "Structural Identity"),
+                 new ExportMetadataFieldConfiguration(
+                     DatabaseMetadataField.RecordHierarchy,
+                     true,
+                     "Record Hierarchy")])]);
+        var exportDirectory = Path.Combine(workspace.Root, "same-leaf-export");
+        Directory.CreateDirectory(exportDirectory);
+        var exported = await workspace.Export.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extracted.PublishedResult,
+            configuration,
+            CreatePublicationPlan(configuration, extracted.PublishedResult, exportDirectory));
+
+        Assert.IsTrue(exported.Accepted, exported.Failure?.Description);
+        var workbookPath = Path.Combine(exportDirectory, "Structural origins.xlsx");
+        using var workbook = SpreadsheetDocument.Open(workbookPath, isEditable: false);
+        var cells = ReadCells(workbook, "Results");
+        var columns = cells.Where(cell => cell.Key.EndsWith("1", StringComparison.Ordinal))
+            .ToDictionary(cell => cell.Value, cell => cell.Key[..^1], StringComparer.Ordinal);
+        var partNumberColumn = columns["Part Number"];
+        var valuePathColumn = columns["Value / XML Path"];
+        var structuralIdentityColumn = columns["Structural Identity"];
+        var recordHierarchyColumn = columns["Record Hierarchy"];
+        var rows = new[] { 2, 3 };
+        var mainRow = rows.Single(row => cells[$"{partNumberColumn}{row}"] == "MAIN-001");
+        var alternateRow = rows.Single(row => cells[$"{partNumberColumn}{row}"] == "ALT-001");
+        Assert.DoesNotContain("|", cells[$"{partNumberColumn}{mainRow}"]);
+        Assert.DoesNotContain("|", cells[$"{partNumberColumn}{alternateRow}"]);
+        StringAssert.Contains(cells[$"{valuePathColumn}{mainRow}"], "/toolnbr/pnr");
+        Assert.IsFalse(cells[$"{valuePathColumn}{mainRow}"].Contains(
+            "/pnrdata/rplby/pnr", StringComparison.Ordinal));
+        StringAssert.Contains(cells[$"{valuePathColumn}{alternateRow}"], "/pnrdata/rplby/pnr");
+        StringAssert.Contains(cells[$"{structuralIdentityColumn}{mainRow}"], "/toolnbr/pnr");
+        StringAssert.Contains(
+            cells[$"{structuralIdentityColumn}{alternateRow}"],
+            "/pnrdata/rplby/pnr");
+        Assert.AreEqual(
+            cells[$"{recordHierarchyColumn}{mainRow}"],
+            cells[$"{recordHierarchyColumn}{alternateRow}"]);
+        Assert.AreEqual(2, DataRowCount(workbook, "Results"));
+    }
+
+    [TestMethod]
+    [TestCategory(GateCategory)]
     public void EvidencePreservationAssertionRejectsMissingPhysicalOccurrence()
     {
         var evidence = new ValueEvidence(
@@ -268,6 +379,9 @@ public sealed class AlphaRegressionGateTests
     }
 
     private static IReadOnlyList<string> RowValues(DatabaseReviewRow row) =>
+        row.Cells.SelectMany(cell => cell.Values).Select(value => value.Value).ToArray();
+
+    private static IReadOnlyList<string> RowValues(ExtractionResultRow row) =>
         row.Cells.SelectMany(cell => cell.Values).Select(value => value.Value).ToArray();
 
     private static void AssertEvidencePreserved(
@@ -520,6 +634,46 @@ public sealed class AlphaRegressionGateTests
             return new DatabaseBuildSpecification(datasets);
         }
 
+        public async Task<(LoadedSourceContract Source, DatabaseBuildSpecification Specification)>
+            CreateSameLeafSpecificationAsync(RepeatedDataLayout layout)
+        {
+            var sourceSet = SourceSetId.CreateNew();
+            var source = CopyFixture(
+                sourceSet,
+                "same-leaf-different-ancestry.xml",
+                "StructuralDiscovery");
+            var interpreted = await InterpretAsync(source);
+            var identities = interpreted.Values
+                .Where(value => value.Lineage is not null)
+                .Select(value => HierarchySourceOccurrence.FromInterpretedValue(
+                    sourceSet,
+                    value).Identity)
+                .Where(identity => identity.InformationType is "pnr" or "mfr" or "keyword")
+                .Distinct()
+                .ToArray();
+            var overrides = identities
+                .Where(identity => identity.InformationType is "pnr" or "mfr")
+                .ToDictionary(
+                    identity => identity,
+                    identity => identity.InformationType == "pnr"
+                        ? "Part Number"
+                        : "Vendor Code");
+            var fields = DatabaseTagMapper.CreateFieldMappings(
+                sourceSet,
+                identities.Select(identity => new DiscoveryConfigurationItem(
+                    identity,
+                    DiscoveryInformationDisposition.Selected)),
+                overrides);
+            return (source, new DatabaseBuildSpecification(
+                [new DatabaseDatasetBuildSpecification(
+                    sourceSet,
+                    "Tools",
+                    1,
+                    layout,
+                    [source],
+                    fields)]));
+        }
+
         public async Task<IReadOnlyList<ValueEvidence>> ReadExpectedEvidenceAsync(
             AlphaFixture fixture,
             DatabaseBuildSpecification specification)
@@ -582,10 +736,13 @@ public sealed class AlphaRegressionGateTests
             return rows;
         }
 
-        private LoadedSourceContract CopyFixture(SourceSetId set, string fileName)
+        private LoadedSourceContract CopyFixture(
+            SourceSetId set,
+            string fileName,
+            string fixtureDirectory = "AlphaRegression")
         {
             var source = Path.Combine(
-                AppContext.BaseDirectory, "Fixtures", "AlphaRegression", fileName);
+                AppContext.BaseDirectory, "Fixtures", fixtureDirectory, fileName);
             var target = Path.Combine(Root, set.ToString(), fileName);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(source, target);

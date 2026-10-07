@@ -1,3 +1,4 @@
+using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Sources;
 using CIA.Core.Sources;
@@ -80,13 +81,16 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
             .OrderBy(occurrence => occurrence.Lineage.TraversalOrder)
             .Select(CreateCell)
             .ToList();
+        var childBranches = new List<VariableBranch>();
         var variableBranches = new List<VariableBranch>();
+        var structuralBranchGroup = 0;
 
         foreach (var siblingGroup in node.Children
                      .OrderBy(child => child.Element.SiblingPosition)
                      .ThenBy(child => child.Element.InstanceId)
                      .GroupBy(child => child.Element.ExpandedName, StringComparer.Ordinal))
         {
+            structuralBranchGroup++;
             var siblings = siblingGroup.ToArray();
             var isRepeatedFamily = IsRepeatedFamily(siblings, repeatedFamilyPaths);
             var representsTypedStructuralSlots = isRepeatedFamily
@@ -118,9 +122,10 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
 
                 if (repeatedBranch.Count > 0)
                 {
-                    variableBranches.Add(new VariableBranch(
+                    childBranches.Add(new VariableBranch(
                         repeatedBranch,
-                        IsDirectRepeatedFamily: true));
+                        IsDirectRepeatedFamily: true,
+                        structuralBranchGroup));
                 }
 
                 continue;
@@ -140,18 +145,33 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                         cancellationToken)
                     .ConfigureAwait(false);
 
-                if (childFragments.Count == 1
-                    && childFragments[0].Cells.All(
-                        cell => cell.ColumnIdentity.RepeatCoordinates.Count == 0))
+                if (childFragments.Count > 0)
                 {
-                    fixedCells.AddRange(childFragments[0].Cells);
-                }
-                else if (childFragments.Count > 0)
-                {
-                    variableBranches.Add(new VariableBranch(
+                    childBranches.Add(new VariableBranch(
                         childFragments,
-                        IsDirectRepeatedFamily: false));
+                        IsDirectRepeatedFamily: false,
+                        structuralBranchGroup));
                 }
+            }
+        }
+
+        // A friendly field can span different ancestry (for example, two distinct pnr
+        // branches). Keep those branches as row alternatives while retaining one logical
+        // Database field; repeated siblings in the same structural group remain unaffected.
+        var structuralAlternativeBranches = FindStructuralAlternativeBranches(childBranches);
+        for (var index = 0; index < childBranches.Count; index++)
+        {
+            var branch = childBranches[index];
+            if (!structuralAlternativeBranches.Contains(index)
+                && branch.Rows.Count == 1
+                && branch.Rows[0].Cells.All(
+                    cell => cell.ColumnIdentity.RepeatCoordinates.Count == 0))
+            {
+                fixedCells.AddRange(branch.Rows[0].Cells);
+            }
+            else
+            {
+                variableBranches.Add(branch);
             }
         }
 
@@ -170,11 +190,12 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                 .ToArray();
         }
 
-        var canAssociateBranches = variableBranches.Count == 1
+        var canAssociateBranches = structuralAlternativeBranches.Count == 0
+                                   && (variableBranches.Count == 1
                                    || (node.Parent is not null
                                        && variableBranches.All(branch =>
                                            branch.IsDirectRepeatedFamily
-                                           || branch.IsSingleFieldSequence));
+                                           || branch.IsSingleFieldSequence)));
         var branchRows = variableBranches.Select(branch => branch.Rows).ToArray();
         if (!canAssociateBranches)
         {
@@ -398,6 +419,33 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                    structuralBySibling.Count(identities => identities.Contains(identity)) == 1);
     }
 
+    private static IReadOnlySet<int> FindStructuralAlternativeBranches(
+        IReadOnlyList<VariableBranch> branches)
+    {
+        var logicalIdentities = branches.Select(branch => branch.Rows
+                .SelectMany(row => row.Cells)
+                .Select(cell => DatabaseLogicalFieldIdentity.Create(cell.DetailedIdentity))
+                .ToHashSet())
+            .ToArray();
+        var alternatives = new HashSet<int>();
+        for (var first = 0; first < logicalIdentities.Length; first++)
+        {
+            for (var second = first + 1; second < logicalIdentities.Length; second++)
+            {
+                if (branches[first].StructuralBranchGroup == branches[second].StructuralBranchGroup
+                    || !logicalIdentities[first].Overlaps(logicalIdentities[second]))
+                {
+                    continue;
+                }
+
+                alternatives.Add(first);
+                alternatives.Add(second);
+            }
+        }
+
+        return alternatives;
+    }
+
     private static IReadOnlySet<string> FindRepeatedFamilyPaths(
         IReadOnlyList<SourceTreeNode> roots)
     {
@@ -533,7 +581,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
 
     private sealed record VariableBranch(
         IReadOnlyList<RowFragment> Rows,
-        bool IsDirectRepeatedFamily)
+        bool IsDirectRepeatedFamily,
+        int StructuralBranchGroup)
     {
         public bool IsSingleFieldSequence => Rows.Count > 0
             && Rows

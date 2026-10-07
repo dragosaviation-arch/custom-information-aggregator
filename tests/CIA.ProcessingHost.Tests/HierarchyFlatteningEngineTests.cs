@@ -34,6 +34,49 @@ public sealed class HierarchyFlatteningEngineTests
     }
 
     [TestMethod]
+    [DataRow(RepeatedDataLayout.AlignRepeatedGroupsByPosition)]
+    [DataRow(RepeatedDataLayout.StructuralRows)]
+    [DataRow(RepeatedDataLayout.AllCombinations)]
+    [DataRow(RepeatedDataLayout.NumberRepeatedValuesIntoColumns)]
+    public async Task SameLeafFieldsUnderDifferentAncestryRemainSeparateInEveryLayout(
+        RepeatedDataLayout layout)
+    {
+        using var workspace = new FlatteningWorkspace();
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = workspace.CopyFixture("same-leaf-different-ancestry.xml", sourceSetId);
+        var document = await InterpretAsync(source);
+        var input = CreateSourceInput(
+            sourceSetId,
+            document,
+            identity => identity.InformationType is "pnr" or "mfr" or "keyword");
+
+        var result = await new HierarchyFlatteningEngine().FlattenAsync(
+            new HierarchyFlatteningRequest(sourceSetId, layout, [input]));
+
+        Assert.HasCount(2, result.Rows);
+        var main = result.Rows.Single(row => Contains(row, "MAIN-001"));
+        var alternate = result.Rows.Single(row => Contains(row, "ALT-001"));
+        CollectionAssert.AreEquivalent(
+            new[] { "KIT", "MAIN-001", "MFR-A" },
+            main.Cells.Select(cell => cell.Value).ToArray());
+        CollectionAssert.AreEquivalent(
+            new[] { "KIT", "ALT-001", "MFR-B" },
+            alternate.Cells.Select(cell => cell.Value).ToArray());
+        Assert.IsFalse(result.Rows.Any(row =>
+            Contains(row, "MAIN-001") && Contains(row, "ALT-001")));
+        Assert.IsFalse(result.Rows.Any(row =>
+            Contains(row, "MAIN-001") && Contains(row, "MFR-B")));
+        Assert.IsFalse(result.Rows.Any(row =>
+            Contains(row, "ALT-001") && Contains(row, "MFR-A")));
+        StringAssert.Contains(
+            main.Cells.Single(cell => cell.Value == "MAIN-001").StructuralPath,
+            "/toolnbr/pnr");
+        StringAssert.Contains(
+            alternate.Cells.Single(cell => cell.Value == "ALT-001").StructuralPath,
+            "/pnrdata/rplby/pnr");
+    }
+
+    [TestMethod]
     public async Task RepeatedAndNestedRecordsKeepHierarchyProvenFieldsTogether()
     {
         using var workspace = new FlatteningWorkspace();
