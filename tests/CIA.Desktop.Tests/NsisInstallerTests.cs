@@ -57,16 +57,19 @@ public sealed class NsisInstallerTests
 
         StringAssert.Contains(
             installer,
-            "CreateDirectory \"$SMPROGRAMS\\Custom Information Aggregator\"");
+            "!define CIA_START_MENU_DIRECTORY \"$SMPROGRAMS\\Custom Information Aggregator\"");
         StringAssert.Contains(
             installer,
-            "CreateShortcut \"$SMPROGRAMS\\Custom Information Aggregator\\Custom Information Aggregator.lnk\" \"$INSTDIR\\CIA.exe\"");
+            "CreateShortcut \"${CIA_START_MENU_DIRECTORY}\\Custom Information Aggregator.lnk\" \"$INSTDIR\\CIA.exe\"");
         StringAssert.Contains(
             installer,
             "Section /o \"Desktop shortcut\" SecDesktopShortcut");
         StringAssert.Contains(
             installer,
-            "CreateShortcut \"$DESKTOP\\Custom Information Aggregator.lnk\" \"$INSTDIR\\CIA.exe\"");
+            "!define CIA_DESKTOP_SHORTCUT \"$DESKTOP\\Custom Information Aggregator.lnk\"");
+        StringAssert.Contains(
+            installer,
+            "CreateShortcut \"${CIA_DESKTOP_SHORTCUT}\" \"$INSTDIR\\CIA.exe\"");
         Assert.HasCount(2, shortcutLines);
         Assert.IsFalse(shortcutLines.Any(
             line => line.Contains("CIA.ProcessingHost", StringComparison.OrdinalIgnoreCase)));
@@ -84,10 +87,13 @@ public sealed class NsisInstallerTests
         StringAssert.Contains(installer, "SetRegView 64");
         StringAssert.Contains(
             installer,
-            "WriteRegStr HKCU \"Software\\Classes\\.cia\" \"\" \"CIA.WorkingState\"");
+            "!define CIA_CLASSES_KEY \"Software\\Classes\"");
         StringAssert.Contains(
             installer,
-            "WriteRegStr HKCU \"Software\\Classes\\CIA.WorkingState\\shell\\open\\command\"");
+            "WriteRegStr HKCU \"${CIA_CLASSES_KEY}\\.cia\" \"\" \"CIA.WorkingState\"");
+        StringAssert.Contains(
+            installer,
+            "WriteRegStr HKCU \"${CIA_CLASSES_KEY}\\CIA.WorkingState\\shell\\open\\command\"");
         StringAssert.Contains(installer, "$INSTDIR\\CIA.exe");
         StringAssert.Contains(installer, "$\\\"%1$\\\"");
         Assert.IsTrue(registryLines.All(
@@ -97,7 +103,80 @@ public sealed class NsisInstallerTests
     }
 
     [TestMethod]
-    public void InstallerIntroducesNoAdminServiceStartupOrMutableDataHandling()
+    public void InstallerSupportsUpgradeAndPerUserWindowsUninstallRegistration()
+    {
+        var installer = ReadRepositoryFile("deployment", "nsis", "CIA.Installer.nsi");
+        var replacementIndex = installer.IndexOf(
+            "RMDir /r \"$INSTDIR\"",
+            StringComparison.Ordinal);
+        var publicationIndex = installer.IndexOf(
+            "File /r \"${CIA_PUBLISH_DIR}\\*\"",
+            StringComparison.Ordinal);
+
+        Assert.IsGreaterThanOrEqualTo(0, replacementIndex);
+        Assert.IsGreaterThan(replacementIndex, publicationIndex);
+        StringAssert.Contains(installer, "WriteUninstaller \"$INSTDIR\\Uninstall CIA.exe\"");
+        StringAssert.Contains(
+            installer,
+            "!define CIA_UNINSTALL_KEY \"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Custom Information Aggregator\"");
+        StringAssert.Contains(installer, "WriteRegStr HKCU \"${CIA_UNINSTALL_KEY}\" \"DisplayName\"");
+        StringAssert.Contains(installer, "WriteRegStr HKCU \"${CIA_UNINSTALL_KEY}\" \"DisplayVersion\"");
+        StringAssert.Contains(installer, "WriteRegStr HKCU \"${CIA_UNINSTALL_KEY}\" \"UninstallString\"");
+        StringAssert.Contains(installer, "WriteRegStr HKCU \"${CIA_UNINSTALL_KEY}\" \"InstallLocation\"");
+        StringAssert.Contains(installer, "WriteRegDWORD HKCU \"${CIA_UNINSTALL_KEY}\" \"NoModify\" 1");
+        StringAssert.Contains(installer, "WriteRegDWORD HKCU \"${CIA_UNINSTALL_KEY}\" \"NoRepair\" 1");
+    }
+
+    [TestMethod]
+    public void UninstallerRemovesInstalledApplicationAndShellIntegration()
+    {
+        var installer = ReadRepositoryFile("deployment", "nsis", "CIA.Installer.nsi");
+
+        StringAssert.Contains(installer, "Section \"Uninstall\"");
+        StringAssert.Contains(
+            installer,
+            "Delete \"${CIA_START_MENU_DIRECTORY}\\Custom Information Aggregator.lnk\"");
+        StringAssert.Contains(installer, "RMDir \"${CIA_START_MENU_DIRECTORY}\"");
+        StringAssert.Contains(installer, "Delete \"${CIA_DESKTOP_SHORTCUT}\"");
+        StringAssert.Contains(installer, "DeleteRegKey HKCU \"${CIA_CLASSES_KEY}\\CIA.WorkingState\"");
+        StringAssert.Contains(installer, "DeleteRegKey HKCU \"${CIA_UNINSTALL_KEY}\"");
+        Assert.HasCount(
+            2,
+            installer
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Where(line => line.Contains(
+                    "RMDir /r \"$INSTDIR\"",
+                    StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public void ManagedDataRemovalIsExplicitDefaultOffAndBoundedToApprovedRoot()
+    {
+        var installer = ReadRepositoryFile("deployment", "nsis", "CIA.Installer.nsi");
+        var managedDataRemovalLines = installer
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains(
+                "RMDir /r \"${CIA_MANAGED_DATA_DIRECTORY}\"",
+                StringComparison.Ordinal))
+            .ToArray();
+
+        StringAssert.Contains(
+            installer,
+            "!define CIA_MANAGED_DATA_DIRECTORY \"$LOCALAPPDATA\\Custom Information Aggregator\"");
+        StringAssert.Contains(installer, "StrCpy $RemoveManagedData ${BST_UNCHECKED}");
+        StringAssert.Contains(installer, "Remove CIA managed application data");
+        StringAssert.Contains(installer, "${GetOptions} $0 \"/RemoveManagedData\" $1");
+        StringAssert.Contains(installer, "${If} $RemoveManagedData == ${BST_CHECKED}");
+        Assert.HasCount(1, managedDataRemovalLines);
+        Assert.IsFalse(installer.Contains("$PROFILE", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(installer.Contains("$DOCUMENTS", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(installer.Contains("*.cia", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(installer.Contains("PersistentArchiveExtraction", StringComparison.Ordinal));
+        Assert.IsFalse(installer.Contains("LastUsedOutputDirectory", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void InstallerIntroducesNoAdminServiceStartupOrBackgroundBehavior()
     {
         var installer = ReadRepositoryFile("deployment", "nsis", "CIA.Installer.nsi");
         var desktopProject = ReadRepositoryFile("src", "CIA.Desktop", "CIA.Desktop.csproj");
@@ -106,11 +185,7 @@ public sealed class NsisInstallerTests
             "CIA.ProcessingHost",
             "CIA.ProcessingHost.csproj");
 
-        Assert.IsFalse(installer.Contains("WriteUninstaller", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(installer.Contains("$APPDATA", StringComparison.OrdinalIgnoreCase));
-        Assert.IsFalse(installer.Contains(
-            "$LOCALAPPDATA\\Custom Information Aggregator",
-            StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(installer.Contains("ExecWait", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(installer.Contains("nsExec", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(installer.Contains("HKLM", StringComparison.Ordinal));
