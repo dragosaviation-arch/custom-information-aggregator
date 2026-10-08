@@ -21,29 +21,30 @@ The application is designed to let a user load large XML document sets, discover
 5. **Review** the resulting data and configure how it should be presented.
 6. **Prepare and export** the required fields to Excel.
 
-The workflow is still being refined during Alpha development, so individual controls and presentation details may change before release.
+The major v1 workflow and UI structure are now frozen. Current work focuses on release readiness, compatibility validation, documentation and final verification.
+
+## Installation
+
+See the [CIA v1 Installation Guide](docs/installation/README.md) for supported Windows versions, installation, upgrades, uninstall behavior and release-installation troubleshooting.
 
 ## Development status
 
-**Current stage: Alpha development**
+**Current stage: Release Candidate preparation**
 
-- ✅ Application foundation, desktop workspace and processing architecture
-- ✅ File, folder and archive loading with active source management
-- ✅ Generic XML discovery, structural context and field selection
-- ✅ Database generation and review workflow
-- ✅ Extraction pipeline and configurable Excel export engine
-- 🟡 End-to-end UI/UX completion and workflow refinement
-- 🟡 Release validation, defect correction and packaging
+- ✅ Core Load → Discovery → Database → Extraction / Review / Export workflow
+- ✅ v1 UI/UX convergence and structure freeze
+- ✅ Windows installer, shell integration, upgrade and uninstall lifecycle
+- 🟡 Windows compatibility validation
+- 🟡 Release documentation and final verification
 
 ### Release roadmap
 
-| Milestone | Target | Goal |
-|---|---:|---|
-| **Full Alpha** | **11 September 2026** | Complete end-to-end application workflow available for Alpha testing |
-| **Release Candidate** | **18 September 2026** | Feature-complete build focused on verification, defects and release readiness |
-| **First Release** | After RC acceptance | Packaged release following successful Release Candidate validation |
-
-Dates are current project targets and may move if release-blocking defects are found during validation.
+| Milestone | Status |
+|---|---|
+| **Full Alpha** | Complete |
+| **UI/UX convergence / Beta closure** | Complete |
+| **Release Candidate** | In preparation |
+| **v1.0.0** | After RC acceptance |
 
 ## For technical reviewers
 

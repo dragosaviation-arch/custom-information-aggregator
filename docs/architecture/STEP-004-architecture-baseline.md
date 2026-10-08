@@ -114,7 +114,7 @@ The interactive UI and Processing Host are separate local OS processes inside on
 - Only **CIA.exe** is user-facing; the Processing Host is internal and is not installed as a Windows Service/startup application.
 - Normal installation uses a graphical installer flow without Command Prompt/PowerShell/console windows.
 - Uninstall removes application binaries/integration by default while preserving CIA-managed/user data unless explicit removal is selected.
-- Official public v1 releases target **SignPath Foundation** code signing if the project qualifies; no paid signing certificate is required by the v1 baseline.
+- CIA v1.0.0 is intentionally unsigned; SignPath Foundation is not a v1 dependency or release blocker, no paid certificate is required, and future signing remains optional.
 - MSIX / Microsoft Store remains a possible future packaging channel, not the primary v1 package.
 
 ## Architecture drivers
