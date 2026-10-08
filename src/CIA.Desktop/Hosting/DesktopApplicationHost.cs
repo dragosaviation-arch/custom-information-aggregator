@@ -113,6 +113,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<IPostExportPrompt, WindowsPostExportPrompt>();
         builder.Services.AddSingleton<PostExportBehaviorCoordinator>();
         builder.Services.AddSingleton<ISettingsFolderPicker, WindowsSettingsFolderPicker>();
+        builder.Services.AddSingleton<IExternalLinkLauncher, WindowsExternalLinkLauncher>();
         builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
         builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();
         builder.Services.AddSingleton<IProcessingHistoryReader>(

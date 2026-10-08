@@ -21,6 +21,13 @@ public sealed record SettingsWorkspaceRuntimePaths(
 
 public sealed class SettingsWorkspaceViewModel : ObservableObject
 {
+    public static readonly Uri UserManualUri = new(
+        "https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/docs/user-manual/README.md");
+    public static readonly Uri ReleaseNotesUri = new(
+        "https://github.com/dragosaviation-arch/custom-information-aggregator/releases");
+    public static readonly Uri SupportUri = new(
+        "https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/SUPPORT.md");
+
     private static readonly (string Key, double DefaultWidth, double MinimumWidth)[]
         LogColumnDefinitions =
         [
@@ -52,6 +59,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     private readonly IApplicationWorkflowCoordinator? _workflowCoordinator;
     private readonly ISavedWorkingStateDeleteConfirmation _deleteConfirmation;
     private readonly IManagedStorageCleanupService? _managedStorageCleanupService;
+    private readonly IExternalLinkLauncher _externalLinkLauncher;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly AsyncRelayCommand _saveStateCommand;
     private readonly AsyncRelayCommand _restoreStateCommand;
@@ -106,7 +114,8 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         IWorkingStateCoordinator? workingStateCoordinator = null,
         IApplicationWorkflowCoordinator? workflowCoordinator = null,
         ISavedWorkingStateDeleteConfirmation? deleteConfirmation = null,
-        IManagedStorageCleanupService? managedStorageCleanupService = null)
+        IManagedStorageCleanupService? managedStorageCleanupService = null,
+        IExternalLinkLauncher? externalLinkLauncher = null)
     {
         _historyReader = historyReader ?? throw new ArgumentNullException(nameof(historyReader));
         ArgumentNullException.ThrowIfNull(runtimePaths);
@@ -126,6 +135,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         _deleteConfirmation = deleteConfirmation
             ?? new InApplicationSavedWorkingStateDeleteConfirmation();
         _managedStorageCleanupService = managedStorageCleanupService;
+        _externalLinkLauncher = externalLinkLauncher ?? new WindowsExternalLinkLauncher();
         _uiSynchronizationContext = SynchronizationContext.Current;
         _deleteConfirmation.Changed += OnDeleteConfirmationChanged;
         if (_workflowCoordinator is not null)
@@ -161,6 +171,9 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         OpenManagedStorageFolderCommand = new RelayCommand<string>(
             OpenManagedStorageFolder,
             name => ResolveRuntimeDirectory(name) is not null);
+        OpenUserManualCommand = new RelayCommand(() => OpenExternalLink(UserManualUri));
+        OpenReleaseNotesCommand = new RelayCommand(() => OpenExternalLink(ReleaseNotesUri));
+        OpenSupportCommand = new RelayCommand(() => OpenExternalLink(SupportUri));
         SaveSettingsCommand = new RelayCommand(SaveSettings);
         ResetSettingsCommand = new RelayCommand(ResetSettings);
         RefreshSavedStatesCommand = new RelayCommand(
@@ -222,6 +235,12 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public IRelayCommand OpenLogsFolderCommand { get; }
 
     public IRelayCommand<string> OpenManagedStorageFolderCommand { get; }
+
+    public IRelayCommand OpenUserManualCommand { get; }
+
+    public IRelayCommand OpenReleaseNotesCommand { get; }
+
+    public IRelayCommand OpenSupportCommand { get; }
 
     public IRelayCommand SaveSettingsCommand { get; }
 
@@ -771,6 +790,20 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         if (ResolveRuntimeDirectory(name) is { } path)
         {
             OpenDirectory(path, name!);
+        }
+    }
+
+    private void OpenExternalLink(Uri destination)
+    {
+        try
+        {
+            _externalLinkLauncher.TryOpen(destination);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
+                                          or NotSupportedException
+                                          or System.ComponentModel.Win32Exception)
+        {
+            // External browser availability must not affect CIA operation.
         }
     }
 

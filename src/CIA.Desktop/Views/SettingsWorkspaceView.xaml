@@ -917,11 +917,9 @@
                             <Border Grid.Row="4" Style="{StaticResource SettingsCardStyle}" Margin="0">
                                 <StackPanel Margin="7">
                                     <TextBlock Margin="2,0,0,5" FontSize="10.7" FontWeight="Bold" Text="HELP &amp; ABOUT" />
-                                    <Button Content="User Manual" IsEnabled="False" Style="{StaticResource SettingsHelpButtonStyle}" ToolTip="No documentation destination is configured." />
-                                    <Button Content="Installation Guide" IsEnabled="False" Style="{StaticResource SettingsHelpButtonStyle}" ToolTip="No documentation destination is configured." />
-                                    <Button Content="Documentation" IsEnabled="False" Style="{StaticResource SettingsHelpButtonStyle}" ToolTip="No documentation destination is configured." />
-                                    <Button Content="Release Notes / What's New" IsEnabled="False" Style="{StaticResource SettingsHelpButtonStyle}" ToolTip="No documentation destination is configured." />
-                                    <Button Content="Support" IsEnabled="False" Style="{StaticResource SettingsHelpButtonStyle}" ToolTip="No support destination is configured." />
+                                    <Button x:Name="UserManualButton" Command="{Binding OpenUserManualCommand}" Content="User Manual" Style="{StaticResource SettingsHelpButtonStyle}" ToolTip="Open the User Manual in the default browser." />
+                                    <Button x:Name="ReleaseNotesButton" Command="{Binding OpenReleaseNotesCommand}" Content="Release Notes / What's New" Style="{StaticResource SettingsHelpButtonStyle}" ToolTip="Open release notes in the default browser." />
+                                    <Button x:Name="SupportButton" Command="{Binding OpenSupportCommand}" Content="Support" Style="{StaticResource SettingsHelpButtonStyle}" ToolTip="Open support information in the default browser." />
                                 </StackPanel>
                             </Border>
                         </Grid>

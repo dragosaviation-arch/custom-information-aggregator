@@ -121,7 +121,7 @@
                                VerticalAlignment="Center"
                                Foreground="{StaticResource CiaTextMutedBrush}"
                                IsHitTestVisible="False"
-                               Text="Search tags…">
+                               Text="Search tags or mappings…">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock">
                                 <Setter Property="Visibility" Value="Collapsed" />

@@ -182,6 +182,64 @@ public sealed class SettingsWorkspaceV03Tests
     }
 
     [TestMethod]
+    public void HelpAndAboutUsesOnlyApprovedFixedHttpsDestinationsAndContainsLaunchFailures()
+    {
+        var launcher = new RecordingExternalLinkLauncher();
+        var viewModel = CreateViewModel(launcher);
+
+        viewModel.OpenUserManualCommand.Execute(null);
+        viewModel.OpenReleaseNotesCommand.Execute(null);
+        viewModel.OpenSupportCommand.Execute(null);
+
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                SettingsWorkspaceViewModel.UserManualUri,
+                SettingsWorkspaceViewModel.ReleaseNotesUri,
+                SettingsWorkspaceViewModel.SupportUri
+            },
+            launcher.Destinations.ToArray());
+        Assert.IsTrue(launcher.Destinations.All(destination =>
+            destination.Scheme == Uri.UriSchemeHttps));
+
+        var failingViewModel = CreateViewModel(new ThrowingExternalLinkLauncher());
+        failingViewModel.OpenUserManualCommand.Execute(null);
+        failingViewModel.OpenReleaseNotesCommand.Execute(null);
+        failingViewModel.OpenSupportCommand.Execute(null);
+
+        var repositoryRoot = FindRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "CIA.Desktop",
+            "Views",
+            "SettingsWorkspaceView.xaml"));
+        StringAssert.Contains(xaml, "Content=\"User Manual\"");
+        StringAssert.Contains(xaml, "Content=\"Release Notes / What's New\"");
+        StringAssert.Contains(xaml, "Content=\"Support\"");
+        StringAssert.Contains(xaml, "Command=\"{Binding OpenUserManualCommand}\"");
+        StringAssert.Contains(xaml, "Command=\"{Binding OpenReleaseNotesCommand}\"");
+        StringAssert.Contains(xaml, "Command=\"{Binding OpenSupportCommand}\"");
+        Assert.IsFalse(xaml.Contains("Installation Guide", StringComparison.Ordinal));
+        Assert.IsFalse(xaml.Contains("Content=\"Documentation\"", StringComparison.Ordinal));
+
+        var manual = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "docs",
+            "user-manual",
+            "README.md"));
+        StringAssert.Contains(manual, "loading and Source Sets");
+        StringAssert.Contains(manual, "Discovery");
+        StringAssert.Contains(manual, "Repeated Data Layout modes");
+        StringAssert.Contains(manual, "Database review and provenance");
+        StringAssert.Contains(manual, "Excel export");
+        StringAssert.Contains(manual, "Settings and recovery");
+        StringAssert.Contains(
+            File.ReadAllText(Path.Combine(repositoryRoot, "SUPPORT.md")),
+            "pre-release validation");
+    }
+
+    [TestMethod]
     public async Task CleanupCommandInvokesOnceAndReportsTruthfulOutcomeCounts()
     {
         var cleanup = new BlockingCleanupService(new ManagedStorageCleanupResult(
@@ -443,13 +501,15 @@ public sealed class SettingsWorkspaceV03Tests
         Assert.IsFalse(File.Exists(service.Startup.SettingsFilePath));
     }
 
-    internal static SettingsWorkspaceViewModel CreateViewModel()
+    internal static SettingsWorkspaceViewModel CreateViewModel(
+        IExternalLinkLauncher? externalLinkLauncher = null)
     {
         var localAppData = Path.Combine(Path.GetTempPath(), "CIA.Settings.V03", "LocalAppData");
         var paths = ApplicationPaths.FromLocalApplicationData(localAppData);
         return new SettingsWorkspaceViewModel(
             CreateReader(),
-            new SettingsWorkspaceRuntimePaths(paths, paths.LogsDirectory));
+            new SettingsWorkspaceRuntimePaths(paths, paths.LogsDirectory),
+            externalLinkLauncher: externalLinkLauncher);
     }
 
     private static SettingsWorkspaceViewModel CreateViewModel(
@@ -602,6 +662,39 @@ public sealed class SettingsWorkspaceV03Tests
         return viewModel.ManagedStoragePaths.Single(path => path.Name == name).Path;
     }
 
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "CIA.slnx")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("The repository root containing CIA.slnx was not found.");
+    }
+
+    private sealed class RecordingExternalLinkLauncher : IExternalLinkLauncher
+    {
+        public List<Uri> Destinations { get; } = [];
+
+        public bool TryOpen(Uri destination)
+        {
+            Destinations.Add(destination);
+            return true;
+        }
+    }
+
+    private sealed class ThrowingExternalLinkLauncher : IExternalLinkLauncher
+    {
+        public bool TryOpen(Uri destination) =>
+            throw new InvalidOperationException("Injected browser launch failure.");
+    }
+
     private sealed class StaticHistoryReader(ProcessingHistorySnapshot snapshot)
         : IProcessingHistoryReader
     {
@@ -678,6 +771,12 @@ public sealed class SettingsWorkspaceV03InteractionTests
             var cleanTemporary = (Button)view.FindName("CleanTemporaryDataButton");
             var selectedFailureCode = (TextBlock)view.FindName("SelectedFailureCode");
             var saveSettings = (Button)view.FindName("SavePersistentSettingsButton");
+            var helpButtons = new[]
+            {
+                (Button)view.FindName("UserManualButton"),
+                (Button)view.FindName("ReleaseNotesButton"),
+                (Button)view.FindName("SupportButton")
+            };
             var browseButtons = new[]
             {
                 (Button)view.FindName("BrowseTemporaryDirectoryButton"),
@@ -697,6 +796,10 @@ public sealed class SettingsWorkspaceV03InteractionTests
             Assert.IsFalse(saveState.IsEnabled);
             Assert.IsFalse(cleanTemporary.IsEnabled);
             Assert.IsTrue(saveSettings.IsEnabled);
+            Assert.IsTrue(helpButtons.All(button => button.IsEnabled));
+            CollectionAssert.AreEqual(
+                new[] { "User Manual", "Release Notes / What's New", "Support" },
+                helpButtons.Select(button => button.Content).ToArray());
             Assert.IsTrue(browseButtons.All(button => Equals(button.Content, "Browse...")));
             Assert.AreEqual("Failure code: parse-failed", selectedFailureCode.Text);
             Assert.AreEqual(Visibility.Visible, selectedFailureCode.Visibility);

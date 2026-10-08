@@ -2095,11 +2095,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             query = query.Where(information =>
                 information.InformationType.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
-                || information.SourceSetName.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
-                || information.StructuralIdentity.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
-                || information.CandidateKindText.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
-                || information.DatabaseTag.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
-                || information.SampleValue.Contains(SearchText, StringComparison.OrdinalIgnoreCase));
+                || information.DatabaseTag.Contains(SearchText, StringComparison.OrdinalIgnoreCase));
         }
 
         if (!ShowBlacklisted)
