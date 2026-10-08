@@ -47,6 +47,32 @@ public sealed class NsisInstallerTests
     }
 
     [TestMethod]
+    public void ReleaseCompatibilityDeclarationMatchesTheDeploymentTarget()
+    {
+        var compatibilityDeclaration = ReadRepositoryFile(
+            "docs",
+            "architecture",
+            "STEP-004-architecture-baseline.md");
+        var publishProject = ReadRepositoryFile("CIA.Publish.proj");
+        var installerProject = ReadRepositoryFile("CIA.Installer.proj");
+
+        StringAssert.Contains(
+            compatibilityDeclaration,
+            "Windows 11 x64 is the primary supported baseline.");
+        StringAssert.Contains(
+            compatibilityDeclaration,
+            "Windows 10 x64 remains an explicit compatibility-tested target");
+        StringAssert.Contains(
+            compatibilityDeclaration,
+            "Publish target: self-contained **win-x64**");
+        StringAssert.Contains(publishProject, "RuntimeIdentifier=win-x64");
+        StringAssert.Contains(publishProject, "SelfContained=true");
+        StringAssert.Contains(
+            installerProject,
+            "artifacts\\publish\\win-x64");
+    }
+
+    [TestMethod]
     public void InstallerCreatesRequiredStartMenuAndOptionalDesktopShortcuts()
     {
         var installer = ReadRepositoryFile("deployment", "nsis", "CIA.Installer.nsi");
