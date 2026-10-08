@@ -1,0 +1,35 @@
+<Project DefaultTargets="BuildInstaller">
+
+  <PropertyGroup>
+    <_CiaRepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))</_CiaRepositoryRoot>
+    <_CiaPublishDirectory>$(_CiaRepositoryRoot)artifacts\publish\win-x64</_CiaPublishDirectory>
+    <_CiaInstallerDirectory>$(_CiaRepositoryRoot)artifacts\installer</_CiaInstallerDirectory>
+    <_CiaInstallerScript>$(_CiaRepositoryRoot)deployment\nsis\CIA.Installer.nsi</_CiaInstallerScript>
+    <CiaVersion Condition="'$(CiaVersion)' == ''">1.0.0</CiaVersion>
+    <_CiaInstallerFile>$(_CiaInstallerDirectory)\CIA-Setup-$(CiaVersion).exe</_CiaInstallerFile>
+    <_NsisProgramFilesX86>$([System.Environment]::GetFolderPath(SpecialFolder.ProgramFilesX86))</_NsisProgramFilesX86>
+    <NsisCompiler Condition="'$(NsisCompiler)' == '' And Exists('$(_NsisProgramFilesX86)\NSIS\makensis.exe')">$(_NsisProgramFilesX86)\NSIS\makensis.exe</NsisCompiler>
+    <NsisCompiler Condition="'$(NsisCompiler)' == ''">makensis.exe</NsisCompiler>
+  </PropertyGroup>
+
+  <Target Name="PublishApplication">
+    <MSBuild
+      Projects="$(_CiaRepositoryRoot)CIA.Publish.proj"
+      Targets="Publish"
+      BuildInParallel="false" />
+  </Target>
+
+  <Target Name="BuildInstaller" DependsOnTargets="PublishApplication">
+    <Error Condition="!Exists('$(_CiaInstallerScript)')" Text="The CIA NSIS installer definition is missing." />
+    <Error Condition="!Exists('$(_CiaPublishDirectory)\CIA.exe')" Text="The CIA desktop executable is missing from the installer input." />
+    <Error Condition="!Exists('$(_CiaPublishDirectory)\CIA.ProcessingHost.exe')" Text="The CIA Processing Host executable is missing from the installer input." />
+
+    <MakeDir Directories="$(_CiaInstallerDirectory)" />
+    <Delete Files="$(_CiaInstallerFile)" />
+    <Exec Command="&quot;$(NsisCompiler)&quot; /V2 &quot;/DCIA_VERSION=$(CiaVersion)&quot; &quot;/DCIA_PUBLISH_DIR=$(_CiaPublishDirectory)&quot; &quot;/DCIA_INSTALLER_OUTPUT=$(_CiaInstallerFile)&quot; &quot;$(_CiaInstallerScript)&quot;" />
+
+    <Error Condition="!Exists('$(_CiaInstallerFile)')" Text="NSIS did not produce the expected CIA installer." />
+    <Message Importance="high" Text="Built graphical per-user CIA installer at $(_CiaInstallerFile)" />
+  </Target>
+
+</Project>
