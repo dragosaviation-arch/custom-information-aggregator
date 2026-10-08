@@ -12,6 +12,7 @@ public sealed class NsisInstallerTests
 
         StringAssert.Contains(installer, "!include \"MUI2.nsh\"");
         StringAssert.Contains(installer, "!insertmacro MUI_PAGE_WELCOME");
+        StringAssert.Contains(installer, "!insertmacro MUI_PAGE_COMPONENTS");
         StringAssert.Contains(installer, "!insertmacro MUI_PAGE_INSTFILES");
         StringAssert.Contains(installer, "!insertmacro MUI_PAGE_FINISH");
         StringAssert.Contains(installer, "RequestExecutionLevel user");
@@ -46,7 +47,57 @@ public sealed class NsisInstallerTests
     }
 
     [TestMethod]
-    public void InstallerIntroducesNoShellIntegrationOrMutableDataHandling()
+    public void InstallerCreatesRequiredStartMenuAndOptionalDesktopShortcuts()
+    {
+        var installer = ReadRepositoryFile("deployment", "nsis", "CIA.Installer.nsi");
+        var shortcutLines = installer
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains("CreateShortcut", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        StringAssert.Contains(
+            installer,
+            "CreateDirectory \"$SMPROGRAMS\\Custom Information Aggregator\"");
+        StringAssert.Contains(
+            installer,
+            "CreateShortcut \"$SMPROGRAMS\\Custom Information Aggregator\\Custom Information Aggregator.lnk\" \"$INSTDIR\\CIA.exe\"");
+        StringAssert.Contains(
+            installer,
+            "Section /o \"Desktop shortcut\" SecDesktopShortcut");
+        StringAssert.Contains(
+            installer,
+            "CreateShortcut \"$DESKTOP\\Custom Information Aggregator.lnk\" \"$INSTDIR\\CIA.exe\"");
+        Assert.HasCount(2, shortcutLines);
+        Assert.IsFalse(shortcutLines.Any(
+            line => line.Contains("CIA.ProcessingHost", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [TestMethod]
+    public void InstallerRegistersCiaAssociationPerUserThroughDesktopExecutable()
+    {
+        var installer = ReadRepositoryFile("deployment", "nsis", "CIA.Installer.nsi");
+        var registryLines = installer
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains("WriteReg", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        StringAssert.Contains(installer, "SetRegView 64");
+        StringAssert.Contains(
+            installer,
+            "WriteRegStr HKCU \"Software\\Classes\\.cia\" \"\" \"CIA.WorkingState\"");
+        StringAssert.Contains(
+            installer,
+            "WriteRegStr HKCU \"Software\\Classes\\CIA.WorkingState\\shell\\open\\command\"");
+        StringAssert.Contains(installer, "$INSTDIR\\CIA.exe");
+        StringAssert.Contains(installer, "$\\\"%1$\\\"");
+        Assert.IsTrue(registryLines.All(
+            line => line.Contains("HKCU", StringComparison.Ordinal)));
+        Assert.IsFalse(registryLines.Any(
+            line => line.Contains("CIA.ProcessingHost", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [TestMethod]
+    public void InstallerIntroducesNoAdminServiceStartupOrMutableDataHandling()
     {
         var installer = ReadRepositoryFile("deployment", "nsis", "CIA.Installer.nsi");
         var desktopProject = ReadRepositoryFile("src", "CIA.Desktop", "CIA.Desktop.csproj");
@@ -55,8 +106,6 @@ public sealed class NsisInstallerTests
             "CIA.ProcessingHost",
             "CIA.ProcessingHost.csproj");
 
-        Assert.IsFalse(installer.Contains("CreateShortCut", StringComparison.OrdinalIgnoreCase));
-        Assert.IsFalse(installer.Contains("WriteReg", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(installer.Contains("WriteUninstaller", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(installer.Contains("$APPDATA", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(installer.Contains(
@@ -64,6 +113,12 @@ public sealed class NsisInstallerTests
             StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(installer.Contains("ExecWait", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(installer.Contains("nsExec", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(installer.Contains("HKLM", StringComparison.Ordinal));
+        Assert.IsFalse(installer.Contains("CreateService", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(installer.Contains("$SMSTARTUP", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(installer.Contains("CurrentVersion\\Run", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(installer.Contains("RequestExecutionLevel admin", StringComparison.Ordinal));
+        Assert.IsFalse(installer.Contains("RequestExecutionLevel highest", StringComparison.Ordinal));
         StringAssert.Contains(desktopProject, "<OutputType>WinExe</OutputType>");
         StringAssert.Contains(hostProject, "<OutputType>WinExe</OutputType>");
     }
