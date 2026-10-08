@@ -23,6 +23,10 @@ The application is designed to let a user load large XML document sets, discover
 
 The workflow is still being refined during Alpha development, so individual controls and presentation details may change before release.
 
+## Installation
+
+See the [CIA v1 Installation Guide](docs/installation/README.md) for supported Windows versions, installation, upgrades, uninstall behavior and release-installation troubleshooting.
+
 ## Development status
 
 **Current stage: Alpha development**
