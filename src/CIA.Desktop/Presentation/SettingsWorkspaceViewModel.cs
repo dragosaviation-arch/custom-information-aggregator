@@ -21,6 +21,27 @@ public sealed record SettingsWorkspaceRuntimePaths(
 
 public sealed class SettingsWorkspaceViewModel : ObservableObject
 {
+    public static readonly Uri UserManualUri = new(
+        "https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/docs/user-manual/README.md");
+    public static readonly Uri ReleaseNotesUri = new(
+        "https://github.com/dragosaviation-arch/custom-information-aggregator/releases");
+    public static readonly Uri SupportUri = new(
+        "https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/SUPPORT.md");
+
+    private static readonly (string Key, double DefaultWidth, double MinimumWidth)[]
+        LogColumnDefinitions =
+        [
+            ("settings.log.time", 110, 80),
+            ("settings.log.type", 64, 50),
+            ("settings.log.severity", 64, 55),
+            ("settings.log.area", 105, 70),
+            ("settings.log.outcome", 135, 90),
+            ("settings.log.stage", 125, 90),
+            ("settings.log.stream", 75, 60),
+            ("settings.log.item", 150, 90),
+            ("settings.log.message", 270, 140)
+        ];
+    private const double MaximumLogColumnWidth = 2000;
     public const string NoHistoryMessage = "No processing history has been recorded yet.";
     public const string NoIssuesMessage = "No recorded processing issues.";
     public const string AllEntryTypes = "All types";
@@ -30,6 +51,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public const string AllStreams = "All streams";
     private readonly IProcessingHistoryReader _historyReader;
     private readonly string _logDirectory;
+    private readonly ApplicationPaths _runtimeApplicationPaths;
     private readonly ApplicationSettingsService _settingsService;
     private readonly ISettingsFolderPicker? _settingsFolderPicker;
     private readonly SavedWorkingStateLibrary _savedStateLibrary;
@@ -37,6 +59,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     private readonly IApplicationWorkflowCoordinator? _workflowCoordinator;
     private readonly ISavedWorkingStateDeleteConfirmation _deleteConfirmation;
     private readonly IManagedStorageCleanupService? _managedStorageCleanupService;
+    private readonly IExternalLinkLauncher _externalLinkLauncher;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly AsyncRelayCommand _saveStateCommand;
     private readonly AsyncRelayCommand _restoreStateCommand;
@@ -77,7 +100,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     private SavedWorkingStateEntry? _selectedSavedState;
     private string _savedStateName = string.Empty;
     private string? _savedStateNameProblem;
-    private string _savedStateStatusText = "No saved states have been created yet.";
+    private string _savedStateStatusText = string.Empty;
     private bool _isSavedStateActionRunning;
     private bool _isCleanupRunning;
     private string _cleanupStatusText = "No cleanup has been run.";
@@ -91,7 +114,8 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         IWorkingStateCoordinator? workingStateCoordinator = null,
         IApplicationWorkflowCoordinator? workflowCoordinator = null,
         ISavedWorkingStateDeleteConfirmation? deleteConfirmation = null,
-        IManagedStorageCleanupService? managedStorageCleanupService = null)
+        IManagedStorageCleanupService? managedStorageCleanupService = null,
+        IExternalLinkLauncher? externalLinkLauncher = null)
     {
         _historyReader = historyReader ?? throw new ArgumentNullException(nameof(historyReader));
         ArgumentNullException.ThrowIfNull(runtimePaths);
@@ -99,6 +123,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         ArgumentException.ThrowIfNullOrWhiteSpace(runtimePaths.LogDirectory);
 
         _logDirectory = Path.GetFullPath(runtimePaths.LogDirectory);
+        _runtimeApplicationPaths = runtimePaths.ApplicationPaths;
         _settingsService = settingsService ?? new ApplicationSettingsService(
             new ApplicationSettingsStore(
                 runtimePaths.ApplicationPaths.LocalApplicationDataDirectory));
@@ -110,6 +135,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         _deleteConfirmation = deleteConfirmation
             ?? new InApplicationSavedWorkingStateDeleteConfirmation();
         _managedStorageCleanupService = managedStorageCleanupService;
+        _externalLinkLauncher = externalLinkLauncher ?? new WindowsExternalLinkLauncher();
         _uiSynchronizationContext = SynchronizationContext.Current;
         _deleteConfirmation.Changed += OnDeleteConfirmationChanged;
         if (_workflowCoordinator is not null)
@@ -142,6 +168,12 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
             _logDirectory);
         RefreshCommand = new RelayCommand(Refresh);
         OpenLogsFolderCommand = new RelayCommand(OpenLogsFolder);
+        OpenManagedStorageFolderCommand = new RelayCommand<string>(
+            OpenManagedStorageFolder,
+            name => ResolveRuntimeDirectory(name) is not null);
+        OpenUserManualCommand = new RelayCommand(() => OpenExternalLink(UserManualUri));
+        OpenReleaseNotesCommand = new RelayCommand(() => OpenExternalLink(ReleaseNotesUri));
+        OpenSupportCommand = new RelayCommand(() => OpenExternalLink(SupportUri));
         SaveSettingsCommand = new RelayCommand(SaveSettings);
         ResetSettingsCommand = new RelayCommand(ResetSettings);
         RefreshSavedStatesCommand = new RelayCommand(
@@ -201,6 +233,14 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public IRelayCommand RefreshCommand { get; }
 
     public IRelayCommand OpenLogsFolderCommand { get; }
+
+    public IRelayCommand<string> OpenManagedStorageFolderCommand { get; }
+
+    public IRelayCommand OpenUserManualCommand { get; }
+
+    public IRelayCommand OpenReleaseNotesCommand { get; }
+
+    public IRelayCommand OpenSupportCommand { get; }
 
     public IRelayCommand SaveSettingsCommand { get; }
 
@@ -742,22 +782,59 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
 
     private void OpenLogsFolder()
     {
+        OpenDirectory(_logDirectory, "Logs");
+    }
+
+    private void OpenManagedStorageFolder(string? name)
+    {
+        if (ResolveRuntimeDirectory(name) is { } path)
+        {
+            OpenDirectory(path, name!);
+        }
+    }
+
+    private void OpenExternalLink(Uri destination)
+    {
         try
         {
-            Directory.CreateDirectory(_logDirectory);
-            Process.Start(
-                new ProcessStartInfo
-                {
-                    FileName = _logDirectory,
-                    UseShellExecute = true
-                });
+            _externalLinkLauncher.TryOpen(destination);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
+                                          or NotSupportedException
+                                          or System.ComponentModel.Win32Exception)
+        {
+            // External browser availability must not affect CIA operation.
+        }
+    }
+
+    private string? ResolveRuntimeDirectory(string? name) => name switch
+    {
+        "Temporary" => _runtimeApplicationPaths.TempDirectory,
+        "Working" => _runtimeApplicationPaths.WorkingDirectory,
+        "Profiles" => _runtimeApplicationPaths.ProfilesDirectory,
+        "Settings" => _runtimeApplicationPaths.SettingsDirectory,
+        "Database" => _runtimeApplicationPaths.DatabaseDirectory,
+        "Logs" => _logDirectory,
+        _ => null
+    };
+
+    private void OpenDirectory(string path, string name)
+    {
+        try
+        {
+            Directory.CreateDirectory(path);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true
+            });
             FolderOpenProblem = null;
         }
         catch (Exception exception) when (exception is IOException
                                           or UnauthorizedAccessException
                                           or System.ComponentModel.Win32Exception)
         {
-            FolderOpenProblem = "The Logs folder could not be opened.";
+            FolderOpenProblem = $"The {name} folder could not be opened.";
         }
     }
 
@@ -817,6 +894,36 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         {
             SettingsStatusText = exception.Message;
         }
+    }
+
+    internal IReadOnlyList<double> GetLogColumnWidths()
+    {
+        return LogColumnDefinitions
+            .Select(definition => ColumnWidthPreferences.Resolve(
+                _settingsService,
+                definition.Key,
+                definition.DefaultWidth,
+                definition.MinimumWidth,
+                MaximumLogColumnWidth))
+            .ToArray();
+    }
+
+    internal void PersistLogColumnWidths(IReadOnlyList<double> widths)
+    {
+        ArgumentNullException.ThrowIfNull(widths);
+        if (widths.Count != LogColumnDefinitions.Length)
+        {
+            return;
+        }
+
+        ColumnWidthPreferences.Save(
+            _settingsService,
+            LogColumnDefinitions.Select((definition, index) => (
+                definition.Key,
+                Math.Clamp(
+                    widths[index],
+                    definition.MinimumWidth,
+                    MaximumLogColumnWidth))).ToArray());
     }
 
     private void ResetSettings()
@@ -1065,7 +1172,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
             SavedStateStatusText = inventory.Problems.Count > 0
                 ? inventory.Problems[0].Description
                 : SavedStates.Count == 0
-                    ? "No saved states have been created yet."
+                    ? string.Empty
                     : $"{SavedStates.Count} saved state(s) available.";
         }
 

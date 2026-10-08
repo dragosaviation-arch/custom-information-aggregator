@@ -3,9 +3,18 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:sources="clr-namespace:CIA.Contracts.Sources;assembly=CIA.Contracts"
              xmlns:workflow="clr-namespace:CIA.Desktop.Workflow"
+             x:Name="LoadViewRoot"
              Loaded="OnViewLoaded"
              SizeChanged="OnViewSizeChanged"
              SnapsToDevicePixels="True">
+    <UserControl.Resources>
+        <Style x:Key="LoadColumnResizeThumbStyle"
+               TargetType="Thumb"
+               BasedOn="{StaticResource CiaColumnResizeThumbStyle}">
+            <EventSetter Event="DragDelta" Handler="OnLoadColumnDividerDragDelta" />
+            <EventSetter Event="DragCompleted" Handler="OnLoadColumnDividerDragCompleted" />
+        </Style>
+    </UserControl.Resources>
     <Grid x:Name="LoadLayout"
           Margin="{StaticResource CiaWorkspaceMargin}"
           MinHeight="0">
@@ -109,8 +118,8 @@
                 </StackPanel>
                 <Button Command="{Binding RemoveCheckedCommand}"
                         Style="{StaticResource CiaDangerButtonStyle}"
-                        Content="− Remove"
-                        ToolTip="Remove checked entries from this session only." />
+                        Content="− Remove selected"
+                        ToolTip="Remove highlighted rows from this session only." />
             </StackPanel>
 
             <WrapPanel Grid.Row="2"
@@ -219,18 +228,6 @@
                         Command="{Binding ExcludeVisibleCommand}"
                         Style="{StaticResource CiaGhostButtonStyle}"
                         Content="Exclude visible" />
-                <Button Margin="0,0,6,0"
-                        Command="{Binding RefreshSelectedCommand}"
-                        Style="{StaticResource CiaGhostButtonStyle}"
-                        Content="Refresh selected"
-                        ToolTip="Refresh highlighted source rows." />
-                <Button x:Name="ReassignSetMenuButton"
-                        Margin="0,0,6,0"
-                        Click="OnReassignSetMenuClick"
-                        IsEnabled="{Binding HasHighlightedSources}"
-                        Style="{StaticResource CiaGhostButtonStyle}"
-                        Content="Move selected ▾"
-                        ToolTip="Move highlighted rows to another Source Set." />
                 <TextBlock VerticalAlignment="Center"
                            FontWeight="Bold"
                            Foreground="{StaticResource CiaTextPrimaryBrush}"
@@ -258,13 +255,12 @@
                         <Grid Margin="6,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="34" />
-                                <ColumnDefinition Width="1.45*" MinWidth="110" />
-                                <ColumnDefinition Width="1.9*" MinWidth="135" />
-                                <ColumnDefinition Width="64" />
-                                <ColumnDefinition Width="42" />
-                                <ColumnDefinition Width="72" />
-                                <ColumnDefinition Width="100" />
-                                <ColumnDefinition Width="36" />
+                                <ColumnDefinition Width="{Binding SourceColumnWidth}" MinWidth="72" />
+                                <ColumnDefinition Width="{Binding PathColumnWidth}" MinWidth="90" />
+                                <ColumnDefinition Width="{Binding SourceSetColumnWidth}" MinWidth="55" />
+                                <ColumnDefinition Width="{Binding LevelColumnWidth}" MinWidth="32" />
+                                <ColumnDefinition Width="{Binding SizeColumnWidth}" MinWidth="48" />
+                                <ColumnDefinition Width="{Binding StatusColumnWidth}" MinWidth="64" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="1"
                                        Style="{StaticResource CiaSourceHeaderTextStyle}"
@@ -286,6 +282,11 @@
                             <TextBlock Grid.Column="6"
                                        Style="{StaticResource CiaSourceHeaderTextStyle}"
                                        Text="Status" />
+                            <Thumb Grid.Column="1" Tag="load.source|load.path" Style="{StaticResource LoadColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="2" Tag="load.path|load.sourceSet" Style="{StaticResource LoadColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="3" Tag="load.sourceSet|load.level" Style="{StaticResource LoadColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="4" Tag="load.level|load.size" Style="{StaticResource LoadColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="5" Tag="load.size|load.status" Style="{StaticResource LoadColumnResizeThumbStyle}" />
                         </Grid>
                     </Border>
 
@@ -318,11 +319,19 @@
                                  LayoutUpdated="OnSourceRowsLayoutUpdated"
                                  SelectionChanged="OnSourceSelectionChanged"
                                  SelectionMode="Extended"
-                                 SelectedItem="{Binding SelectedSource, Mode=TwoWay}"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+                            <ListBox.ContextMenu>
+                                <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                    <MenuItem Command="{Binding ReloadHighlightedSourcesCommand}"
+                                              Header="Reload selected sources"
+                                              ToolTip="Deliberately re-read the highlighted sources from disk." />
+                                </ContextMenu>
+                            </ListBox.ContextMenu>
                             <ListBox.ItemContainerStyle>
                                 <Style TargetType="ListBoxItem">
+                                    <EventSetter Event="PreviewMouseDown"
+                                                 Handler="OnSourceRowPreviewMouseDown" />
                                     <Setter Property="Height" Value="33" />
                                     <Setter Property="Padding" Value="0" />
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -343,7 +352,7 @@
                                                     <Trigger Property="IsSelected" Value="True">
                                                         <Setter TargetName="RowBackground"
                                                                 Property="Background"
-                                                                Value="{StaticResource CiaSelectedRowBrush}" />
+                                                                Value="{StaticResource CiaLoadSelectedRowBrush}" />
                                                     </Trigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
@@ -370,16 +379,16 @@
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="34" />
-                                                <ColumnDefinition Width="1.45*" MinWidth="110" />
-                                                <ColumnDefinition Width="1.9*" MinWidth="135" />
-                                                <ColumnDefinition Width="64" />
-                                                <ColumnDefinition Width="42" />
-                                                <ColumnDefinition Width="72" />
-                                                <ColumnDefinition Width="100" />
-                                                <ColumnDefinition Width="36" />
+                                                <ColumnDefinition Width="{Binding DataContext.SourceColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
+                                                <ColumnDefinition Width="{Binding DataContext.PathColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="90" />
+                                                <ColumnDefinition Width="{Binding DataContext.SourceSetColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="55" />
+                                                <ColumnDefinition Width="{Binding DataContext.LevelColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="32" />
+                                                <ColumnDefinition Width="{Binding DataContext.SizeColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="48" />
+                                                <ColumnDefinition Width="{Binding DataContext.StatusColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="64" />
                                             </Grid.ColumnDefinitions>
                                             <CheckBox HorizontalAlignment="Center"
                                                       VerticalAlignment="Center"
+                                                      PreviewMouseLeftButtonDown="OnSourceInclusionPreviewMouseLeftButtonDown"
                                                       Command="{Binding DataContext.ToggleSourceInclusionCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
                                                       CommandParameter="{Binding}"
                                                       IsChecked="{Binding IsIncluded, Mode=OneWay}" />
@@ -463,15 +472,6 @@
                                                            Foreground="{StaticResource CiaTextSecondaryBrush}"
                                                            Text="{Binding StatusText}" />
                                             </StackPanel>
-                                            <Button Grid.Column="7"
-                                                    Width="28"
-                                                    Height="28"
-                                                    Command="{Binding DataContext.RefreshSourceCommand, RelativeSource={RelativeSource AncestorType=ListBox}}"
-                                                    CommandParameter="{Binding}"
-                                                    Padding="0"
-                                                    Style="{StaticResource CiaGhostButtonStyle}"
-                                                    Content="↻"
-                                                    ToolTip="Refresh this source." />
                                         </Grid>
                                     </Border>
                                 </DataTemplate>
@@ -528,14 +528,6 @@
                                    Style="{StaticResource CiaSecondaryTextStyle}"
                                    Text="{Binding ProgressText}" />
                     </Grid>
-                    <ProgressBar Height="5"
-                                 Margin="0,6,0,0"
-                                 Maximum="{Binding ProgressMaximum, Mode=OneWay}"
-                                 IsIndeterminate="{Binding IsProgressIndeterminate, Mode=OneWay}"
-                                 Value="{Binding ProgressValue, Mode=OneWay}"
-                                 Background="{StaticResource CiaProgressTrackBrush}"
-                                 BorderThickness="0"
-                                 Foreground="{StaticResource CiaAccentBrush}" />
                     <Grid Margin="0,6,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -555,11 +547,16 @@
             <Border Grid.Row="8"
                     Padding="8,5"
                     Style="{StaticResource CiaPanelStyle}">
-                <StackPanel Orientation="Horizontal">
-                    <Border Height="22"
-                            Padding="8,0"
-                            VerticalAlignment="Center"
-                            CornerRadius="11">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center" Orientation="Horizontal">
+                        <Border Height="22"
+                                Padding="8,0"
+                                VerticalAlignment="Center"
+                                CornerRadius="11">
                         <Border.Style>
                             <Style TargetType="Border">
                                 <Setter Property="Background" Value="{StaticResource CiaDividerBrush}" />
@@ -575,18 +572,28 @@
                                 </Style.Triggers>
                             </Style>
                         </Border.Style>
-                        <TextBlock VerticalAlignment="Center"
-                                   FontSize="11"
-                                   FontWeight="Bold"
-                                   Foreground="{StaticResource CiaTextSecondaryBrush}"
-                                   Text="{Binding DiscoveryStatusText}" />
-                    </Border>
-                    <TextBlock Margin="8,0,0,0"
-                               VerticalAlignment="Center"
-                               Style="{StaticResource CiaSecondaryTextStyle}"
-                               Text="{Binding DiscoveryStatusDetail}"
-                               TextTrimming="CharacterEllipsis" />
-                </StackPanel>
+                            <TextBlock VerticalAlignment="Center"
+                                       FontSize="11"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                       Text="{Binding DiscoveryStatusText}" />
+                        </Border>
+                        <TextBlock Margin="8,0,8,0"
+                                   VerticalAlignment="Center"
+                                   Style="{StaticResource CiaSecondaryTextStyle}"
+                                   Text="{Binding DiscoveryStatusDetail}"
+                                   TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <Button x:Name="RunDiscoveryButton"
+                            Grid.Column="1"
+                            MinHeight="32"
+                            Padding="14,5"
+                            AutomationProperties.Name="Run Discovery"
+                            Command="{Binding DiscoveryWorkspace.RunDiscoveryCommand, ElementName=LoadViewRoot}"
+                            Content="{Binding DiscoveryWorkspace.RunButtonText, ElementName=LoadViewRoot}"
+                            FontWeight="SemiBold"
+                            Style="{StaticResource CiaPrimaryButtonStyle}" />
+                </Grid>
             </Border>
         </Grid>
 
@@ -600,9 +607,9 @@
                 <ColumnDefinition x:Name="SettingsColumn" Width="0" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
-                <RowDefinition x:Name="DetailsRow" Height="56*" />
+                <RowDefinition x:Name="DetailsRow" Height="34*" />
                 <RowDefinition x:Name="RightRailGapRow" Height="8" />
-                <RowDefinition x:Name="SettingsRow" Height="44*" />
+                <RowDefinition x:Name="SettingsRow" Height="66*" />
             </Grid.RowDefinitions>
 
             <Border x:Name="DetailsPanel"
@@ -647,7 +654,7 @@
 
                         <ScrollViewer VerticalScrollBarVisibility="Auto"
                                       HorizontalScrollBarVisibility="Disabled">
-                            <StackPanel Margin="9,7">
+                            <StackPanel Margin="8,5">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
                                         <Setter Property="Visibility" Value="Visible" />
@@ -658,21 +665,23 @@
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
-                                <TextBlock Margin="0,0,0,5"
+                                <TextBlock Margin="0,0,0,3"
+                                           FontSize="10.5"
                                            Style="{StaticResource CiaSecondaryTextStyle}"
                                            Text="{Binding SelectedSource.BreadcrumbText}"
                                            TextTrimming="CharacterEllipsis"
                                            ToolTip="{Binding SelectedSource.Path}" />
-                                <TextBlock FontSize="15"
+                                <TextBlock FontSize="13.5"
                                            FontWeight="ExtraBold"
                                            Foreground="{StaticResource CiaTextPrimaryBrush}"
                                            Text="{Binding SelectedSource.DisplayName}"
                                            TextTrimming="CharacterEllipsis" />
-                                <TextBlock Margin="0,2,0,6"
+                                <TextBlock Margin="0,1,0,4"
+                                           FontSize="10.5"
                                            Style="{StaticResource CiaSecondaryTextStyle}"
                                            Text="{Binding SelectedSource.Path}"
                                            TextWrapping="Wrap" />
-                                <Button Margin="0,0,0,6"
+                                <Button Margin="0,0,0,4"
                                         HorizontalAlignment="Left"
                                         Command="{Binding RelinkSourceCommand}"
                                         CommandParameter="{Binding SelectedSource}"
@@ -697,7 +706,7 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel>
                                         <Border Style="{StaticResource CiaDividerStyle}">
-                                            <Grid Margin="0,4">
+                                            <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="94" />
                                                     <ColumnDefinition Width="*" />
@@ -707,7 +716,7 @@
                                             </Grid>
                                         </Border>
                                         <Border Style="{StaticResource CiaDividerStyle}">
-                                            <Grid Margin="0,4">
+                                            <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="94" />
                                                     <ColumnDefinition Width="*" />
@@ -717,7 +726,7 @@
                                             </Grid>
                                         </Border>
                                         <Border Style="{StaticResource CiaDividerStyle}">
-                                            <Grid Margin="0,4">
+                                            <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="94" />
                                                     <ColumnDefinition Width="*" />
@@ -727,7 +736,7 @@
                                             </Grid>
                                         </Border>
                                         <Border Style="{StaticResource CiaDividerStyle}">
-                                            <Grid Margin="0,4">
+                                            <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="94" />
                                                     <ColumnDefinition Width="*" />
@@ -739,7 +748,7 @@
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
                                         <Border Style="{StaticResource CiaDividerStyle}">
-                                            <Grid Margin="0,4">
+                                            <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="94" />
                                                     <ColumnDefinition Width="*" />
@@ -749,7 +758,7 @@
                                             </Grid>
                                         </Border>
                                         <Border Style="{StaticResource CiaDividerStyle}">
-                                            <Grid Margin="0,4">
+                                            <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="94" />
                                                     <ColumnDefinition Width="*" />
@@ -759,7 +768,7 @@
                                             </Grid>
                                         </Border>
                                         <Border Style="{StaticResource CiaDividerStyle}">
-                                            <Grid Margin="0,4">
+                                            <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="94" />
                                                     <ColumnDefinition Width="*" />
@@ -769,7 +778,7 @@
                                             </Grid>
                                         </Border>
                                         <Border Style="{StaticResource CiaDividerStyle}">
-                                            <Grid Margin="0,4">
+                                            <Grid Margin="0,2">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="94" />
                                                     <ColumnDefinition Width="*" />
@@ -810,100 +819,111 @@
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled">
                         <Grid Margin="9,7">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="10" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="8" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <StackPanel x:Name="SourceSetSettingsSection">
                                 <TextBlock Margin="0,3,0,3"
                                            FontSize="10.5"
                                            FontWeight="ExtraBold"
                                            Foreground="{StaticResource CiaAccentBrush}"
                                            Text="SOURCE SET" />
-                                <ComboBox Height="29"
-                                          DisplayMemberPath="Name"
-                                          ItemsSource="{Binding SourceSets}"
-                                          SelectedItem="{Binding ActiveSourceSet, Mode=TwoWay}" />
-                                <TextBox Margin="0,5,0,0"
-                                         MaxLength="100"
-                                         Style="{StaticResource CiaTextInputStyle}"
-                                         Text="{Binding ActiveSourceSetName, UpdateSourceTrigger=PropertyChanged}" />
-                                <StackPanel Margin="0,5,0,8" Orientation="Horizontal">
-                                    <Button Margin="0,0,5,0"
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="8" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox x:Name="ActiveSourceSetSelector"
+                                              Height="29"
+                                              DisplayMemberPath="Name"
+                                              ItemsSource="{Binding SourceSets}"
+                                              SelectedItem="{Binding ActiveSourceSet, Mode=TwoWay}" />
+                                    <TextBox x:Name="SourceSetNameInput"
+                                             Grid.Column="2"
+                                             MaxLength="100"
+                                             Style="{StaticResource CiaTextInputStyle}"
+                                             Text="{Binding ActiveSourceSetName, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+                                <WrapPanel Margin="0,5,0,0">
+                                    <Button x:Name="CreateSourceSetButton"
+                                            Margin="0,0,5,0"
                                             Command="{Binding CreateSourceSetCommand}"
                                             Style="{StaticResource CiaButtonStyle}"
                                             Content="Create Set" />
-                                    <Button Command="{Binding RenameActiveSourceSetCommand}"
+                                    <Button Margin="0,0,5,0"
+                                            Command="{Binding RenameActiveSourceSetCommand}"
                                             Style="{StaticResource CiaGhostButtonStyle}"
                                             Content="Rename" />
+                                    <Button x:Name="ReassignSetMenuButton"
+                                            Click="OnReassignSetMenuClick"
+                                            IsEnabled="{Binding HasHighlightedSources}"
+                                            Style="{StaticResource CiaGhostButtonStyle}"
+                                            Content="Move selected ▾"
+                                            ToolTip="Move highlighted rows to an existing or new Source Set." />
+                                </WrapPanel>
+                            </StackPanel>
+                            <Grid x:Name="LoadSettingsLowerGrid" Grid.Row="2">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition x:Name="WorkflowSettingsColumn" Width="*" />
+                                    <ColumnDefinition x:Name="LoadSettingsLowerGapColumn" Width="12" />
+                                    <ColumnDefinition x:Name="FolderSettingsColumn" Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition x:Name="LoadSettingsLowerTopRow" Height="Auto" />
+                                    <RowDefinition x:Name="LoadSettingsLowerStackGapRow" Height="0" />
+                                    <RowDefinition x:Name="LoadSettingsLowerBottomRow" Height="0" />
+                                </Grid.RowDefinitions>
+                                <StackPanel x:Name="WorkflowSettingsSection">
+                                    <TextBlock Margin="0,3,0,3"
+                                               FontSize="10.5"
+                                               FontWeight="ExtraBold"
+                                               Foreground="{StaticResource CiaAccentBrush}"
+                                               Text="WORKFLOW" />
+                                    <CheckBox Padding="0,4"
+                                              Content="Open Discovery after run"
+                                              FontWeight="SemiBold"
+                                              IsChecked="{Binding OpenDiscoveryWhenGenerationCompletes}"
+                                              ToolTipService.InitialShowDelay="500"
+                                              ToolTip="Open the Discovery tab only after Discovery generation/update completes successfully." />
+                                    <Border Style="{StaticResource CiaDividerStyle}" />
+                                    <CheckBox Padding="0,4"
+                                              Content="Skip remove warning"
+                                              FontWeight="SemiBold"
+                                              IsChecked="{Binding DontWarnWhenRemovingEntries}"
+                                              ToolTipService.InitialShowDelay="500"
+                                              ToolTip="Remove highlighted rows from the current session without showing the confirmation dialog." />
                                 </StackPanel>
-                                <Border Style="{StaticResource CiaDividerStyle}" />
-                                <TextBlock Margin="0,3,0,3"
-                                           FontSize="10.5"
-                                           FontWeight="ExtraBold"
-                                           Foreground="{StaticResource CiaAccentBrush}"
-                                           Text="WHEN ADDING A FOLDER" />
-                                <CheckBox Padding="0,4"
-                                          IsChecked="{Binding IncludeXmlFiles}">
-                                    <StackPanel Margin="7,0,0,0">
-                                        <TextBlock FontWeight="SemiBold" Text="Include XML files" />
-                                        <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                                   Text="Include supported XML files found in the selected folder."
-                                                   TextWrapping="Wrap" />
-                                    </StackPanel>
-                                </CheckBox>
-                                <Border Style="{StaticResource CiaDividerStyle}" />
-                                <CheckBox Padding="0,4"
-                                          IsChecked="{Binding IncludeArchives}">
-                                    <StackPanel Margin="7,0,0,0">
-                                        <TextBlock FontWeight="SemiBold" Text="Include archives" />
-                                        <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                                   Text="Include supported archives found inside the selected folder. Add Archive is unaffected."
-                                                   TextWrapping="Wrap" />
-                                    </StackPanel>
-                                </CheckBox>
-                                <Border Style="{StaticResource CiaDividerStyle}" />
-                                <CheckBox Padding="0,4"
-                                          IsChecked="{Binding SearchSubfolders}">
-                                    <StackPanel Margin="7,0,0,0">
-                                        <TextBlock FontWeight="SemiBold" Text="Search subfolders" />
-                                        <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                                   Text="Traverse subfolders recursively when a folder is added."
-                                                   TextWrapping="Wrap" />
-                                    </StackPanel>
-                                </CheckBox>
-                            </StackPanel>
-                            <StackPanel Grid.Column="2">
-                                <TextBlock Margin="0,3,0,3"
-                                           FontSize="10.5"
-                                           FontWeight="ExtraBold"
-                                           Foreground="{StaticResource CiaAccentBrush}"
-                                           Text="WORKFLOW" />
-                                <CheckBox Padding="0,4"
-                                          IsChecked="{Binding OpenDiscoveryWhenLoadingCompletes}">
-                                    <StackPanel Margin="7,0,0,0">
-                                        <TextBlock FontWeight="SemiBold"
-                                                   Text="Open Discovery when loading completes"
-                                                   TextWrapping="Wrap" />
-                                        <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                                   Text="Navigate after completion. Discovery is not started automatically."
-                                                   TextWrapping="Wrap" />
-                                    </StackPanel>
-                                </CheckBox>
-                                <Border Style="{StaticResource CiaDividerStyle}" />
-                                <CheckBox Padding="0,4"
-                                          IsChecked="{Binding DontWarnWhenRemovingEntries}">
-                                    <StackPanel Margin="7,0,0,0">
-                                        <TextBlock FontWeight="SemiBold"
-                                                   Text="Don't warn when removing entries"
-                                                   TextWrapping="Wrap" />
-                                        <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                                   Text="Skip the removal confirmation for this session."
-                                                   TextWrapping="Wrap" />
-                                    </StackPanel>
-                                </CheckBox>
-                            </StackPanel>
+                                <StackPanel x:Name="FolderSettingsSection" Grid.Column="2">
+                                    <TextBlock Margin="0,3,0,3"
+                                               FontSize="10.5"
+                                               FontWeight="ExtraBold"
+                                               Foreground="{StaticResource CiaAccentBrush}"
+                                               Text="WHEN ADDING A FOLDER" />
+                                    <CheckBox Padding="0,4"
+                                              Content="Include XML"
+                                              FontWeight="SemiBold"
+                                              IsChecked="{Binding IncludeXmlFiles}"
+                                              ToolTipService.InitialShowDelay="500"
+                                              ToolTip="Load supported XML files found in the selected folder." />
+                                    <Border Style="{StaticResource CiaDividerStyle}" />
+                                    <CheckBox Padding="0,4"
+                                              Content="Include archives"
+                                              FontWeight="SemiBold"
+                                              IsChecked="{Binding IncludeArchives}"
+                                              ToolTipService.InitialShowDelay="500"
+                                              ToolTip="Load supported archives found inside the selected folder." />
+                                    <Border Style="{StaticResource CiaDividerStyle}" />
+                                    <CheckBox Padding="0,4"
+                                              Content="Search subfolders"
+                                              FontWeight="SemiBold"
+                                              IsChecked="{Binding SearchSubfolders}"
+                                              ToolTipService.InitialShowDelay="500"
+                                              ToolTip="Traverse subfolders recursively while loading a folder." />
+                                </StackPanel>
+                            </Grid>
                         </Grid>
                     </ScrollViewer>
                 </Grid>

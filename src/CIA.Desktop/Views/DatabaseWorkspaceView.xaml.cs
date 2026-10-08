@@ -1,14 +1,18 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
+using CIA.Desktop.Presentation;
 
 namespace CIA.Desktop.Views;
 
 public partial class DatabaseWorkspaceView : UserControl
 {
     private const double CompactLayoutBreakpoint = 1180;
+    private const double DatabaseReviewRowHeight = 30;
     private bool _isCompact;
     private bool _showExcelExport;
+    private DatabaseColumnWidthFeedback? _columnResize;
 
     public DatabaseWorkspaceView()
     {
@@ -28,11 +32,6 @@ public partial class DatabaseWorkspaceView : UserControl
     private void OnColumnsClick(object sender, RoutedEventArgs e)
     {
         ColumnsPopup.IsOpen = !ColumnsPopup.IsOpen;
-    }
-
-    private void OnMetadataClick(object sender, RoutedEventArgs e)
-    {
-        MetadataPopup.IsOpen = !MetadataPopup.IsOpen;
     }
 
     private void OnExportFieldsTabClick(object sender, RoutedEventArgs e)
@@ -134,4 +133,66 @@ public partial class DatabaseWorkspaceView : UserControl
         button.Foreground = (Brush)FindResource(
             isActive ? "CiaAccentBrush" : "CiaTextSecondaryBrush");
     }
+
+    private void OnDatabaseColumnResizeStarted(object sender, DragStartedEventArgs e)
+    {
+        if (sender is not Thumb { DataContext: { } column }
+            || DataContext is not DatabaseWorkspaceViewModel viewModel)
+        {
+            return;
+        }
+
+        _columnResize = viewModel.GetAdjacentDatabaseColumnWidths(column);
+        ShowColumnSizeFeedback(_columnResize);
+    }
+
+    private void OnDatabaseColumnResizeDelta(object sender, DragDeltaEventArgs e)
+    {
+        if (sender is not Thumb { DataContext: { } column }
+            || DataContext is not DatabaseWorkspaceViewModel viewModel)
+        {
+            return;
+        }
+
+        _columnResize = viewModel.ResizeAdjacentDatabaseColumns(column, e.HorizontalChange);
+        ShowColumnSizeFeedback(_columnResize);
+    }
+
+    private void OnDatabaseColumnResizeCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (_columnResize is { } resize
+            && DataContext is DatabaseWorkspaceViewModel viewModel)
+        {
+            viewModel.PersistDatabaseColumnWidths(resize);
+        }
+
+        _columnResize = null;
+        DatabaseColumnSizeFeedback.Visibility = Visibility.Collapsed;
+    }
+
+    private async void OnDatabaseReviewScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (DataContext is not DatabaseWorkspaceViewModel viewModel
+            || e.ViewportHeight <= 0)
+        {
+            return;
+        }
+
+        var firstVisibleOrdinal = (int)Math.Floor(e.VerticalOffset / DatabaseReviewRowHeight) + 1;
+        var visibleRowCount = (int)Math.Ceiling(e.ViewportHeight / DatabaseReviewRowHeight) + 2;
+        await viewModel.EnsureReviewRowsAvailableAsync(firstVisibleOrdinal, visibleRowCount);
+    }
+
+    private void ShowColumnSizeFeedback(DatabaseColumnWidthFeedback? feedback)
+    {
+        if (feedback is null)
+        {
+            DatabaseColumnSizeFeedback.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        DatabaseColumnSizeFeedbackText.Text = $"{feedback.LeftWidth:0} / {feedback.RightWidth:0}";
+        DatabaseColumnSizeFeedback.Visibility = Visibility.Visible;
+    }
+
 }

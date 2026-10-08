@@ -23,7 +23,8 @@ public sealed class DatabaseGenerationService(
     public async Task<DatabaseGenerationHostResult> BuildAsync(
         OperationCorrelation correlation,
         DatabaseBuildSpecification specification,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<DatabaseBuildProgressSnapshot>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(specification);
@@ -34,6 +35,12 @@ public sealed class DatabaseGenerationService(
             correlation, "DatabaseBuild", "Hierarchy-aware candidate Database generation", plans);
         DatabaseCandidate? candidate = null;
         var sourceContributionFailed = false;
+        var completedWorkCount = 0;
+        ReportProgress(progress, new DatabaseBuildProgressSnapshot(
+            correlation.OperationId,
+            "Preparing candidate Database",
+            completedWorkCount,
+            plans.Length));
         try
         {
             candidate = await repository.CreateDatabaseCandidateAsync(
@@ -50,6 +57,7 @@ public sealed class DatabaseGenerationService(
                         break;
                     }
 
+                    var sourceWorkCompleted = false;
                     using (execution)
                     using (var sourceCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                                cancellationToken, execution!.CancellationToken))
@@ -64,6 +72,7 @@ public sealed class DatabaseGenerationService(
                                 sourceContributionFailed = true;
                                 execution.RecordFailure(
                                     interpretation.Failure?.Code ?? "database-source-interpretation-failed");
+                                sourceWorkCompleted = true;
                                 continue;
                             }
 
@@ -86,6 +95,7 @@ public sealed class DatabaseGenerationService(
                                 candidate, dataset.SourceSetId, source.SourceId, rows,
                                 sourceCancellation.Token).ConfigureAwait(false);
                             execution.CommitCompletedResult();
+                            sourceWorkCompleted = true;
                         }
                         catch (OperationCanceledException) when (sourceCancellation.IsCancellationRequested)
                         {
@@ -103,6 +113,19 @@ public sealed class DatabaseGenerationService(
                                 "Source {SourceId} could not contribute hierarchy-aware rows to Database candidate {OperationId}",
                                 source.SourceId, correlation.OperationId);
                             execution.RecordFailure("database-source-generation-failed");
+                            sourceWorkCompleted = true;
+                        }
+                        finally
+                        {
+                            if (sourceWorkCompleted)
+                            {
+                                completedWorkCount++;
+                                ReportProgress(progress, new DatabaseBuildProgressSnapshot(
+                                    correlation.OperationId,
+                                    $"Processed {completedWorkCount} of {sources.Length} sources",
+                                    completedWorkCount,
+                                    plans.Length));
+                            }
                         }
                     }
                 }
@@ -135,6 +158,12 @@ public sealed class DatabaseGenerationService(
                     "database-candidate-not-publishable", "The candidate Database could not enter publication.");
             }
 
+            ReportProgress(progress, new DatabaseBuildProgressSnapshot(
+                correlation.OperationId,
+                "Publishing Database generation",
+                completedWorkCount,
+                plans.Length));
+
             using (publicationExecution)
             using (var publicationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                        cancellationToken, publicationExecution!.CancellationToken))
@@ -145,6 +174,12 @@ public sealed class DatabaseGenerationService(
                         candidate, publicationCancellation.Token,
                         operation.TryEnterNonCancellableCommitBoundary).ConfigureAwait(false);
                     publicationExecution.CommitCompletedResult();
+                    completedWorkCount++;
+                    ReportProgress(progress, new DatabaseBuildProgressSnapshot(
+                        correlation.OperationId,
+                        "Published Database generation",
+                        completedWorkCount,
+                        plans.Length));
                     return DatabaseGenerationHostResult.Accept(published, operation.Complete());
                 }
                 catch (OperationCanceledException) when (publicationCancellation.IsCancellationRequested)
@@ -191,6 +226,20 @@ public sealed class DatabaseGenerationService(
             return DatabaseGenerationHostResult.Reject(
                 operation.CompleteTerminal(OperationOutcome.Failed),
                 "database-candidate-initialization-failed", "The candidate Database could not be initialized.");
+        }
+    }
+
+    private static void ReportProgress(
+        IProgress<DatabaseBuildProgressSnapshot>? progress,
+        DatabaseBuildProgressSnapshot snapshot)
+    {
+        try
+        {
+            progress?.Report(snapshot);
+        }
+        catch (Exception)
+        {
+            // Progress observers cannot alter the Database-build outcome.
         }
     }
 

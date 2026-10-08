@@ -340,11 +340,36 @@ public sealed class SourceLoadingCoordinator(
     public SourceSetMutationResult ReassignSourcesToNewSet(
         IEnumerable<LoadedSourceItem> sources)
     {
+        return ReassignSourcesToNewSet(sources, name: null);
+    }
+
+    public SourceSetMutationResult ReassignSourcesToNewSet(
+        IEnumerable<LoadedSourceItem> sources,
+        string? name)
+    {
+        var sourceSetName = string.IsNullOrWhiteSpace(name)
+            ? sourceSet.GetNextDefaultSourceSetName()
+            : name.Trim();
+        if (sourceSetName.Length > MaximumSourceSetNameLength)
+        {
+            return SourceSetMutationResult.Reject(
+                "invalid-source-set-name",
+                $"Source Set names cannot exceed {MaximumSourceSetNameLength} characters.");
+        }
+
+        if (sourceSet.SourceSets.Any(candidate =>
+            string.Equals(candidate.Name, sourceSetName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return SourceSetMutationResult.Reject(
+                "duplicate-source-set-name",
+                "Source Set names must be unique in the active session.");
+        }
+
         return ReassignSourcesCore(
             sources,
             SourceSetId.CreateNew(),
             createTargetSourceSet: true,
-            newSourceSetName: sourceSet.GetNextDefaultSourceSetName());
+            newSourceSetName: sourceSetName);
     }
 
     private SourceSetMutationResult ReassignSourcesCore(

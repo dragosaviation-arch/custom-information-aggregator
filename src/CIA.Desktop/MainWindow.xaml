@@ -1,6 +1,7 @@
 <Window x:Class="CIA.Desktop.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:presentation="clr-namespace:CIA.Desktop.Presentation"
         xmlns:views="clr-namespace:CIA.Desktop.Views"
         x:Name="WindowRoot"
@@ -12,22 +13,94 @@
         KeyDown="OnWindowKeyDown"
         SizeChanged="OnWindowSizeChanged"
         WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
         Background="{StaticResource CiaBackgroundBrush}"
         FontFamily="{StaticResource CiaFontFamily}"
         FontSize="{StaticResource CiaBodyFontSize}"
         SnapsToDevicePixels="True">
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="38"
+                            CornerRadius="0"
+                            GlassFrameThickness="0"
+                            ResizeBorderThickness="6"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+    <Window.Resources>
+        <Style x:Key="CiaCaptionButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="44" />
+            <Setter Property="Height" Value="38" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="{StaticResource CiaTextPrimaryBrush}" />
+            <Setter Property="FontFamily" Value="Segoe UI Symbol" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="shell:WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBackground"
+                                Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonBackground"
+                                        Property="Background"
+                                        Value="{StaticResource CiaHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonBackground"
+                                        Property="Background"
+                                        Value="{StaticResource CiaDividerBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CiaCloseCaptionButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource CiaCaptionButtonStyle}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ButtonBackground"
+                                Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ButtonBackground" Property="Background" Value="#FFE81123" />
+                                <Setter Property="Foreground" Value="White" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ButtonBackground" Property="Background" Value="#FFC50F1F" />
+                                <Setter Property="Foreground" Value="White" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid Background="{StaticResource CiaBackgroundBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="38" />
             <RowDefinition Height="60" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="32" />
+            <RowDefinition Height="34" />
         </Grid.RowDefinitions>
 
         <Border Grid.Row="0"
+                MouseRightButtonUp="OnTitleBarMouseRightButtonUp"
                 Style="{StaticResource CiaTopBarStyle}">
-            <StackPanel VerticalAlignment="Center"
-                        Orientation="Horizontal">
+            <Grid>
+                <StackPanel VerticalAlignment="Center"
+                            Orientation="Horizontal">
                 <Border Width="24"
                         Height="24"
                         Background="{StaticResource CiaLogoBrush}"
@@ -53,7 +126,54 @@
                            FontSize="12.5"
                            Foreground="{StaticResource CiaTextPrimaryBrush}"
                            Text="Custom Information Aggregator" />
-            </StackPanel>
+                </StackPanel>
+                <StackPanel HorizontalAlignment="Right"
+                            Orientation="Horizontal">
+                    <Button x:Name="MinimizeButton"
+                            AutomationProperties.Name="Minimize window"
+                            Click="OnMinimizeClick"
+                            Content="&#x2014;"
+                            Style="{StaticResource CiaCaptionButtonStyle}" />
+                    <Button x:Name="MaximizeRestoreButton"
+                            AutomationProperties.Name="Maximize or restore window"
+                            Click="OnMaximizeRestoreClick"
+                            Style="{StaticResource CiaCaptionButtonStyle}">
+                        <Grid>
+                            <TextBlock Text="&#x25A1;">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding WindowState, ElementName=WindowRoot}"
+                                                         Value="Maximized">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="&#x2750;">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding WindowState, ElementName=WindowRoot}"
+                                                         Value="Maximized">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+                    </Button>
+                    <Button x:Name="CloseButton"
+                            AutomationProperties.Name="Close window"
+                            Click="OnCloseClick"
+                            Content="&#x00D7;"
+                            Style="{StaticResource CiaCloseCaptionButtonStyle}" />
+                </StackPanel>
+            </Grid>
         </Border>
 
         <Border Grid.Row="1"
@@ -70,7 +190,8 @@
         <Grid Grid.Row="2"
               MinHeight="0"
               ClipToBounds="True">
-            <views:LoadWorkspaceView DataContext="{Binding LoadWorkspace, ElementName=WindowRoot}">
+            <views:LoadWorkspaceView DataContext="{Binding LoadWorkspace, ElementName=WindowRoot}"
+                                     DiscoveryWorkspace="{Binding DiscoveryWorkspace, ElementName=WindowRoot}">
                 <views:LoadWorkspaceView.Style>
                     <Style TargetType="views:LoadWorkspaceView">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -173,51 +294,82 @@
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="18" />
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <Ellipse Width="7"
                          Height="7"
-                         Margin="0,0,9,0"
+                         Margin="0,0,10,0"
                          VerticalAlignment="Center"
-                         AutomationProperties.Name="Session active"
-                         Fill="{StaticResource CiaSuccessBrush}"
-                         ToolTip="Session active" />
+                         AutomationProperties.Name="Processing Host status">
+                    <Ellipse.Style>
+                        <Style TargetType="Ellipse">
+                            <Setter Property="Fill" Value="{StaticResource CiaWarningBrush}" />
+                            <Setter Property="ToolTip"
+                                    Value="{Binding GlobalStatus.HostStatusText, ElementName=WindowRoot, StringFormat=Processing Host: {0}}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding GlobalStatus.HostStatusText, ElementName=WindowRoot}"
+                                             Value="Available">
+                                    <Setter Property="Fill" Value="{StaticResource CiaSuccessBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding GlobalStatus.HostStatusText, ElementName=WindowRoot}"
+                                             Value="Unavailable">
+                                    <Setter Property="Fill" Value="{StaticResource CiaDangerBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding GlobalStatus.HostStatusText, ElementName=WindowRoot}"
+                                             Value="Faulted">
+                                    <Setter Property="Fill" Value="{StaticResource CiaDangerBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Ellipse.Style>
+                </Ellipse>
                 <TextBlock Grid.Column="1"
-                           Margin="0,0,5,0"
-                           VerticalAlignment="Center"
-                           Style="{StaticResource CiaStatusLabelTextStyle}"
-                           Text="Host" />
-                <TextBlock Grid.Column="2"
-                           AutomationProperties.LiveSetting="Polite"
-                           AutomationProperties.Name="Processing Host status"
-                           VerticalAlignment="Center"
-                           Style="{StaticResource CiaSecondaryTextStyle}"
-                           Text="{Binding GlobalStatus.HostStatusText, ElementName=WindowRoot}" />
-
-                <TextBlock Grid.Column="4"
-                           Margin="0,0,5,0"
-                           VerticalAlignment="Center"
-                           Style="{StaticResource CiaStatusLabelTextStyle}"
-                           Text="Operation" />
-                <TextBlock Grid.Column="5"
                            AutomationProperties.LiveSetting="Polite"
                            AutomationProperties.Name="Global operation status"
                            VerticalAlignment="Center"
                            Style="{StaticResource CiaSecondaryTextStyle}"
                            Text="{Binding GlobalStatus.OperationStatusText, ElementName=WindowRoot}"
                            TextTrimming="CharacterEllipsis" />
-                <TextBlock Grid.Column="6"
-                           Margin="12,0,0,0"
+                <ProgressBar Grid.Column="2"
+                             Width="150"
+                             Height="5"
+                             Margin="12,0,0,0"
+                             Maximum="{Binding GlobalStatus.ProgressMaximum, ElementName=WindowRoot, Mode=OneWay}"
+                             Value="{Binding GlobalStatus.ProgressValue, ElementName=WindowRoot, Mode=OneWay}">
+                    <ProgressBar.Style>
+                        <Style TargetType="ProgressBar"
+                               BasedOn="{StaticResource CiaDeterminateProgressBarStyle}">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding GlobalStatus.IsProgressVisible, ElementName=WindowRoot}"
+                                             Value="False">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ProgressBar.Style>
+                </ProgressBar>
+                <TextBlock Grid.Column="3"
+                           Width="38"
+                           Margin="6,0,0,0"
                            VerticalAlignment="Center"
-                           FontWeight="Bold"
-                           Foreground="{StaticResource CiaTextPrimaryBrush}"
-                           Text="{Binding LoadWorkspace.IncludedSummary, ElementName=WindowRoot}" />
+                           Text="{Binding GlobalStatus.ProgressPercentText, ElementName=WindowRoot}">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock"
+                               BasedOn="{StaticResource CiaSecondaryTextStyle}">
+                            <Setter Property="Visibility" Value="Visible" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding GlobalStatus.IsProgressVisible, ElementName=WindowRoot}"
+                                             Value="False">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
             </Grid>
         </Border>
     </Grid>

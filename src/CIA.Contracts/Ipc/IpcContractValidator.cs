@@ -140,6 +140,12 @@ public static class IpcContractValidator
             case SourceIntakeProgressEvent progressEvent:
                 ValidateSourceIntakeProgressEvent(progressEvent);
                 break;
+            case DiscoveryProgressEvent progressEvent:
+                ValidateDiscoveryProgressEvent(progressEvent);
+                break;
+            case DatabaseBuildProgressEvent progressEvent:
+                ValidateDatabaseBuildProgressEvent(progressEvent);
+                break;
             default:
                 throw InvalidContract($"Unsupported IPC contract type '{message.GetType().FullName}'.");
         }
@@ -1250,6 +1256,37 @@ public static class IpcContractValidator
             && total < progress.EncounteredItemCount)
         {
             throw InvalidContract("Source-intake progress counters are inconsistent.");
+        }
+    }
+
+    private static void ValidateDiscoveryProgressEvent(DiscoveryProgressEvent progressEvent)
+    {
+        ValidateVersionSevenId(progressEvent.CommandMessageId, nameof(progressEvent.CommandMessageId));
+
+        var progress = progressEvent.Progress;
+        if (progress is null
+            || progress.TotalSourceCount < 1
+            || progress.CompletedSourceCount < 0
+            || progress.CompletedSourceCount > progress.TotalSourceCount)
+        {
+            throw InvalidContract("A Discovery progress event requires valid completed and total source counts.");
+        }
+    }
+
+    private static void ValidateDatabaseBuildProgressEvent(DatabaseBuildProgressEvent progressEvent)
+    {
+        ValidateVersionSevenId(progressEvent.CommandMessageId, nameof(progressEvent.CommandMessageId));
+
+        var progress = progressEvent.Progress;
+        if (progress is null
+            || !OperationId.IsValid(progress.OperationId.Value)
+            || string.IsNullOrWhiteSpace(progress.Stage)
+            || progress.Stage.Length > 200
+            || progress.TotalWorkCount < 1
+            || progress.CompletedWorkCount < 0
+            || progress.CompletedWorkCount > progress.TotalWorkCount)
+        {
+            throw InvalidContract("A Database-build progress event requires valid operation, stage, and work counts.");
         }
     }
 

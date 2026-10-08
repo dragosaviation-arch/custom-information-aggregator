@@ -18,6 +18,29 @@ namespace CIA.ProcessingHost.Tests;
 public sealed class DiscoveryServiceTests
 {
     [TestMethod]
+    public async Task DiscoveryReportsActualCompletedSourceUnitsMonotonically()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var first = workspace.CreateSource("first.xml", "<root><value>A</value></root>");
+        var second = workspace.CreateSource("second.xml", "<root><value>B</value></root>");
+        var progress = new RecordingProgress<DiscoveryProgressSnapshot>();
+
+        var result = await CreateGenericService().RunAsync(
+            OperationCorrelation.CreateNew(),
+            [first, second],
+            progress);
+
+        Assert.IsTrue(result.Accepted);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                new DiscoveryProgressSnapshot(1, 2),
+                new DiscoveryProgressSnapshot(2, 2)
+            },
+            progress.Values.ToArray());
+    }
+
+    [TestMethod]
     public async Task DiscoveryKeepsSourceSetsAndStructuralPathsIndependentlyIdentifiable()
     {
         using var workspace = new DiscoveryWorkspace();
@@ -62,6 +85,16 @@ public sealed class DiscoveryServiceTests
         Assert.AreEqual("Seller A", preview.Occurrence?.Value);
         Assert.AreEqual(firstSeller.Identity, preview.Occurrence?.Identity);
         Assert.AreEqual(first.SourceId, preview.Occurrence?.SourceId);
+    }
+
+    private sealed class RecordingProgress<T> : IProgress<T>
+    {
+        public List<T> Values { get; } = [];
+
+        public void Report(T value)
+        {
+            Values.Add(value);
+        }
     }
 
     [TestMethod]
@@ -350,7 +383,10 @@ public sealed class DiscoveryServiceTests
     [TestMethod]
     public void RunAsyncDoesNotRetainAWorkloadCollectionOfInterpretedDocuments()
     {
-        var runAsync = typeof(DiscoveryService).GetMethod(nameof(DiscoveryService.RunAsync))!;
+        var runAsync = typeof(DiscoveryService)
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .Single(method => method.Name == nameof(DiscoveryService.RunAsync)
+                              && method.GetParameters().Length == 4);
         var stateMachine = runAsync
             .GetCustomAttribute<AsyncStateMachineAttribute>()!
             .StateMachineType;

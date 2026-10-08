@@ -44,6 +44,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton(settingsService);
         builder.Services.AddSingleton(applicationPaths);
         builder.Services.AddSingleton<ApplicationSession>();
+        builder.Services.AddSingleton<GlobalOperationProgress>();
         builder.Services.AddSingleton<GlobalStatusViewModel>();
         builder.Services.AddSingleton<MainWindowViewModel>();
         builder.Services.AddSingleton<LoadWorkspaceViewModel>();
@@ -112,6 +113,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<IPostExportPrompt, WindowsPostExportPrompt>();
         builder.Services.AddSingleton<PostExportBehaviorCoordinator>();
         builder.Services.AddSingleton<ISettingsFolderPicker, WindowsSettingsFolderPicker>();
+        builder.Services.AddSingleton<IExternalLinkLauncher, WindowsExternalLinkLauncher>();
         builder.Services.AddSingleton<DiscoveryWorkspaceViewModel>();
         builder.Services.AddSingleton<DatabaseWorkspaceViewModel>();
         builder.Services.AddSingleton<IProcessingHistoryReader>(

@@ -17,6 +17,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace CIA.ProcessingHost.Tests;
 
 [TestClass]
+[DoNotParallelize]
 public sealed class HierarchyDatabaseGenerationTests
 {
     [TestMethod]
@@ -70,6 +71,109 @@ public sealed class HierarchyDatabaseGenerationTests
         Assert.IsTrue(firstPage.Rows.All(row =>
             row.RecordHierarchy.Contains("/record[", StringComparison.Ordinal)
             && !row.RecordHierarchy.Contains(row.Source.SourceId.ToString(), StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public async Task BuildReportsRealSourceAndPublicationWorkProgress()
+    {
+        using var workspace = new Workspace();
+        var sourceSet = SourceSetId.CreateNew();
+        var first = workspace.Source(sourceSet, "first-progress.xml",
+            "<records><record><code>A</code></record></records>");
+        var second = workspace.Source(sourceSet, "second-progress.xml",
+            "<records><record><code>B</code></record></records>");
+        var specification = await workspace.SpecificationAsync(
+            (sourceSet, "Set", RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+                new[] { first, second }));
+        var correlation = OperationCorrelation.CreateNew();
+        var progress = new RecordingProgress<DatabaseBuildProgressSnapshot>();
+
+        var result = await workspace.Service.BuildAsync(
+            correlation,
+            specification,
+            progress: progress);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.IsGreaterThan(3, progress.Values.Count);
+        Assert.IsTrue(progress.Values.All(snapshot =>
+            snapshot.OperationId == correlation.OperationId
+            && snapshot.TotalWorkCount == 3));
+        CollectionAssert.AreEqual(
+            new[] { 0, 1, 2, 2, 3 },
+            progress.Values.Select(snapshot => snapshot.CompletedWorkCount).ToArray());
+        Assert.IsTrue(progress.Values.Zip(progress.Values.Skip(1),
+            (left, right) => right.CompletedWorkCount >= left.CompletedWorkCount).All(value => value));
+        StringAssert.Contains(progress.Values[^2].Stage, "Publishing");
+    }
+
+    [TestMethod]
+    [TestCategory("AlphaRegressionGate")]
+    [DataRow(RepeatedDataLayout.AlignRepeatedGroupsByPosition)]
+    [DataRow(RepeatedDataLayout.StructuralRows)]
+    [DataRow(RepeatedDataLayout.AllCombinations)]
+    [DataRow(RepeatedDataLayout.NumberRepeatedValuesIntoColumns)]
+    public async Task SameLeafDifferentAncestryBuildsSeparateDatabaseRowsInEveryLayout(
+        RepeatedDataLayout layout)
+    {
+        using var workspace = new Workspace();
+        var sourceSet = SourceSetId.CreateNew();
+        var fixturePath = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "StructuralDiscovery",
+            "same-leaf-different-ancestry.xml");
+        var source = workspace.Source(
+            sourceSet,
+            "same-leaf-different-ancestry.xml",
+            File.ReadAllText(fixturePath));
+        var interpreted = await workspace.InterpretAsync(source);
+        var identities = Identities(sourceSet, interpreted)
+            .Where(identity => identity.InformationType is "pnr" or "mfr" or "keyword")
+            .ToArray();
+        var overrides = identities
+            .Where(identity => identity.InformationType is "pnr" or "mfr")
+            .ToDictionary(
+                identity => identity,
+                identity => identity.InformationType == "pnr"
+                    ? "Part Number"
+                    : "Vendor Code");
+        var specification = workspace.Specification(
+            sourceSet,
+            "Tools",
+            layout,
+            [source],
+            identities,
+            overrides);
+
+        var result = await workspace.Service.BuildAsync(
+            OperationCorrelation.CreateNew(),
+            specification);
+
+        Assert.IsTrue(result.Accepted, result.Failure?.Description);
+        var page = await workspace.PageAsync(result.PublishedGeneration!, sourceSet);
+        Assert.HasCount(2, page.Rows);
+        Assert.HasCount(1, page.Dataset.Mappings.Where(field => field.EffectiveName == "Part Number"));
+        Assert.HasCount(1, page.Dataset.Columns.Where(column => column.EffectiveName == "Part Number"));
+        var main = page.Rows.Single(row => Values(row).Contains("MAIN-001"));
+        var alternate = page.Rows.Single(row => Values(row).Contains("ALT-001"));
+        AssertRowValues(main, "MAIN-001", "MFR-A", "KIT");
+        AssertRowValues(alternate, "ALT-001", "MFR-B", "KIT");
+        Assert.IsTrue(main.Cells.All(cell => !cell.HasConflict && cell.Values.Count == 1));
+        Assert.IsTrue(alternate.Cells.All(cell => !cell.HasConflict && cell.Values.Count == 1));
+
+        var mainPaths = Metadata(main, DatabaseMetadataField.ValuePath);
+        var alternatePaths = Metadata(alternate, DatabaseMetadataField.ValuePath);
+        StringAssert.Contains(mainPaths, "/toolnbr/pnr");
+        Assert.IsFalse(mainPaths.Contains("/pnrdata/rplby/pnr", StringComparison.Ordinal));
+        StringAssert.Contains(alternatePaths, "/pnrdata/rplby/pnr");
+        Assert.IsFalse(alternatePaths.Contains("/toolnbr/pnr", StringComparison.Ordinal));
+        StringAssert.Contains(Metadata(main, DatabaseMetadataField.StructuralIdentity), "/toolnbr/pnr");
+        StringAssert.Contains(
+            Metadata(alternate, DatabaseMetadataField.StructuralIdentity),
+            "/pnrdata/rplby/pnr");
+        Assert.AreEqual(
+            Metadata(main, DatabaseMetadataField.RecordHierarchy),
+            Metadata(alternate, DatabaseMetadataField.RecordHierarchy));
     }
 
     [TestMethod]
@@ -412,13 +516,17 @@ public sealed class HierarchyDatabaseGenerationTests
             firstSpecification.Datasets[0].Fields.SelectMany(field => field.DetailedIdentities).ToArray(),
             new Dictionary<DiscoveryInformationIdentity, string>());
 
+        var progress = new RecordingProgress<DatabaseBuildProgressSnapshot>();
         var replacement = await workspace.Service.BuildAsync(
-            OperationCorrelation.CreateNew(), invalidSpecification);
+            OperationCorrelation.CreateNew(), invalidSpecification, progress: progress);
         var retained = await workspace.Repository.ReadPublishedDatabaseGenerationAsync();
 
         Assert.IsFalse(replacement.Accepted);
         Assert.AreEqual(previousId, retained?.OperationId);
         Assert.AreEqual(OperationOutcome.Failed, replacement.Completion.Outcome);
+        Assert.IsLessThan(
+            progress.Values[^1].TotalWorkCount,
+            progress.Values[^1].CompletedWorkCount);
         Assert.AreEqual(
             OperationItemState.Failed,
             replacement.Completion.Items.Single(item =>
@@ -445,13 +553,20 @@ public sealed class HierarchyDatabaseGenerationTests
             NullLogger<DatabaseGenerationService>.Instance);
         var correlation = OperationCorrelation.CreateNew();
 
-        var replacementTask = replacementService.BuildAsync(correlation, specification);
+        var progress = new RecordingProgress<DatabaseBuildProgressSnapshot>();
+        var replacementTask = replacementService.BuildAsync(
+            correlation,
+            specification,
+            progress: progress);
         await blocking.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.IsTrue(cancellation.RequestCancellation(correlation.OperationId).Accepted);
         var replacement = await replacementTask;
 
         Assert.IsFalse(replacement.Accepted);
         Assert.AreEqual(OperationOutcome.Cancelled, replacement.Completion.Outcome);
+        Assert.IsLessThan(
+            progress.Values[^1].TotalWorkCount,
+            progress.Values[^1].CompletedWorkCount);
         Assert.AreEqual(
             first.PublishedGeneration!.OperationId,
             (await workspace.Repository.ReadPublishedDatabaseGenerationAsync())!.OperationId);
@@ -512,6 +627,17 @@ public sealed class HierarchyDatabaseGenerationTests
 
     private static IReadOnlyList<string> Values(DatabaseReviewRow row) =>
         row.Cells.SelectMany(cell => cell.Values).Select(value => value.Value).ToArray();
+
+    private static void AssertRowValues(DatabaseReviewRow row, params string[] expected) =>
+        CollectionAssert.AreEquivalent(expected, Values(row).ToArray());
+
+    private static string Metadata(DatabaseReviewRow row, DatabaseMetadataField field) =>
+        DatabaseRowMetadataProjection.GetValue(
+            row.Source,
+            row.RecordHierarchy,
+            row.Cells.SelectMany(cell => cell.Values).Select(value =>
+                new DatabaseRowMetadataValue(value.DetailedIdentity, value.Lineage)),
+            field);
 
     private static DiscoveryInformationIdentity[] Identities(
         SourceSetId set,
@@ -627,6 +753,13 @@ public sealed class HierarchyDatabaseGenerationTests
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             throw new InvalidOperationException();
         }
+    }
+
+    private sealed class RecordingProgress<T> : IProgress<T>
+    {
+        public List<T> Values { get; } = [];
+
+        public void Report(T value) => Values.Add(value);
     }
 
     private static async Task<int> ReadSchemaVersionAsync(string databasePath)

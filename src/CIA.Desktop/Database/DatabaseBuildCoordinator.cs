@@ -90,7 +90,8 @@ public sealed class DatabaseBuildCoordinator(
     }
 
     public async Task<WorkflowCommandResult> BuildAsync(
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IProgress<DatabaseBuildProgressSnapshot>? progress = null)
     {
         var readiness = EvaluateReadiness();
         if (!readiness.NormalOperationReady)
@@ -109,9 +110,14 @@ public sealed class DatabaseBuildCoordinator(
 
         try
         {
-            var result = await databaseClient
-                .BuildAsync(begin.Operation, specification, cancellationToken)
-                .ConfigureAwait(false);
+            var result = databaseClient is IDatabaseBuildProgressClient progressClient
+                && progress is not null
+                ? await progressClient
+                    .BuildAsync(begin.Operation, specification, progress, cancellationToken)
+                    .ConfigureAwait(false)
+                : await databaseClient
+                    .BuildAsync(begin.Operation, specification, cancellationToken)
+                    .ConfigureAwait(false);
 
             if (result.Accepted
                 && (result.PublishedGeneration is null

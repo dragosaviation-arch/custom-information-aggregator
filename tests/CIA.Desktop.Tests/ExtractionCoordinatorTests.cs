@@ -508,6 +508,87 @@ public sealed class ExtractionCoordinatorTests
     }
 
     [TestMethod]
+    public async Task ExportActionAutomaticallyPreparesOnceAndReusesCurrentExtraction()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var extractionClient = new RecordingExtractionClient(
+            (correlation, basis) => Success(correlation, basis));
+        var extraction = context.CreateExtractionCoordinator(extractionClient);
+        var exportClient = new RecordingWorkbookExportClient(SuccessfulWorkbookExport);
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        using var directory = new TemporaryDirectory("CIA.SPR191.ExportFlow.Tests");
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: new StaticExportFolderPicker(directory.Path),
+            workbookCollisionResolver: new RecordingCollisionResolver(_ => null));
+        viewModel.OutputFolder = directory.Path;
+        viewModel.AlwaysAskWhereToExport = false;
+
+        Assert.IsTrue(viewModel.ExportToExcelCommand.CanExecute(null));
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, extractionClient.CallCount);
+        Assert.AreEqual(2, exportClient.CallCount);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
+        Assert.AreEqual(
+            context.DatabaseCoordinator.CurrentGeneration!.OperationId,
+            extraction.CurrentResult!.DatabaseGeneration.OperationId);
+    }
+
+    [TestMethod]
+    [DataRow(OperationOutcome.Failed)]
+    [DataRow(OperationOutcome.Cancelled)]
+    public async Task UnsuccessfulAutomaticPreparationBlocksWorkbookExport(
+        OperationOutcome outcome)
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var extractionClient = new RecordingExtractionClient(
+            (correlation, _) => Failure(correlation, outcome));
+        var extraction = context.CreateExtractionCoordinator(extractionClient);
+        var exportClient = new RecordingWorkbookExportClient((_, _, _, _) =>
+            throw new AssertFailedException("Failed preparation must not export."));
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        using var directory = new TemporaryDirectory("CIA.SPR191.ExportFlow.Tests");
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: new StaticExportFolderPicker(directory.Path),
+            workbookCollisionResolver: new RecordingCollisionResolver(_ => null));
+        viewModel.OutputFolder = directory.Path;
+        viewModel.AlwaysAskWhereToExport = false;
+
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, extractionClient.CallCount);
+        Assert.AreEqual(0, exportClient.CallCount);
+        Assert.IsNull(export.LastBatch);
+        Assert.AreEqual(
+            outcome == OperationOutcome.Cancelled
+                ? WorkflowOperationState.Cancelled
+                : WorkflowOperationState.Failed,
+            context.Workflow.Current.LatestOperation?.State);
+        StringAssert.Contains(viewModel.WorkbookExportStatusText, "No Extraction Result was published");
+    }
+
+    [TestMethod]
     public async Task CancelledExportRunsNoPostExportAction()
     {
         var context = await ExtractionContext.CreateAsync();
@@ -845,11 +926,11 @@ public sealed class ExtractionCoordinatorTests
         File.Delete(conflictingPath);
         Assert.IsTrue(export.EvaluateReadiness().NormalOperationReady);
 
-        viewModel.ExportColumns.Single().IsExported = false;
+        viewModel.ColumnChoices.Single(choice => choice.IsGenerated).IsIncluded = false;
         Assert.IsFalse(viewModel.IsExportAvailable);
         Assert.IsFalse(export.EvaluateReadiness().NormalOperationReady);
         Assert.IsFalse(recovery.Current?.NormalOperationReady);
-        viewModel.ExportColumns.Single().IsExported = true;
+        viewModel.ColumnChoices.Single(choice => choice.IsGenerated).IsIncluded = true;
         Assert.IsTrue(viewModel.IsExportAvailable);
         Assert.IsTrue(export.EvaluateReadiness().NormalOperationReady);
 

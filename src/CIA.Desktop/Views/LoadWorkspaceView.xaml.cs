@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using CIA.Contracts.Sources;
@@ -11,6 +13,7 @@ namespace CIA.Desktop.Views;
 public partial class LoadWorkspaceView : UserControl
 {
     private const double CompactLayoutBreakpoint = 1180;
+    private const double LoadSettingsStackBreakpoint = 390;
     private const double SourceRowHeight = 33;
     private const double DropOverlaySafeSpace = 20;
     private bool? _dropOverlayVisible;
@@ -18,6 +21,18 @@ public partial class LoadWorkspaceView : UserControl
     public LoadWorkspaceView()
     {
         InitializeComponent();
+    }
+
+    public static readonly DependencyProperty DiscoveryWorkspaceProperty =
+        DependencyProperty.Register(
+            nameof(DiscoveryWorkspace),
+            typeof(DiscoveryWorkspaceViewModel),
+            typeof(LoadWorkspaceView));
+
+    public DiscoveryWorkspaceViewModel? DiscoveryWorkspace
+    {
+        get => (DiscoveryWorkspaceViewModel?)GetValue(DiscoveryWorkspaceProperty);
+        set => SetValue(DiscoveryWorkspaceProperty, value);
     }
 
     private void OnViewLoaded(object sender, RoutedEventArgs e)
@@ -44,10 +59,12 @@ public partial class LoadWorkspaceView : UserControl
         if (hostWidth < CompactLayoutBreakpoint)
         {
             ApplyCompactLayout();
+            ApplyLoadSettingsLayout();
             return;
         }
 
         ApplyWideLayout();
+        ApplyLoadSettingsLayout();
     }
 
     private void ApplyCompactLayout()
@@ -102,14 +119,44 @@ public partial class LoadWorkspaceView : UserControl
         RightRailGapColumn.Width = new GridLength(0);
         SettingsColumn.Width = new GridLength(0);
 
-        DetailsRow.Height = new GridLength(56, GridUnitType.Star);
+        DetailsRow.Height = new GridLength(38, GridUnitType.Star);
         RightRailGapRow.Height = new GridLength(8);
-        SettingsRow.Height = new GridLength(44, GridUnitType.Star);
+        SettingsRow.Height = new GridLength(62, GridUnitType.Star);
 
         Grid.SetRow(DetailsPanel, 0);
         Grid.SetColumn(DetailsPanel, 0);
         Grid.SetRow(SettingsPanel, 2);
         Grid.SetColumn(SettingsPanel, 0);
+    }
+
+    private void ApplyLoadSettingsLayout()
+    {
+        var availableWidth = SettingsPanel.ActualWidth;
+        if (availableWidth > 0 && availableWidth < LoadSettingsStackBreakpoint)
+        {
+            WorkflowSettingsColumn.Width = new GridLength(1, GridUnitType.Star);
+            LoadSettingsLowerGapColumn.Width = new GridLength(0);
+            FolderSettingsColumn.Width = new GridLength(0);
+            LoadSettingsLowerTopRow.Height = GridLength.Auto;
+            LoadSettingsLowerStackGapRow.Height = new GridLength(8);
+            LoadSettingsLowerBottomRow.Height = GridLength.Auto;
+            Grid.SetRow(WorkflowSettingsSection, 0);
+            Grid.SetColumn(WorkflowSettingsSection, 0);
+            Grid.SetRow(FolderSettingsSection, 2);
+            Grid.SetColumn(FolderSettingsSection, 0);
+            return;
+        }
+
+        WorkflowSettingsColumn.Width = new GridLength(1, GridUnitType.Star);
+        LoadSettingsLowerGapColumn.Width = new GridLength(12);
+        FolderSettingsColumn.Width = new GridLength(1, GridUnitType.Star);
+        LoadSettingsLowerTopRow.Height = GridLength.Auto;
+        LoadSettingsLowerStackGapRow.Height = new GridLength(0);
+        LoadSettingsLowerBottomRow.Height = new GridLength(0);
+        Grid.SetRow(WorkflowSettingsSection, 0);
+        Grid.SetColumn(WorkflowSettingsSection, 0);
+        Grid.SetRow(FolderSettingsSection, 0);
+        Grid.SetColumn(FolderSettingsSection, 2);
     }
 
     private void OnSourceRowsLayoutUpdated(object? sender, EventArgs e)
@@ -123,7 +170,81 @@ public partial class LoadWorkspaceView : UserControl
         {
             viewModel.SetHighlightedSources(
                 SourceRowsList.SelectedItems.Cast<LoadedSourceItem>());
+            if (e.AddedItems.OfType<LoadedSourceItem>().LastOrDefault() is { } current)
+            {
+                viewModel.SelectedSource = current;
+            }
         }
+    }
+
+    private void OnSourceRowPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton == MouseButton.Left
+            && sender is ListBoxItem { DataContext: LoadedSourceItem source }
+            && DataContext is LoadWorkspaceViewModel viewModel)
+        {
+            viewModel.SelectedSource = source;
+        }
+    }
+
+    private void OnSourceInclusionPreviewMouseLeftButtonDown(
+        object sender,
+        MouseButtonEventArgs e)
+    {
+        if (sender is not CheckBox checkBox
+            || ItemsControl.ContainerFromElement(SourceRowsList, checkBox)
+                is not ListBoxItem { DataContext: LoadedSourceItem source } row
+            || DataContext is not LoadWorkspaceViewModel viewModel)
+        {
+            return;
+        }
+
+        if (!row.IsSelected)
+        {
+            SourceRowsList.SelectedItems.Clear();
+            row.IsSelected = true;
+        }
+
+        viewModel.SelectedSource = source;
+        viewModel.SetHighlightedSources(SourceRowsList.SelectedItems.Cast<LoadedSourceItem>());
+    }
+
+    private void OnLoadColumnDividerDragDelta(object sender, DragDeltaEventArgs e)
+    {
+        if (DataContext is LoadWorkspaceViewModel viewModel
+            && sender is Thumb { Tag: string tag }
+            && TryParseColumnPair(tag, out var leftKey, out var rightKey))
+        {
+            viewModel.ResizeColumns(leftKey, rightKey, e.HorizontalChange);
+        }
+    }
+
+    private void OnLoadColumnDividerDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (DataContext is LoadWorkspaceViewModel viewModel
+            && sender is Thumb { Tag: string tag }
+            && TryParseColumnPair(tag, out var leftKey, out var rightKey))
+        {
+            viewModel.PersistColumnWidths(leftKey, rightKey);
+        }
+    }
+
+    private static bool TryParseColumnPair(
+        string value,
+        out string leftKey,
+        out string rightKey)
+    {
+        var separator = value.IndexOf('|', StringComparison.Ordinal);
+        if (separator <= 0 || separator >= value.Length - 1)
+        {
+            leftKey = string.Empty;
+            rightKey = string.Empty;
+            return false;
+        }
+
+        leftKey = value[..separator];
+        rightKey = value[(separator + 1)..];
+        return true;
     }
 
     private void OnAddFilesSetMenuClick(object sender, RoutedEventArgs e)

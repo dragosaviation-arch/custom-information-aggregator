@@ -15,6 +15,13 @@ namespace CIA.Desktop.Presentation;
 
 public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 {
+    internal const string SourceColumnKey = "load.source";
+    internal const string PathColumnKey = "load.path";
+    internal const string SourceSetColumnKey = "load.sourceSet";
+    internal const string LevelColumnKey = "load.level";
+    internal const string SizeColumnKey = "load.size";
+    internal const string StatusColumnKey = "load.status";
+    private const double MaximumColumnWidth = 2000;
     private static readonly IReadOnlyList<string> AvailableStatuses =
         ["All", "Ready", "Unavailable", "Unsupported", "Failed validation"];
 
@@ -22,8 +29,9 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private readonly SourceLoadingCoordinator _loadingCoordinator;
     private readonly ActiveLoadedSourceSet _sourceSet;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
-    private readonly MainWindowViewModel _shell;
+    private readonly ApplicationSettingsService? _settingsService;
     private readonly ApplicationSettings _startupSettings;
+    private readonly GlobalOperationProgress? _globalProgress;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private readonly RelayCommand<LoadedSourceItem> _toggleSourceInclusionCommand;
     private readonly RelayCommand _includeVisibleCommand;
@@ -31,9 +39,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _removeCheckedCommand;
     private readonly RelayCommand _confirmRemovalCommand;
     private readonly RelayCommand _cancelRemovalCommand;
-    private readonly AsyncRelayCommand<LoadedSourceItem> _refreshSourceCommand;
     private readonly AsyncRelayCommand<LoadedSourceItem> _relinkSourceCommand;
-    private readonly AsyncRelayCommand _refreshSelectedCommand;
+    private readonly AsyncRelayCommand _reloadHighlightedSourcesCommand;
     private readonly RelayCommand _createSourceSetCommand;
     private readonly RelayCommand _renameActiveSourceSetCommand;
     private IReadOnlyList<LoadedSourceItem> _highlightedSources = [];
@@ -41,7 +48,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private bool _includeXmlFiles = true;
     private bool _includeArchives = true;
     private bool _searchSubfolders = true;
-    private bool _openDiscoveryWhenLoadingCompletes;
+    private bool _openDiscoveryWhenGenerationCompletes;
     private bool _dontWarnWhenRemovingEntries;
     private bool _isBusy;
     private bool _isFilterOptionsOpen;
@@ -64,6 +71,17 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private int _lastIntakeIssueCount;
     private int _lastIntakeFailureCount;
     private int _progressGeneration;
+    private int _operationProgressCompleted;
+    private int _operationProgressTotal = 1;
+    private double _operationProgressCurrentFraction;
+    private Guid? _globalProgressUpdateId;
+    private bool _operationHadFailure;
+    private double _sourceColumnWidth;
+    private double _pathColumnWidth;
+    private double _sourceSetColumnWidth;
+    private double _levelColumnWidth;
+    private double _sizeColumnWidth;
+    private double _statusColumnWidth;
     private WorkflowArtifactStatus _discoveryStatus;
     private int _disposed;
 
@@ -73,7 +91,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         ActiveLoadedSourceSet sourceSet,
         IApplicationWorkflowCoordinator workflowCoordinator,
         MainWindowViewModel shell,
-        ApplicationSettingsService? settingsService = null)
+        ApplicationSettingsService? settingsService = null,
+        GlobalOperationProgress? globalProgress = null)
     {
         ArgumentNullException.ThrowIfNull(pathPicker);
         ArgumentNullException.ThrowIfNull(loadingCoordinator);
@@ -85,11 +104,20 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _loadingCoordinator = loadingCoordinator;
         _sourceSet = sourceSet;
         _workflowCoordinator = workflowCoordinator;
-        _shell = shell;
+        _settingsService = settingsService;
+        _globalProgress = globalProgress;
         _startupSettings = settingsService?.Startup.Settings
             ?? ApplicationSettings.CreateDefault(
                 ApplicationPaths.ForCurrentUser().LocalApplicationDataDirectory);
         _searchSubfolders = _startupSettings.TraverseSubfolders;
+        _openDiscoveryWhenGenerationCompletes =
+            settingsService?.Current.OpenDiscoveryWhenGenerationCompletes == true;
+        _sourceColumnWidth = ResolveColumnWidth(SourceColumnKey, 160, 72);
+        _pathColumnWidth = ResolveColumnWidth(PathColumnKey, 190, 90);
+        _sourceSetColumnWidth = ResolveColumnWidth(SourceSetColumnKey, 80, 55);
+        _levelColumnWidth = ResolveColumnWidth(LevelColumnKey, 42, 32);
+        _sizeColumnWidth = ResolveColumnWidth(SizeColumnKey, 72, 48);
+        _statusColumnWidth = ResolveColumnWidth(StatusColumnKey, 100, 64);
         _uiSynchronizationContext = SynchronizationContext.Current;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
 
@@ -107,13 +135,13 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
 
         AddXmlFileCommand = new AsyncRelayCommand(
-            () => AddSelectedPathAsync(SourceSelectionKind.XmlFile, _pathPicker.PickXmlFile),
+            () => AddSelectedPathsAsync(SourceSelectionKind.XmlFile, _pathPicker.PickXmlFiles),
             () => !IsBusy);
         AddFolderCommand = new AsyncRelayCommand(
-            () => AddSelectedPathAsync(SourceSelectionKind.Folder, _pathPicker.PickFolder),
+            () => AddSelectedPathsAsync(SourceSelectionKind.Folder, _pathPicker.PickFolders),
             () => !IsBusy);
         AddArchiveCommand = new AsyncRelayCommand(
-            () => AddSelectedPathAsync(SourceSelectionKind.Archive, _pathPicker.PickArchive),
+            () => AddSelectedPathsAsync(SourceSelectionKind.Archive, _pathPicker.PickArchives),
             () => !IsBusy);
         _toggleSourceInclusionCommand = new RelayCommand<LoadedSourceItem>(
             ToggleSourceInclusion,
@@ -127,15 +155,12 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _removeCheckedCommand = new RelayCommand(RemoveChecked, CanRemoveChecked);
         _confirmRemovalCommand = new RelayCommand(ConfirmRemoval);
         _cancelRemovalCommand = new RelayCommand(CancelRemoval);
-        _refreshSourceCommand = new AsyncRelayCommand<LoadedSourceItem>(
-            RefreshSourceAsync,
-            source => source is not null && !IsBusy);
         _relinkSourceCommand = new AsyncRelayCommand<LoadedSourceItem>(
             RelinkSourceAsync,
             CanRelinkSource);
-        _refreshSelectedCommand = new AsyncRelayCommand(
-            RefreshSelectedAsync,
-            () => !IsBusy && _highlightedSources.Count > 0);
+        _reloadHighlightedSourcesCommand = new AsyncRelayCommand(
+            ReloadHighlightedSourcesAsync,
+            CanReloadHighlightedSources);
         _createSourceSetCommand = new RelayCommand(
             CreateSourceSet,
             () => !IsBusy && HasSourceSets);
@@ -160,9 +185,9 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand RemoveCheckedCommand => _removeCheckedCommand;
     public IRelayCommand ConfirmRemovalCommand => _confirmRemovalCommand;
     public IRelayCommand CancelRemovalCommand => _cancelRemovalCommand;
-    public IAsyncRelayCommand RefreshSourceCommand => _refreshSourceCommand;
     public IAsyncRelayCommand RelinkSourceCommand => _relinkSourceCommand;
-    public IAsyncRelayCommand RefreshSelectedCommand => _refreshSelectedCommand;
+    public IAsyncRelayCommand ReloadHighlightedSourcesCommand =>
+        _reloadHighlightedSourcesCommand;
     public IRelayCommand CreateSourceSetCommand => _createSourceSetCommand;
     public IRelayCommand RenameActiveSourceSetCommand => _renameActiveSourceSetCommand;
     public IRelayCommand ToggleFilterOptionsCommand { get; }
@@ -172,6 +197,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public bool HasSources => Sources.Count > 0;
     public bool HasSourceSets => SourceSets.Count > 0;
     public bool HasHighlightedSources => _highlightedSources.Count > 0;
+    public int HighlightedSourceCount => _highlightedSources.Count;
     public int IncludedCount => Sources.Count(source => source.IsIncluded);
     public string IncludedSummary => $"{IncludedCount} / {Sources.Count} included";
 
@@ -187,8 +213,9 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            ActiveSourceSetName = value.Name;
-            OnPropertyChanged();
+            NotifyActiveSourceSetChanged();
+            StatusTitle = "Active Source Set changed";
+            StatusDetail = $"{value.Name} is now the active Source Set.";
         }
     }
 
@@ -201,11 +228,52 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         ? $"Found {progress.EncounteredItemCount} · Loaded {progress.LoadedSourceCount} · Issues {progress.IssueCount} · Failures {progress.FailureCount}"
         : $"Files found {Sources.Count} · Loaded {Sources.Count(source => source.Status == LoadedSourceStatus.Ready)} · Issues {_lastIntakeIssueCount + Sources.Count(source => source.Status == LoadedSourceStatus.Unsupported)} · Failures {_lastIntakeFailureCount + Sources.Count(source => source.Status is LoadedSourceStatus.Unavailable or LoadedSourceStatus.FailedValidation)}";
 
-    public bool IsProgressIndeterminate => IsBusy && _liveProgress?.TotalItemCount is null;
+    public bool IsProgressIndeterminate => false;
 
-    public double ProgressMaximum => Math.Max(1, _liveProgress?.TotalItemCount ?? 1);
+    public double ProgressMaximum => 100;
 
-    public double ProgressValue => _liveProgress?.EncounteredItemCount ?? 0;
+    public double ProgressValue => Math.Clamp(
+        (_operationProgressCompleted + _operationProgressCurrentFraction)
+        / Math.Max(1, _operationProgressTotal)
+        * 100,
+        0,
+        100);
+
+    public double SourceColumnWidth
+    {
+        get => _sourceColumnWidth;
+        private set => SetProperty(ref _sourceColumnWidth, value);
+    }
+
+    public double PathColumnWidth
+    {
+        get => _pathColumnWidth;
+        private set => SetProperty(ref _pathColumnWidth, value);
+    }
+
+    public double SourceSetColumnWidth
+    {
+        get => _sourceSetColumnWidth;
+        private set => SetProperty(ref _sourceSetColumnWidth, value);
+    }
+
+    public double LevelColumnWidth
+    {
+        get => _levelColumnWidth;
+        private set => SetProperty(ref _levelColumnWidth, value);
+    }
+
+    public double SizeColumnWidth
+    {
+        get => _sizeColumnWidth;
+        private set => SetProperty(ref _sizeColumnWidth, value);
+    }
+
+    public double StatusColumnWidth
+    {
+        get => _statusColumnWidth;
+        private set => SetProperty(ref _statusColumnWidth, value);
+    }
 
     public string FilterText
     {
@@ -273,10 +341,20 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         set => SetProperty(ref _searchSubfolders, value);
     }
 
-    public bool OpenDiscoveryWhenLoadingCompletes
+    public bool OpenDiscoveryWhenGenerationCompletes
     {
-        get => _openDiscoveryWhenLoadingCompletes;
-        set => SetProperty(ref _openDiscoveryWhenLoadingCompletes, value);
+        get => _openDiscoveryWhenGenerationCompletes;
+        set
+        {
+            if (SetProperty(ref _openDiscoveryWhenGenerationCompletes, value)
+                && _settingsService is not null)
+            {
+                _settingsService.Save(_settingsService.Current with
+                {
+                    OpenDiscoveryWhenGenerationCompletes = value
+                });
+            }
+        }
     }
 
     public bool DontWarnWhenRemovingEntries
@@ -371,21 +449,29 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public async Task AddDroppedPathsAsync(IEnumerable<string> paths)
     {
         ArgumentNullException.ThrowIfNull(paths);
-        var acceptedAny = false;
-
-        foreach (var path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+        var distinctPaths = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (distinctPaths.Length == 0)
         {
-            var selectionKind = Directory.Exists(path)
-                ? SourceSelectionKind.Folder
-                : string.Equals(Path.GetExtension(path), ".xml", StringComparison.OrdinalIgnoreCase)
-                    ? SourceSelectionKind.XmlFile
-                    : SourceSelectionKind.Archive;
-            acceptedAny |= await AddPathAsync(selectionKind, path, allowNavigation: false);
+            return;
         }
 
-        if (acceptedAny && OpenDiscoveryWhenLoadingCompletes)
+        BeginOperationProgress(distinctPaths.Length);
+        try
         {
-            NavigateToDiscovery();
+            foreach (var path in distinctPaths)
+            {
+                var selectionKind = Directory.Exists(path)
+                    ? SourceSelectionKind.Folder
+                    : string.Equals(Path.GetExtension(path), ".xml", StringComparison.OrdinalIgnoreCase)
+                        ? SourceSelectionKind.XmlFile
+                        : SourceSelectionKind.Archive;
+                await AddPathAsync(selectionKind, path);
+                AdvanceOperationProgress();
+            }
+        }
+        finally
+        {
+            EndOperationProgress();
         }
     }
 
@@ -393,25 +479,44 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         SourceSelectionKind selectionKind,
         SourceSetDefinition? targetSourceSet)
     {
-        Func<string?> pickPath = selectionKind switch
+        Func<IReadOnlyList<string>> pickPaths = selectionKind switch
         {
-            SourceSelectionKind.XmlFile => _pathPicker.PickXmlFile,
-            SourceSelectionKind.Folder => _pathPicker.PickFolder,
-            SourceSelectionKind.Archive => _pathPicker.PickArchive,
+            SourceSelectionKind.XmlFile => _pathPicker.PickXmlFiles,
+            SourceSelectionKind.Folder => _pathPicker.PickFolders,
+            SourceSelectionKind.Archive => _pathPicker.PickArchives,
             _ => throw new ArgumentOutOfRangeException(nameof(selectionKind))
         };
-        var path = pickPath();
-        if (path is null)
+        var paths = pickPaths();
+        if (paths.Count == 0)
         {
             return;
         }
 
-        await AddPathAsync(
-            selectionKind,
-            path,
-            allowNavigation: true,
-            targetSourceSet,
-            createNewSourceSet: targetSourceSet is null);
+        var resolvedTargetSourceSet = targetSourceSet;
+        var distinctPaths = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        BeginOperationProgress(distinctPaths.Length);
+        try
+        {
+            foreach (var path in distinctPaths)
+            {
+                var createNewSourceSet = resolvedTargetSourceSet is null;
+                var accepted = await AddPathAsync(
+                    selectionKind,
+                    path,
+                    resolvedTargetSourceSet,
+                    createNewSourceSet);
+                if (accepted && createNewSourceSet)
+                {
+                    resolvedTargetSourceSet = ActiveSourceSet;
+                }
+
+                AdvanceOperationProgress();
+            }
+        }
+        finally
+        {
+            EndOperationProgress();
+        }
     }
 
     public void ReassignHighlightedSources(SourceSetDefinition? targetSourceSet)
@@ -448,8 +553,32 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     {
         ArgumentNullException.ThrowIfNull(sources);
         _highlightedSources = sources.Where(Sources.Contains).Distinct().ToArray();
-        _refreshSelectedCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(HasHighlightedSources));
+        OnPropertyChanged(nameof(HighlightedSourceCount));
+        NotifySourceCommandsCanExecuteChanged();
+    }
+
+    internal void ResizeColumns(string leftKey, string rightKey, double horizontalChange)
+    {
+        var leftWidth = GetColumnWidth(leftKey);
+        var rightWidth = GetColumnWidth(rightKey);
+        var appliedChange = ColumnWidthPreferences.ApplyAdjacentDelta(
+            leftWidth,
+            rightWidth,
+            horizontalChange,
+            GetColumnMinimum(leftKey),
+            GetColumnMinimum(rightKey),
+            MaximumColumnWidth);
+        SetColumnWidth(leftKey, leftWidth + appliedChange);
+        SetColumnWidth(rightKey, rightWidth - appliedChange);
+    }
+
+    internal void PersistColumnWidths(string leftKey, string rightKey)
+    {
+        ColumnWidthPreferences.Save(
+            _settingsService,
+            (leftKey, GetColumnWidth(leftKey)),
+            (rightKey, GetColumnWidth(rightKey)));
     }
 
     public void Dispose()
@@ -469,25 +598,38 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task AddSelectedPathAsync(SourceSelectionKind selectionKind, Func<string?> pickPath)
+    private async Task AddSelectedPathsAsync(
+        SourceSelectionKind selectionKind,
+        Func<IReadOnlyList<string>> pickPaths)
     {
-        var path = pickPath();
-
-        if (path is not null)
+        var paths = pickPaths().Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (paths.Length == 0)
         {
-            await AddPathAsync(selectionKind, path, allowNavigation: true);
+            return;
+        }
+
+        BeginOperationProgress(paths.Length);
+        try
+        {
+            foreach (var path in paths)
+            {
+                await AddPathAsync(selectionKind, path);
+                AdvanceOperationProgress();
+            }
+        }
+        finally
+        {
+            EndOperationProgress();
         }
     }
 
     private async Task<bool> AddPathAsync(
         SourceSelectionKind selectionKind,
         string path,
-        bool allowNavigation,
         SourceSetDefinition? targetSourceSet = null,
         bool createNewSourceSet = false)
     {
         var progressGeneration = ++_progressGeneration;
-        IsBusy = true;
         _liveProgress = null;
         NotifyProgressChanged();
         StatusTitle = "Loading sources";
@@ -522,10 +664,12 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
                         progress);
             _lastIntakeIssueCount = result.Issues.Count;
             _lastIntakeFailureCount = result.Accepted ? 0 : 1;
+            _operationHadFailure |= result.Issues.Count > 0;
             OnPropertyChanged(nameof(SourceSummary));
 
             if (!result.Accepted)
             {
+                _operationHadFailure = true;
                 StatusTitle = "Source not added";
                 StatusDetail = result.FailureDescription ?? "The selected source could not be loaded.";
                 ProgressText = "Stopped";
@@ -553,11 +697,6 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
                 StatusDetail += $" {result.Issues.Count} archive item issue(s) were skipped.";
             }
 
-            if (allowNavigation && OpenDiscoveryWhenLoadingCompletes)
-            {
-                NavigateToDiscovery();
-            }
-
             return true;
         }
         finally
@@ -568,7 +707,6 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
                 NotifyProgressChanged();
             }
 
-            IsBusy = false;
         }
     }
 
@@ -598,10 +736,21 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         _liveProgress = progress;
+        if (progress.TotalItemCount is > 0)
+        {
+            _operationProgressCurrentFraction = Math.Clamp(
+                progress.EncounteredItemCount / (double)progress.TotalItemCount.Value,
+                0,
+                1);
+        }
         CurrentArchiveText = progress.CurrentArchivePath is null
             ? "Archive: —"
             : $"Archive: {Path.GetFileName(progress.CurrentArchivePath)} · Level {progress.CurrentArchiveNestingLevel}";
         NotifyProgressChanged();
+        var stage = progress.TotalItemCount is > 0
+            ? $"Processing {progress.EncounteredItemCount:N0} of {progress.TotalItemCount.Value:N0}"
+            : $"Processing {Path.GetFileName(progress.CurrentArchivePath) ?? "source"}";
+        ReportGlobalProgress(stage);
     }
 
     private void NotifyProgressChanged()
@@ -610,6 +759,57 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(IsProgressIndeterminate));
         OnPropertyChanged(nameof(ProgressMaximum));
         OnPropertyChanged(nameof(ProgressValue));
+    }
+
+    private void BeginOperationProgress(int totalWorkUnits, string operationName = "Loading sources")
+    {
+        _operationProgressTotal = Math.Max(1, totalWorkUnits);
+        _operationProgressCompleted = 0;
+        _operationProgressCurrentFraction = 0;
+        _operationHadFailure = false;
+        _globalProgressUpdateId = _globalProgress?.Begin(
+            operationName,
+            $"Processing item 1 of {_operationProgressTotal:N0}",
+            0,
+            100);
+        IsBusy = totalWorkUnits > 0;
+        NotifyProgressChanged();
+    }
+
+    private void AdvanceOperationProgress()
+    {
+        _operationProgressCompleted = Math.Min(
+            _operationProgressTotal,
+            _operationProgressCompleted + 1);
+        _operationProgressCurrentFraction = 0;
+        NotifyProgressChanged();
+        ReportGlobalProgress(
+            $"Processing item {Math.Min(_operationProgressCompleted + 1, _operationProgressTotal):N0} of {_operationProgressTotal:N0}");
+    }
+
+    private void EndOperationProgress()
+    {
+        _liveProgress = null;
+        IsBusy = false;
+        NotifyProgressChanged();
+        if (_globalProgressUpdateId is { } updateId)
+        {
+            _globalProgress?.Complete(
+                updateId,
+                _operationHadFailure
+                    ? GlobalOperationProgressState.CompletedWithIssues
+                    : GlobalOperationProgressState.CompletedSuccessfully,
+                _operationHadFailure ? "completed with issues" : "completed successfully");
+            _globalProgressUpdateId = null;
+        }
+    }
+
+    private void ReportGlobalProgress(string stageText)
+    {
+        if (_globalProgressUpdateId is { } updateId)
+        {
+            _globalProgress?.Report(updateId, stageText, ProgressValue, 100);
+        }
     }
 
     private bool MatchesFilter(object item)
@@ -706,7 +906,10 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     {
         if (source is not null)
         {
-            ApplyInclusionResult(_loadingCoordinator.SetInclusion([source], !source.IsIncluded));
+            var targets = _highlightedSources.Contains(source)
+                ? _highlightedSources
+                : [source];
+            ApplyInclusionResult(_loadingCoordinator.SetInclusion(targets, !source.IsIncluded));
         }
     }
 
@@ -733,7 +936,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
 
     private void RemoveChecked()
     {
-        var targets = Sources.Where(source => source.IsIncluded).ToArray();
+        var targets = _highlightedSources.Where(Sources.Contains).ToArray();
 
         if (targets.Length == 0)
         {
@@ -792,32 +995,12 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         {
             SelectedSource = Sources.FirstOrDefault();
         }
+        SetHighlightedSources([]);
 
         StatusTitle = result.RemovedCount == 1 ? "Source removed" : "Sources removed";
         StatusDetail = result.RemovedCount == 1
             ? "Removed 1 entry from this session. The source file was not deleted."
             : $"Removed {result.RemovedCount} entries from this session. Source files were not deleted.";
-    }
-
-    private async Task RefreshSourceAsync(LoadedSourceItem? source)
-    {
-        if (source is null)
-        {
-            return;
-        }
-
-        IsBusy = true;
-        StatusTitle = "Refreshing source";
-        StatusDetail = $"Reloading {source.DisplayName} through the Processing Host…";
-
-        try
-        {
-            ApplyRefreshResult(source, await _loadingCoordinator.RefreshAsync(source));
-        }
-        finally
-        {
-            IsBusy = false;
-        }
     }
 
     private async Task RelinkSourceAsync(LoadedSourceItem? source)
@@ -836,7 +1019,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
-        IsBusy = true;
+        BeginOperationProgress(1, "Relinking source");
         StatusTitle = "Relinking source";
         StatusDetail = $"Validating a replacement for {source.DisplayName} through the Processing Host...";
 
@@ -846,62 +1029,17 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             RefreshVisibleSources();
             NotifySourceCountsChanged();
             StatusTitle = result.Accepted ? "Source relinked" : "Source relink failed";
+            _operationHadFailure = !result.Accepted;
             StatusDetail = result.Accepted
                 ? $"Relinked {source.DisplayName}; its source identity and Source Set were retained."
                 : result.FailureDescription
                     ?? "The selected replacement could not be validated.";
+            AdvanceOperationProgress();
         }
         finally
         {
-            IsBusy = false;
+            EndOperationProgress();
         }
-    }
-
-    private async Task RefreshSelectedAsync()
-    {
-        var targets = _highlightedSources.Where(Sources.Contains).ToArray();
-
-        if (targets.Length == 0)
-        {
-            return;
-        }
-
-        IsBusy = true;
-        StatusTitle = targets.Length == 1 ? "Refreshing source" : "Refreshing selected sources";
-        StatusDetail = "Reloading highlighted source rows through the Processing Host…";
-
-        try
-        {
-            var refreshedCount = 0;
-            var failedCount = 0;
-
-            foreach (var source in targets)
-            {
-                var result = await _loadingCoordinator.RefreshAsync(source);
-                refreshedCount += result.Accepted ? 1 : 0;
-                failedCount += result.Accepted ? 0 : 1;
-            }
-
-            RefreshVisibleSources();
-            StatusTitle = failedCount == 0
-                ? "Selected sources refreshed"
-                : "Source refresh completed with issues";
-            StatusDetail = $"Refreshed {refreshedCount}; {failedCount} could not be refreshed.";
-        }
-        finally
-        {
-            IsBusy = false;
-        }
-    }
-
-    private void ApplyRefreshResult(LoadedSourceItem source, SourceRefreshResult result)
-    {
-        RefreshVisibleSources();
-        NotifySourceCountsChanged();
-        StatusTitle = result.Accepted ? "Source refreshed" : "Source refresh failed";
-        StatusDetail = result.Accepted
-            ? $"Reloaded {source.DisplayName}; its source identity was retained."
-            : result.FailureDescription ?? "The selected source could not be refreshed.";
     }
 
     private bool CanChangeVisibleInclusion() => !IsBusy && !VisibleSources.IsEmpty;
@@ -912,7 +1050,62 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         && !IsBusy
         && _workflowCoordinator.Current.ActiveOperation is null;
 
-    private bool CanRemoveChecked() => !IsBusy && Sources.Any(source => source.IsIncluded);
+    private async Task ReloadHighlightedSourcesAsync()
+    {
+        var targets = _highlightedSources.Where(Sources.Contains).ToArray();
+        if (targets.Length == 0)
+        {
+            return;
+        }
+
+        BeginOperationProgress(targets.Length, "Reloading sources");
+        var refreshed = 0;
+        var failed = 0;
+        try
+        {
+            foreach (var source in targets)
+            {
+                StatusTitle = "Reloading sources";
+                StatusDetail = $"Re-reading {source.DisplayName} from disk through the Processing Host...";
+                ReportGlobalProgress(
+                    $"Re-reading {refreshed + failed + 1:N0} of {targets.Length:N0}");
+                var result = await _loadingCoordinator.RefreshAsync(source);
+                if (result.Accepted)
+                {
+                    refreshed++;
+                }
+                else
+                {
+                    failed++;
+                    _operationHadFailure = true;
+                }
+
+                AdvanceOperationProgress();
+            }
+
+            DispatchToUi(() =>
+            {
+                RefreshVisibleSources();
+                NotifySourceCountsChanged();
+                StatusTitle = failed == 0
+                    ? "Sources reloaded"
+                    : "Source reload completed with issues";
+                StatusDetail = $"Re-read {refreshed:N0} selected source(s); {failed:N0} failed validation or became unavailable.";
+                ProgressText = failed == 0 ? "Completed" : "Completed with issues";
+            });
+        }
+        finally
+        {
+            EndOperationProgress();
+        }
+    }
+
+    private bool CanReloadHighlightedSources() =>
+        !IsBusy
+        && _highlightedSources.Count > 0
+        && _workflowCoordinator.Current.ActiveOperation is null;
+
+    private bool CanRemoveChecked() => !IsBusy && _highlightedSources.Count > 0;
 
     private void RefreshVisibleSources()
     {
@@ -926,16 +1119,21 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _includeVisibleCommand.NotifyCanExecuteChanged();
         _excludeVisibleCommand.NotifyCanExecuteChanged();
         _removeCheckedCommand.NotifyCanExecuteChanged();
-        _refreshSourceCommand.NotifyCanExecuteChanged();
         _relinkSourceCommand.NotifyCanExecuteChanged();
-        _refreshSelectedCommand.NotifyCanExecuteChanged();
+        _reloadHighlightedSourcesCommand.NotifyCanExecuteChanged();
         _createSourceSetCommand.NotifyCanExecuteChanged();
         _renameActiveSourceSetCommand.NotifyCanExecuteChanged();
     }
 
     private void CreateSourceSet()
     {
-        var result = _loadingCoordinator.CreateSourceSet();
+        var requestedName = string.Equals(
+            ActiveSourceSetName.Trim(),
+            ActiveSourceSet?.Name,
+            StringComparison.Ordinal)
+            ? null
+            : ActiveSourceSetName;
+        var result = _loadingCoordinator.CreateSourceSet(requestedName);
         if (!result.Accepted)
         {
             StatusTitle = "Source Set not created";
@@ -981,10 +1179,61 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _renameActiveSourceSetCommand.NotifyCanExecuteChanged();
     }
 
-    private void NavigateToDiscovery()
+    private double ResolveColumnWidth(string key, double defaultWidth, double minimumWidth) =>
+        ColumnWidthPreferences.Resolve(
+            _settingsService,
+            key,
+            defaultWidth,
+            minimumWidth,
+            MaximumColumnWidth);
+
+    private double GetColumnWidth(string key) => key switch
     {
-        _shell.SelectedWorkspace = _shell.Workspaces.Single(
-            workspace => workspace.Area == WorkspaceArea.Discovery);
+        SourceColumnKey => SourceColumnWidth,
+        PathColumnKey => PathColumnWidth,
+        SourceSetColumnKey => SourceSetColumnWidth,
+        LevelColumnKey => LevelColumnWidth,
+        SizeColumnKey => SizeColumnWidth,
+        StatusColumnKey => StatusColumnWidth,
+        _ => throw new ArgumentOutOfRangeException(nameof(key))
+    };
+
+    private static double GetColumnMinimum(string key) => key switch
+    {
+        SourceColumnKey => 72,
+        PathColumnKey => 90,
+        SourceSetColumnKey => 55,
+        LevelColumnKey => 32,
+        SizeColumnKey => 48,
+        StatusColumnKey => 64,
+        _ => throw new ArgumentOutOfRangeException(nameof(key))
+    };
+
+    private void SetColumnWidth(string key, double width)
+    {
+        switch (key)
+        {
+            case SourceColumnKey:
+                SourceColumnWidth = width;
+                break;
+            case PathColumnKey:
+                PathColumnWidth = width;
+                break;
+            case SourceSetColumnKey:
+                SourceSetColumnWidth = width;
+                break;
+            case LevelColumnKey:
+                LevelColumnWidth = width;
+                break;
+            case SizeColumnKey:
+                SizeColumnWidth = width;
+                break;
+            case StatusColumnKey:
+                StatusColumnWidth = width;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(key));
+        }
     }
 
     private void OnSourcesChanged(object? sender, NotifyCollectionChangedEventArgs e)

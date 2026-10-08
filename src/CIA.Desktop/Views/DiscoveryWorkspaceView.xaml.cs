@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using CIA.Desktop.Presentation;
 
@@ -83,6 +84,7 @@ public partial class DiscoveryWorkspaceView : UserControl
         DiscoveryLeftColumn.MinWidth = 0;
         DiscoveryLeftColumn.Width = new GridLength(1, GridUnitType.Star);
         DiscoveryGapColumn.Width = new GridLength(0);
+        DiscoveryRightColumn.MinWidth = 0;
         DiscoveryRightColumn.Width = new GridLength(0);
 
         DiscoveryTopRow.Height = new GridLength(3, GridUnitType.Star);
@@ -112,6 +114,7 @@ public partial class DiscoveryWorkspaceView : UserControl
         DiscoveryLeftColumn.MinWidth = 580;
         DiscoveryLeftColumn.Width = new GridLength(3, GridUnitType.Star);
         DiscoveryGapColumn.Width = new GridLength(8);
+        DiscoveryRightColumn.MinWidth = 360;
         DiscoveryRightColumn.Width = new GridLength(2, GridUnitType.Star);
 
         DiscoveryTopRow.Height = new GridLength(1, GridUnitType.Star);
@@ -126,13 +129,45 @@ public partial class DiscoveryWorkspaceView : UserControl
         PreviewColumn.Width = new GridLength(1, GridUnitType.Star);
         RightRailGapColumn.Width = new GridLength(0);
         SettingsColumn.Width = new GridLength(0);
-        PreviewRow.Height = new GridLength(3, GridUnitType.Star);
+        PreviewRow.Height = new GridLength(2, GridUnitType.Star);
         RightRailGapRow.Height = new GridLength(8);
-        SettingsRow.Height = new GridLength(2, GridUnitType.Star);
+        SettingsRow.Height = new GridLength(3, GridUnitType.Star);
 
         Grid.SetRow(PreviewPanel, 0);
         Grid.SetColumn(PreviewPanel, 0);
         Grid.SetRow(SettingsPanel, 2);
         Grid.SetColumn(SettingsPanel, 0);
     }
+
+    private void OnColumnResizeDragDelta(object sender, DragDeltaEventArgs e)
+    {
+        if (sender is Thumb { Tag: string pair }
+            && TryParseColumnPair(pair, out var left, out var right)
+            && DataContext is DiscoveryWorkspaceViewModel viewModel)
+        {
+            viewModel.ResizeColumns(left, right, e.HorizontalChange);
+        }
+    }
+
+    private void OnColumnResizeDragCompleted(object sender, DragCompletedEventArgs e)
+    {
+        if (sender is Thumb { Tag: string pair }
+            && TryParseColumnPair(pair, out var left, out var right)
+            && DataContext is DiscoveryWorkspaceViewModel viewModel)
+        {
+            viewModel.PersistColumnWidths(left, right);
+        }
+    }
+
+    private static bool TryParseColumnPair(
+        string value,
+        out string left,
+        out string right)
+    {
+        var columns = value.Split('|', StringSplitOptions.TrimEntries);
+        left = columns.Length == 2 ? columns[0] : string.Empty;
+        right = columns.Length == 2 ? columns[1] : string.Empty;
+        return columns.Length == 2;
+    }
+
 }

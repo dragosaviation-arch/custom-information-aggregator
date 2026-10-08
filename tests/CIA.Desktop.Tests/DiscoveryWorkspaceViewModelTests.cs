@@ -698,6 +698,95 @@ public sealed class DiscoveryWorkspaceViewModelTests
     }
 
     [TestMethod]
+    public async Task SearchMatchesOnlyVisibleTagAndDatabaseTagAndResetsPaging()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var information = Enumerable.Range(1, 26)
+            .Select(index => CreateDetailedInformation(
+                source,
+                $"/root/item/tag{index:00}",
+                $"Tag{index:00}",
+                SourceValueCandidateKind.Element,
+                $"/root/item/tag{index:00}"))
+            .Concat(
+            [
+                CreateDetailedInformation(
+                    source,
+                    "/root/item/visible-tag",
+                    "VisibleTag",
+                    SourceValueCandidateKind.Element,
+                    "/root/item/visible-tag"),
+                CreateDetailedInformation(
+                    source,
+                    "/root/item/mapped-source",
+                    "MappedSource",
+                    SourceValueCandidateKind.Element,
+                    "/root/item/mapped-source"),
+                CreateDetailedInformation(
+                    source,
+                    "/root/item",
+                    "Code",
+                    SourceValueCandidateKind.Attribute,
+                    "/root/hidden-structure/@code"),
+                CreateDetailedInformation(
+                    source,
+                    "/root/item/sample-carrier",
+                    "SampleCarrier",
+                    SourceValueCandidateKind.Element,
+                    "/root/item/sample-carrier",
+                    sampleValue: "hidden-sample")
+            ])
+            .ToArray();
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(correlation, sources, information));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow)
+        {
+            PageSize = 25
+        };
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        viewModel.SelectedInformation = viewModel.Information.Single(item =>
+            item.InformationType == "MappedSource");
+        viewModel.SelectedDatabaseTag = "Visible Mapping";
+
+        viewModel.SearchText = "visibletag";
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreEqual("VisibleTag", viewModel.Information[0].InformationType);
+
+        viewModel.SearchText = "VISIBLE MAPPING";
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreEqual("MappedSource", viewModel.Information[0].InformationType);
+
+        foreach (var hiddenValue in new[]
+                 {
+                     "hidden-structure",
+                     "hidden-sample",
+                     "Attribute",
+                     "Set 1"
+                 })
+        {
+            viewModel.SearchText = hiddenValue;
+            Assert.IsEmpty(viewModel.Information, hiddenValue);
+        }
+
+        viewModel.SearchText = string.Empty;
+        Assert.AreEqual(30, viewModel.FilteredCount);
+        Assert.AreEqual(2, viewModel.PageCount);
+        viewModel.NextPageCommand.Execute(null);
+        Assert.AreEqual(2, viewModel.CurrentPage);
+
+        viewModel.SearchText = "Tag01";
+        Assert.AreEqual(1, viewModel.CurrentPage);
+        Assert.HasCount(1, viewModel.Information);
+    }
+
+    [TestMethod]
     public async Task OccurrencePreviewLoadsFirstValueAndNavigatesWithinBoundaries()
     {
         var source = CreateSource("source.xml");

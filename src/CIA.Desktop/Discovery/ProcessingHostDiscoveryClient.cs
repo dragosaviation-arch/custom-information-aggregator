@@ -17,6 +17,16 @@ public sealed class ProcessingHostDiscoveryClient(
         IReadOnlyList<LoadedSourceContract> sources,
         CancellationToken cancellationToken = default)
     {
+        return await RunAsync(correlation, sources, progress: null, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<DiscoveryClientResult> RunAsync(
+        OperationCorrelation correlation,
+        IReadOnlyList<LoadedSourceContract> sources,
+        IProgress<DiscoveryProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(sources);
 
@@ -32,6 +42,7 @@ public sealed class ProcessingHostDiscoveryClient(
             var response = await requestClient.RequestDiscoveryAsync(
                     correlation,
                     sources,
+                    progress,
                     cancellationToken)
                 .ConfigureAwait(false);
             return new DiscoveryClientResult(

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using CIA.Contracts.Database;
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Sources;
 using CIA.ProcessingHost.Database;
@@ -379,8 +380,23 @@ public sealed class ProcessingHostLifetimeService(
                     break;
 
                 case RunDiscoveryCommand command when established:
+                    var discoveryProgress = new InlineProgress<DiscoveryProgressSnapshot>(snapshot =>
+                        connection.SendAsync(
+                                new DiscoveryProgressEvent(
+                                    Guid.CreateVersion7(),
+                                    DateTimeOffset.UtcNow,
+                                    command.MessageId,
+                                    snapshot),
+                                cancellationToken)
+                            .AsTask()
+                            .GetAwaiter()
+                            .GetResult());
                     var discoveryResult = await discovery
-                        .RunAsync(command.Correlation, command.Sources, cancellationToken)
+                        .RunAsync(
+                            command.Correlation,
+                            command.Sources,
+                            discoveryProgress,
+                            cancellationToken)
                         .ConfigureAwait(false);
                     await connection.SendAsync(
                             new RunDiscoveryResponse(
@@ -446,11 +462,21 @@ public sealed class ProcessingHostLifetimeService(
         SemaphoreSlim sendGate,
         CancellationToken cancellationToken)
     {
+        var progress = new InlineProgress<DatabaseBuildProgressSnapshot>(snapshot =>
+            SendDatabaseBuildProgressAsync(
+                    connection,
+                    command.MessageId,
+                    snapshot,
+                    sendGate,
+                    cancellationToken)
+                .GetAwaiter()
+                .GetResult());
         var result = await databaseGeneration
             .BuildAsync(
                 command.Correlation,
                 command.Specification,
-                cancellationToken)
+                cancellationToken,
+                progress)
             .ConfigureAwait(false);
         var response = new BuildDatabaseResponse(
             Guid.CreateVersion7(),
@@ -467,6 +493,31 @@ public sealed class ProcessingHostLifetimeService(
         try
         {
             await connection.SendAsync(response, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            sendGate.Release();
+        }
+    }
+
+    private static async Task SendDatabaseBuildProgressAsync(
+        NamedPipeIpcConnection connection,
+        Guid commandMessageId,
+        DatabaseBuildProgressSnapshot progress,
+        SemaphoreSlim sendGate,
+        CancellationToken cancellationToken)
+    {
+        await sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await connection.SendAsync(
+                    new DatabaseBuildProgressEvent(
+                        Guid.CreateVersion7(),
+                        DateTimeOffset.UtcNow,
+                        commandMessageId,
+                        progress),
+                    cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {

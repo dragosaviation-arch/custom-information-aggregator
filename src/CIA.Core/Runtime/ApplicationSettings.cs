@@ -36,6 +36,67 @@ public sealed record ApplicationSettings
 
     public required PostExportBehavior PostExportBehavior { get; init; }
 
+    public Dictionary<string, double> ColumnWidths { get; init; } = [];
+
+    public bool OpenDiscoveryWhenGenerationCompletes { get; init; }
+
+    public bool OpenDatabaseWhenCreationCompletes { get; init; }
+
+    public bool Equals(ApplicationSettings? other)
+    {
+        return ReferenceEquals(this, other)
+            || other is not null
+            && SchemaVersion == other.SchemaVersion
+            && string.Equals(TemporaryDirectory, other.TemporaryDirectory, StringComparison.Ordinal)
+            && string.Equals(WorkingDirectory, other.WorkingDirectory, StringComparison.Ordinal)
+            && string.Equals(ProfilesDirectory, other.ProfilesDirectory, StringComparison.Ordinal)
+            && string.Equals(SettingsDirectory, other.SettingsDirectory, StringComparison.Ordinal)
+            && TraverseSubfolders == other.TraverseSubfolders
+            && MaximumArchiveNestingDepth == other.MaximumArchiveNestingDepth
+            && PersistentArchiveExtractionEnabled == other.PersistentArchiveExtractionEnabled
+            && string.Equals(
+                PersistentArchiveExtractionDirectory,
+                other.PersistentArchiveExtractionDirectory,
+                StringComparison.Ordinal)
+            && string.Equals(
+                LastUsedOutputDirectory,
+                other.LastUsedOutputDirectory,
+                StringComparison.Ordinal)
+            && PostExportBehavior == other.PostExportBehavior
+            && OpenDiscoveryWhenGenerationCompletes
+                == other.OpenDiscoveryWhenGenerationCompletes
+            && OpenDatabaseWhenCreationCompletes == other.OpenDatabaseWhenCreationCompletes
+            && ColumnWidths.Count == other.ColumnWidths.Count
+            && ColumnWidths.All(entry =>
+                other.ColumnWidths.TryGetValue(entry.Key, out var width)
+                && entry.Value.Equals(width));
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(SchemaVersion);
+        hash.Add(TemporaryDirectory, StringComparer.Ordinal);
+        hash.Add(WorkingDirectory, StringComparer.Ordinal);
+        hash.Add(ProfilesDirectory, StringComparer.Ordinal);
+        hash.Add(SettingsDirectory, StringComparer.Ordinal);
+        hash.Add(TraverseSubfolders);
+        hash.Add(MaximumArchiveNestingDepth);
+        hash.Add(PersistentArchiveExtractionEnabled);
+        hash.Add(PersistentArchiveExtractionDirectory, StringComparer.Ordinal);
+        hash.Add(LastUsedOutputDirectory, StringComparer.Ordinal);
+        hash.Add(PostExportBehavior);
+        hash.Add(OpenDiscoveryWhenGenerationCompletes);
+        hash.Add(OpenDatabaseWhenCreationCompletes);
+        foreach (var entry in ColumnWidths.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+        {
+            hash.Add(entry.Key, StringComparer.Ordinal);
+            hash.Add(entry.Value);
+        }
+
+        return hash.ToHashCode();
+    }
+
     public static ApplicationSettings CreateDefault(string localApplicationDataDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localApplicationDataDirectory);
@@ -61,7 +122,10 @@ public sealed record ApplicationSettings
             PersistentArchiveExtractionEnabled = false,
             PersistentArchiveExtractionDirectory = null,
             LastUsedOutputDirectory = null,
-            PostExportBehavior = PostExportBehavior.StatusOnly
+            PostExportBehavior = PostExportBehavior.StatusOnly,
+            ColumnWidths = [],
+            OpenDiscoveryWhenGenerationCompletes = false,
+            OpenDatabaseWhenCreationCompletes = false
         };
     }
 }

@@ -346,6 +346,16 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         IReadOnlyList<LoadedSourceContract> sources,
         CancellationToken cancellationToken = default)
     {
+        return await RequestDiscoveryAsync(correlation, sources, progress: null, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<RunDiscoveryResponse> RequestDiscoveryAsync(
+        OperationCorrelation correlation,
+        IReadOnlyList<LoadedSourceContract> sources,
+        IProgress<DiscoveryProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(sources);
         ThrowIfDisposed();
@@ -370,18 +380,28 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                     correlation,
                     sources);
                 await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
-                var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
-
-                if (response is not RunDiscoveryResponse discoveryResponse
-                    || discoveryResponse.CommandMessageId != command.MessageId
-                    || discoveryResponse.Completion.Correlation != correlation)
+                while (true)
                 {
+                    var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+
+                    if (response is DiscoveryProgressEvent progressEvent
+                        && progressEvent.CommandMessageId == command.MessageId)
+                    {
+                        TryReportDiscoveryProgress(progress, progressEvent.Progress);
+                        continue;
+                    }
+
+                    if (response is RunDiscoveryResponse discoveryResponse
+                        && discoveryResponse.CommandMessageId == command.MessageId
+                        && discoveryResponse.Completion.Correlation == correlation)
+                    {
+                        return discoveryResponse;
+                    }
+
                     throw new IpcProtocolException(
                         IpcProtocolError.InvalidContract,
                         "The Processing Host returned an invalid Discovery response.");
                 }
-
-                return discoveryResponse;
             }
             finally
             {
@@ -391,6 +411,20 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         finally
         {
             _lifecycleGate.Release();
+        }
+    }
+
+    private static void TryReportDiscoveryProgress(
+        IProgress<DiscoveryProgressSnapshot>? progress,
+        DiscoveryProgressSnapshot snapshot)
+    {
+        try
+        {
+            progress?.Report(snapshot);
+        }
+        catch (Exception)
+        {
+            // Progress observers cannot alter the Discovery outcome.
         }
     }
 
@@ -454,6 +488,20 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         DatabaseBuildSpecification specification,
         CancellationToken cancellationToken = default)
     {
+        return await RequestDatabaseBuildAsync(
+                correlation,
+                specification,
+                progress: null,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<BuildDatabaseResponse> RequestDatabaseBuildAsync(
+        OperationCorrelation correlation,
+        DatabaseBuildSpecification specification,
+        IProgress<DatabaseBuildProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(specification);
         ThrowIfDisposed();
@@ -487,6 +535,14 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                 {
                     var response = await connection.ReceiveAsync(cancellationToken)
                         .ConfigureAwait(false);
+                    if (response is DatabaseBuildProgressEvent progressEvent
+                        && progressEvent.CommandMessageId == command.MessageId
+                        && progressEvent.Progress.OperationId == correlation.OperationId)
+                    {
+                        TryReportDatabaseBuildProgress(progress, progressEvent.Progress);
+                        continue;
+                    }
+
                     if (response is BuildDatabaseResponse databaseResponse
                         && databaseResponse.CommandMessageId == command.MessageId
                         && databaseResponse.Completion.Correlation == correlation)
@@ -522,6 +578,20 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         finally
         {
             _lifecycleGate.Release();
+        }
+    }
+
+    private static void TryReportDatabaseBuildProgress(
+        IProgress<DatabaseBuildProgressSnapshot>? progress,
+        DatabaseBuildProgressSnapshot snapshot)
+    {
+        try
+        {
+            progress?.Report(snapshot);
+        }
+        catch (Exception)
+        {
+            // Progress observers cannot alter the Database-build outcome.
         }
     }
 

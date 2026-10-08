@@ -28,6 +28,16 @@ public sealed class DiscoveryService
         IReadOnlyList<LoadedSourceContract> sources,
         CancellationToken cancellationToken = default)
     {
+        return await RunAsync(correlation, sources, progress: null, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<DiscoveryHostResult> RunAsync(
+        OperationCorrelation correlation,
+        IReadOnlyList<LoadedSourceContract> sources,
+        IProgress<DiscoveryProgressSnapshot>? progress,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(sources);
 
@@ -42,6 +52,7 @@ public sealed class DiscoveryService
         var itemStatuses = new List<OperationItemStatus>(sources.Count);
         var issues = new List<DiscoverySourceIssue>();
         var usableSourceCount = 0;
+        var completedSourceCount = 0;
 
         foreach (var source in sources)
         {
@@ -61,6 +72,7 @@ public sealed class DiscoveryService
                 usableSourceCount++;
                 itemStatuses.Add(OperationItemStatus.ProcessedSuccessfully(
                     source.SourceId.ToString()));
+                ReportProgress(progress, ++completedSourceCount, sources.Count);
                 continue;
             }
 
@@ -72,6 +84,7 @@ public sealed class DiscoveryService
                 source.SourceId,
                 failure.Code,
                 failure.Description));
+            ReportProgress(progress, ++completedSourceCount, sources.Count);
         }
 
         if (usableSourceCount == 0)
@@ -92,6 +105,21 @@ public sealed class DiscoveryService
             information,
             issues,
             completion);
+    }
+
+    private static void ReportProgress(
+        IProgress<DiscoveryProgressSnapshot>? progress,
+        int completedSourceCount,
+        int totalSourceCount)
+    {
+        try
+        {
+            progress?.Report(new DiscoveryProgressSnapshot(completedSourceCount, totalSourceCount));
+        }
+        catch (Exception)
+        {
+            // Progress observers cannot alter the Discovery outcome.
+        }
     }
 
     public async Task<DiscoveryOccurrenceHostResult> GetOccurrenceAsync(

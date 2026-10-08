@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <tool>
+    <keyword>KIT</keyword>
+    <toolnbr>
+      <pnr>MAIN-001</pnr>
+      <mfr>MFR-A</mfr>
+    </toolnbr>
+    <pnrdata>
+      <rplby inc="2">
+        <pnr>ALT-001</pnr>
+        <mfr>MFR-B</mfr>
+      </rplby>
+    </pnrdata>
+  </tool>
+</root>

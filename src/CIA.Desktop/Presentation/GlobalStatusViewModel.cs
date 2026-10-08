@@ -9,30 +9,36 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
 {
     private readonly IProcessingHostSupervisor _processingHostSupervisor;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
+    private readonly GlobalOperationProgress _operationProgress;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private string _hostStatusText;
     private string _operationStatusText;
+    private GlobalOperationProgressSnapshot _progress;
     private readonly AsyncRelayCommand _cancelActiveOperationCommand;
     private int _disposed;
 
     public GlobalStatusViewModel(
         IProcessingHostSupervisor processingHostSupervisor,
-        IApplicationWorkflowCoordinator workflowCoordinator)
+        IApplicationWorkflowCoordinator workflowCoordinator,
+        GlobalOperationProgress? operationProgress = null)
     {
         ArgumentNullException.ThrowIfNull(processingHostSupervisor);
         ArgumentNullException.ThrowIfNull(workflowCoordinator);
 
         _processingHostSupervisor = processingHostSupervisor;
         _workflowCoordinator = workflowCoordinator;
+        _operationProgress = operationProgress ?? new GlobalOperationProgress();
         _uiSynchronizationContext = SynchronizationContext.Current;
         _hostStatusText = FormatHostStatus(_processingHostSupervisor.Current);
         _operationStatusText = FormatOperationStatus(_workflowCoordinator.Current.LatestOperation);
+        _progress = _operationProgress.Current;
         _cancelActiveOperationCommand = new AsyncRelayCommand(
             RequestCancellationAsync,
             CanRequestCancellation);
 
         _processingHostSupervisor.StateChanged += OnProcessingHostStateChanged;
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
+        _operationProgress.Changed += OnOperationProgressChanged;
     }
 
     public string HostStatusText
@@ -47,6 +53,16 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _operationStatusText, value);
     }
 
+    public bool IsProgressVisible => _progress.HasDeterminateProgress;
+
+    public double ProgressMaximum => _progress.TotalWork ?? 1;
+
+    public double ProgressValue => _progress.CompletedWork ?? 0;
+
+    public string ProgressPercentText => _progress.HasDeterminateProgress
+        ? $"{Math.Clamp(ProgressValue / ProgressMaximum, 0, 1):P0}"
+        : string.Empty;
+
     public IAsyncRelayCommand CancelActiveOperationCommand => _cancelActiveOperationCommand;
 
     public void Dispose()
@@ -58,6 +74,7 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
 
         _processingHostSupervisor.StateChanged -= OnProcessingHostStateChanged;
         _workflowCoordinator.StateChanged -= OnWorkflowStateChanged;
+        _operationProgress.Changed -= OnOperationProgressChanged;
     }
 
     private void OnProcessingHostStateChanged(
@@ -72,9 +89,28 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
         DispatchToUi(
             () =>
             {
-                OperationStatusText = FormatOperationStatus(state.LatestOperation);
+                if (!_progress.IsActive
+                    || state.LatestOperation?.State == WorkflowOperationState.Cancelling)
+                {
+                    OperationStatusText = FormatOperationStatus(state.LatestOperation);
+                }
                 _cancelActiveOperationCommand.NotifyCanExecuteChanged();
             });
+    }
+
+    private void OnOperationProgressChanged(
+        object? sender,
+        GlobalOperationProgressSnapshot progress)
+    {
+        DispatchToUi(() =>
+        {
+            _progress = progress;
+            OperationStatusText = $"{progress.OperationName} - {progress.StageText}";
+            OnPropertyChanged(nameof(IsProgressVisible));
+            OnPropertyChanged(nameof(ProgressMaximum));
+            OnPropertyChanged(nameof(ProgressValue));
+            OnPropertyChanged(nameof(ProgressPercentText));
+        });
     }
 
     private bool CanRequestCancellation()
