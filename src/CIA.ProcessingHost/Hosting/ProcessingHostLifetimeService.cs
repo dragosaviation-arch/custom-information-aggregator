@@ -453,6 +453,25 @@ public sealed class ProcessingHostLifetimeService(
                         .ConfigureAwait(false);
                     break;
 
+                case GetDiscoveryContributorsCommand command when established:
+                    var contributorResult = await discovery
+                        .GetContributorsAsync(command.Query, cancellationToken)
+                        .ConfigureAwait(false);
+                    await connection.SendAsync(
+                            new GetDiscoveryContributorsResponse(
+                                Guid.CreateVersion7(),
+                                DateTimeOffset.UtcNow,
+                                command.MessageId,
+                                command.Query.DiscoveryOperationId,
+                                contributorResult.Accepted
+                                    ? CommandAcceptance.Accepted
+                                    : CommandAcceptance.Rejected,
+                                contributorResult.Page,
+                                contributorResult.Failure),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+
                 case StopProcessingHostCommand command when established:
                     await SendAcceptedAsync(connection, command.MessageId, cancellationToken)
                         .ConfigureAwait(false);

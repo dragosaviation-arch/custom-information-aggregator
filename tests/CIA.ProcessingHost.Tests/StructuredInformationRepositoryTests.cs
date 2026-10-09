@@ -180,6 +180,45 @@ public sealed class StructuredInformationRepositoryTests
     }
 
     [TestMethod]
+    public async Task WorkingStateSnapshotOmitsNonRestorableDiscoveryContributorIndex()
+    {
+        using var workspace = new RepositoryWorkspace();
+        var repository = workspace.CreateRepository();
+        var correlation = OperationCorrelation.CreateNew();
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            sourceSetId,
+            Path.Combine(workspace.Root, "source.xml"),
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
+        var identity = new DiscoveryInformationIdentity(
+            sourceSetId,
+            "/root/value",
+            "value");
+        await repository.BeginDiscoveryIndexAsync(correlation);
+        await repository.AddDiscoverySourceAsync(
+            correlation.OperationId,
+            source,
+            "source.xml",
+            0,
+            [new DiscoveryIndexContribution(0, identity, 1, "sample", true)]);
+        await repository.PublishDiscoveryIndexAsync(correlation.OperationId);
+        var snapshotPath = Path.Combine(workspace.Root, "working-state.sqlite3");
+
+        await repository.CreateWorkingStateSnapshotAsync(snapshotPath, expectedGeneration: null);
+
+        await using var connection = await OpenConnectionAsync(snapshotPath);
+        Assert.AreEqual(0, await ScalarIntAsync(
+            connection,
+            "SELECT COUNT(*) FROM discovery_results;"));
+        Assert.AreEqual(0, await ScalarIntAsync(
+            connection,
+            "SELECT COUNT(*) FROM discovery_publication;"));
+    }
+
+    [TestMethod]
     public async Task IndexedParameterizedQueriesRetainCrossSourceIdentity()
     {
         using var workspace = new RepositoryWorkspace();
@@ -295,6 +334,11 @@ public sealed class StructuredInformationRepositoryTests
             await ExecuteAsync(
                 connection,
                 """
+                DROP TABLE discovery_publication;
+                DROP TABLE discovery_contributions;
+                DROP TABLE discovery_information;
+                DROP TABLE discovery_sources;
+                DROP TABLE discovery_results;
                 DROP TABLE extraction_publication;
                 DROP TABLE extraction_values;
                 DROP TABLE extraction_column_sources;
@@ -353,6 +397,11 @@ public sealed class StructuredInformationRepositoryTests
             await ExecuteAsync(
                 connection,
                 $"""
+                DROP TABLE discovery_publication;
+                DROP TABLE discovery_contributions;
+                DROP TABLE discovery_information;
+                DROP TABLE discovery_sources;
+                DROP TABLE discovery_results;
                 DROP TABLE hierarchy_extraction_publication;
                 DROP TABLE hierarchy_extraction_cell_values;
                 DROP TABLE hierarchy_extraction_cells;

@@ -23,6 +23,17 @@ public interface IDiscoveryClient
     Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
         DiscoveryOccurrenceLookup lookup,
         CancellationToken cancellationToken = default);
+
+    Task<DiscoveryContributorClientResult> GetContributorsAsync(
+        DiscoveryContributorPageQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(new DiscoveryContributorClientResult(
+            false,
+            Page: null,
+            "discovery-contributors-unavailable",
+            "Discovery contributor inspection is unavailable."));
+    }
 }
 
 public sealed record DiscoveryClientResult(
@@ -39,5 +50,11 @@ public sealed record DiscoveryClientResult(
 public sealed record DiscoveryOccurrenceClientResult(
     bool Accepted,
     DiscoveredOccurrence? Occurrence,
+    string? FailureCode,
+    string? FailureDescription);
+
+public sealed record DiscoveryContributorClientResult(
+    bool Accepted,
+    DiscoveryContributorPage? Page,
     string? FailureCode,
     string? FailureDescription);

@@ -37,8 +37,9 @@ public sealed class AlphaRegressionGateTests
     {
         using var workspace = new AlphaWorkspace();
         var fixture = workspace.LoadFixture();
+        var correlation = OperationCorrelation.CreateNew();
         var result = await workspace.Discovery.RunAsync(
-            OperationCorrelation.CreateNew(),
+            correlation,
             [.. fixture.AllSources, fixture.MalformedSource]);
 
         Assert.IsTrue(result.Accepted);
@@ -67,7 +68,15 @@ public sealed class AlphaRegressionGateTests
             setAName.DetailedIdentities.Select(identity => identity.StructuralPath).Distinct().Count());
         Assert.AreNotEqual(setAName.SourceSetId, setBName.SourceSetId);
         Assert.AreEqual(2, setBName.TotalOccurrenceCount);
-        Assert.IsTrue(setAName.ContributingSources.Select(source => source.SourceId)
+        var setAContributors = await workspace.Discovery.GetContributorsAsync(
+            new DiscoveryContributorPageQuery(
+                correlation.OperationId,
+                setAName.DetailedIdentities,
+                StartIndex: 0,
+                PageSize: DiscoveryContributorPaging.DefaultPageSize,
+                ExpectedSourceCount: setAName.SourceCount));
+        Assert.IsTrue(setAContributors.Accepted);
+        Assert.IsTrue(setAContributors.Page!.Sources.Select(source => source.SourceId)
             .All(sourceId => fixture.SetASources.Any(source => source.SourceId == sourceId)));
 
         var configuration = new ActiveDiscoveryConfiguration();
@@ -88,9 +97,7 @@ public sealed class AlphaRegressionGateTests
             && item.InformationType == "note"
             && item.SampleValue == "same-content");
         Assert.AreEqual(3, repeatedNote.TotalOccurrenceCount);
-        Assert.AreEqual(
-            repeatedNote.TotalOccurrenceCount,
-            repeatedNote.ContributingSources.Sum(source => source.OccurrenceCount));
+        Assert.AreEqual(2, repeatedNote.LogicalSourceCount);
     }
 
     [TestMethod]
@@ -549,7 +556,8 @@ public sealed class AlphaRegressionGateTests
             _interpreter = new SourceInterpreter([], NullLogger<SourceInterpreter>.Instance);
             Discovery = new DiscoveryService(
                 _interpreter,
-                new SourceOccurrenceReader([], NullLogger<SourceOccurrenceReader>.Instance));
+                new SourceOccurrenceReader([], NullLogger<SourceOccurrenceReader>.Instance),
+                Repository);
             Database = new DatabaseGenerationService(
                 Repository,
                 _interpreter,

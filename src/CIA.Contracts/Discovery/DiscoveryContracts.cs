@@ -4,6 +4,12 @@ using System.Text.Json.Serialization;
 
 namespace CIA.Contracts.Discovery;
 
+public static class DiscoveryContributorPaging
+{
+    public const int DefaultPageSize = 100;
+    public const int MaximumPageSize = 200;
+}
+
 public sealed record DiscoveryInformationIdentity
 {
     private static readonly SourceSetId LegacySourceSetId = SourceSetId.From(
@@ -78,11 +84,57 @@ public sealed record DiscoveredSourceContribution(
     string SourceName,
     int OccurrenceCount);
 
+public readonly record struct DiscoveryLogicalIdentity(
+    SourceSetId SourceSetId,
+    SourceValueCandidateKind CandidateKind,
+    string CanonicalFieldIdentity)
+{
+    public static DiscoveryLogicalIdentity Create(DiscoveryInformationIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        var canonicalFieldIdentity = identity.CandidateKind switch
+        {
+            SourceValueCandidateKind.Element => GetFinalStructuralSegment(
+                identity.StructuralPath),
+            SourceValueCandidateKind.Attribute => GetFinalStructuralSegment(
+                identity.StructuralIdentity),
+            _ => identity.StructuralIdentity
+        };
+        return new DiscoveryLogicalIdentity(
+            identity.SourceSetId,
+            identity.CandidateKind,
+            canonicalFieldIdentity);
+    }
+
+    private static string GetFinalStructuralSegment(string path)
+    {
+        var namespaceDepth = 0;
+        var finalSeparator = -1;
+        for (var index = 0; index < path.Length; index++)
+        {
+            switch (path[index])
+            {
+                case '{':
+                    namespaceDepth++;
+                    break;
+                case '}' when namespaceDepth > 0:
+                    namespaceDepth--;
+                    break;
+                case '/' when namespaceDepth == 0:
+                    finalSeparator = index;
+                    break;
+            }
+        }
+
+        return finalSeparator < 0 ? path : path[(finalSeparator + 1)..];
+    }
+}
+
 [method: JsonConstructor]
 public sealed record DiscoveredInformation(
     DiscoveryInformationIdentity Identity,
     int TotalOccurrenceCount,
-    IReadOnlyList<DiscoveredSourceContribution> ContributingSources,
+    int LogicalSourceCount,
     string SampleValue)
 {
     public DiscoveredInformation(
@@ -91,11 +143,44 @@ public sealed record DiscoveredInformation(
         IReadOnlyList<DiscoveredSourceContribution> contributingSources,
         string sampleValue)
         : this(
-            DiscoveryInformationIdentity.CreateLegacy(informationType),
+            informationType,
             totalOccurrenceCount,
-            contributingSources,
+            CountDistinctSources(contributingSources),
             sampleValue)
     {
+    }
+
+    public DiscoveredInformation(
+        DiscoveryInformationIdentity identity,
+        int totalOccurrenceCount,
+        IReadOnlyList<DiscoveredSourceContribution> contributingSources,
+        string sampleValue)
+        : this(
+            identity,
+            totalOccurrenceCount,
+            CountDistinctSources(contributingSources),
+            sampleValue)
+    {
+    }
+
+    public DiscoveredInformation(
+        string informationType,
+        int totalOccurrenceCount,
+        int logicalSourceCount,
+        string sampleValue)
+        : this(
+            DiscoveryInformationIdentity.CreateLegacy(informationType),
+            totalOccurrenceCount,
+            logicalSourceCount,
+            sampleValue)
+    {
+    }
+
+    private static int CountDistinctSources(
+        IReadOnlyList<DiscoveredSourceContribution> contributingSources)
+    {
+        ArgumentNullException.ThrowIfNull(contributingSources);
+        return contributingSources.Select(source => source.SourceId).Distinct().Count();
     }
 
     [JsonIgnore]
@@ -114,8 +199,19 @@ public sealed record DiscoveredOccurrence(
     int Ordinal,
     int TotalOccurrenceCount,
     SourceId SourceId,
+    string SourceName,
     string Value)
 {
+    public DiscoveredOccurrence(
+        DiscoveryInformationIdentity identity,
+        int ordinal,
+        int totalOccurrenceCount,
+        SourceId sourceId,
+        string value)
+        : this(identity, ordinal, totalOccurrenceCount, sourceId, sourceId.ToString(), value)
+    {
+    }
+
     public DiscoveredOccurrence(
         string informationType,
         int ordinal,
@@ -127,6 +223,7 @@ public sealed record DiscoveredOccurrence(
             ordinal,
             totalOccurrenceCount,
             sourceId,
+            sourceId.ToString(),
             value)
     {
     }
@@ -138,41 +235,66 @@ public sealed record DiscoveredOccurrence(
 [method: JsonConstructor]
 public sealed record DiscoveryOccurrenceLookup(
     OperationId DiscoveryOperationId,
-    DiscoveryInformationIdentity Identity,
+    IReadOnlyList<DiscoveryInformationIdentity> DetailedIdentities,
     int GlobalOrdinal,
-    int TotalOccurrenceCount,
-    LoadedSourceContract Source,
-    int LocalOrdinal,
-    int ExpectedSourceOccurrenceCount)
+    int TotalOccurrenceCount)
 {
     public DiscoveryOccurrenceLookup(
-        OperationId discoveryOperationId,
-        string informationType,
-        int globalOrdinal,
-        int totalOccurrenceCount,
-        LoadedSourceContract source,
-        int localOrdinal,
-        int expectedSourceOccurrenceCount)
+        OperationId DiscoveryOperationId,
+        DiscoveryInformationIdentity Identity,
+        int GlobalOrdinal,
+        int TotalOccurrenceCount,
+        LoadedSourceContract Source,
+        int LocalOrdinal,
+        int ExpectedSourceOccurrenceCount)
+        : this(DiscoveryOperationId, [Identity], GlobalOrdinal, TotalOccurrenceCount)
+    {
+        ArgumentNullException.ThrowIfNull(Source);
+    }
+
+    public DiscoveryOccurrenceLookup(
+        OperationId DiscoveryOperationId,
+        string InformationType,
+        int GlobalOrdinal,
+        int TotalOccurrenceCount,
+        LoadedSourceContract Source,
+        int LocalOrdinal,
+        int ExpectedSourceOccurrenceCount)
         : this(
-            discoveryOperationId,
-            new DiscoveryInformationIdentity(
-                source.SourceSetId,
-                $"/{informationType}",
-                informationType),
-            globalOrdinal,
-            totalOccurrenceCount,
-            source,
-            localOrdinal,
-            expectedSourceOccurrenceCount)
+            DiscoveryOperationId,
+            [new DiscoveryInformationIdentity(
+                Source.SourceSetId,
+                $"/{InformationType}",
+                InformationType)],
+            GlobalOrdinal,
+            TotalOccurrenceCount)
     {
     }
 
     [JsonIgnore]
-    public string InformationType => Identity.InformationType;
+    public DiscoveryInformationIdentity Identity => DetailedIdentities[0];
 
     [JsonIgnore]
-    public string StructuralPath => Identity.StructuralPath;
+    public string InformationType => DetailedIdentities[0].InformationType;
+
+    [JsonIgnore]
+    public DiscoveryLogicalIdentity LogicalIdentity =>
+        DiscoveryLogicalIdentity.Create(DetailedIdentities[0]);
 }
+
+public sealed record DiscoveryContributorPageQuery(
+    OperationId DiscoveryOperationId,
+    IReadOnlyList<DiscoveryInformationIdentity> DetailedIdentities,
+    int StartIndex,
+    int PageSize,
+    int ExpectedSourceCount);
+
+public sealed record DiscoveryContributorPage(
+    OperationId DiscoveryOperationId,
+    int StartIndex,
+    int TotalSourceCount,
+    int TotalOccurrenceCount,
+    IReadOnlyList<DiscoveredSourceContribution> Sources);
 
 public sealed record DiscoverySourceIssue(
     SourceId SourceId,

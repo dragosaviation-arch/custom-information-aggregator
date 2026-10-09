@@ -497,10 +497,9 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                     || occurrenceResponse.CommandMessageId != command.MessageId
                     || occurrenceResponse.DiscoveryOperationId != lookup.DiscoveryOperationId
                     || occurrenceResponse.Occurrence is { } occurrence
-                    && (occurrence.Identity != lookup.Identity
+                    && (!lookup.DetailedIdentities.Contains(occurrence.Identity)
                         || occurrence.Ordinal != lookup.GlobalOrdinal
-                        || occurrence.TotalOccurrenceCount != lookup.TotalOccurrenceCount
-                        || occurrence.SourceId != lookup.Source.SourceId))
+                        || occurrence.TotalOccurrenceCount != lookup.TotalOccurrenceCount))
                 {
                     throw new IpcProtocolException(
                         IpcProtocolError.InvalidContract,
@@ -508,6 +507,57 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                 }
 
                 return occurrenceResponse;
+            }
+            finally
+            {
+                _requestGate.Release();
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    public async Task<GetDiscoveryContributorsResponse> RequestDiscoveryContributorsAsync(
+        DiscoveryContributorPageQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ThrowIfDisposed();
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (!IsCurrentHostReady())
+            {
+                throw new InvalidOperationException(
+                    "The Processing Host is not ready for Discovery contributor requests.");
+            }
+
+            var connection = _connection!;
+            await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var command = new GetDiscoveryContributorsCommand(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    query);
+                await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+                var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+                if (response is not GetDiscoveryContributorsResponse contributorResponse
+                    || contributorResponse.CommandMessageId != command.MessageId
+                    || contributorResponse.DiscoveryOperationId != query.DiscoveryOperationId
+                    || contributorResponse.Page is { } page
+                    && (page.StartIndex != query.StartIndex
+                        || page.TotalSourceCount != query.ExpectedSourceCount))
+                {
+                    throw new IpcProtocolException(
+                        IpcProtocolError.InvalidContract,
+                        "The Processing Host returned an invalid Discovery contributor response.");
+                }
+
+                return contributorResponse;
             }
             finally
             {

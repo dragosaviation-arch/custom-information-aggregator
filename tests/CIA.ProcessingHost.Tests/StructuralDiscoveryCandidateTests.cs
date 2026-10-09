@@ -1,10 +1,13 @@
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Runtime;
 using CIA.Core.Sources;
 using CIA.Desktop.Presentation;
 using CIA.ProcessingHost.Discovery;
+using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceInterpretation;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.ProcessingHost.Tests;
@@ -37,7 +40,7 @@ public sealed class StructuralDiscoveryCandidateTests
             value.CandidateKind == SourceValueCandidateKind.Structural
             && value.Content.StartsWith("repeated-", StringComparison.Ordinal)));
 
-        var service = CreateDiscoveryService();
+        var service = CreateDiscoveryService(workspace.Repository);
         var correlation = OperationCorrelation.CreateNew();
         var discovery = await service.RunAsync(correlation, [source]);
         var detailed = discovery.Information
@@ -52,10 +55,7 @@ public sealed class StructuralDiscoveryCandidateTests
             new[] { 1, 66 },
             detailed.Select(information => information.TotalOccurrenceCount).ToArray());
         Assert.AreEqual(67, detailed.Sum(information => information.TotalOccurrenceCount));
-        Assert.AreEqual(
-            67,
-            detailed.Sum(information =>
-                information.ContributingSources.Single().OccurrenceCount));
+        Assert.IsTrue(detailed.All(information => information.LogicalSourceCount == 1));
 
         var logical = DiscoveredInformationItemViewModel.CreateLogicalItems(
                 detailed,
@@ -66,16 +66,20 @@ public sealed class StructuralDiscoveryCandidateTests
 
         Assert.AreEqual(67, logical.TotalOccurrenceCount);
         Assert.HasCount(2, logical.DetailedIdentities);
-        Assert.AreEqual(67, logical.ContributingSources.Single().OccurrenceCount);
+        Assert.AreEqual(1, logical.SourceCount);
 
         var repeated = detailed.Single(information =>
             information.Identity.StructuralPath == "/root/collection/alternative/field");
-        var last = await CreateDiscoveryService().GetOccurrenceAsync(
-            CreateLookup(correlation, repeated, source, globalOrdinal: 66));
+        var last = await CreateDiscoveryService(workspace.Repository).GetOccurrenceAsync(
+            new DiscoveryOccurrenceLookup(
+                correlation.OperationId,
+                detailed.Select(item => item.Identity).ToArray(),
+                GlobalOrdinal: 66,
+                TotalOccurrenceCount: 67));
 
         Assert.IsTrue(last.Accepted);
         Assert.AreEqual("repeated-66", last.Occurrence?.Value);
-        Assert.AreEqual(66, last.Occurrence?.TotalOccurrenceCount);
+        Assert.AreEqual(67, last.Occurrence?.TotalOccurrenceCount);
         Assert.AreEqual(repeated.Identity, last.Occurrence?.Identity);
     }
 
@@ -247,7 +251,7 @@ public sealed class StructuralDiscoveryCandidateTests
     {
         using var workspace = new StructuralDiscoveryWorkspace();
         var source = workspace.CopyFixture("nested-stable-slot-records.xml");
-        var service = CreateDiscoveryService();
+        var service = CreateDiscoveryService(workspace.Repository);
         var correlation = OperationCorrelation.CreateNew();
 
         var discovery = await service.RunAsync(correlation, [source]);
@@ -258,9 +262,9 @@ public sealed class StructuralDiscoveryCandidateTests
             information.Identity.StructuralIdentity ==
             "/records/record/slot[@key='C']/wrapper");
 
-        var secondQuantity = await CreateDiscoveryService().GetOccurrenceAsync(
+        var secondQuantity = await CreateDiscoveryService(workspace.Repository).GetOccurrenceAsync(
             CreateLookup(correlation, quantity, source, globalOrdinal: 2));
-        var firstDescription = await CreateDiscoveryService().GetOccurrenceAsync(
+        var firstDescription = await CreateDiscoveryService(workspace.Repository).GetOccurrenceAsync(
             CreateLookup(correlation, description, source, globalOrdinal: 1));
 
         Assert.IsTrue(secondQuantity.Accepted);
@@ -299,7 +303,7 @@ public sealed class StructuralDiscoveryCandidateTests
         var secondSet = SourceSetId.CreateNew();
         var first = workspace.CopyFixture("stable-slot-records.xml", firstSet, "first.xml");
         var second = workspace.CopyFixture("stable-slot-records.xml", secondSet, "second.xml");
-        var service = CreateDiscoveryService();
+        var service = CreateDiscoveryService(workspace.Repository);
         var correlation = OperationCorrelation.CreateNew();
 
         var result = await service.RunAsync(correlation, [first, second]);
@@ -320,7 +324,7 @@ public sealed class StructuralDiscoveryCandidateTests
         Assert.AreNotEqual(firstQuantity.Identity, attributeCode.Identity);
         Assert.AreEqual(2, firstQuantity.TotalOccurrenceCount);
 
-        var preview = await CreateDiscoveryService().GetOccurrenceAsync(
+        var preview = await CreateDiscoveryService(workspace.Repository).GetOccurrenceAsync(
             new DiscoveryOccurrenceLookup(
                 correlation.OperationId,
                 firstQuantity.Identity,
@@ -342,7 +346,7 @@ public sealed class StructuralDiscoveryCandidateTests
         using var workspace = new StructuralDiscoveryWorkspace();
         var source = workspace.CopyFixture("separate-record-contexts.xml");
 
-        var result = await CreateDiscoveryService().RunAsync(
+        var result = await CreateDiscoveryService(workspace.Repository).RunAsync(
             OperationCorrelation.CreateNew(),
             [source]);
         var quantities = result.Information
@@ -399,7 +403,8 @@ public sealed class StructuralDiscoveryCandidateTests
         return result.Source;
     }
 
-    private static DiscoveryService CreateDiscoveryService()
+    private static DiscoveryService CreateDiscoveryService(
+        StructuredInformationRepository repository)
     {
         var generic = new GenericXmlElementValueSourceAdapter();
         return new DiscoveryService(
@@ -410,7 +415,8 @@ public sealed class StructuralDiscoveryCandidateTests
             new SourceOccurrenceReader(
                 [],
                 generic,
-                NullLogger<SourceOccurrenceReader>.Instance));
+                NullLogger<SourceOccurrenceReader>.Instance),
+            repository);
     }
 
     private static DiscoveryOccurrenceLookup CreateLookup(
@@ -444,9 +450,14 @@ public sealed class StructuralDiscoveryCandidateTests
         {
             Path = System.IO.Path.Combine(root, Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path);
+            Repository = new StructuredInformationRepository(
+                ApplicationPaths.FromLocalApplicationData(
+                    System.IO.Path.Combine(Path, "LocalAppData")));
         }
 
         public string Path { get; }
+
+        public StructuredInformationRepository Repository { get; }
 
         public LoadedSourceContract CopyFixture(
             string fixtureName,
@@ -500,6 +511,7 @@ public sealed class StructuralDiscoveryCandidateTests
                     "Refusing to delete an SPR-148 test directory outside its root.");
             }
 
+            SqliteConnection.ClearAllPools();
             Directory.Delete(resolvedTarget, recursive: true);
         }
     }

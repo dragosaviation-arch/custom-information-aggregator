@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -644,7 +645,7 @@ public sealed class NamedPipeIpcTests
     }
 
     [TestMethod]
-    public async Task DiscoveryResponseAtObservedSourceScaleExceedsLegacyLimitAndRoundTrips()
+    public async Task DiscoveryResponseAtObservedSourceScaleIsCompactAndRoundTrips()
     {
         const int observedSourceCount = 3481;
         const int observedInformationTypeCount = 30;
@@ -652,12 +653,6 @@ public sealed class NamedPipeIpcTests
         var correlation = OperationCorrelation.CreateNew();
         var sourceIds = Enumerable.Range(0, observedSourceCount)
             .Select(_ => SourceId.CreateNew())
-            .ToArray();
-        var contributions = sourceIds
-            .Select((sourceId, index) => new DiscoveredSourceContribution(
-                sourceId,
-                $"source-{index:D4}.xml",
-                1))
             .ToArray();
         var completion = OperationCompletion.FromCompletedItems(
             correlation,
@@ -673,7 +668,7 @@ public sealed class NamedPipeIpcTests
                 .Select(index => new DiscoveredInformation(
                     $"Tag{index:D2}",
                     observedSourceCount,
-                    contributions,
+                    observedSourceCount,
                     "sample"))
                 .ToArray(),
             [],
@@ -682,7 +677,7 @@ public sealed class NamedPipeIpcTests
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
 
-        Assert.IsGreaterThan(legacyMaximumPayloadLength, stream.Length);
+        Assert.IsLessThan(legacyMaximumPayloadLength, stream.Length);
         Assert.IsLessThanOrEqualTo(
             IpcProtocol.MaximumPayloadLength + IpcProtocol.FrameHeaderLength,
             stream.Length);
@@ -690,9 +685,10 @@ public sealed class NamedPipeIpcTests
         var roundTripped = (RunDiscoveryResponse)await LengthPrefixedJsonMessageFramer
             .ReadAsync(stream);
         Assert.HasCount(observedInformationTypeCount, roundTripped.Information);
-        Assert.HasCount(
+        Assert.AreEqual(
             observedSourceCount,
-            roundTripped.Information[0].ContributingSources);
+            roundTripped.Information[0].LogicalSourceCount);
+        Assert.IsNull(typeof(DiscoveredInformation).GetProperty("ContributingSources"));
         Assert.AreEqual(correlation, roundTripped.Completion.Correlation);
     }
 
@@ -701,73 +697,39 @@ public sealed class NamedPipeIpcTests
     {
         const int logicalInformationTypeCount = 44;
         const int detailedInformationIdentityCount = 68;
-        var tenThousand = CreateDiscoveryScaleFixture(
+        var oneThousand = await MeasureDiscoveryScaleAsync(
+            1_000,
+            detailedInformationIdentityCount,
+            logicalInformationTypeCount);
+        var tenThousand = await MeasureDiscoveryScaleAsync(
             10_000,
             detailedInformationIdentityCount,
             logicalInformationTypeCount);
-        var legacyPayload = JsonSerializer.SerializeToUtf8Bytes<IpcMessage>(
-            tenThousand.Response,
-            CreateFramerCompatibleSerializerOptions());
-
-        Assert.IsGreaterThan(IpcProtocol.MaximumPayloadLength, legacyPayload.Length);
-        TestContext.WriteLine($"Legacy 10k monolithic payload: {legacyPayload.Length:N0} bytes.");
-
-        long maximumTenThousandFrameLength = 0;
-        for (var index = 0; index < tenThousand.Information.Count; index++)
-        {
-            await using var pageStream = new MemoryStream();
-            await LengthPrefixedJsonMessageFramer.WriteAsync(
-                pageStream,
-                new DiscoveryResultPageEvent(
-                    Guid.CreateVersion7(),
-                    DateTimeOffset.UtcNow,
-                    tenThousand.Response.CommandMessageId,
-                    index,
-                    [tenThousand.Information[index]]));
-            maximumTenThousandFrameLength = Math.Max(
-                maximumTenThousandFrameLength,
-                pageStream.Length);
-        }
-
-        await using var tenThousandCompletionStream = new MemoryStream();
-        await LengthPrefixedJsonMessageFramer.WriteAsync(
-            tenThousandCompletionStream,
-            tenThousand.Response with { Information = [] });
-        maximumTenThousandFrameLength = Math.Max(
-            maximumTenThousandFrameLength,
-            tenThousandCompletionStream.Length);
-        Assert.IsLessThanOrEqualTo(
-            IpcProtocol.MaximumPayloadLength + IpcProtocol.FrameHeaderLength,
-            maximumTenThousandFrameLength);
-
-        var thirtyThousand = CreateDiscoveryScaleFixture(
+        var thirtyThousand = await MeasureDiscoveryScaleAsync(
             30_000,
             detailedInformationIdentityCount,
             logicalInformationTypeCount);
-        await using var representativePageStream = new MemoryStream();
-        await LengthPrefixedJsonMessageFramer.WriteAsync(
-            representativePageStream,
-            new DiscoveryResultPageEvent(
-                Guid.CreateVersion7(),
-                DateTimeOffset.UtcNow,
-                thirtyThousand.Response.CommandMessageId,
-                PageIndex: 0,
-                [thirtyThousand.Information[0]]));
-        await using var completionStream = new MemoryStream();
-        await LengthPrefixedJsonMessageFramer.WriteAsync(
-            completionStream,
-            thirtyThousand.Response with { Information = [] });
 
         Assert.IsLessThanOrEqualTo(
             IpcProtocol.MaximumPayloadLength + IpcProtocol.FrameHeaderLength,
-            representativePageStream.Length);
+            tenThousand.MaximumFrameLength);
+        Assert.IsLessThanOrEqualTo(2L * 1024 * 1024, tenThousand.TotalPayloadLength);
+        Assert.HasCount(detailedInformationIdentityCount, tenThousand.Information);
+        Assert.AreEqual(
+            logicalInformationTypeCount,
+            tenThousand.Information.Select(item => DiscoveryLogicalIdentity.Create(item.Identity))
+                .Distinct()
+                .Count());
+        Assert.IsTrue(tenThousand.Information.All(item =>
+            item.TotalOccurrenceCount == 10_000 && item.LogicalSourceCount == 10_000));
+
         Assert.IsLessThanOrEqualTo(
             IpcProtocol.MaximumPayloadLength + IpcProtocol.FrameHeaderLength,
-            completionStream.Length);
-        TestContext.WriteLine(
-            $"10k largest corrected frame: {maximumTenThousandFrameLength:N0} bytes; "
-            + $"30k information frame: {representativePageStream.Length:N0} bytes; "
-            + $"30k completion frame: {completionStream.Length:N0} bytes.");
+            thirtyThousand.MaximumFrameLength);
+        Assert.IsLessThanOrEqualTo(5L * 1024 * 1024, thirtyThousand.TotalPayloadLength);
+        WriteDiscoveryScaleMeasurement(oneThousand);
+        WriteDiscoveryScaleMeasurement(tenThousand);
+        WriteDiscoveryScaleMeasurement(thirtyThousand);
     }
 
     [TestMethod]
@@ -955,12 +917,6 @@ public sealed class NamedPipeIpcTests
         var sourceIds = Enumerable.Range(0, sourceCount)
             .Select(_ => SourceId.CreateNew())
             .ToArray();
-        var contributions = sourceIds
-            .Select((sourceId, index) => new DiscoveredSourceContribution(
-                sourceId,
-                $"book-{index:D5}.xml",
-                1))
-            .ToArray();
         var information = Enumerable.Range(0, detailedInformationIdentityCount)
             .Select(index => new DiscoveredInformation(
                 new DiscoveryInformationIdentity(
@@ -968,7 +924,7 @@ public sealed class NamedPipeIpcTests
                     $"/book/context-{index:D2}/tag-{index % logicalInformationTypeCount:D2}",
                     $"tag-{index % logicalInformationTypeCount:D2}"),
                 sourceCount,
-                contributions,
+                sourceCount,
                 "sample"))
             .ToArray();
         var response = new RunDiscoveryResponse(
@@ -984,6 +940,74 @@ public sealed class NamedPipeIpcTests
             [],
             Failure: null);
         return new DiscoveryScaleFixture(response, information);
+    }
+
+    private static async Task<DiscoveryScaleMeasurement> MeasureDiscoveryScaleAsync(
+        int sourceCount,
+        int detailedInformationIdentityCount,
+        int logicalInformationTypeCount)
+    {
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var retainedHeapBefore = GC.GetTotalMemory(forceFullCollection: false);
+        using var process = Process.GetCurrentProcess();
+        process.Refresh();
+        var workingSetBefore = process.WorkingSet64;
+        var fixture = CreateDiscoveryScaleFixture(
+            sourceCount,
+            detailedInformationIdentityCount,
+            logicalInformationTypeCount);
+        long totalPayloadLength = 0;
+        long maximumFrameLength = 0;
+        var stopwatch = Stopwatch.StartNew();
+        for (var index = 0; index < fixture.Information.Count; index++)
+        {
+            await using var pageStream = new MemoryStream();
+            await LengthPrefixedJsonMessageFramer.WriteAsync(
+                pageStream,
+                new DiscoveryResultPageEvent(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    fixture.Response.CommandMessageId,
+                    index,
+                    [fixture.Information[index]]));
+            totalPayloadLength += pageStream.Length;
+            maximumFrameLength = Math.Max(maximumFrameLength, pageStream.Length);
+        }
+
+        await using var completionStream = new MemoryStream();
+        await LengthPrefixedJsonMessageFramer.WriteAsync(
+            completionStream,
+            fixture.Response with { Information = [] });
+        totalPayloadLength += completionStream.Length;
+        maximumFrameLength = Math.Max(maximumFrameLength, completionStream.Length);
+        stopwatch.Stop();
+        var retainedHeapAfter = GC.GetTotalMemory(forceFullCollection: true);
+        process.Refresh();
+        var workingSetAfter = process.WorkingSet64;
+        GC.KeepAlive(fixture);
+
+        return new DiscoveryScaleMeasurement(
+            sourceCount,
+            totalPayloadLength,
+            maximumFrameLength,
+            stopwatch.Elapsed,
+            retainedHeapAfter - retainedHeapBefore,
+            workingSetAfter,
+            workingSetAfter - workingSetBefore,
+            fixture.Information);
+    }
+
+    private void WriteDiscoveryScaleMeasurement(DiscoveryScaleMeasurement measurement)
+    {
+        TestContext.WriteLine(
+            $"{measurement.SourceCount:N0} sources: payload "
+            + $"{measurement.TotalPayloadLength:N0} bytes; largest frame "
+            + $"{measurement.MaximumFrameLength:N0} bytes; serialization "
+            + $"{measurement.SerializationDuration.TotalMilliseconds:N1} ms; retained heap delta "
+            + $"{measurement.RetainedHeapDelta:N0} bytes; working set "
+            + $"{measurement.WorkingSet:N0} bytes (delta {measurement.WorkingSetDelta:+#,0;-#,0;0}).");
     }
 
     private static JsonSerializerOptions CreateFramerCompatibleSerializerOptions()
@@ -1049,5 +1073,15 @@ public sealed class NamedPipeIpcTests
 
     private sealed record DiscoveryScaleFixture(
         RunDiscoveryResponse Response,
+        IReadOnlyList<DiscoveredInformation> Information);
+
+    private sealed record DiscoveryScaleMeasurement(
+        int SourceCount,
+        long TotalPayloadLength,
+        long MaximumFrameLength,
+        TimeSpan SerializationDuration,
+        long RetainedHeapDelta,
+        long WorkingSet,
+        long WorkingSetDelta,
         IReadOnlyList<DiscoveredInformation> Information);
 }

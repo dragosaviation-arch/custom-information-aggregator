@@ -6,6 +6,7 @@ using CIA.Core.Diagnostics;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Hosting;
 using CIA.ProcessingHost.SourceInterpretation;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -45,7 +46,8 @@ public sealed class ProductionXmlSourceAdapterTests
         using var host = CreateHost(workspace.Path);
         var service = host.Services.GetRequiredService<DiscoveryService>();
 
-        var result = await service.RunAsync(OperationCorrelation.CreateNew(), [source]);
+        var correlation = OperationCorrelation.CreateNew();
+        var result = await service.RunAsync(correlation, [source]);
 
         Assert.IsTrue(result.Accepted);
         Assert.AreEqual(OperationOutcome.CompletedSuccessfully, result.Completion.Outcome);
@@ -54,12 +56,19 @@ public sealed class ProductionXmlSourceAdapterTests
 
         var identifier = result.Information.Single(item => item.InformationType == "identifier");
         Assert.AreEqual("MiXeD-Case-01", identifier.SampleValue);
-        Assert.HasCount(1, identifier.ContributingSources);
-        Assert.AreEqual(source.SourceId, identifier.ContributingSources[0].SourceId);
+        Assert.AreEqual(1, identifier.LogicalSourceCount);
+        var contributors = await service.GetContributorsAsync(
+            new DiscoveryContributorPageQuery(
+                correlation.OperationId,
+                [identifier.Identity],
+                0,
+                DiscoveryContributorPaging.DefaultPageSize,
+                1));
+        Assert.AreEqual(source.SourceId, contributors.Page!.Sources.Single().SourceId);
     }
 
     [TestMethod]
-    public async Task AmmOccurrenceIsReadByFreshProductionCompositionWithoutDiscoveryRun()
+    public async Task AmmOccurrenceIsReadByFreshProductionServiceFromDurableIndex()
     {
         using var workspace = new TemporaryXmlDirectory();
         var source = workspace.CreateSource(
@@ -73,18 +82,14 @@ public sealed class ProductionXmlSourceAdapterTests
         using var host = CreateHost(workspace.Path);
         var service = host.Services.GetRequiredService<DiscoveryService>();
         var correlation = OperationCorrelation.CreateNew();
+        var discovery = await service.RunAsync(correlation, [source]);
+        var identifier = discovery.Information.Single();
 
         var occurrence = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
             correlation.OperationId,
-            new DiscoveryInformationIdentity(
-                source.SourceSetId,
-                "/amm/identifier",
-                "identifier"),
+            [identifier.Identity],
             GlobalOrdinal: 2,
-            TotalOccurrenceCount: 2,
-            source,
-            LocalOrdinal: 2,
-            ExpectedSourceOccurrenceCount: 2));
+            TotalOccurrenceCount: 2));
 
         Assert.IsTrue(occurrence.Accepted);
         Assert.AreEqual("  Exact MiXeD-Case Value  ", occurrence.Occurrence?.Value);
@@ -118,7 +123,7 @@ public sealed class ProductionXmlSourceAdapterTests
         Assert.IsTrue(discovery.Accepted);
         Assert.HasCount(1, discovery.Information);
         Assert.AreEqual("content", discovery.Information[0].SampleValue);
-        Assert.AreEqual(source.SourceId, discovery.Information[0].ContributingSources[0].SourceId);
+        Assert.AreEqual(1, discovery.Information[0].LogicalSourceCount);
     }
 
     [TestMethod]
@@ -141,7 +146,7 @@ public sealed class ProductionXmlSourceAdapterTests
         Assert.HasCount(1, result.Information);
         Assert.AreEqual("stockCode", result.Information[0].InformationType);
         Assert.AreEqual("STOCK-01", result.Information[0].SampleValue);
-        Assert.AreEqual(source.SourceId, result.Information[0].ContributingSources[0].SourceId);
+        Assert.AreEqual(1, result.Information[0].LogicalSourceCount);
     }
 
     [TestMethod]
@@ -205,7 +210,11 @@ public sealed class ProductionXmlSourceAdapterTests
     private static Microsoft.Extensions.Hosting.IHost CreateHost(string logDirectory)
     {
         return ProcessingHostApplicationHost.Create(
-            [$"--{ApplicationLogPaths.DirectoryConfigurationKey}={logDirectory}"]);
+            [
+                $"--{ApplicationLogPaths.DirectoryConfigurationKey}={logDirectory}",
+                $"--{CIA.Core.Runtime.ApplicationPaths.LocalApplicationDataDirectoryConfigurationKey}="
+                + System.IO.Path.Combine(logDirectory, "LocalAppData")
+            ]);
     }
 
     private sealed class TemporaryXmlDirectory : IDisposable
@@ -251,6 +260,7 @@ public sealed class ProductionXmlSourceAdapterTests
                     "Refusing to delete an SPR-122 test directory outside its root.");
             }
 
+            SqliteConnection.ClearAllPools();
             Directory.Delete(target, recursive: true);
         }
     }

@@ -849,7 +849,7 @@
                         </Grid>
                     </Border>
                     <ScrollViewer Grid.Row="1" MaxHeight="330" VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{Binding InspectedInformation.ContributingSources}">
+                        <ItemsControl ItemsSource="{Binding InspectedSources}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Grid MinHeight="31" Margin="10,0">
@@ -885,8 +885,30 @@
                             Background="{StaticResource CiaPanelAlternateBrush}"
                             BorderBrush="{StaticResource CiaBorderBrush}"
                             BorderThickness="0,1,0,0">
-                        <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
-                                   Text="{Binding SourceInspectionSummary}" />
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="{Binding SourceInspectionSummary}" />
+                            <Grid Grid.Row="1" Margin="0,5,0,0">
+                                <TextBlock VerticalAlignment="Center"
+                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                           Text="{Binding SourceInspectionPageText}" />
+                                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
+                                    <Button Width="64"
+                                            Margin="0,0,6,0"
+                                            Command="{Binding PreviousSourceInspectionPageCommand}"
+                                            Content="Previous"
+                                            Style="{StaticResource CiaGhostButtonStyle}" />
+                                    <Button Width="48"
+                                            Command="{Binding NextSourceInspectionPageCommand}"
+                                            Content="Next"
+                                            Style="{StaticResource CiaGhostButtonStyle}" />
+                                </StackPanel>
+                            </Grid>
+                        </Grid>
                     </Border>
                 </Grid>
             </Border>

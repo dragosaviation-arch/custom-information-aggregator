@@ -517,11 +517,14 @@ public sealed class DiscoveryProfileSessionStateTests
     private sealed class StaticDiscoveryClient(
         IReadOnlyList<DiscoveredInformation> information) : IDiscoveryClient
     {
+        private SourceId _sourceId;
+
         public Task<DiscoveryClientResult> RunAsync(
             OperationCorrelation correlation,
             IReadOnlyList<LoadedSourceContract> sources,
             CancellationToken cancellationToken = default)
         {
+            _sourceId = sources[0].SourceId;
             var completion = OperationCompletion.FromCompletedItems(
                 correlation,
                 sources.Select(source => OperationItemStatus.ProcessedSuccessfully(
@@ -544,7 +547,7 @@ public sealed class DiscoveryProfileSessionStateTests
                     lookup.Identity,
                     lookup.GlobalOrdinal,
                     lookup.TotalOccurrenceCount,
-                    lookup.Source.SourceId,
+                    _sourceId,
                     "value"),
                 FailureCode: null,
                 FailureDescription: null));

@@ -128,12 +128,9 @@ public sealed class ProcessingHostLifecycleTests
             load.Sources);
         var lookup = new DiscoveryOccurrenceLookup(
             correlation.OperationId,
-            discovery.Information.Single().Identity,
+            [discovery.Information.Single().Identity],
             GlobalOrdinal: 2,
-            TotalOccurrenceCount: 2,
-            load.Sources[0],
-            LocalOrdinal: 2,
-            ExpectedSourceOccurrenceCount: 2);
+            TotalOccurrenceCount: 2);
 
         var firstHostProcessId = fixture.Supervisor.Current.ProcessId!.Value;
         KillOwnedProcess(firstHostProcessId);
@@ -144,9 +141,18 @@ public sealed class ProcessingHostLifecycleTests
                 && state.ProcessId != firstHostProcessId);
 
         var occurrence = await fixture.Supervisor.RequestDiscoveryOccurrenceAsync(lookup);
+        var contributors = await fixture.Supervisor.RequestDiscoveryContributorsAsync(
+            new DiscoveryContributorPageQuery(
+                correlation.OperationId,
+                [discovery.Information.Single().Identity],
+                StartIndex: 0,
+                PageSize: DiscoveryContributorPaging.DefaultPageSize,
+                ExpectedSourceCount: 1));
 
         Assert.AreEqual(CommandAcceptance.Accepted, discovery.Acceptance);
         Assert.AreEqual(CommandAcceptance.Accepted, occurrence.Acceptance);
+        Assert.AreEqual(CommandAcceptance.Accepted, contributors.Acceptance);
+        Assert.AreEqual(load.Sources[0].SourceId, contributors.Page?.Sources.Single().SourceId);
         Assert.AreEqual(2, fixture.Launcher.AttemptCount);
         Assert.AreEqual("Exact second", occurrence.Occurrence?.Value);
         Assert.AreEqual(load.Sources[0].SourceId, occurrence.Occurrence?.SourceId);
@@ -1033,7 +1039,7 @@ public sealed class ProcessingHostLifecycleTests
 
         public SupervisorFixture(int? failLaunchAttempt = null)
         {
-            Launcher = new TrackingProcessLauncher(failLaunchAttempt);
+            Launcher = new TrackingProcessLauncher(failLaunchAttempt, _logs.Path);
             _loggerFactory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Trace));
             Supervisor = new ProcessingHostSupervisor(
                 new ProcessingHostSupervisorOptions(
@@ -1068,7 +1074,9 @@ public sealed class ProcessingHostLifecycleTests
         }
     }
 
-    private sealed class TrackingProcessLauncher(int? failLaunchAttempt)
+    private sealed class TrackingProcessLauncher(
+        int? failLaunchAttempt,
+        string localApplicationDataRoot)
         : IProcessingHostProcessLauncher
     {
         private readonly SystemProcessingHostProcessLauncher _inner = new();
@@ -1084,6 +1092,9 @@ public sealed class ProcessingHostLifecycleTests
         {
             var attempt = Interlocked.Increment(ref _attemptCount);
             _startArguments.Enqueue(startInfo.ArgumentList.ToArray());
+            startInfo.ArgumentList.Add(
+                $"--{ApplicationPaths.LocalApplicationDataDirectoryConfigurationKey}="
+                + Path.Combine(localApplicationDataRoot, "LocalAppData"));
 
             if (attempt == failLaunchAttempt)
             {

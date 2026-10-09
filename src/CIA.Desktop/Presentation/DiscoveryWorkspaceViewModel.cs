@@ -36,6 +36,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly GlobalOperationProgress? _globalProgress;
     private readonly ObservableCollection<DiscoveredInformationItemViewModel> _visibleInformation = [];
     private readonly ReadOnlyObservableCollection<DiscoveredInformationItemViewModel> _readOnlyInformation;
+    private readonly ObservableCollection<DiscoveredSourceContributionViewModel>
+        _inspectedSources = [];
+    private readonly ReadOnlyObservableCollection<DiscoveredSourceContributionViewModel>
+        _readOnlyInspectedSources;
     private readonly ObservableCollection<SourceSetLayoutItemViewModel> _sourceSetLayouts = [];
     private readonly ReadOnlyObservableCollection<SourceSetLayoutItemViewModel>
         _readOnlySourceSetLayouts;
@@ -45,7 +49,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly AsyncRelayCommand _previousOccurrenceCommand;
     private readonly AsyncRelayCommand _nextOccurrenceCommand;
     private readonly AsyncRelayCommand _jumpToOccurrenceCommand;
-    private readonly RelayCommand<DiscoveredInformationItemViewModel> _inspectSourcesCommand;
+    private readonly AsyncRelayCommand<DiscoveredInformationItemViewModel> _inspectSourcesCommand;
+    private readonly AsyncRelayCommand _previousSourceInspectionPageCommand;
+    private readonly AsyncRelayCommand _nextSourceInspectionPageCommand;
     private readonly RelayCommand<DiscoveredInformationItemViewModel> _toggleSelectionCommand;
     private readonly RelayCommand<DiscoveredInformationItemViewModel> _toggleBlacklistCommand;
     private readonly RelayCommand _clearDatabaseTagOverrideCommand;
@@ -98,8 +104,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private DiscoveredInformationItemViewModel? _selectedInformation;
     private DiscoveredInformationItemViewModel? _inspectedInformation;
     private OperationId? _publishedDiscoveryOperationId;
-    private IReadOnlyDictionary<SourceId, LoadedSourceContract> _publishedDiscoverySources =
-        new Dictionary<SourceId, LoadedSourceContract>();
+    private int _sourceInspectionStartIndex;
+    private int _sourceInspectionTotalOccurrenceCount;
+    private bool _isSourceInspectionLoading;
+    private string? _sourceInspectionFailure;
     private string _occurrencePreviewText =
         "Select a discovered tag to inspect its occurrence value.";
     private string _occurrenceOrdinalInput = string.Empty;
@@ -174,6 +182,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _uiSynchronizationContext = SynchronizationContext.Current;
         _readOnlyInformation = new ReadOnlyObservableCollection<DiscoveredInformationItemViewModel>(
             _visibleInformation);
+        _readOnlyInspectedSources =
+            new ReadOnlyObservableCollection<DiscoveredSourceContributionViewModel>(
+                _inspectedSources);
         _readOnlySourceSetLayouts = new ReadOnlyObservableCollection<SourceSetLayoutItemViewModel>(
             _sourceSetLayouts);
 
@@ -201,9 +212,21 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _jumpToOccurrenceCommand = new AsyncRelayCommand(
             JumpToOccurrenceAsync,
             CanJumpToOccurrence);
-        _inspectSourcesCommand = new RelayCommand<DiscoveredInformationItemViewModel>(
-            InspectSources,
+        _inspectSourcesCommand = new AsyncRelayCommand<DiscoveredInformationItemViewModel>(
+            InspectSourcesAsync,
             information => information?.SourceCount > 0);
+        _previousSourceInspectionPageCommand = new AsyncRelayCommand(
+            () => LoadSourceInspectionPageAsync(
+                Math.Max(
+                    0,
+                    _sourceInspectionStartIndex - DiscoveryContributorPaging.DefaultPageSize)),
+            () => !IsSourceInspectionLoading && _sourceInspectionStartIndex > 0);
+        _nextSourceInspectionPageCommand = new AsyncRelayCommand(
+            () => LoadSourceInspectionPageAsync(
+                _sourceInspectionStartIndex + DiscoveryContributorPaging.DefaultPageSize),
+            () => !IsSourceInspectionLoading
+                && _sourceInspectionStartIndex + _inspectedSources.Count
+                    < (InspectedInformation?.SourceCount ?? 0));
         _toggleSelectionCommand = new RelayCommand<DiscoveredInformationItemViewModel>(
             ToggleSelection,
             CanToggleSelection);
@@ -370,8 +393,14 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public IAsyncRelayCommand JumpToOccurrenceCommand => _jumpToOccurrenceCommand;
 
-    public IRelayCommand<DiscoveredInformationItemViewModel> InspectSourcesCommand =>
+    public IAsyncRelayCommand<DiscoveredInformationItemViewModel> InspectSourcesCommand =>
         _inspectSourcesCommand;
+
+    public IAsyncRelayCommand PreviousSourceInspectionPageCommand =>
+        _previousSourceInspectionPageCommand;
+
+    public IAsyncRelayCommand NextSourceInspectionPageCommand =>
+        _nextSourceInspectionPageCommand;
 
     public IRelayCommand<DiscoveredInformationItemViewModel> ToggleSelectionCommand =>
         _toggleSelectionCommand;
@@ -910,6 +939,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _inspectedInformation, value))
             {
                 OnPropertyChanged(nameof(SourceInspectionSummary));
+                OnPropertyChanged(nameof(SourceInspectionPageText));
+                _previousSourceInspectionPageCommand.NotifyCanExecuteChanged();
+                _nextSourceInspectionPageCommand.NotifyCanExecuteChanged();
             }
         }
     }
@@ -920,13 +952,40 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         set => SetProperty(ref _isSourceInspectionOpen, value);
     }
 
+    public IReadOnlyList<DiscoveredSourceContributionViewModel> InspectedSources =>
+        _readOnlyInspectedSources;
+
+    public bool IsSourceInspectionLoading
+    {
+        get => _isSourceInspectionLoading;
+        private set
+        {
+            if (SetProperty(ref _isSourceInspectionLoading, value))
+            {
+                _previousSourceInspectionPageCommand.NotifyCanExecuteChanged();
+                _nextSourceInspectionPageCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public string SourceInspectionPageText => InspectedInformation is null
+        ? string.Empty
+        : string.Format(
+            CultureInfo.CurrentCulture,
+            "Sources {0:N0}-{1:N0} of {2:N0}",
+            _inspectedSources.Count == 0 ? 0 : _sourceInspectionStartIndex + 1,
+            _sourceInspectionStartIndex + _inspectedSources.Count,
+            InspectedInformation.SourceCount);
+
     public string SourceInspectionSummary => InspectedInformation is null
         ? string.Empty
+        : _sourceInspectionFailure is not null
+            ? _sourceInspectionFailure
         : string.Format(
             CultureInfo.CurrentCulture,
             "{0:N0} sources · {1:N0} occurrences · matches tag aggregate",
             InspectedInformation.SourceCount,
-            InspectedInformation.ContributingSources.Sum(source => source.OccurrenceCount));
+            _sourceInspectionTotalOccurrenceCount);
 
     public void Dispose()
     {
@@ -1106,6 +1165,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 item => item.Identity,
                 item => item.Disposition);
             var databaseTagOverrides = _activeConfiguration.DatabaseTagOverridesByIdentity;
+            IsSourceInspectionOpen = false;
+            InspectedInformation = null;
+            _inspectedSources.Clear();
             _allInformation = DiscoveredInformationItemViewModel
                 .CreateLogicalItems(
                     result.Information,
@@ -1115,9 +1177,6 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 .ToArray();
             RefreshSourceSetLayouts();
             _publishedDiscoveryOperationId = result.Completion.Correlation.OperationId;
-            _publishedDiscoverySources = CreatePublishedSourceSnapshot(
-                sources,
-                result.Information);
             _issueCount = result.Issues.Count;
             _progressStage = "Stage: Complete";
             _progressCompletedSourceCount = _progressTotalSourceCount;
@@ -1329,10 +1388,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             var occurrence = result.Occurrence;
             if (!result.Accepted
                 || occurrence is null
-                || occurrence.Identity != lookup.Identity
+                || !lookup.DetailedIdentities.Contains(occurrence.Identity)
                 || occurrence.Ordinal != ordinal
-                || occurrence.TotalOccurrenceCount != information.TotalOccurrenceCount
-                || occurrence.SourceId != lookup.Source.SourceId)
+                || occurrence.TotalOccurrenceCount != information.TotalOccurrenceCount)
             {
                 if (CurrentOccurrenceOrdinal == 0)
                 {
@@ -1400,56 +1458,24 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private static IReadOnlyDictionary<SourceId, LoadedSourceContract>
-        CreatePublishedSourceSnapshot(
-            IEnumerable<LoadedSourceContract> sources,
-            IEnumerable<DiscoveredInformation> information)
-    {
-        var contributingSourceIds = information
-            .SelectMany(item => item.ContributingSources)
-            .Select(contribution => contribution.SourceId)
-            .ToHashSet();
-        return sources
-            .Where(source => contributingSourceIds.Contains(source.SourceId))
-            .ToDictionary(source => source.SourceId);
-    }
-
-    private bool TryCreateOccurrenceLookup(
+    private static bool TryCreateOccurrenceLookup(
         OperationId discoveryOperationId,
         DiscoveredInformationItemViewModel information,
         int globalOrdinal,
         out DiscoveryOccurrenceLookup lookup)
     {
-        var localOrdinal = globalOrdinal;
-        foreach (var member in information.DetailedInformation)
+        if (globalOrdinal < 1 || globalOrdinal > information.TotalOccurrenceCount)
         {
-            foreach (var contribution in member.ContributingSources)
-            {
-                if (localOrdinal > contribution.OccurrenceCount)
-                {
-                    localOrdinal -= contribution.OccurrenceCount;
-                    continue;
-                }
-
-                if (_publishedDiscoverySources.TryGetValue(contribution.SourceId, out var source))
-                {
-                    lookup = new DiscoveryOccurrenceLookup(
-                        discoveryOperationId,
-                        member.Identity,
-                        globalOrdinal,
-                        information.TotalOccurrenceCount,
-                        source,
-                        localOrdinal,
-                        contribution.OccurrenceCount);
-                    return true;
-                }
-
-                break;
-            }
+            lookup = null!;
+            return false;
         }
 
-        lookup = null!;
-        return false;
+        lookup = new DiscoveryOccurrenceLookup(
+            discoveryOperationId,
+            information.DetailedIdentities,
+            globalOrdinal,
+            information.TotalOccurrenceCount);
+        return true;
     }
 
     private bool IsCurrentPreviewRequest(
@@ -2169,15 +2195,82 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             : information.OrderByDescending(keySelector, DiscoverySortComparer.Instance);
     }
 
-    private void InspectSources(DiscoveredInformationItemViewModel? information)
+    private async Task InspectSourcesAsync(DiscoveredInformationItemViewModel? information)
     {
-        if (information is null)
+        if (information is null || _publishedDiscoveryOperationId is null)
         {
             return;
         }
 
         InspectedInformation = information;
+        _sourceInspectionStartIndex = 0;
+        _sourceInspectionTotalOccurrenceCount = information.TotalOccurrenceCount;
+        _sourceInspectionFailure = null;
+        _inspectedSources.Clear();
         IsSourceInspectionOpen = true;
+        OnPropertyChanged(nameof(SourceInspectionSummary));
+        OnPropertyChanged(nameof(SourceInspectionPageText));
+        await LoadSourceInspectionPageAsync(0);
+    }
+
+    private async Task LoadSourceInspectionPageAsync(int startIndex)
+    {
+        var information = InspectedInformation;
+        var operationId = _publishedDiscoveryOperationId;
+        if (information is null || operationId is null || startIndex < 0)
+        {
+            return;
+        }
+
+        IsSourceInspectionLoading = true;
+        _sourceInspectionFailure = null;
+        try
+        {
+            var result = await _discoveryClient.GetContributorsAsync(
+                new DiscoveryContributorPageQuery(
+                    operationId.Value,
+                    information.DetailedIdentities,
+                    startIndex,
+                    DiscoveryContributorPaging.DefaultPageSize,
+                    information.SourceCount));
+            if (!ReferenceEquals(InspectedInformation, information)
+                || _publishedDiscoveryOperationId != operationId)
+            {
+                return;
+            }
+
+            if (!result.Accepted || result.Page is null)
+            {
+                _sourceInspectionFailure = result.FailureDescription
+                    ?? "The contributing sources could not be retrieved.";
+                _inspectedSources.Clear();
+                return;
+            }
+
+            _sourceInspectionStartIndex = result.Page.StartIndex;
+            _sourceInspectionTotalOccurrenceCount = result.Page.TotalOccurrenceCount;
+            _inspectedSources.Clear();
+            foreach (var source in result.Page.Sources)
+            {
+                _inspectedSources.Add(new DiscoveredSourceContributionViewModel(source));
+            }
+        }
+        catch (Exception)
+        {
+            _sourceInspectionFailure = "The contributing sources could not be retrieved.";
+            _inspectedSources.Clear();
+        }
+        finally
+        {
+            if (ReferenceEquals(InspectedInformation, information))
+            {
+                IsSourceInspectionLoading = false;
+                OnPropertyChanged(nameof(SourceInspectionSummary));
+                OnPropertyChanged(nameof(SourceInspectionPageText));
+                _previousSourceInspectionPageCommand.NotifyCanExecuteChanged();
+                _nextSourceInspectionPageCommand.NotifyCanExecuteChanged();
+            }
+        }
     }
 
     private void OnSourcesChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -2566,7 +2659,18 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
                 ? null
                 : candidate;
         TotalOccurrenceCount = information.Sum(item => item.TotalOccurrenceCount);
-        ContributingSources = CreateLogicalContributions(information);
+        var sourceCounts = information
+            .Select(item => item.LogicalSourceCount)
+            .Distinct()
+            .ToArray();
+        if (sourceCounts.Length != 1)
+        {
+            throw new ArgumentException(
+                "Detailed Discovery identities require one logical source-count summary.",
+                nameof(information));
+        }
+
+        SourceCount = sourceCounts[0];
         SampleValue = DiscoverySampleValueFormatter.Format(information[0].SampleValue);
         _disposition = disposition;
     }
@@ -2583,7 +2687,7 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(resolveDatabaseTagOverride);
 
         return information
-            .GroupBy(item => LogicalDiscoveryIdentity.Create(item.Identity))
+            .GroupBy(item => DiscoveryLogicalIdentity.Create(item.Identity))
             .Select(group => group
                 .OrderBy(item => item.Identity.StructuralIdentity, StringComparer.Ordinal)
                 .ThenBy(item => item.Identity.StructuralPath, StringComparer.Ordinal)
@@ -2634,9 +2738,7 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
 
     public string TotalOccurrenceText => TotalOccurrenceCount.ToString("N0", CultureInfo.CurrentCulture);
 
-    public IReadOnlyList<DiscoveredSourceContributionViewModel> ContributingSources { get; }
-
-    public int SourceCount => ContributingSources.Count;
+    public int SourceCount { get; }
 
     public string SourceCountText => SourceCount.ToString("N0", CultureInfo.CurrentCulture);
 
@@ -2699,30 +2801,6 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         SetProperty(ref _sourceSetName, sourceSetName, nameof(SourceSetName));
     }
 
-    private static IReadOnlyList<DiscoveredSourceContributionViewModel>
-        CreateLogicalContributions(IEnumerable<DiscoveredInformation> information)
-    {
-        var contributions = new List<DiscoveredSourceContributionViewModel>();
-        var positionsBySource = new Dictionary<SourceId, int>();
-        foreach (var source in information.SelectMany(item => item.ContributingSources))
-        {
-            if (positionsBySource.TryGetValue(source.SourceId, out var position))
-            {
-                var current = contributions[position];
-                contributions[position] = new DiscoveredSourceContributionViewModel(
-                    current.SourceId,
-                    current.SourceName,
-                    checked(current.OccurrenceCount + source.OccurrenceCount));
-                continue;
-            }
-
-            positionsBySource.Add(source.SourceId, contributions.Count);
-            contributions.Add(new DiscoveredSourceContributionViewModel(source));
-        }
-
-        return contributions;
-    }
-
     private static DiscoveryInformationDisposition ResolveLogicalDisposition(
         IEnumerable<DiscoveryInformationDisposition> dispositions)
     {
@@ -2738,50 +2816,6 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         return values.Length == 1 ? values[0] : null;
     }
 
-    private readonly record struct LogicalDiscoveryIdentity(
-        SourceSetId SourceSetId,
-        SourceValueCandidateKind CandidateKind,
-        string CanonicalFieldIdentity)
-    {
-        public static LogicalDiscoveryIdentity Create(DiscoveryInformationIdentity identity)
-        {
-            var canonicalFieldIdentity = identity.CandidateKind switch
-            {
-                SourceValueCandidateKind.Element => GetFinalStructuralSegment(
-                    identity.StructuralPath),
-                SourceValueCandidateKind.Attribute => GetFinalStructuralSegment(
-                    identity.StructuralIdentity),
-                _ => identity.StructuralIdentity
-            };
-            return new LogicalDiscoveryIdentity(
-                identity.SourceSetId,
-                identity.CandidateKind,
-                canonicalFieldIdentity);
-        }
-
-        private static string GetFinalStructuralSegment(string path)
-        {
-            var namespaceDepth = 0;
-            var finalSeparator = -1;
-            for (var index = 0; index < path.Length; index++)
-            {
-                switch (path[index])
-                {
-                    case '{':
-                        namespaceDepth++;
-                        break;
-                    case '}' when namespaceDepth > 0:
-                        namespaceDepth--;
-                        break;
-                    case '/' when namespaceDepth == 0:
-                        finalSeparator = index;
-                        break;
-                }
-            }
-
-            return finalSeparator < 0 ? path : path[(finalSeparator + 1)..];
-        }
-    }
 }
 
 public sealed record RepeatedDataLayoutOption(RepeatedDataLayout Mode, string DisplayName);
