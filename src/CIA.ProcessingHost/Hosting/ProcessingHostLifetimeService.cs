@@ -427,7 +427,10 @@ public sealed class ProcessingHostLifetimeService(
                                 discoveryResult.Completion,
                                 Array.Empty<DiscoveredInformation>(),
                                 discoveryResult.Issues,
-                                discoveryResult.Failure),
+                                discoveryResult.Failure)
+                            {
+                                FamilyCatalog = discoveryResult.FamilyCatalog
+                            },
                             cancellationToken)
                         .ConfigureAwait(false);
                     break;

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -658,6 +659,8 @@ public sealed class NamedPipeIpcTests
             correlation,
             sourceIds.Select(sourceId => OperationItemStatus.ProcessedSuccessfully(
                 sourceId.ToString())));
+        var sourceSetId = SourceSetId.CreateNew();
+        var familyId = new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/TagRoot");
         var response = new RunDiscoveryResponse(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
@@ -666,13 +669,24 @@ public sealed class NamedPipeIpcTests
             completion,
             Enumerable.Range(0, observedInformationTypeCount)
                 .Select(index => new DiscoveredInformation(
-                    $"Tag{index:D2}",
+                    new DiscoveryInformationIdentity(
+                        sourceSetId,
+                        $"/TagRoot/Tag{index:D2}",
+                        $"Tag{index:D2}"),
                     observedSourceCount,
                     observedSourceCount,
-                    "sample"))
+                    "sample")
+                {
+                    DetailedSourceCount = observedSourceCount,
+                    RowFamilyId = familyId
+                })
                 .ToArray(),
             [],
-            Failure: null);
+            Failure: null)
+        {
+            FamilyCatalog = new DiscoveryFamilyCatalog(
+                [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+        };
         await using var stream = new MemoryStream();
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
@@ -917,6 +931,7 @@ public sealed class NamedPipeIpcTests
         var sourceIds = Enumerable.Range(0, sourceCount)
             .Select(_ => SourceId.CreateNew())
             .ToArray();
+        var familyId = new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/book");
         var information = Enumerable.Range(0, detailedInformationIdentityCount)
             .Select(index => new DiscoveredInformation(
                 new DiscoveryInformationIdentity(
@@ -925,7 +940,11 @@ public sealed class NamedPipeIpcTests
                     $"tag-{index % logicalInformationTypeCount:D2}"),
                 sourceCount,
                 sourceCount,
-                "sample"))
+                "sample")
+            {
+                DetailedSourceCount = sourceCount,
+                RowFamilyId = familyId
+            })
             .ToArray();
         var response = new RunDiscoveryResponse(
             Guid.CreateVersion7(),
@@ -938,7 +957,11 @@ public sealed class NamedPipeIpcTests
                     sourceId.ToString()))),
             information,
             [],
-            Failure: null);
+            Failure: null)
+        {
+            FamilyCatalog = new DiscoveryFamilyCatalog(
+                [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+        };
         return new DiscoveryScaleFixture(response, information);
     }
 

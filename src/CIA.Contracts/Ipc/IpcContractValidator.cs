@@ -576,6 +576,7 @@ public static class IpcContractValidator
         if (response.Acceptance == CommandAcceptance.Accepted)
         {
             if (response.Failure is not null
+                || response.FamilyCatalog is null
                 || response.Completion.Outcome is not (
                     OperationOutcome.CompletedSuccessfully
                     or OperationOutcome.CompletedWithIssues))
@@ -584,10 +585,13 @@ public static class IpcContractValidator
                     "An accepted Discovery response requires a completed outcome and no failure.");
             }
 
+            ValidateDiscoveryFamilyCatalog(response.FamilyCatalog);
+            ValidateDiscoveryFamilyAssignments(response.Information, response.FamilyCatalog);
             return;
         }
 
         if (response.Information.Count != 0
+            || response.FamilyCatalog is not null
             || response.Failure is null
             || response.Completion.Outcome is not (
                 OperationOutcome.Failed
@@ -621,11 +625,44 @@ public static class IpcContractValidator
             }
 
             ValidateDiscoveryInformationIdentity(information.Identity);
+            if (information.DetailedSourceCount < 1
+                || information.DetailedSourceCount > information.LogicalSourceCount
+                || information.RowFamilyId is not { } rowFamilyId
+                || rowFamilyId.SourceSetId != information.SourceSetId)
+            {
+                throw InvalidContract(
+                    "Discovered information requires a matching Row Family assignment and source counts.");
+            }
+
             if (!informationIdentities.Add(information.Identity))
             {
                 throw InvalidContract("Discovered information identities must be unique.");
             }
 
+        }
+    }
+
+    private static void ValidateDiscoveryFamilyCatalog(DiscoveryFamilyCatalog catalog)
+    {
+        var ids = catalog.Families.Select(family => family.Id).ToHashSet();
+        if (ids.Count != catalog.Families.Count
+            || catalog.Families.Any(family => family.ParentRowFamilyId is { } parent
+                && !ids.Contains(parent)))
+        {
+            throw InvalidContract("A Discovery family catalog is inconsistent.");
+        }
+    }
+
+    private static void ValidateDiscoveryFamilyAssignments(
+        IReadOnlyList<DiscoveredInformation> information,
+        DiscoveryFamilyCatalog catalog)
+    {
+        var ids = catalog.Families.Select(family => family.Id).ToHashSet();
+        if (information.Any(item => item.RowFamilyId is not { } familyId
+                || !ids.Contains(familyId)))
+        {
+            throw InvalidContract(
+                "A discovered information item references an unknown Row Family.");
         }
     }
 

@@ -54,7 +54,10 @@ public sealed class ProcessingHostDiscoveryClient(
                 response.Issues,
                 response.Completion,
                 response.Failure?.Code,
-                response.Failure?.Description);
+                response.Failure?.Description)
+            {
+                FamilyCatalog = response.FamilyCatalog
+            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

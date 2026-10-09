@@ -1,8 +1,10 @@
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Sources;
+using CIA.Core.Hierarchy;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceInterpretation;
 
@@ -60,6 +62,7 @@ public sealed class DiscoveryService
         var completedSourceCount = 0;
         var indexBatch = new List<DiscoveryIndexedSource>(DiscoveryIndexBatchSize);
         var discoveredIdentities = new Dictionary<DiscoveryInformationIdentity, int>();
+        var cardinality = new StructuralCardinalityAccumulator();
         await _repository.BeginDiscoveryIndexAsync(correlation, cancellationToken)
             .ConfigureAwait(false);
         try
@@ -74,6 +77,7 @@ public sealed class DiscoveryService
 
                 if (interpretation.Status == SourceInterpretationStatus.Usable)
                 {
+                    cardinality.Add(source.SourceSetId, interpretation.Source!);
                     indexBatch.Add(new DiscoveryIndexedSource(
                         source,
                         sourceName,
@@ -126,13 +130,40 @@ public sealed class DiscoveryService
                     cancellationToken)
                 .ConfigureAwait(false);
 
+            foreach (var identity in discoveredIdentities.Keys)
+            {
+                cardinality.EnsureRoot(identity.SourceSetId, identity.StructuralPath);
+            }
+
+            var classifications = discoveredIdentities.Keys
+                .GroupBy(identity => identity.SourceSetId)
+                .Select(group => new RowFamilyClassifier().Classify(
+                    group.Key,
+                    cardinality.GetRootPaths(group.Key),
+                    cardinality.GetStatistics(group.Key),
+                    group))
+                .ToArray();
+            var families = classifications
+                .SelectMany(classification => classification.Families)
+                .OrderBy(family => family.Id)
+                .ToArray();
+            var assignments = classifications
+                .SelectMany(classification => classification.FieldAssignments)
+                .ToDictionary(assignment => assignment.Identity, assignment => assignment.RowFamilyId);
+            var familyCatalog = new DiscoveryFamilyCatalog(families);
+
             var information = await _repository.PublishDiscoveryIndexAsync(
                     correlation.OperationId,
                     cancellationToken)
                 .ConfigureAwait(false);
+            information = information.Select(item => item with
+            {
+                RowFamilyId = assignments[item.Identity]
+            }).ToArray();
             var completion = OperationCompletion.FromCompletedItems(correlation, itemStatuses);
             return DiscoveryHostResult.Accept(
                 information,
+                familyCatalog,
                 issues,
                 completion);
         }
@@ -331,12 +362,18 @@ public sealed record DiscoveryHostResult(
     OperationCompletion Completion,
     IpcFailure? Failure)
 {
+    public DiscoveryFamilyCatalog? FamilyCatalog { get; init; }
+
     internal static DiscoveryHostResult Accept(
         IReadOnlyList<DiscoveredInformation> information,
+        DiscoveryFamilyCatalog familyCatalog,
         IReadOnlyList<DiscoverySourceIssue> issues,
         OperationCompletion completion)
     {
-        return new DiscoveryHostResult(true, information, issues, completion, Failure: null);
+        return new DiscoveryHostResult(true, information, issues, completion, Failure: null)
+        {
+            FamilyCatalog = familyCatalog
+        };
     }
 
     internal static DiscoveryHostResult Reject(

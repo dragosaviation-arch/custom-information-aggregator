@@ -353,12 +353,12 @@ public sealed partial class StructuredInformationRepository
             return null;
         }
 
-        var logical = DiscoveryLogicalIdentity.Create(query.DetailedIdentities[0]);
-        var summary = await ReadDiscoveryLogicalSummaryAsync(
-            connection,
-            query.DiscoveryOperationId,
-            logical,
-            cancellationToken).ConfigureAwait(false);
+        var summary = await ReadDiscoverySelectionSummaryAsync(
+                connection,
+                query.DiscoveryOperationId,
+                details,
+                cancellationToken)
+            .ConfigureAwait(false);
         if (summary.SourceCount != query.ExpectedSourceCount
             || query.StartIndex >= summary.SourceCount)
         {
@@ -376,14 +376,16 @@ public sealed partial class StructuredInformationRepository
             JOIN discovery_sources s
               ON s.operation_id = c.operation_id AND s.source_order = c.source_order
             WHERE i.operation_id = $operationId
-              AND i.source_set_id = $sourceSetId
-              AND i.candidate_kind = $candidateKind
-              AND i.logical_field_identity = $logicalFieldIdentity
+              AND i.information_ordinal IN ({0})
             GROUP BY s.source_id, s.source_name, s.source_order
             ORDER BY first_information_order, s.source_order
             LIMIT $pageSize OFFSET $startIndex;
             """;
-        AddLogicalParameters(command, query.DiscoveryOperationId, logical);
+        command.CommandText = string.Format(
+            CultureInfo.InvariantCulture,
+            command.CommandText,
+            AddInformationOrdinalParameters(command, details));
+        command.Parameters.AddWithValue("$operationId", query.DiscoveryOperationId.ToString());
         command.Parameters.AddWithValue("$pageSize", query.PageSize);
         command.Parameters.AddWithValue("$startIndex", query.StartIndex);
         var sources = new List<DiscoveredSourceContribution>();
@@ -401,7 +403,7 @@ public sealed partial class StructuredInformationRepository
             query.DiscoveryOperationId,
             query.StartIndex,
             summary.SourceCount,
-            summary.TotalOccurrenceCount,
+            details.Sum(detail => detail.TotalOccurrenceCount),
             sources);
     }
 
@@ -577,14 +579,25 @@ public sealed partial class StructuredInformationRepository
                 WHERE li.operation_id = $operationId
                 GROUP BY li.source_set_id, li.candidate_kind, li.logical_field_identity
             )
+            , detail_counts AS (
+                SELECT c.operation_id, c.information_ordinal,
+                       COUNT(DISTINCT c.source_order) AS source_count
+                FROM discovery_contributions c
+                WHERE c.operation_id = $operationId
+                GROUP BY c.operation_id, c.information_ordinal
+            )
             SELECT i.source_set_id, i.structural_path, i.information_type,
                    i.candidate_kind, i.structural_identity,
-                   i.total_occurrence_count, i.sample_value, lc.source_count
+                   i.total_occurrence_count, i.sample_value, lc.source_count,
+                   dc.source_count
             FROM discovery_information i
             JOIN logical_counts lc
               ON lc.source_set_id = i.source_set_id
              AND lc.candidate_kind = i.candidate_kind
              AND lc.logical_field_identity = i.logical_field_identity
+            JOIN detail_counts dc
+              ON dc.operation_id = i.operation_id
+             AND dc.information_ordinal = i.information_ordinal
             WHERE i.operation_id = $operationId
             ORDER BY i.presentation_order;
             """;
@@ -598,7 +611,10 @@ public sealed partial class StructuredInformationRepository
                 ReadIdentity(reader),
                 reader.GetInt32(5),
                 reader.GetInt32(7),
-                reader.GetString(6)));
+                reader.GetString(6))
+            {
+                DetailedSourceCount = reader.GetInt32(8)
+            });
         }
 
         return information;
@@ -643,42 +659,47 @@ public sealed partial class StructuredInformationRepository
                 reader.GetInt32(6)));
         }
 
-        return published.Select(item => item.Identity).SequenceEqual(identities)
-            ? published
+        if (identities.Count == 1)
+        {
+            var selected = published.SingleOrDefault(item => item.Identity == identities[0]);
+            return selected is null ? null : [selected];
+        }
+
+        if (published.Count != identities.Count
+            || identities.Distinct().Count() != identities.Count)
+        {
+            return null;
+        }
+
+        var detailsByIdentity = published.ToDictionary(item => item.Identity);
+        return identities.All(detailsByIdentity.ContainsKey)
+            ? identities.Select(identity => detailsByIdentity[identity]).ToArray()
             : null;
     }
 
     private static async Task<(int SourceCount, int TotalOccurrenceCount)>
-        ReadDiscoveryLogicalSummaryAsync(
+        ReadDiscoverySelectionSummaryAsync(
             SqliteConnection connection,
             OperationId operationId,
-            DiscoveryLogicalIdentity logical,
+            IReadOnlyList<DiscoveryInformationDetail> details,
             CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT
-                (SELECT COUNT(DISTINCT c.source_order)
-                 FROM discovery_information i
-                 JOIN discovery_contributions c
-                   ON c.operation_id = i.operation_id
-                  AND c.information_ordinal = i.information_ordinal
-                 JOIN discovery_publication p ON p.operation_id = i.operation_id
-                 WHERE p.singleton_id = 1
-                   AND i.operation_id = $operationId
-                   AND i.source_set_id = $sourceSetId
-                   AND i.candidate_kind = $candidateKind
-                   AND i.logical_field_identity = $logicalFieldIdentity),
-                (SELECT SUM(i.total_occurrence_count)
-                 FROM discovery_information i
-                 JOIN discovery_publication p ON p.operation_id = i.operation_id
-                 WHERE p.singleton_id = 1
-                   AND i.operation_id = $operationId
-                   AND i.source_set_id = $sourceSetId
-                   AND i.candidate_kind = $candidateKind
-                   AND i.logical_field_identity = $logicalFieldIdentity);
+                COUNT(DISTINCT c.source_order),
+                SUM(c.occurrence_count)
+            FROM discovery_contributions c
+            JOIN discovery_publication p ON p.operation_id = c.operation_id
+            WHERE p.singleton_id = 1
+              AND c.operation_id = $operationId
+              AND c.information_ordinal IN ({0});
             """;
-        AddLogicalParameters(command, operationId, logical);
+        command.CommandText = string.Format(
+            CultureInfo.InvariantCulture,
+            command.CommandText,
+            AddInformationOrdinalParameters(command, details));
+        command.Parameters.AddWithValue("$operationId", operationId.ToString());
         await using var reader = await command.ExecuteReaderAsync(cancellationToken)
             .ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
@@ -688,6 +709,21 @@ public sealed partial class StructuredInformationRepository
         }
 
         return (reader.GetInt32(0), reader.GetInt32(1));
+    }
+
+    private static string AddInformationOrdinalParameters(
+        SqliteCommand command,
+        IReadOnlyList<DiscoveryInformationDetail> details)
+    {
+        var parameterNames = new string[details.Count];
+        for (var index = 0; index < details.Count; index++)
+        {
+            var parameterName = $"$informationOrdinal{index}";
+            parameterNames[index] = parameterName;
+            command.Parameters.AddWithValue(parameterName, details[index].InformationOrdinal);
+        }
+
+        return string.Join(", ", parameterNames);
     }
 
     private static DiscoveryInformationIdentity ReadIdentity(SqliteDataReader reader)

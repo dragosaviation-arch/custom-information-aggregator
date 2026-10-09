@@ -54,10 +54,10 @@
                BasedOn="{StaticResource CiaSecondaryTextStyle}">
             <Setter Property="FontWeight" Value="Bold" />
             <Style.Triggers>
-                <DataTrigger Binding="{Binding SelectedInformation.IsSelected}" Value="True">
+                <DataTrigger Binding="{Binding PreviewInformation.IsSelected}" Value="True">
                     <Setter Property="Foreground" Value="{StaticResource CiaSuccessBrush}" />
                 </DataTrigger>
-                <DataTrigger Binding="{Binding SelectedInformation.IsBlacklisted}" Value="True">
+                <DataTrigger Binding="{Binding PreviewInformation.IsBlacklisted}" Value="True">
                     <Setter Property="Foreground" Value="{StaticResource CiaDangerBrush}" />
                 </DataTrigger>
             </Style.Triggers>
@@ -278,72 +278,178 @@
                             </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid Margin="6,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="34" />
-                                            <ColumnDefinition Width="{Binding DataContext.SourceSetColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="60" />
-                                            <ColumnDefinition Width="{Binding DataContext.TagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="55" />
-                                            <ColumnDefinition Width="{Binding DataContext.DatabaseTagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="64" />
-                                            <ColumnDefinition Width="{Binding DataContext.OccurrencesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="52" />
-                                            <ColumnDefinition Width="{Binding DataContext.SourcesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="44" />
-                                            <ColumnDefinition Width="{Binding DataContext.SampleColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
-                                            <ColumnDefinition Width="{Binding DataContext.BlacklistColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="88" />
-                                        </Grid.ColumnDefinitions>
-                                        <CheckBox HorizontalAlignment="Center"
-                                                  VerticalAlignment="Center"
-                                                  AutomationProperties.Name="Select discovered information"
-                                                  Command="{Binding DataContext.ToggleSelectionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                  CommandParameter="{Binding}"
-                                                  IsChecked="{Binding IsSelected, Mode=OneWay}" />
-                                        <TextBlock Grid.Column="1"
-                                                   Style="{StaticResource DiscoveryRowTextStyle}"
-                                                   Text="{Binding SourceSetName}"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   ToolTip="{Binding SourceSetName}" />
-                                        <TextBlock Grid.Column="2"
-                                                   FontFamily="Consolas"
-                                                   FontWeight="SemiBold"
-                                                   Style="{StaticResource DiscoveryRowTextStyle}"
-                                                   Text="{Binding InformationType}" />
-                                        <TextBlock Grid.Column="3"
-                                                   FontWeight="SemiBold"
-                                                   Text="{Binding DatabaseTag}">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock"
-                                                       BasedOn="{StaticResource DiscoveryRowTextStyle}">
+                                    <StackPanel>
+                                        <Grid Margin="6,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="34" />
+                                                <ColumnDefinition Width="{Binding DataContext.SourceSetColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="60" />
+                                                <ColumnDefinition Width="{Binding DataContext.TagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="55" />
+                                                <ColumnDefinition Width="{Binding DataContext.DatabaseTagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="64" />
+                                                <ColumnDefinition Width="{Binding DataContext.OccurrencesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="52" />
+                                                <ColumnDefinition Width="{Binding DataContext.SourcesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="44" />
+                                                <ColumnDefinition Width="{Binding DataContext.SampleColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
+                                                <ColumnDefinition Width="{Binding DataContext.BlacklistColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="88" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="14" />
+                                                    <ColumnDefinition Width="20" />
+                                                </Grid.ColumnDefinitions>
+                                                <ToggleButton Width="14"
+                                                              Height="20"
+                                                              Padding="0"
+                                                              Background="Transparent"
+                                                              BorderThickness="0"
+                                                              Content="&#x203A;"
+                                                              IsChecked="{Binding IsExpanded}">
+                                                    <ToggleButton.Style>
+                                                        <Style TargetType="ToggleButton">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding HasDetailedChildren}" Value="False">
+                                                                    <Setter Property="Visibility" Value="Hidden" />
+                                                                </DataTrigger>
+                                                                <Trigger Property="IsChecked" Value="True">
+                                                                    <Setter Property="Content" Value="&#x2304;" />
+                                                                </Trigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </ToggleButton.Style>
+                                                </ToggleButton>
+                                                <CheckBox Grid.Column="1"
+                                                          HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center"
+                                                          AutomationProperties.Name="Select discovered information"
+                                                          Command="{Binding DataContext.ToggleSelectionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                          CommandParameter="{Binding}"
+                                                          IsChecked="{Binding SelectionState, Mode=OneWay}"
+                                                          IsThreeState="True" />
+                                            </Grid>
+                                            <TextBlock Grid.Column="1"
+                                                       Style="{StaticResource DiscoveryRowTextStyle}"
+                                                       Text="{Binding SourceSetName}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding SourceSetName}" />
+                                            <TextBlock Grid.Column="2"
+                                                       FontFamily="Consolas"
+                                                       FontWeight="SemiBold"
+                                                       Style="{StaticResource DiscoveryRowTextStyle}"
+                                                       Text="{Binding InformationType}" />
+                                            <TextBlock Grid.Column="3"
+                                                       FontWeight="SemiBold"
+                                                       Text="{Binding DatabaseTag}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock"
+                                                           BasedOn="{StaticResource DiscoveryRowTextStyle}">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding HasAnyDatabaseTagOverride}" Value="True">
+                                                                <Setter Property="Foreground" Value="{StaticResource CiaWarningBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Grid.Column="4"
+                                                       Style="{StaticResource DiscoveryRowTextStyle}"
+                                                       Text="{Binding TotalOccurrenceText}" />
+                                            <Button Grid.Column="5"
+                                                    Height="24"
+                                                    Padding="5,0"
+                                                    Command="{Binding DataContext.InspectSourcesCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}"
+                                                    Content="{Binding SourceCountText}"
+                                                    Foreground="{StaticResource CiaAccentBrush}"
+                                                    Style="{StaticResource CiaGhostButtonStyle}"
+                                                    ToolTip="Inspect contributing source identities and occurrence counts." />
+                                            <TextBlock Grid.Column="6"
+                                                       Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                                       Style="{StaticResource DiscoveryRowTextStyle}"
+                                                       Text="{Binding SampleValue}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       TextWrapping="NoWrap" />
+                                            <Button Grid.Column="7"
+                                                    AutomationProperties.Name="Toggle information group blacklist"
+                                                    Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}"
+                                                    Content="{Binding BlacklistActionText}"
+                                                    Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
+                                        </Grid>
+                                        <ItemsControl ItemsSource="{Binding Children}">
+                                            <ItemsControl.Style>
+                                                <Style TargetType="ItemsControl">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding HasDatabaseTagOverride}" Value="True">
-                                                            <Setter Property="Foreground" Value="{StaticResource CiaWarningBrush}" />
+                                                        <DataTrigger Binding="{Binding IsExpanded}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible" />
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                        <TextBlock Grid.Column="4"
-                                                   Style="{StaticResource DiscoveryRowTextStyle}"
-                                                   Text="{Binding TotalOccurrenceText}" />
-                                        <Button Grid.Column="5"
-                                                Height="24"
-                                                Padding="5,0"
-                                                Command="{Binding DataContext.InspectSourcesCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                CommandParameter="{Binding}"
-                                                Content="{Binding SourceCountText}"
-                                                Foreground="{StaticResource CiaAccentBrush}"
-                                                Style="{StaticResource CiaGhostButtonStyle}"
-                                                ToolTip="Inspect contributing source identities and occurrence counts." />
-                                        <TextBlock Grid.Column="6"
-                                                   Foreground="{StaticResource CiaTextSecondaryBrush}"
-                                                   Style="{StaticResource DiscoveryRowTextStyle}"
-                                                   Text="{Binding SampleValue}"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   TextWrapping="NoWrap" />
-                                        <Button Grid.Column="7"
-                                                AutomationProperties.Name="Toggle information blacklist"
-                                                Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                CommandParameter="{Binding}"
-                                                Content="{Binding BlacklistActionText}"
-                                                Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
-                                    </Grid>
+                                            </ItemsControl.Style>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Grid Margin="6,0" Background="{StaticResource CiaPanelAlternateBrush}">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="34" />
+                                                            <ColumnDefinition Width="{Binding DataContext.SourceSetColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="60" />
+                                                            <ColumnDefinition Width="{Binding DataContext.TagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="55" />
+                                                            <ColumnDefinition Width="{Binding DataContext.DatabaseTagColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="64" />
+                                                            <ColumnDefinition Width="{Binding DataContext.OccurrencesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="52" />
+                                                            <ColumnDefinition Width="{Binding DataContext.SourcesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="44" />
+                                                            <ColumnDefinition Width="{Binding DataContext.SampleColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
+                                                            <ColumnDefinition Width="{Binding DataContext.BlacklistColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="88" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <CheckBox HorizontalAlignment="Center"
+                                                                  VerticalAlignment="Center"
+                                                                  AutomationProperties.Name="Select detailed discovered identity"
+                                                                  Command="{Binding DataContext.ToggleSelectionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                  CommandParameter="{Binding}"
+                                                                  IsChecked="{Binding IsSelected, Mode=OneWay}" />
+                                                        <TextBlock Grid.Column="1"
+                                                                   Style="{StaticResource DiscoveryRowTextStyle}"
+                                                                   Text="{Binding CandidateKindText}" />
+                                                        <Button Grid.Column="2"
+                                                                Height="24"
+                                                                Padding="3,0"
+                                                                HorizontalContentAlignment="Left"
+                                                                AutomationProperties.Name="Preview detailed discovered identity"
+                                                                Command="{Binding DataContext.SelectDetailedInformationCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                CommandParameter="{Binding}"
+                                                                Content="{Binding StructuralPath}"
+                                                                FontFamily="Consolas"
+                                                                Style="{StaticResource CiaGhostButtonStyle}"
+                                                                ToolTip="{Binding StructuralContextToolTip}" />
+                                                        <TextBlock Grid.Column="3"
+                                                                   FontWeight="SemiBold"
+                                                                   Style="{StaticResource DiscoveryRowTextStyle}"
+                                                                   Text="{Binding DatabaseTag}" />
+                                                        <TextBlock Grid.Column="4"
+                                                                   Style="{StaticResource DiscoveryRowTextStyle}"
+                                                                   Text="{Binding TotalOccurrenceText}" />
+                                                        <Button Grid.Column="5"
+                                                                Height="24"
+                                                                Padding="5,0"
+                                                                Command="{Binding DataContext.InspectSourcesCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                CommandParameter="{Binding}"
+                                                                Content="{Binding SourceCountText}"
+                                                                Foreground="{StaticResource CiaAccentBrush}"
+                                                                Style="{StaticResource CiaGhostButtonStyle}" />
+                                                        <TextBlock Grid.Column="6"
+                                                                   Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                                                   Style="{StaticResource DiscoveryRowTextStyle}"
+                                                                   Text="{Binding SampleValue}"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   TextWrapping="NoWrap" />
+                                                        <Button Grid.Column="7"
+                                                                AutomationProperties.Name="Toggle detailed identity blacklist"
+                                                                Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                CommandParameter="{Binding}"
+                                                                Content="{Binding BlacklistActionText}"
+                                                                Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
@@ -455,14 +561,14 @@
                                 <TextBlock FontFamily="Consolas"
                                            FontWeight="Bold"
                                            Foreground="{StaticResource CiaAccentBrush}"
-                                           Text="{Binding SelectedInformation.InformationType, TargetNullValue=No tag selected}" />
+                                           Text="{Binding PreviewInformation.InformationType, TargetNullValue=No tag selected}" />
                             </Border>
                             <Border Margin="6,0,0,0"
                                     Padding="7,4"
                                     Background="{StaticResource CiaPanelAlternateBrush}"
                                     CornerRadius="6">
                                 <TextBlock Style="{StaticResource DiscoveryDispositionTextStyle}"
-                                           Text="{Binding SelectedInformation.DispositionText, TargetNullValue=Neutral}" />
+                                           Text="{Binding PreviewInformation.DispositionText, TargetNullValue=Neutral}" />
                             </Border>
                         </StackPanel>
                         <Border Grid.Row="2"
@@ -501,7 +607,7 @@
                                         <Style TargetType="TextBox"
                                                BasedOn="{StaticResource CiaTextInputStyle}">
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding SelectedInformation.HasDatabaseTagOverride}" Value="True">
+                                                <DataTrigger Binding="{Binding SelectedInformation.HasAnyDatabaseTagOverride}" Value="True">
                                                     <Setter Property="BorderBrush" Value="{StaticResource CiaWarningBrush}" />
                                                     <Setter Property="Foreground" Value="{StaticResource CiaWarningBrush}" />
                                                 </DataTrigger>
@@ -525,7 +631,7 @@
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Visibility" Value="Collapsed" />
                                         <Style.Triggers>
-                                            <DataTrigger Binding="{Binding SelectedInformation.HasDatabaseTagOverride}" Value="True">
+                                            <DataTrigger Binding="{Binding SelectedInformation.HasAnyDatabaseTagOverride}" Value="True">
                                                 <Setter Property="Visibility" Value="Visible" />
                                             </DataTrigger>
                                         </Style.Triggers>

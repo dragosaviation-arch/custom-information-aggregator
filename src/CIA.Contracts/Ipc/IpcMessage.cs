@@ -236,7 +236,10 @@ public sealed record RunDiscoveryResponse(
     IReadOnlyList<DiscoveredInformation> Information,
     IReadOnlyList<DiscoverySourceIssue> Issues,
     IpcFailure? Failure)
-    : IpcResponse(MessageId, TimestampUtc);
+    : IpcResponse(MessageId, TimestampUtc)
+{
+    public DiscoveryFamilyCatalog? FamilyCatalog { get; init; }
+}
 
 public sealed record GetDiscoveryOccurrenceResponse(
     Guid MessageId,

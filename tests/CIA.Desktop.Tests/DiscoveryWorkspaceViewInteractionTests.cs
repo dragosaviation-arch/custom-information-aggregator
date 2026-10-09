@@ -70,11 +70,12 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                 sourceSet,
                 workflow,
                 databaseBuild);
+            var view = new DiscoveryWorkspaceView { DataContext = viewModel };
             var window = new Window
             {
                 Width = 1400,
                 Height = 760,
-                Content = new DiscoveryWorkspaceView { DataContext = viewModel },
+                Content = view,
                 ShowInTaskbar = false,
                 WindowStyle = WindowStyle.None
             };
@@ -85,6 +86,25 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                 await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
                 await AwaitOccurrencePreviewAsync(viewModel);
                 var logical = viewModel.Information.Single();
+                Assert.HasCount(2, logical.Children);
+                logical.IsExpanded = true;
+                await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                view.UpdateLayout();
+                var detailedPreview = FindVisualDescendant<Button>(
+                    view,
+                    button => string.Equals(
+                        AutomationProperties.GetName(button),
+                        "Preview detailed discovered identity",
+                        StringComparison.Ordinal));
+                Assert.IsNotNull(detailedPreview);
+                Assert.IsNotNull(detailedPreview.Command);
+                detailedPreview.Command!.Execute(detailedPreview.CommandParameter);
+                await AwaitOccurrencePreviewAsync(viewModel);
+                var previewInformation = viewModel.PreviewInformation;
+                Assert.IsNotNull(previewInformation);
+                Assert.AreSame(logical.Children[0], previewInformation);
+                Assert.HasCount(1, previewInformation.DetailedIdentities);
+
                 viewModel.ToggleSelectionCommand.Execute(logical);
                 await Dispatcher.Yield(DispatcherPriority.DataBind);
                 Assert.IsTrue(logical.IsSelected);

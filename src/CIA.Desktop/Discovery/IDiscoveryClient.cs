@@ -45,6 +45,8 @@ public sealed record DiscoveryClientResult(
     string? FailureDescription)
 {
     public string? FailureTechnicalDetail { get; init; }
+
+    public DiscoveryFamilyCatalog? FamilyCatalog { get; init; }
 }
 
 public sealed record DiscoveryOccurrenceClientResult(

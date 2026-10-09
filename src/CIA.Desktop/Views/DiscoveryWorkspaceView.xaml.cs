@@ -42,9 +42,17 @@ public partial class DiscoveryWorkspaceView : UserControl
     {
         if (e.ChangedButton == MouseButton.Left
             && sender is ListBoxItem item
-            && !item.IsSelected)
+            && item.DataContext is DiscoveredInformationItemViewModel information)
         {
-            item.IsSelected = true;
+            if (!item.IsSelected)
+            {
+                item.IsSelected = true;
+            }
+
+            if (DataContext is DiscoveryWorkspaceViewModel viewModel)
+            {
+                viewModel.SelectLogicalInformation(information);
+            }
         }
     }
 

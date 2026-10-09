@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Desktop.Discovery;
@@ -452,7 +453,17 @@ public sealed class DiscoveryWorkspaceViewModelTests
                     lookup.TotalOccurrenceCount,
                     source.SourceId,
                     $"{identity.StructuralPath}:{lookup.GlobalOrdinal}");
-            });
+            },
+            query => new DiscoveryContributorClientResult(
+                true,
+                new DiscoveryContributorPage(
+                    query.DiscoveryOperationId,
+                    query.StartIndex,
+                    TotalSourceCount: 1,
+                    TotalOccurrenceCount: query.DetailedIdentities.Count,
+                    [new DiscoveredSourceContribution(source.SourceId, "logical-fields.xml", 1)]),
+                null,
+                null));
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
             new ActiveDiscoveryConfiguration(),
@@ -466,6 +477,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual("toolnbr", logicalField.InformationType);
         Assert.AreEqual(16, logicalField.TotalOccurrenceCount);
         Assert.HasCount(3, logicalField.DetailedIdentities);
+        Assert.HasCount(3, logicalField.Children);
         Assert.AreEqual(1, logicalField.SourceCount);
         Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
         Assert.AreEqual(16, viewModel.OccurrenceTotal);
@@ -479,6 +491,22 @@ public sealed class DiscoveryWorkspaceViewModelTests
             "/root/second/toolnbr",
             occurrenceLookups[^1].DetailedIdentities[1].StructuralPath);
         Assert.AreEqual(5, occurrenceLookups[^1].GlobalOrdinal);
+
+        var detailedChild = logicalField.Children.Single(child =>
+            child.StructuralPath == "/root/third/toolnbr");
+        viewModel.SelectDetailedInformationCommand.Execute(detailedChild);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreSame(detailedChild, viewModel.PreviewInformation);
+        Assert.AreEqual(6, viewModel.OccurrenceTotal);
+        Assert.HasCount(1, occurrenceLookups[^1].DetailedIdentities);
+        Assert.AreEqual(detailedChild.Identity, occurrenceLookups[^1].DetailedIdentities[0]);
+
+        await viewModel.InspectSourcesCommand.ExecuteAsync(detailedChild);
+        Assert.HasCount(1, client.ContributorQueries[^1].DetailedIdentities);
+        Assert.AreEqual(
+            detailedChild.Identity,
+            client.ContributorQueries[^1].DetailedIdentities[0]);
     }
 
     [TestMethod]
@@ -590,7 +618,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
 
         viewModel.ToggleSelectionCommand.Execute(logicalField);
 
-        Assert.AreEqual("1 / 1 selected", viewModel.SelectionSummary);
+        Assert.AreEqual("2 / 2 selected", viewModel.SelectionSummary);
         Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
             configuration.Current.Items.Single(item => item.Identity == identity).Disposition
                 == DiscoveryInformationDisposition.Selected));
@@ -620,6 +648,86 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
             !configuration.DatabaseTagOverridesByIdentity.ContainsKey(identity)));
         Assert.HasCount(2, configuration.Current.Items);
+    }
+
+    [TestMethod]
+    public async Task DetailedChildrenDriveTriStateSelectionAndCollapsedBulkActions()
+    {
+        var source = CreateSource("tri-state.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var configuration = new ActiveDiscoveryConfiguration();
+        var client = new StubDiscoveryClient((correlation, sources) => Accept(
+            correlation,
+            sources,
+            [
+                CreateDetailedInformation(
+                    source,
+                    "/root/buyer/name",
+                    "name",
+                    SourceValueCandidateKind.Element,
+                    "/root/buyer/name"),
+                CreateDetailedInformation(
+                    source,
+                    "/root/seller/name",
+                    "name",
+                    SourceValueCandidateKind.Element,
+                    "/root/seller/name"),
+                CreateDetailedInformation(
+                    source,
+                    "/root/owner/name",
+                    "name",
+                    SourceValueCandidateKind.Element,
+                    "/root/owner/name")
+            ]));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var parent = viewModel.Information.Single();
+        Assert.IsFalse(parent.IsExpanded);
+        Assert.HasCount(3, parent.Children);
+        Assert.IsFalse(parent.SelectionState ?? true);
+        var blacklistedChild = parent.Children.Single(child =>
+            child.StructuralPath == "/root/seller/name");
+
+        viewModel.ToggleSelectionCommand.Execute(parent.Children[0]);
+        Assert.IsNull(parent.SelectionState);
+        Assert.AreEqual("1 / 3 selected", viewModel.SelectionSummary);
+
+        viewModel.ToggleSelectionCommand.Execute(parent);
+        Assert.IsTrue(parent.SelectionState ?? false);
+        Assert.AreEqual("3 / 3 selected", viewModel.SelectionSummary);
+
+        viewModel.ToggleBlacklistCommand.Execute(blacklistedChild);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
+        Assert.IsTrue(parent.SelectionState ?? false);
+
+        viewModel.ToggleSelectionCommand.Execute(parent);
+        Assert.IsFalse(parent.SelectionState ?? true);
+        Assert.IsFalse(parent.Children[0].IsSelected);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
+
+        viewModel.SelectVisibleCommand.Execute(null);
+        Assert.IsTrue(parent.SelectionState ?? false);
+        Assert.IsTrue(parent.Children[0].IsSelected);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
+
+        viewModel.DeselectVisibleCommand.Execute(null);
+        Assert.IsFalse(parent.SelectionState ?? true);
+        Assert.IsFalse(parent.Children[0].IsSelected);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
+
+        viewModel.ToggleSelectionCommand.Execute(parent.Children[0]);
+        Assert.IsNull(parent.SelectionState);
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var reconstructed = viewModel.Information.Single();
+        Assert.IsNull(reconstructed.SelectionState);
+        Assert.IsTrue(reconstructed.Children.Single(child =>
+            child.StructuralPath == "/root/seller/name").IsBlacklisted);
     }
 
     [TestMethod]
@@ -1204,6 +1312,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
         await AwaitSelectedOccurrenceAsync(viewModel);
         var selectedInformation = viewModel.SelectedInformation;
+        var retainedFamilyIds = viewModel.RowFamilies.Select(family => family.Id).ToArray();
         var collectionChangeCount = 0;
         ((INotifyCollectionChanged)viewModel.Information).CollectionChanged +=
             (_, _) => collectionChangeCount++;
@@ -1217,6 +1326,9 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
         Assert.AreEqual(3, viewModel.OccurrenceTotal);
         Assert.AreEqual(0, collectionChangeCount);
+        CollectionAssert.AreEqual(
+            retainedFamilyIds,
+            viewModel.RowFamilies.Select(family => family.Id).ToArray());
         Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
         Assert.AreEqual("Discovery out of date", viewModel.DiscoveryStateText);
         Assert.AreEqual("Discovery re-run failed", viewModel.StatusTitle);
@@ -1665,17 +1777,35 @@ public sealed class DiscoveryWorkspaceViewModelTests
         IReadOnlyList<LoadedSourceContract> sources,
         IReadOnlyList<DiscoveredInformation> information)
     {
+        var assignedInformation = information.Select(item =>
+        {
+            var familyId = item.RowFamilyId
+                ?? new RowFamilyId(
+                    item.SourceSetId,
+                    RowFamilyKind.Root,
+                    item.StructuralPath);
+            return item with { RowFamilyId = familyId };
+        }).ToArray();
+        var families = assignedInformation
+            .Select(item => item.RowFamilyId!.Value)
+            .Distinct()
+            .Order()
+            .Select(familyId => new RowFamilyDefinition(familyId, parentRowFamilyId: null))
+            .ToArray();
         var completion = OperationCompletion.FromCompletedItems(
             correlation,
             sources.Select(source => OperationItemStatus.ProcessedSuccessfully(
                 source.SourceId.ToString())));
         return new DiscoveryClientResult(
             true,
-            information,
+            assignedInformation,
             [],
             completion,
             FailureCode: null,
-            FailureDescription: null);
+            FailureDescription: null)
+        {
+            FamilyCatalog = new DiscoveryFamilyCatalog(families)
+        };
     }
 
     private static DiscoveryClientResult Reject(

@@ -4,6 +4,7 @@ using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -159,7 +160,21 @@ public sealed class DiscoveryServiceTests
 
         Assert.HasCount(2, logicalDetails);
         Assert.IsTrue(logicalDetails.All(item => item.LogicalSourceCount == 4));
+        Assert.IsTrue(logicalDetails.All(item => item.DetailedSourceCount == 3));
         Assert.AreEqual(6, logicalDetails.Sum(item => item.TotalOccurrenceCount));
+
+        var detailedPage = await service.GetContributorsAsync(
+            new DiscoveryContributorPageQuery(
+                correlation.OperationId,
+                [logicalDetails[0].Identity],
+                StartIndex: 0,
+                PageSize: 4,
+                ExpectedSourceCount: 3));
+        Assert.IsTrue(detailedPage.Accepted);
+        Assert.HasCount(3, detailedPage.Page!.Sources);
+        CollectionAssert.AreEqual(
+            sources.Take(3).Select(source => source.SourceId).ToArray(),
+            detailedPage.Page.Sources.Select(source => source.SourceId).ToArray());
 
         var firstPage = await service.GetContributorsAsync(new DiscoveryContributorPageQuery(
             correlation.OperationId,
@@ -200,11 +215,18 @@ public sealed class DiscoveryServiceTests
                 logicalDetails.Select(item => item.Identity).ToArray(),
                 GlobalOrdinal: 6,
                 TotalOccurrenceCount: 6));
+        var reorderedFirst = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
+            correlation.OperationId,
+            logicalDetails.Reverse().Select(item => item.Identity).ToArray(),
+            GlobalOrdinal: 1,
+            TotalOccurrenceCount: 6));
 
         Assert.AreEqual(sources[1].SourceId, fourth.Occurrence?.SourceId);
         Assert.AreEqual("second:source-2", fourth.Occurrence?.Value);
         Assert.AreEqual(sources[3].SourceId, sixthFromFreshService.Occurrence?.SourceId);
         Assert.AreEqual("second:source-4", sixthFromFreshService.Occurrence?.Value);
+        Assert.AreEqual(sources[1].SourceId, reorderedFirst.Occurrence?.SourceId);
+        Assert.AreEqual("second:source-2", reorderedFirst.Occurrence?.Value);
     }
 
     [TestMethod]
@@ -289,6 +311,10 @@ public sealed class DiscoveryServiceTests
         Assert.AreEqual("name", firstBuyer.InformationType);
         Assert.AreEqual("name", firstSeller.InformationType);
         Assert.AreEqual("name", secondBuyer.InformationType);
+        Assert.AreEqual(firstBuyer.RowFamilyId, firstSeller.RowFamilyId);
+        Assert.AreEqual(RowFamilyKind.Root, firstBuyer.RowFamilyId?.Kind);
+        Assert.IsFalse(result.FamilyCatalog!.Families.Any(family =>
+            family.Id.SourceSetId == firstSet && family.Id.Kind == RowFamilyKind.Repeated));
 
         var preview = await CreateGenericService(workspace.Repository).GetOccurrenceAsync(
             new DiscoveryOccurrenceLookup(
@@ -301,6 +327,169 @@ public sealed class DiscoveryServiceTests
         Assert.AreEqual("Seller A", preview.Occurrence?.Value);
         Assert.AreEqual(firstSeller.Identity, preview.Occurrence?.Identity);
         Assert.AreEqual(first.SourceId, preview.Occurrence?.SourceId);
+    }
+
+    [TestMethod]
+    public async Task NamespaceAwareStructuralPathsPublishDistinctRootFamilies()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var sourceSetId = SourceSetId.CreateNew();
+        var first = workspace.CreateSource(
+            "namespace-one.xml",
+            "<root xmlns=\"urn:one\"><value>A</value></root>",
+            sourceSetId);
+        var second = workspace.CreateSource(
+            "namespace-two.xml",
+            "<root xmlns=\"urn:two\"><value>B</value></root>",
+            sourceSetId);
+
+        var result = await CreateGenericService(workspace.Repository).RunAsync(
+            OperationCorrelation.CreateNew(),
+            [first, second]);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.HasCount(2, result.Information);
+        CollectionAssert.AreEqual(
+            new[] { "/{urn:one}root", "/{urn:two}root" },
+            result.FamilyCatalog!.Families.Select(family => family.Id.AnchorPath).ToArray());
+        Assert.AreNotEqual(result.Information[0].RowFamilyId, result.Information[1].RowFamilyId);
+    }
+
+    [TestMethod]
+    public async Task GenericGoodbooksLikeDiscoveryPublishesStructuralFamiliesAndDetailedAssignments()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var source = workspace.CreateSource(
+            "synthetic-books.xml",
+            """
+            <book>
+              <title>Root title</title>
+              <authors>
+                <author><name>Root author one</name></author>
+                <author><name>Root author two</name></author>
+              </authors>
+              <buy_links>
+                <buy_link><name>Store one</name></buy_link>
+                <buy_link><name>Store two</name></buy_link>
+              </buy_links>
+              <series_works>
+                <series_work><series><title>Series one</title></series></series_work>
+                <series_work><series><title>Series two</title></series></series_work>
+              </series_works>
+              <similar_books>
+                <book>
+                  <title>Similar one</title>
+                  <authors>
+                    <author><name>Nested author one</name></author>
+                    <author><name>Nested author two</name></author>
+                  </authors>
+                </book>
+                <book><title>Similar two</title></book>
+              </similar_books>
+            </book>
+            """);
+
+        var result = await CreateGenericService(workspace.Repository).RunAsync(
+            OperationCorrelation.CreateNew(),
+            [source]);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.IsNotNull(result.FamilyCatalog);
+        var families = result.FamilyCatalog.Families.ToDictionary(
+            family => family.Id.AnchorPath,
+            StringComparer.Ordinal);
+        foreach (var expectedPath in new[]
+                 {
+                     "/book",
+                     "/book/authors/author",
+                     "/book/buy_links/buy_link",
+                     "/book/series_works/series_work",
+                     "/book/similar_books/book",
+                     "/book/similar_books/book/authors/author"
+                 })
+        {
+            Assert.IsTrue(families.ContainsKey(expectedPath), expectedPath);
+        }
+
+        Assert.AreEqual(
+            families["/book/similar_books/book"].Id,
+            families["/book/similar_books/book/authors/author"].ParentRowFamilyId);
+        Assert.IsTrue(result.Information.All(item => item.RowFamilyId is not null));
+
+        var titlePaths = result.Information
+            .Where(item => item.InformationType == "title")
+            .Select(item => item.StructuralPath)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                "/book/series_works/series_work/series/title",
+                "/book/similar_books/book/title",
+                "/book/title"
+            },
+            titlePaths);
+
+        var namePaths = result.Information
+            .Where(item => item.InformationType == "name")
+            .Select(item => item.StructuralPath)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                "/book/authors/author/name",
+                "/book/buy_links/buy_link/name",
+                "/book/similar_books/book/authors/author/name"
+            },
+            namePaths);
+    }
+
+    [TestMethod]
+    public async Task NestedContainerBecomesRepeatedFamilyOnlyFromPerParentCardinality()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var source = workspace.CreateSource(
+            "singleton-nested.xml",
+            """
+            <book><similar_books>
+              <book><authors><author><name>A</name></author></authors></book>
+              <book><authors><author><name>B</name></author></authors></book>
+            </similar_books></book>
+            """);
+
+        var result = await CreateGenericService(workspace.Repository).RunAsync(
+            OperationCorrelation.CreateNew(),
+            [source]);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.IsTrue(result.FamilyCatalog!.Families.Any(family =>
+            family.Id.AnchorPath == "/book/similar_books/book"));
+        Assert.IsFalse(result.FamilyCatalog.Families.Any(family =>
+            family.Id.AnchorPath == "/book/similar_books/book/authors/author"));
+    }
+
+    [TestMethod]
+    public async Task EmptyRepeatedElementStillContributesStreamingStructuralEvidence()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var source = workspace.CreateSource(
+            "empty-record.xml",
+            "<root><records><record/><record><value>A</value></record></records></root>");
+
+        var result = await CreateGenericService(workspace.Repository).RunAsync(
+            OperationCorrelation.CreateNew(),
+            [source]);
+
+        Assert.IsTrue(result.Accepted);
+        Assert.IsTrue(result.FamilyCatalog!.Families.Any(family =>
+            family.Id.AnchorPath == "/root/records/record"
+            && family.Id.Kind == RowFamilyKind.Repeated),
+            string.Join(", ", result.FamilyCatalog.Families.Select(family => family.Id)));
+        Assert.AreEqual(
+            "/root/records/record",
+            result.Information.Single(item => item.InformationType == "value")
+                .RowFamilyId?.AnchorPath);
     }
 
     private sealed class RecordingProgress<T> : IProgress<T>
@@ -539,7 +728,10 @@ public sealed class DiscoveryServiceTests
             result.Completion,
             result.Information,
             result.Issues,
-            Failure: null);
+            Failure: null)
+        {
+            FamilyCatalog = result.FamilyCatalog
+        };
         await using var stream = new MemoryStream();
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
@@ -773,26 +965,33 @@ public sealed class DiscoveryServiceTests
         var completion = OperationCompletion.FromCompletedItems(
             correlation,
             [OperationItemStatus.ProcessedSuccessfully(sourceId.ToString())]);
+        var familyId = new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/catalog");
+        var information = new DiscoveredInformation(
+            new DiscoveryInformationIdentity(
+                sourceSetId,
+                "/catalog/item",
+                "code",
+                SourceValueCandidateKind.Attribute,
+                "/catalog/item/@code"),
+            2,
+            [new DiscoveredSourceContribution(sourceId, "source.xml", 2)],
+            "Alpha")
+        {
+            RowFamilyId = familyId
+        };
         var response = new RunDiscoveryResponse(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             Guid.CreateVersion7(),
             CommandAcceptance.Accepted,
             completion,
-            [
-                new DiscoveredInformation(
-                    new DiscoveryInformationIdentity(
-                        sourceSetId,
-                        "/catalog/item",
-                        "code",
-                        SourceValueCandidateKind.Attribute,
-                        "/catalog/item/@code"),
-                    2,
-                    [new DiscoveredSourceContribution(sourceId, "source.xml", 2)],
-                    "Alpha")
-            ],
+            [information],
             Array.Empty<DiscoverySourceIssue>(),
-            Failure: null);
+            Failure: null)
+        {
+            FamilyCatalog = new DiscoveryFamilyCatalog(
+                [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+        };
         await using var stream = new MemoryStream();
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
@@ -819,6 +1018,10 @@ public sealed class DiscoveryServiceTests
                     3,
                     LogicalSourceCount: 0,
                     "Alpha")
+                {
+                    DetailedSourceCount = 0,
+                    RowFamilyId = familyId
+                }
             ]
         };
         await using var invalidStream = new MemoryStream();

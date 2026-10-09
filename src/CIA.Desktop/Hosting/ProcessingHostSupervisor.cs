@@ -430,9 +430,25 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                                 "The Processing Host returned both paged and inline Discovery results.");
                         }
 
-                        return information.Count == 0
+                        var completedResponse = information.Count == 0
                             ? discoveryResponse
                             : discoveryResponse with { Information = information.ToArray() };
+                        if (completedResponse.FamilyCatalog is { } catalog)
+                        {
+                            var familyIds = catalog.Families
+                                .Select(family => family.Id)
+                                .ToHashSet();
+                            if (completedResponse.Information.Any(item =>
+                                    item.RowFamilyId is not { } familyId
+                                    || !familyIds.Contains(familyId)))
+                            {
+                                throw new IpcProtocolException(
+                                    IpcProtocolError.InvalidContract,
+                                    "The Processing Host returned an inconsistent Discovery family catalog.");
+                            }
+                        }
+
+                        return completedResponse;
                     }
 
                     throw new IpcProtocolException(

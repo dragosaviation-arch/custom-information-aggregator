@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Globalization;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Profiles;
@@ -46,6 +47,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _previousPageCommand;
     private readonly RelayCommand _nextPageCommand;
     private readonly AsyncRelayCommand<DiscoveredInformationItemViewModel?> _selectInformationCommand;
+    private readonly RelayCommand<DiscoveredInformationItemViewModel> _selectDetailedInformationCommand;
     private readonly AsyncRelayCommand _previousOccurrenceCommand;
     private readonly AsyncRelayCommand _nextOccurrenceCommand;
     private readonly AsyncRelayCommand _jumpToOccurrenceCommand;
@@ -102,6 +104,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private string _statusTitle = "Discovery ready";
     private string _statusDetail = "Run Discovery against the current active source set.";
     private DiscoveredInformationItemViewModel? _selectedInformation;
+    private DiscoveredInformationItemViewModel? _previewInformation;
     private DiscoveredInformationItemViewModel? _inspectedInformation;
     private OperationId? _publishedDiscoveryOperationId;
     private int _sourceInspectionStartIndex;
@@ -134,6 +137,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private double _sampleColumnWidth;
     private double _blacklistColumnWidth;
     private Guid? _discoveryProgressUpdateId;
+    private DiscoveryFamilyCatalog? _familyCatalog;
 
     public DiscoveryWorkspaceViewModel(
         IDiscoveryClient discoveryClient,
@@ -203,6 +207,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             SelectInformationAsync,
             _ => true,
             AsyncRelayCommandOptions.AllowConcurrentExecutions);
+        _selectDetailedInformationCommand = new RelayCommand<DiscoveredInformationItemViewModel>(
+            SelectDetailedInformation,
+            information => information is not null && !information.IsLogicalParent);
         _previousOccurrenceCommand = new AsyncRelayCommand(
             () => NavigateOccurrenceAsync(CurrentOccurrenceOrdinal - 1),
             CanNavigateToPreviousOccurrence);
@@ -386,6 +393,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public IAsyncRelayCommand<DiscoveredInformationItemViewModel?> SelectInformationCommand =>
         _selectInformationCommand;
+
+    public IRelayCommand<DiscoveredInformationItemViewModel> SelectDetailedInformationCommand =>
+        _selectDetailedInformationCommand;
+
+    public IReadOnlyList<RowFamilyDefinition> RowFamilies => _familyCatalog?.Families ?? [];
 
     public IAsyncRelayCommand PreviousOccurrenceCommand => _previousOccurrenceCommand;
 
@@ -691,8 +703,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public string SelectionSummary => string.Format(
         CultureInfo.CurrentCulture,
         "{0:N0} / {1:N0} selected",
-        _allInformation.Count(information => information.IsSelected),
-        _allInformation.Count);
+        _allInformation.SelectMany(information => information.Children)
+            .Count(information => information.IsSelected),
+        _allInformation.Sum(information => information.Children.Count));
 
     public string ShowingSummary
     {
@@ -824,6 +837,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _selectedInformation, value))
             {
+                _previewInformation = value;
+                OnPropertyChanged(nameof(PreviewInformation));
                 OnPropertyChanged(nameof(SelectedDatabaseTag));
                 OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
                 OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
@@ -833,6 +848,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             }
         }
     }
+
+    public DiscoveredInformationItemViewModel? PreviewInformation => _previewInformation;
 
     public string SelectedDatabaseTag
     {
@@ -875,7 +892,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     }
 
     public string DatabaseTagOverrideActionText =>
-        SelectedInformation?.HasDatabaseTagOverride == true ? "Revert" : "Default";
+        SelectedInformation?.HasAnyDatabaseTagOverride == true ? "Revert" : "Default";
 
     public string OccurrencePreviewText
     {
@@ -1175,6 +1192,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                     identity => dispositions[identity],
                     identity => databaseTagOverrides.GetValueOrDefault(identity))
                 .ToArray();
+            _familyCatalog = result.FamilyCatalog;
+            OnPropertyChanged(nameof(RowFamilies));
             RefreshSourceSetLayouts();
             _publishedDiscoveryOperationId = result.Completion.Correlation.OperationId;
             _issueCount = result.Issues.Count;
@@ -1258,7 +1277,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         var request = CapturePreviewRequest();
         if (information is null
             || _publishedDiscoveryOperationId is null
-            || !ReferenceEquals(SelectedInformation, information))
+            || !ReferenceEquals(PreviewInformation, information))
         {
             return;
         }
@@ -1297,7 +1316,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     private Task NavigateOccurrenceAsync(int ordinal)
     {
-        var information = SelectedInformation;
+        var information = PreviewInformation;
         if (information is null)
         {
             return Task.CompletedTask;
@@ -1484,7 +1503,40 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     {
         return Volatile.Read(ref _disposed) == 0
             && requestVersion == Volatile.Read(ref _previewRequestVersion)
-            && ReferenceEquals(SelectedInformation, information);
+            && ReferenceEquals(PreviewInformation, information);
+    }
+
+    private void SelectDetailedInformation(DiscoveredInformationItemViewModel? information)
+    {
+        if (information is null || information.IsLogicalParent)
+        {
+            return;
+        }
+
+        _previewInformation = information;
+        OnPropertyChanged(nameof(PreviewInformation));
+        PrepareOccurrenceSelection(information);
+        _selectInformationCommand.Execute(information);
+    }
+
+    internal void SelectLogicalInformation(DiscoveredInformationItemViewModel information)
+    {
+        ArgumentNullException.ThrowIfNull(information);
+        if (!information.IsLogicalParent)
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(SelectedInformation, information))
+        {
+            SelectedInformation = information;
+            return;
+        }
+
+        _previewInformation = information;
+        OnPropertyChanged(nameof(PreviewInformation));
+        PrepareOccurrenceSelection(information);
+        _selectInformationCommand.Execute(information);
     }
 
     private bool CanNavigateToPreviousOccurrence()
@@ -1564,20 +1616,20 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool CanClearDatabaseTagOverride()
     {
         return CanEditDatabaseTagOverride
-            && SelectedInformation?.HasDatabaseTagOverride == true;
+            && SelectedInformation?.HasAnyDatabaseTagOverride == true;
     }
 
     private bool CanSelectVisible()
     {
         return CanChangeConfiguration()
-            && _filteredInformation.Any(
+            && GetDetailedItems(_filteredInformation).Any(
                 information => !information.IsSelected && !information.IsBlacklisted);
     }
 
     private bool CanDeselectVisible()
     {
         return CanChangeConfiguration()
-            && _filteredInformation.Any(information => information.IsSelected);
+            && GetDetailedItems(_filteredInformation).Any(information => information.IsSelected);
     }
 
     private bool CanLoadSelectedProfile()
@@ -1931,7 +1983,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         ApplyConfigurationChange(
             () => _activeConfiguration.SetSelection(
                 information.DetailedIdentities,
-                !information.IsSelected));
+                information.SelectionState != true));
     }
 
     private void ToggleBlacklist(DiscoveredInformationItemViewModel? information)
@@ -1995,16 +2047,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
-        information.ApplyDatabaseTagOverride(next);
-        OnPropertyChanged(nameof(SelectedDatabaseTag));
-        OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
-        _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
-        RefreshPresentation();
+        ApplyActiveConfiguration();
     }
 
     private void SetVisibleSelection(bool isSelected)
     {
-        var targets = _filteredInformation
+        var targets = GetDetailedItems(_filteredInformation)
             .Where(information => isSelected
                 ? !information.IsSelected && !information.IsBlacklisted
                 : information.IsSelected)
@@ -2017,6 +2065,14 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         ApplyConfigurationChange(
             () => _activeConfiguration.SetSelection(targets, isSelected));
+    }
+
+    private static IEnumerable<DiscoveredInformationItemViewModel> GetDetailedItems(
+        IEnumerable<DiscoveredInformationItemViewModel> logicalItems)
+    {
+        return logicalItems.SelectMany(information => information.Children.Count == 0
+            ? [information]
+            : information.Children);
     }
 
     private void ApplyConfigurationChange(Func<int> applyChange)
@@ -2043,11 +2099,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         var databaseTagOverrides = _activeConfiguration.DatabaseTagOverridesByIdentity;
         foreach (var information in _allInformation)
         {
-            information.ApplyDisposition(ResolveLogicalDisposition(
-                information.DetailedIdentities.Select(identity => dispositions[identity])));
-            information.ApplyDatabaseTagOverride(ResolveLogicalDatabaseTagOverride(
-                information.DetailedIdentities.Select(identity =>
-                    databaseTagOverrides.GetValueOrDefault(identity))));
+            information.ApplyDetailedConfiguration(dispositions, databaseTagOverrides);
         }
 
         OnPropertyChanged(nameof(SelectedDatabaseTag));
@@ -2135,12 +2187,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         if (ShowOnlySelected)
         {
-            query = query.Where(information => information.IsSelected);
+            query = query.Where(information => information.HasAnySelectedChild);
         }
 
         if (ShowOnlyDatabaseTagOverrides)
         {
-            query = query.Where(information => information.HasDatabaseTagOverride);
+            query = query.Where(information => information.HasAnyDatabaseTagOverride);
         }
 
         query = ApplySort(query);
@@ -2616,13 +2668,20 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
     private DiscoveryInformationDisposition _disposition;
     private string? _databaseTagOverride;
     private string _sourceSetName;
+    private bool _isExpanded;
 
     public DiscoveredInformationItemViewModel(
         DiscoveredInformation information,
         string sourceSetName,
         DiscoveryInformationDisposition disposition,
         string? databaseTagOverride = null)
-        : this([information], sourceSetName, disposition, databaseTagOverride)
+        : this(
+            [information],
+            sourceSetName,
+            disposition,
+            databaseTagOverride,
+            isLogicalParent: true,
+            children: [])
     {
     }
 
@@ -2630,7 +2689,9 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         IReadOnlyList<DiscoveredInformation> information,
         string sourceSetName,
         DiscoveryInformationDisposition disposition,
-        string? databaseTagOverride)
+        string? databaseTagOverride,
+        bool isLogicalParent,
+        IReadOnlyList<DiscoveredInformationItemViewModel> children)
     {
         ArgumentNullException.ThrowIfNull(information);
         if (information.Count == 0)
@@ -2649,6 +2710,9 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         DetailedInformation = information;
         DetailedIdentities = information.Select(item => item.Identity).ToArray();
         Identity = information[0].Identity;
+        RowFamilyId = information[0].RowFamilyId;
+        IsLogicalParent = isLogicalParent;
+        Children = children;
         _sourceSetName = sourceSetName;
         var candidate = databaseTagOverride?.Trim();
         _databaseTagOverride = string.IsNullOrWhiteSpace(candidate)
@@ -2659,18 +2723,9 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
                 ? null
                 : candidate;
         TotalOccurrenceCount = information.Sum(item => item.TotalOccurrenceCount);
-        var sourceCounts = information
-            .Select(item => item.LogicalSourceCount)
-            .Distinct()
-            .ToArray();
-        if (sourceCounts.Length != 1)
-        {
-            throw new ArgumentException(
-                "Detailed Discovery identities require one logical source-count summary.",
-                nameof(information));
-        }
-
-        SourceCount = sourceCounts[0];
+        SourceCount = isLogicalParent
+            ? information.Select(item => item.LogicalSourceCount).Distinct().Single()
+            : information[0].DetailedSourceCount;
         SampleValue = DiscoverySampleValueFormatter.Format(information[0].SampleValue);
         _disposition = disposition;
     }
@@ -2693,12 +2748,25 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
                 .ThenBy(item => item.Identity.StructuralPath, StringComparer.Ordinal)
                 .ThenBy(item => item.Identity.InformationType, StringComparer.Ordinal)
                 .ToArray())
-            .Select(group => new DiscoveredInformationItemViewModel(
-                group,
-                resolveSourceSetName(group[0].SourceSetId),
-                ResolveLogicalDisposition(group.Select(item => resolveDisposition(item.Identity))),
-                ResolveLogicalDatabaseTagOverride(
-                    group.Select(item => resolveDatabaseTagOverride(item.Identity)))));
+            .Select(group =>
+            {
+                var sourceSetName = resolveSourceSetName(group[0].SourceSetId);
+                var children = group.Select(item => new DiscoveredInformationItemViewModel(
+                    [item],
+                    sourceSetName,
+                    resolveDisposition(item.Identity),
+                    resolveDatabaseTagOverride(item.Identity),
+                    isLogicalParent: false,
+                    children: [])).ToArray();
+                return new DiscoveredInformationItemViewModel(
+                    group,
+                    sourceSetName,
+                    ResolveLogicalDisposition(group.Select(item => resolveDisposition(item.Identity))),
+                    ResolveLogicalDatabaseTagOverride(
+                        group.Select(item => resolveDatabaseTagOverride(item.Identity))),
+                    isLogicalParent: true,
+                    children);
+            });
     }
 
     public DiscoveryInformationIdentity Identity { get; }
@@ -2706,6 +2774,20 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
     public IReadOnlyList<DiscoveredInformation> DetailedInformation { get; }
 
     public IReadOnlyList<DiscoveryInformationIdentity> DetailedIdentities { get; }
+
+    public IReadOnlyList<DiscoveredInformationItemViewModel> Children { get; }
+
+    public bool IsLogicalParent { get; }
+
+    public bool HasDetailedChildren => Children.Count > 0;
+
+    public RowFamilyId? RowFamilyId { get; }
+
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set => SetProperty(ref _isExpanded, value);
+    }
 
     public SourceSetId SourceSetId => Identity.SourceSetId;
 
@@ -2734,6 +2816,10 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
 
     public bool HasDatabaseTagOverride => DatabaseTagOverride is not null;
 
+    public bool HasAnyDatabaseTagOverride => IsLogicalParent && Children.Count > 0
+        ? Children.Any(child => child.HasDatabaseTagOverride)
+        : HasDatabaseTagOverride;
+
     public int TotalOccurrenceCount { get; }
 
     public string TotalOccurrenceText => TotalOccurrenceCount.ToString("N0", CultureInfo.CurrentCulture);
@@ -2748,12 +2834,42 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
 
     public bool IsSelected => Disposition == DiscoveryInformationDisposition.Selected;
 
+    public bool HasAnySelectedChild => IsLogicalParent && Children.Count > 0
+        ? Children.Any(child => child.IsSelected)
+        : IsSelected;
+
+    public bool? SelectionState
+    {
+        get
+        {
+            if (!IsLogicalParent)
+            {
+                return IsSelected;
+            }
+
+            if (Children.Count == 0)
+            {
+                return IsSelected;
+            }
+
+            var eligible = Children.Where(child => !child.IsBlacklisted).ToArray();
+            var selectedCount = eligible.Count(child => child.IsSelected);
+            if (selectedCount == 0)
+            {
+                return false;
+            }
+
+            return selectedCount == eligible.Length ? true : null;
+        }
+    }
+
     public bool IsBlacklisted => Disposition == DiscoveryInformationDisposition.Blacklisted;
 
-    public string DispositionText => Disposition switch
+    public string DispositionText => SelectionState switch
     {
-        DiscoveryInformationDisposition.Selected => "Selected",
-        DiscoveryInformationDisposition.Blacklisted => "Excluded",
+        null => "Partially selected",
+        true => "Selected",
+        _ when IsBlacklisted => "Excluded",
         _ => "Neutral"
     };
 
@@ -2769,6 +2885,8 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         _disposition = disposition;
         OnPropertyChanged(nameof(Disposition));
         OnPropertyChanged(nameof(IsSelected));
+        OnPropertyChanged(nameof(HasAnySelectedChild));
+        OnPropertyChanged(nameof(SelectionState));
         OnPropertyChanged(nameof(IsBlacklisted));
         OnPropertyChanged(nameof(DispositionText));
         OnPropertyChanged(nameof(BlacklistActionText));
@@ -2793,12 +2911,46 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         OnPropertyChanged(nameof(DatabaseTagOverride));
         OnPropertyChanged(nameof(DatabaseTag));
         OnPropertyChanged(nameof(HasDatabaseTagOverride));
+        OnPropertyChanged(nameof(HasAnyDatabaseTagOverride));
+    }
+
+    internal void ApplyDetailedConfiguration(
+        IReadOnlyDictionary<DiscoveryInformationIdentity, DiscoveryInformationDisposition>
+            dispositions,
+        IReadOnlyDictionary<DiscoveryInformationIdentity, string> databaseTagOverrides)
+    {
+        ArgumentNullException.ThrowIfNull(dispositions);
+        ArgumentNullException.ThrowIfNull(databaseTagOverrides);
+        if (!IsLogicalParent)
+        {
+            ApplyDisposition(dispositions[Identity]);
+            ApplyDatabaseTagOverride(databaseTagOverrides.GetValueOrDefault(Identity));
+            return;
+        }
+
+        foreach (var child in Children)
+        {
+            child.ApplyDetailedConfiguration(dispositions, databaseTagOverrides);
+        }
+
+        ApplyDisposition(ResolveLogicalDisposition(
+            DetailedIdentities.Select(identity => dispositions[identity])));
+        ApplyDatabaseTagOverride(ResolveLogicalDatabaseTagOverride(
+            DetailedIdentities.Select(identity => databaseTagOverrides.GetValueOrDefault(identity))));
+        OnPropertyChanged(nameof(HasAnySelectedChild));
+        OnPropertyChanged(nameof(HasAnyDatabaseTagOverride));
+        OnPropertyChanged(nameof(SelectionState));
+        OnPropertyChanged(nameof(DispositionText));
     }
 
     internal void ApplySourceSetName(string sourceSetName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceSetName);
         SetProperty(ref _sourceSetName, sourceSetName, nameof(SourceSetName));
+        foreach (var child in Children)
+        {
+            child.ApplySourceSetName(sourceSetName);
+        }
     }
 
     private static DiscoveryInformationDisposition ResolveLogicalDisposition(

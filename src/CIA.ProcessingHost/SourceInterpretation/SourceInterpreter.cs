@@ -152,7 +152,8 @@ public sealed class SourceInterpreter : ISourceInterpreter
                     interpretedSource.OriginatingSourceId,
                     interpretedSource.StructureId,
                     interpretedSource.Values,
-                    source.ArchiveProvenance));
+                    source.ArchiveProvenance,
+                    interpretedSource.StructuralCardinality));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

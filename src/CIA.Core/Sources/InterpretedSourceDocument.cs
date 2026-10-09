@@ -8,7 +8,8 @@ public sealed class InterpretedSourceDocument
         SourceId originatingSourceId,
         string structureId,
         IEnumerable<InterpretedSourceValue> values,
-        ArchiveSourceProvenance? archiveProvenance = null)
+        ArchiveSourceProvenance? archiveProvenance = null,
+        IEnumerable<SourceStructuralCardinality>? structuralCardinality = null)
     {
         if (originatingSourceId == default)
         {
@@ -21,6 +22,7 @@ public sealed class InterpretedSourceDocument
         ArgumentNullException.ThrowIfNull(values);
 
         var valueArray = values.ToArray();
+        var cardinalityArray = structuralCardinality?.ToArray() ?? [];
 
         if (valueArray.Any(value => value is null))
         {
@@ -29,10 +31,18 @@ public sealed class InterpretedSourceDocument
                 nameof(values));
         }
 
+        if (cardinalityArray.Any(statistic => statistic is null))
+        {
+            throw new ArgumentException(
+                "Source structural cardinality cannot contain null items.",
+                nameof(structuralCardinality));
+        }
+
         OriginatingSourceId = originatingSourceId;
         StructureId = structureId;
         Values = Array.AsReadOnly(valueArray);
         ArchiveProvenance = archiveProvenance;
+        StructuralCardinality = Array.AsReadOnly(cardinalityArray);
     }
 
     public SourceId OriginatingSourceId { get; }
@@ -42,6 +52,8 @@ public sealed class InterpretedSourceDocument
     public IReadOnlyList<InterpretedSourceValue> Values { get; }
 
     public ArchiveSourceProvenance? ArchiveProvenance { get; }
+
+    public IReadOnlyList<SourceStructuralCardinality> StructuralCardinality { get; }
 }
 
 public sealed class InterpretedSourceValue
