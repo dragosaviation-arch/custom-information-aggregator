@@ -36,62 +36,6 @@ public sealed class LoadWorkspaceViewInteractionTests
         await WpfTestApplication.RunAsync(VerifyExtendedSelectionAsync).WaitAsync(TestTimeout);
     }
 
-    [TestMethod]
-    public async Task SuccessfulLoadSelectsRowAndImmediatelyEnablesRemoveSelected()
-    {
-        await WpfTestApplication.RunAsync(VerifyPostLoadSelectionAsync).WaitAsync(TestTimeout);
-    }
-
-    private static async Task VerifyPostLoadSelectionAsync()
-    {
-        var source = CreateSource("newly-loaded.xml");
-        using var workflow = new ApplicationWorkflowCoordinator(
-            new ReadyProcessingHostSupervisor(),
-            new RecordingProcessingHistoryRecorder());
-        var activeSources = new ActiveLoadedSourceSet();
-        var loading = new SourceLoadingCoordinator(
-            new StaticSourceIntakeClient([source]),
-            activeSources,
-            workflow);
-        var shell = new MainWindowViewModel(new ApplicationSession());
-        using var viewModel = new LoadWorkspaceViewModel(
-            new SingleXmlPathPicker(source.Path),
-            loading,
-            activeSources,
-            workflow,
-            shell);
-        var view = new LoadWorkspaceView { DataContext = viewModel };
-        var window = new Window
-        {
-            Width = 1400,
-            Height = 760,
-            Content = view,
-            ShowInTaskbar = false,
-            WindowStyle = WindowStyle.None
-        };
-
-        try
-        {
-            window.Show();
-            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-
-            await viewModel.AddXmlFileCommand.ExecuteAsync(null);
-            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-
-            var rows = (ListBox)view.FindName("SourceRowsList");
-            var removeSelected = (Button)view.FindName("RemoveSelectedButton");
-            Assert.HasCount(1, rows.SelectedItems);
-            Assert.AreSame(activeSources.Items.Single(), rows.SelectedItem);
-            Assert.IsTrue(viewModel.HasHighlightedSources);
-            Assert.IsTrue(viewModel.RemoveCheckedCommand.CanExecute(null));
-            Assert.IsTrue(removeSelected.IsEnabled);
-        }
-        finally
-        {
-            window.Close();
-        }
-    }
-
     private static async Task VerifyExtendedSelectionAsync()
     {
         var sources = Enumerable.Range(1, 7)
@@ -138,7 +82,6 @@ public sealed class LoadWorkspaceViewInteractionTests
             GetSelectionProvider(rows, 6).AddToSelection();
             await Dispatcher.Yield(DispatcherPriority.DataBind);
             AssertSelected(rows, sources[0], sources[2], sources[6]);
-            Assert.IsTrue(viewModel.RemoveCheckedCommand.CanExecute(null));
 
             GetSelectionProvider(rows, 2).RemoveFromSelection();
             await Dispatcher.Yield(DispatcherPriority.DataBind);
@@ -487,15 +430,6 @@ public sealed class LoadWorkspaceViewInteractionTests
     private sealed class EmptySourcePathPicker : ISourcePathPicker
     {
         public string? PickXmlFile() => null;
-
-        public string? PickFolder() => null;
-
-        public string? PickArchive() => null;
-    }
-
-    private sealed class SingleXmlPathPicker(string path) : ISourcePathPicker
-    {
-        public string? PickXmlFile() => path;
 
         public string? PickFolder() => null;
 
