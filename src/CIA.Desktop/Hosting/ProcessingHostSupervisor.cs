@@ -380,6 +380,9 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                     correlation,
                     sources);
                 await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+                var information = new List<DiscoveredInformation>();
+                var identities = new HashSet<DiscoveryInformationIdentity>();
+                var expectedPageIndex = 0;
                 while (true)
                 {
                     var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
@@ -391,11 +394,45 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                         continue;
                     }
 
+                    if (response is DiscoveryResultPageEvent resultPage
+                        && resultPage.CommandMessageId == command.MessageId)
+                    {
+                        if (resultPage.PageIndex != expectedPageIndex++)
+                        {
+                            throw new IpcProtocolException(
+                                IpcProtocolError.InvalidContract,
+                                "The Processing Host returned Discovery result pages out of sequence.");
+                        }
+
+                        foreach (var item in resultPage.Information)
+                        {
+                            if (!identities.Add(item.Identity))
+                            {
+                                throw new IpcProtocolException(
+                                    IpcProtocolError.InvalidContract,
+                                    "The Processing Host returned a duplicate Discovery information identity.");
+                            }
+
+                            information.Add(item);
+                        }
+
+                        continue;
+                    }
+
                     if (response is RunDiscoveryResponse discoveryResponse
                         && discoveryResponse.CommandMessageId == command.MessageId
                         && discoveryResponse.Completion.Correlation == correlation)
                     {
-                        return discoveryResponse;
+                        if (information.Count > 0 && discoveryResponse.Information.Count > 0)
+                        {
+                            throw new IpcProtocolException(
+                                IpcProtocolError.InvalidContract,
+                                "The Processing Host returned both paged and inline Discovery results.");
+                        }
+
+                        return information.Count == 0
+                            ? discoveryResponse
+                            : discoveryResponse with { Information = information.ToArray() };
                     }
 
                     throw new IpcProtocolException(

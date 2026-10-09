@@ -42,6 +42,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(ProcessingHostAvailabilityEvent), "processingHostAvailabilityEvent")]
 [JsonDerivedType(typeof(SourceIntakeProgressEvent), "sourceIntakeProgressEvent")]
 [JsonDerivedType(typeof(DiscoveryProgressEvent), "discoveryProgressEvent")]
+[JsonDerivedType(typeof(DiscoveryResultPageEvent), "discoveryResultPageEvent")]
 [JsonDerivedType(typeof(DatabaseBuildProgressEvent), "databaseBuildProgressEvent")]
 public abstract record IpcMessage(Guid MessageId, DateTimeOffset TimestampUtc);
 
@@ -327,6 +328,14 @@ public sealed record DiscoveryProgressEvent(
     DateTimeOffset TimestampUtc,
     Guid CommandMessageId,
     DiscoveryProgressSnapshot Progress)
+    : IpcEvent(MessageId, TimestampUtc);
+
+public sealed record DiscoveryResultPageEvent(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    int PageIndex,
+    IReadOnlyList<DiscoveredInformation> Information)
     : IpcEvent(MessageId, TimestampUtc);
 
 public sealed record DatabaseBuildProgressEvent(

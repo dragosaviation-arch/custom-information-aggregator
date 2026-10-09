@@ -31,7 +31,10 @@ public sealed record DiscoveryClientResult(
     IReadOnlyList<DiscoverySourceIssue> Issues,
     OperationCompletion Completion,
     string? FailureCode,
-    string? FailureDescription);
+    string? FailureDescription)
+{
+    public string? FailureTechnicalDetail { get; init; }
+}
 
 public sealed record DiscoveryOccurrenceClientResult(
     bool Accepted,

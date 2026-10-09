@@ -53,7 +53,7 @@ public sealed class ProductionXmlSourceAdapterTests
         Assert.HasCount(2, result.Information);
 
         var identifier = result.Information.Single(item => item.InformationType == "identifier");
-        Assert.AreEqual("  MiXeD-Case-01  ", identifier.SampleValue);
+        Assert.AreEqual("MiXeD-Case-01", identifier.SampleValue);
         Assert.HasCount(1, identifier.ContributingSources);
         Assert.AreEqual(source.SourceId, identifier.ContributingSources[0].SourceId);
     }
@@ -140,7 +140,7 @@ public sealed class ProductionXmlSourceAdapterTests
         Assert.IsTrue(result.Accepted);
         Assert.HasCount(1, result.Information);
         Assert.AreEqual("stockCode", result.Information[0].InformationType);
-        Assert.AreEqual("  STOCK-01  ", result.Information[0].SampleValue);
+        Assert.AreEqual("STOCK-01", result.Information[0].SampleValue);
         Assert.AreEqual(source.SourceId, result.Information[0].ContributingSources[0].SourceId);
     }
 

@@ -1075,7 +1075,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             var progress = new InlineProgress<DiscoveryProgressSnapshot>(snapshot =>
                 DispatchToUi(() => ApplyDiscoveryProgress(snapshot)));
             var result = await _discoveryClient.RunAsync(operation, sources, progress);
-            var completion = _workflowCoordinator.CompleteOperation(result.Completion);
+            var completion = _workflowCoordinator.CompleteOperation(
+                result.Completion,
+                result.FailureCode,
+                result.FailureDescription,
+                result.FailureTechnicalDetail);
             SynchronizeDiscoveryStatus();
 
             if (!result.Accepted || !completion.Accepted)
@@ -2563,7 +2567,7 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
                 : candidate;
         TotalOccurrenceCount = information.Sum(item => item.TotalOccurrenceCount);
         ContributingSources = CreateLogicalContributions(information);
-        SampleValue = information[0].SampleValue;
+        SampleValue = DiscoverySampleValueFormatter.Format(information[0].SampleValue);
         _disposition = disposition;
     }
 

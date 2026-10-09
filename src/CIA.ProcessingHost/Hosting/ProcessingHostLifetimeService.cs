@@ -398,6 +398,24 @@ public sealed class ProcessingHostLifetimeService(
                             discoveryProgress,
                             cancellationToken)
                         .ConfigureAwait(false);
+                    if (discoveryResult.Accepted)
+                    {
+                        for (var pageIndex = 0;
+                             pageIndex < discoveryResult.Information.Count;
+                             pageIndex++)
+                        {
+                            await connection.SendAsync(
+                                    new DiscoveryResultPageEvent(
+                                        Guid.CreateVersion7(),
+                                        DateTimeOffset.UtcNow,
+                                        command.MessageId,
+                                        pageIndex,
+                                        [discoveryResult.Information[pageIndex]]),
+                                    cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                    }
+
                     await connection.SendAsync(
                             new RunDiscoveryResponse(
                                 Guid.CreateVersion7(),
@@ -407,7 +425,7 @@ public sealed class ProcessingHostLifetimeService(
                                     ? CommandAcceptance.Accepted
                                     : CommandAcceptance.Rejected,
                                 discoveryResult.Completion,
-                                discoveryResult.Information,
+                                Array.Empty<DiscoveredInformation>(),
                                 discoveryResult.Issues,
                                 discoveryResult.Failure),
                             cancellationToken)
