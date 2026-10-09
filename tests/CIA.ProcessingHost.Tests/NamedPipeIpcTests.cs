@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
@@ -15,6 +17,8 @@ namespace CIA.ProcessingHost.Tests;
 [TestClass]
 public sealed class NamedPipeIpcTests
 {
+    public TestContext TestContext { get; set; } = null!;
+
     [TestMethod]
     public async Task WorkingStateSaveAndRestoreRoundTripAsTypedContracts()
     {
@@ -693,6 +697,80 @@ public sealed class NamedPipeIpcTests
     }
 
     [TestMethod]
+    public async Task GoodbooksScaleDiscoveryUsesBoundedFramesAtTenAndThirtyThousandSources()
+    {
+        const int logicalInformationTypeCount = 44;
+        const int detailedInformationIdentityCount = 68;
+        var tenThousand = CreateDiscoveryScaleFixture(
+            10_000,
+            detailedInformationIdentityCount,
+            logicalInformationTypeCount);
+        var legacyPayload = JsonSerializer.SerializeToUtf8Bytes<IpcMessage>(
+            tenThousand.Response,
+            CreateFramerCompatibleSerializerOptions());
+
+        Assert.IsGreaterThan(IpcProtocol.MaximumPayloadLength, legacyPayload.Length);
+        TestContext.WriteLine($"Legacy 10k monolithic payload: {legacyPayload.Length:N0} bytes.");
+
+        long maximumTenThousandFrameLength = 0;
+        for (var index = 0; index < tenThousand.Information.Count; index++)
+        {
+            await using var pageStream = new MemoryStream();
+            await LengthPrefixedJsonMessageFramer.WriteAsync(
+                pageStream,
+                new DiscoveryResultPageEvent(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    tenThousand.Response.CommandMessageId,
+                    index,
+                    [tenThousand.Information[index]]));
+            maximumTenThousandFrameLength = Math.Max(
+                maximumTenThousandFrameLength,
+                pageStream.Length);
+        }
+
+        await using var tenThousandCompletionStream = new MemoryStream();
+        await LengthPrefixedJsonMessageFramer.WriteAsync(
+            tenThousandCompletionStream,
+            tenThousand.Response with { Information = [] });
+        maximumTenThousandFrameLength = Math.Max(
+            maximumTenThousandFrameLength,
+            tenThousandCompletionStream.Length);
+        Assert.IsLessThanOrEqualTo(
+            IpcProtocol.MaximumPayloadLength + IpcProtocol.FrameHeaderLength,
+            maximumTenThousandFrameLength);
+
+        var thirtyThousand = CreateDiscoveryScaleFixture(
+            30_000,
+            detailedInformationIdentityCount,
+            logicalInformationTypeCount);
+        await using var representativePageStream = new MemoryStream();
+        await LengthPrefixedJsonMessageFramer.WriteAsync(
+            representativePageStream,
+            new DiscoveryResultPageEvent(
+                Guid.CreateVersion7(),
+                DateTimeOffset.UtcNow,
+                thirtyThousand.Response.CommandMessageId,
+                PageIndex: 0,
+                [thirtyThousand.Information[0]]));
+        await using var completionStream = new MemoryStream();
+        await LengthPrefixedJsonMessageFramer.WriteAsync(
+            completionStream,
+            thirtyThousand.Response with { Information = [] });
+
+        Assert.IsLessThanOrEqualTo(
+            IpcProtocol.MaximumPayloadLength + IpcProtocol.FrameHeaderLength,
+            representativePageStream.Length);
+        Assert.IsLessThanOrEqualTo(
+            IpcProtocol.MaximumPayloadLength + IpcProtocol.FrameHeaderLength,
+            completionStream.Length);
+        TestContext.WriteLine(
+            $"10k largest corrected frame: {maximumTenThousandFrameLength:N0} bytes; "
+            + $"30k information frame: {representativePageStream.Length:N0} bytes; "
+            + $"30k completion frame: {completionStream.Length:N0} bytes.");
+    }
+
+    [TestMethod]
     public async Task WriterRejectsInvalidContractBeforeWritingFrameBytes()
     {
         var invalidMessage = new ProcessingHostAvailabilityEvent(
@@ -867,6 +945,61 @@ public sealed class NamedPipeIpcTests
         }
     }
 
+    private static DiscoveryScaleFixture CreateDiscoveryScaleFixture(
+        int sourceCount,
+        int detailedInformationIdentityCount,
+        int logicalInformationTypeCount)
+    {
+        var correlation = OperationCorrelation.CreateNew();
+        var sourceSetId = SourceSetId.CreateNew();
+        var sourceIds = Enumerable.Range(0, sourceCount)
+            .Select(_ => SourceId.CreateNew())
+            .ToArray();
+        var contributions = sourceIds
+            .Select((sourceId, index) => new DiscoveredSourceContribution(
+                sourceId,
+                $"book-{index:D5}.xml",
+                1))
+            .ToArray();
+        var information = Enumerable.Range(0, detailedInformationIdentityCount)
+            .Select(index => new DiscoveredInformation(
+                new DiscoveryInformationIdentity(
+                    sourceSetId,
+                    $"/book/context-{index:D2}/tag-{index % logicalInformationTypeCount:D2}",
+                    $"tag-{index % logicalInformationTypeCount:D2}"),
+                sourceCount,
+                contributions,
+                "sample"))
+            .ToArray();
+        var response = new RunDiscoveryResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            Guid.CreateVersion7(),
+            CommandAcceptance.Accepted,
+            OperationCompletion.FromCompletedItems(
+                correlation,
+                sourceIds.Select(sourceId => OperationItemStatus.ProcessedSuccessfully(
+                    sourceId.ToString()))),
+            information,
+            [],
+            Failure: null);
+        return new DiscoveryScaleFixture(response, information);
+    }
+
+    private static JsonSerializerOptions CreateFramerCompatibleSerializerOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            MaxDepth = 16,
+            NumberHandling = JsonNumberHandling.Strict,
+            PropertyNameCaseInsensitive = false,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
+        };
+        options.Converters.Add(
+            new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false));
+        return options;
+    }
+
     private static EstablishConnectionCommand CreateConnectionCommand()
     {
         return new EstablishConnectionCommand(
@@ -913,4 +1046,8 @@ public sealed class NamedPipeIpcTests
                 cancellationToken);
         }
     }
+
+    private sealed record DiscoveryScaleFixture(
+        RunDiscoveryResponse Response,
+        IReadOnlyList<DiscoveredInformation> Information);
 }

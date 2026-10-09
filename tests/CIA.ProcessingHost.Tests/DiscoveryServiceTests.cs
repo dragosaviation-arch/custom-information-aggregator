@@ -18,6 +18,84 @@ namespace CIA.ProcessingHost.Tests;
 public sealed class DiscoveryServiceTests
 {
     [TestMethod]
+    public async Task LargeMultilineCdataUsesBoundedSampleWhileOccurrenceRemainsExact()
+    {
+        var fullValue = "\r\n<style>\n  .review { color: red; }\t\n</style>\n"
+            + string.Join("\r\n", Enumerable.Repeat("<div>Long review widget content</div>", 40));
+        using var workspace = new DiscoveryWorkspace();
+        var source = workspace.CreateSource(
+            "goodbooks-like.xml",
+            $"<book><reviews_widget><![CDATA[{fullValue}]]></reviews_widget></book>");
+        var service = CreateGenericService();
+        var correlation = OperationCorrelation.CreateNew();
+
+        var result = await service.RunAsync(correlation, [source]);
+        var information = result.Information.Single(item =>
+            item.InformationType == "reviews_widget");
+        var occurrence = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
+            correlation.OperationId,
+            information.Identity,
+            GlobalOrdinal: 1,
+            TotalOccurrenceCount: 1,
+            source,
+            LocalOrdinal: 1,
+            ExpectedSourceOccurrenceCount: 1));
+
+        Assert.IsTrue(result.Accepted);
+        Assert.IsLessThanOrEqualTo(
+            DiscoverySampleValueFormatter.MaximumLength,
+            information.SampleValue.Length);
+        Assert.IsFalse(information.SampleValue.Any(
+            character => character is '\r' or '\n' or '\t'));
+        Assert.EndsWith("…", information.SampleValue);
+        Assert.IsTrue(occurrence.Accepted);
+        Assert.AreEqual(
+            fullValue.Replace("\r\n", "\n", StringComparison.Ordinal),
+            occurrence.Occurrence?.Value);
+    }
+
+    [TestMethod]
+    public async Task TenThousandSourcesAggregateAndNavigateWithoutOccurrenceRetention()
+    {
+        const int sourceCount = 10_000;
+        var sourceSetId = SourceSetId.CreateNew();
+        var sources = Enumerable.Range(1, sourceCount)
+            .Select(index => new LoadedSourceContract(
+                SourceId.CreateNew(),
+                sourceSetId,
+                Path.GetFullPath($"synthetic/book-{index:D5}.xml"),
+                IsIncluded: true,
+                LoadedSourceStatus.Ready,
+                LoadedSourceKind.XmlFile))
+            .ToArray();
+        var service = new DiscoveryService(
+            new SyntheticScaleInterpreter(),
+            new SyntheticScaleOccurrenceReader());
+        var correlation = OperationCorrelation.CreateNew();
+
+        var result = await service.RunAsync(correlation, sources);
+        var title = result.Information.Single(item => item.InformationType == "title");
+        var preview = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
+            correlation.OperationId,
+            title.Identity,
+            GlobalOrdinal: sourceCount,
+            TotalOccurrenceCount: sourceCount,
+            sources[^1],
+            LocalOrdinal: 1,
+            ExpectedSourceOccurrenceCount: 1));
+
+        Assert.IsTrue(result.Accepted);
+        Assert.HasCount(3, result.Information);
+        Assert.AreEqual(sourceCount, title.TotalOccurrenceCount);
+        Assert.HasCount(sourceCount, title.ContributingSources);
+        Assert.AreEqual(sourceCount, title.ContributingSources.Sum(item => item.OccurrenceCount));
+        Assert.IsTrue(preview.Accepted);
+        Assert.AreEqual(sourceCount, preview.Occurrence?.Ordinal);
+        Assert.AreEqual(sources[^1].SourceId, preview.Occurrence?.SourceId);
+        Assert.AreEqual(Path.GetFileNameWithoutExtension(sources[^1].Path), preview.Occurrence?.Value);
+    }
+
+    [TestMethod]
     public async Task DiscoveryReportsActualCompletedSourceUnitsMonotonically()
     {
         using var workspace = new DiscoveryWorkspace();
@@ -763,6 +841,43 @@ public sealed class DiscoveryServiceTests
                 "code" => "Code",
                 _ => localName
             };
+        }
+    }
+
+    private sealed class SyntheticScaleInterpreter : ISourceInterpreter
+    {
+        public Task<SourceInterpretationResult> InterpretAsync(
+            LoadedSourceContract source,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(SourceInterpretationResult.Usable(
+                new InterpretedSourceDocument(
+                    source.SourceId,
+                    "synthetic.goodbooks-scale.v1",
+                    [
+                        new InterpretedSourceValue("title", "Synthetic title"),
+                        new InterpretedSourceValue("authors", "Synthetic author"),
+                        new InterpretedSourceValue("rating", "4.0")
+                    ])));
+        }
+    }
+
+    private sealed class SyntheticScaleOccurrenceReader : ISourceOccurrenceReader
+    {
+        public Task<SourceOccurrenceReadResult> ReadAsync(
+            LoadedSourceContract source,
+            string informationType,
+            string structuralPath,
+            SourceValueCandidateKind candidateKind,
+            string structuralIdentity,
+            int localOrdinal,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(SourceOccurrenceReadResult.Accept(
+                Path.GetFileNameWithoutExtension(source.Path),
+                actualOccurrenceCount: 1));
         }
     }
 

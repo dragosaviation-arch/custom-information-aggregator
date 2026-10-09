@@ -143,6 +143,9 @@ public static class IpcContractValidator
             case DiscoveryProgressEvent progressEvent:
                 ValidateDiscoveryProgressEvent(progressEvent);
                 break;
+            case DiscoveryResultPageEvent resultPageEvent:
+                ValidateDiscoveryResultPageEvent(resultPageEvent);
+                break;
             case DatabaseBuildProgressEvent progressEvent:
                 ValidateDatabaseBuildProgressEvent(progressEvent);
                 break;
@@ -540,47 +543,7 @@ public static class IpcContractValidator
 
         ValidateOperationCorrelation(response.Completion.Correlation);
 
-        var informationIdentities = new HashSet<DiscoveryInformationIdentity>();
-        foreach (var information in response.Information)
-        {
-            if (information is null
-                || information.SampleValue is null
-                || information.TotalOccurrenceCount < 1
-                || information.ContributingSources is null
-                || information.ContributingSources.Count == 0)
-            {
-                throw InvalidContract("A discovered information item is invalid.");
-            }
-
-            ValidateDiscoveryInformationIdentity(information.Identity);
-            if (!informationIdentities.Add(information.Identity))
-            {
-                throw InvalidContract("Discovered information identities must be unique.");
-            }
-
-            var sourceIds = new HashSet<SourceId>();
-            long sourceOccurrenceTotal = 0;
-
-            foreach (var contribution in information.ContributingSources)
-            {
-                if (contribution is null
-                    || !SourceId.IsValid(contribution.SourceId.Value)
-                    || string.IsNullOrWhiteSpace(contribution.SourceName)
-                    || contribution.OccurrenceCount < 1
-                    || !sourceIds.Add(contribution.SourceId))
-                {
-                    throw InvalidContract("A Discovery source contribution is invalid.");
-                }
-
-                sourceOccurrenceTotal += contribution.OccurrenceCount;
-            }
-
-            if (sourceOccurrenceTotal != information.TotalOccurrenceCount)
-            {
-                throw InvalidContract(
-                    "Discovery per-source occurrence counts must match the aggregate count.");
-            }
-        }
+        ValidateDiscoveryInformation(response.Information);
 
         foreach (var issue in response.Issues)
         {
@@ -618,6 +581,57 @@ public static class IpcContractValidator
         }
 
         ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateDiscoveryInformation(
+        IReadOnlyList<DiscoveredInformation> informationItems)
+    {
+        var informationIdentities = new HashSet<DiscoveryInformationIdentity>();
+        foreach (var information in informationItems)
+        {
+            if (information is null
+                || information.SampleValue is null
+                || information.SampleValue.Length > DiscoverySampleValueFormatter.MaximumLength
+                || !string.Equals(
+                    information.SampleValue,
+                    DiscoverySampleValueFormatter.Format(information.SampleValue),
+                    StringComparison.Ordinal)
+                || information.TotalOccurrenceCount < 1
+                || information.ContributingSources is null
+                || information.ContributingSources.Count == 0)
+            {
+                throw InvalidContract("A discovered information item is invalid.");
+            }
+
+            ValidateDiscoveryInformationIdentity(information.Identity);
+            if (!informationIdentities.Add(information.Identity))
+            {
+                throw InvalidContract("Discovered information identities must be unique.");
+            }
+
+            var sourceIds = new HashSet<SourceId>();
+            long sourceOccurrenceTotal = 0;
+
+            foreach (var contribution in information.ContributingSources)
+            {
+                if (contribution is null
+                    || !SourceId.IsValid(contribution.SourceId.Value)
+                    || string.IsNullOrWhiteSpace(contribution.SourceName)
+                    || contribution.OccurrenceCount < 1
+                    || !sourceIds.Add(contribution.SourceId))
+                {
+                    throw InvalidContract("A Discovery source contribution is invalid.");
+                }
+
+                sourceOccurrenceTotal += contribution.OccurrenceCount;
+            }
+
+            if (sourceOccurrenceTotal != information.TotalOccurrenceCount)
+            {
+                throw InvalidContract(
+                    "Discovery per-source occurrence counts must match the aggregate count.");
+            }
+        }
     }
 
     private static void ValidateGetDiscoveryOccurrenceResponse(
@@ -1271,6 +1285,23 @@ public static class IpcContractValidator
         {
             throw InvalidContract("A Discovery progress event requires valid completed and total source counts.");
         }
+    }
+
+    private static void ValidateDiscoveryResultPageEvent(DiscoveryResultPageEvent resultPageEvent)
+    {
+        ValidateVersionSevenId(
+            resultPageEvent.CommandMessageId,
+            nameof(resultPageEvent.CommandMessageId));
+
+        if (resultPageEvent.PageIndex < 0
+            || resultPageEvent.Information is null
+            || resultPageEvent.Information.Count != 1)
+        {
+            throw InvalidContract(
+                "A Discovery result page requires a non-negative index and exactly one information item.");
+        }
+
+        ValidateDiscoveryInformation(resultPageEvent.Information);
     }
 
     private static void ValidateDatabaseBuildProgressEvent(DatabaseBuildProgressEvent progressEvent)

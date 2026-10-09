@@ -214,7 +214,7 @@ public sealed class DiscoveryService
                 {
                     aggregate = new InformationAggregation(
                         identity,
-                        value.Content,
+                        DiscoverySampleValueFormatter.Format(value.Content),
                         sourceOrder);
                     _information.Add(identity, aggregate);
                 }

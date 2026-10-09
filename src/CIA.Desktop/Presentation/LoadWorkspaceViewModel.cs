@@ -85,6 +85,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private WorkflowArtifactStatus _discoveryStatus;
     private int _disposed;
 
+    public event Action<LoadedSourceItem>? SourceSelectionRequested;
+
     public LoadWorkspaceViewModel(
         ISourcePathPicker pathPicker,
         SourceLoadingCoordinator loadingCoordinator,
@@ -678,6 +680,10 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             }
 
             SelectedSource = Sources.LastOrDefault();
+            if (SelectedSource is not null)
+            {
+                SourceSelectionRequested?.Invoke(SelectedSource);
+            }
             NotifyActiveSourceSetChanged();
             ProgressText = result.Issues.Count > 0 ? "Completed with issues" : "Completed";
             CurrentArchiveText = SelectedSource?.ArchiveProvenance is { } provenance

@@ -17,10 +17,46 @@ public partial class LoadWorkspaceView : UserControl
     private const double SourceRowHeight = 33;
     private const double DropOverlaySafeSpace = 20;
     private bool? _dropOverlayVisible;
+    private LoadWorkspaceViewModel? _subscribedViewModel;
 
     public LoadWorkspaceView()
     {
         InitializeComponent();
+        DataContextChanged += OnDataContextChanged;
+    }
+
+    private void OnDataContextChanged(
+        object sender,
+        DependencyPropertyChangedEventArgs e)
+    {
+        if (_subscribedViewModel is not null)
+        {
+            _subscribedViewModel.SourceSelectionRequested -= OnSourceSelectionRequested;
+        }
+
+        _subscribedViewModel = e.NewValue as LoadWorkspaceViewModel;
+        if (_subscribedViewModel is not null)
+        {
+            _subscribedViewModel.SourceSelectionRequested += OnSourceSelectionRequested;
+        }
+    }
+
+    private void OnSourceSelectionRequested(LoadedSourceItem source)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.InvokeAsync(() => OnSourceSelectionRequested(source));
+            return;
+        }
+
+        if (!SourceRowsList.Items.Contains(source))
+        {
+            return;
+        }
+
+        SourceRowsList.SelectedItems.Clear();
+        SourceRowsList.SelectedItem = source;
+        SourceRowsList.ScrollIntoView(source);
     }
 
     public static readonly DependencyProperty DiscoveryWorkspaceProperty =

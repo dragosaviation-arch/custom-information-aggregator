@@ -1,3 +1,4 @@
+using System.IO;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
@@ -12,6 +13,8 @@ public sealed class ProcessingHostDiscoveryClient(
     ProcessingHostSupervisor requestClient,
     ILogger<ProcessingHostDiscoveryClient> logger) : IDiscoveryClient
 {
+    private const int MaximumTechnicalDetailLength = 512;
+
     public async Task<DiscoveryClientResult> RunAsync(
         OperationCorrelation correlation,
         IReadOnlyList<LoadedSourceContract> sources,
@@ -56,6 +59,32 @@ public sealed class ProcessingHostDiscoveryClient(
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (IpcProtocolException exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Discovery received an invalid IPC response for operation {OperationId}",
+                correlation.OperationId);
+            return Reject(
+                correlation,
+                sources,
+                "discovery-ipc-protocol-failure",
+                "Discovery could not receive a valid response from the Processing Host.",
+                CreateTechnicalDetail("IPC protocol failure", exception.Message));
+        }
+        catch (IOException exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Discovery lost its Processing Host connection for operation {OperationId}",
+                correlation.OperationId);
+            return Reject(
+                correlation,
+                sources,
+                "discovery-ipc-transport-failure",
+                "Discovery lost its connection to the Processing Host.",
+                CreateTechnicalDetail("IPC transport failure", exception.Message));
         }
         catch (Exception exception)
         {
@@ -111,7 +140,9 @@ public sealed class ProcessingHostDiscoveryClient(
     private static DiscoveryClientResult Reject(
         OperationCorrelation correlation,
         IReadOnlyList<LoadedSourceContract> sources,
-        string failureCode)
+        string failureCode,
+        string failureDescription = "The Processing Host could not complete Discovery.",
+        string? failureTechnicalDetail = null)
     {
         var completion = OperationCompletion.FromTerminalOutcome(
             correlation,
@@ -125,7 +156,10 @@ public sealed class ProcessingHostDiscoveryClient(
             Array.Empty<CIA.Contracts.Discovery.DiscoverySourceIssue>(),
             completion,
             failureCode,
-            "The Processing Host could not complete Discovery.");
+            failureDescription)
+        {
+            FailureTechnicalDetail = failureTechnicalDetail
+        };
     }
 
     private static DiscoveryOccurrenceClientResult RejectOccurrence(string failureCode)
@@ -135,5 +169,16 @@ public sealed class ProcessingHostDiscoveryClient(
             Occurrence: null,
             failureCode,
             "The Processing Host could not retrieve the Discovery occurrence.");
+    }
+
+    private static string CreateTechnicalDetail(string category, string message)
+    {
+        var normalizedMessage = string.Join(
+            ' ',
+            message.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var detail = $"{category}: {normalizedMessage}";
+        return detail.Length <= MaximumTechnicalDetailLength
+            ? detail
+            : detail[..(MaximumTechnicalDetailLength - 1)] + '…';
     }
 }

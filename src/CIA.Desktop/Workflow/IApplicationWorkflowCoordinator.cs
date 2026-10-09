@@ -34,6 +34,15 @@ public interface IApplicationWorkflowCoordinator
 
     WorkflowCommandResult CompleteOperation(OperationCompletion completion);
 
+    WorkflowCommandResult CompleteOperation(
+        OperationCompletion completion,
+        string? failureCode,
+        string? failureDescription,
+        string? failureTechnicalDetail)
+    {
+        return CompleteOperation(completion);
+    }
+
     void RestoreInterruptedOperationStatus(
         WorkflowOperationKind operationKind,
         OperationCorrelation correlation,

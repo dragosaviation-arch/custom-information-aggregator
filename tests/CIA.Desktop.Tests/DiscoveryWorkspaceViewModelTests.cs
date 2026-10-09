@@ -14,6 +14,53 @@ namespace CIA.Desktop.Tests;
 public sealed class DiscoveryWorkspaceViewModelTests
 {
     [TestMethod]
+    public void DiscoveryGridSampleIsSingleLineAndBoundedDefensively()
+    {
+        var sourceId = SourceId.CreateNew();
+        var item = new DiscoveredInformationItemViewModel(
+            new DiscoveredInformation(
+                "reviews_widget",
+                1,
+                [new DiscoveredSourceContribution(sourceId, "book.xml", 1)],
+                "\r\n<style>\t" + new string('x', 500) + "\n</style>"),
+            "Set 1",
+            DiscoveryInformationDisposition.Neutral);
+
+        Assert.IsLessThanOrEqualTo(
+            DiscoverySampleValueFormatter.MaximumLength,
+            item.SampleValue.Length);
+        Assert.IsFalse(item.SampleValue.Any(
+            character => character is '\r' or '\n' or '\t'));
+        Assert.EndsWith("…", item.SampleValue);
+    }
+
+    [TestMethod]
+    public async Task DiscoveryTransportFailureRetainsBoundedCauseInDiagnostics()
+    {
+        var source = CreateSource("transport-failure.xml");
+        var history = new RecordingProcessingHistoryRecorder();
+        using var workflow = CreateWorkflowCoordinator(history);
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            new TransportFailureDiscoveryClient(),
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+
+        var diagnostic = history.Diagnostics.Single();
+        Assert.AreEqual("discovery-ipc-protocol-failure", diagnostic.FailureCode);
+        Assert.AreEqual(
+            "Discovery could not receive a valid response from the Processing Host.",
+            diagnostic.UserFacingDescription);
+        Assert.AreEqual(
+            "IPC protocol failure: Discovery result exceeded the bounded frame contract.",
+            diagnostic.TechnicalDetail);
+        Assert.IsLessThanOrEqualTo(1024, diagnostic.TechnicalDetail!.Length);
+    }
+
+    [TestMethod]
     public async Task SameNameIdentitySwitchSupersedesPendingPreviewAndUsesFullIdentity()
     {
         var source = CreateSource("same-name-source.xml");
@@ -1546,11 +1593,12 @@ public sealed class DiscoveryWorkspaceViewModelTests
             LoadedSourceKind.XmlFile);
     }
 
-    private static ApplicationWorkflowCoordinator CreateWorkflowCoordinator()
+    private static ApplicationWorkflowCoordinator CreateWorkflowCoordinator(
+        RecordingProcessingHistoryRecorder? history = null)
     {
         return new ApplicationWorkflowCoordinator(
             new StubProcessingHostSupervisor(),
-            new RecordingProcessingHistoryRecorder());
+            history ?? new RecordingProcessingHistoryRecorder());
     }
 
     private static DiscoveryClientResult Accept(
@@ -1711,6 +1759,39 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 lookup.GlobalOrdinal == 1
                     ? information.SampleValue
                     : $"{lookup.InformationType} occurrence {lookup.GlobalOrdinal}"));
+        }
+    }
+
+    private sealed class TransportFailureDiscoveryClient : IDiscoveryClient
+    {
+        public Task<DiscoveryClientResult> RunAsync(
+            OperationCorrelation correlation,
+            IReadOnlyList<LoadedSourceContract> sources,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new DiscoveryClientResult(
+                false,
+                [],
+                [],
+                OperationCompletion.FromTerminalOutcome(
+                    correlation,
+                    OperationOutcome.Failed,
+                    sources.Select(source => OperationItemStatus.Unprocessed(
+                        source.SourceId.ToString(),
+                        "discovery-ipc-protocol-failure"))),
+                "discovery-ipc-protocol-failure",
+                "Discovery could not receive a valid response from the Processing Host.")
+            {
+                FailureTechnicalDetail =
+                    "IPC protocol failure: Discovery result exceeded the bounded frame contract."
+            });
+        }
+
+        public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
+            DiscoveryOccurrenceLookup lookup,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
         }
     }
 

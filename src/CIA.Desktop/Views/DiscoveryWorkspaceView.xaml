@@ -334,7 +334,9 @@
                                         <TextBlock Grid.Column="6"
                                                    Foreground="{StaticResource CiaTextSecondaryBrush}"
                                                    Style="{StaticResource DiscoveryRowTextStyle}"
-                                                   Text="{Binding SampleValue}" />
+                                                   Text="{Binding SampleValue}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   TextWrapping="NoWrap" />
                                         <Button Grid.Column="7"
                                                 AutomationProperties.Name="Toggle information blacklist"
                                                 Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"

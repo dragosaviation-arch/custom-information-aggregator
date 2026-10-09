@@ -368,7 +368,13 @@ public sealed class ApplicationWorkflowCoordinator :
         OperationId operationId,
         OperationOutcome outcome)
     {
-        return CompleteOperation(operationId, outcome, completion: null);
+        return CompleteOperation(
+            operationId,
+            outcome,
+            completion: null,
+            failureCode: null,
+            failureDescription: null,
+            failureTechnicalDetail: null);
     }
 
     public WorkflowCommandResult CompleteOperation(OperationCompletion completion)
@@ -377,7 +383,26 @@ public sealed class ApplicationWorkflowCoordinator :
         return CompleteOperation(
             completion.Correlation.OperationId,
             completion.Outcome,
-            completion);
+            completion,
+            failureCode: null,
+            failureDescription: null,
+            failureTechnicalDetail: null);
+    }
+
+    public WorkflowCommandResult CompleteOperation(
+        OperationCompletion completion,
+        string? failureCode,
+        string? failureDescription,
+        string? failureTechnicalDetail)
+    {
+        ArgumentNullException.ThrowIfNull(completion);
+        return CompleteOperation(
+            completion.Correlation.OperationId,
+            completion.Outcome,
+            completion,
+            failureCode,
+            failureDescription,
+            failureTechnicalDetail);
     }
 
     public void RestoreInterruptedOperationStatus(
@@ -421,7 +446,10 @@ public sealed class ApplicationWorkflowCoordinator :
     private WorkflowCommandResult CompleteOperation(
         OperationId operationId,
         OperationOutcome outcome,
-        OperationCompletion? completion)
+        OperationCompletion? completion,
+        string? failureCode,
+        string? failureDescription,
+        string? failureTechnicalDetail)
     {
         WorkflowStateSnapshot changedState;
         ActiveWorkflowOperation activeOperation;
@@ -460,8 +488,9 @@ public sealed class ApplicationWorkflowCoordinator :
             activeOperation,
             outcome,
             completion,
-            changedState.LatestOperation?.Detail,
-            technicalDetail: null);
+            failureDescription ?? changedState.LatestOperation?.Detail,
+            failureTechnicalDetail,
+            failureCode);
         return WorkflowCommandResult.Accept(activeOperation.Correlation);
     }
 
@@ -595,7 +624,8 @@ public sealed class ApplicationWorkflowCoordinator :
             ToOperationOutcome(terminalState),
             completion: null,
             detail,
-            technicalDetail);
+            technicalDetail,
+            failureCode: null);
     }
 
     private void RecordTerminalAttempt(
@@ -603,7 +633,8 @@ public sealed class ApplicationWorkflowCoordinator :
         OperationOutcome outcome,
         OperationCompletion? completion,
         string? userFacingDescription,
-        string? technicalDetail)
+        string? technicalDetail,
+        string? failureCode)
     {
         var recordedAtUtc = DateTimeOffset.UtcNow;
         var record = new ProcessingAttemptRecord(
@@ -634,9 +665,9 @@ public sealed class ApplicationWorkflowCoordinator :
                 recordedAtUtc,
                 outcome,
                 userFacingDescription,
-                outcome == OperationOutcome.Failed
+                failureCode ?? (outcome == OperationOutcome.Failed
                     ? "operation-failed"
-                    : "operation-interrupted",
+                    : "operation-interrupted"),
                 technicalDetail));
     }
 

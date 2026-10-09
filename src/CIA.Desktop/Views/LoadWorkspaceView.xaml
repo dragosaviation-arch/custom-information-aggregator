@@ -116,7 +116,8 @@
                         </Button.Style>
                     </Button>
                 </StackPanel>
-                <Button Command="{Binding RemoveCheckedCommand}"
+                <Button x:Name="RemoveSelectedButton"
+                        Command="{Binding RemoveCheckedCommand}"
                         Style="{StaticResource CiaDangerButtonStyle}"
                         Content="− Remove selected"
                         ToolTip="Remove highlighted rows from this session only." />
