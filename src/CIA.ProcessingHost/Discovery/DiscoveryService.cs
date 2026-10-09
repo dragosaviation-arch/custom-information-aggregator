@@ -3,24 +3,30 @@ using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Sources;
+using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceInterpretation;
 
 namespace CIA.ProcessingHost.Discovery;
 
 public sealed class DiscoveryService
 {
+    private const int DiscoveryIndexBatchSize = 1_024;
     private readonly ISourceInterpreter _sourceInterpreter;
     private readonly ISourceOccurrenceReader _sourceOccurrenceReader;
+    private readonly StructuredInformationRepository _repository;
 
     public DiscoveryService(
         ISourceInterpreter sourceInterpreter,
-        ISourceOccurrenceReader sourceOccurrenceReader)
+        ISourceOccurrenceReader sourceOccurrenceReader,
+        StructuredInformationRepository repository)
     {
         ArgumentNullException.ThrowIfNull(sourceInterpreter);
         ArgumentNullException.ThrowIfNull(sourceOccurrenceReader);
+        ArgumentNullException.ThrowIfNull(repository);
 
         _sourceInterpreter = sourceInterpreter;
         _sourceOccurrenceReader = sourceOccurrenceReader;
+        _repository = repository;
     }
 
     public async Task<DiscoveryHostResult> RunAsync(
@@ -48,63 +54,95 @@ public sealed class DiscoveryService
                 nameof(sources));
         }
 
-        var aggregation = new DiscoveryAggregation();
         var itemStatuses = new List<OperationItemStatus>(sources.Count);
         var issues = new List<DiscoverySourceIssue>();
         var usableSourceCount = 0;
         var completedSourceCount = 0;
-
-        foreach (var source in sources)
+        var indexBatch = new List<DiscoveryIndexedSource>(DiscoveryIndexBatchSize);
+        var discoveredIdentities = new Dictionary<DiscoveryInformationIdentity, int>();
+        await _repository.BeginDiscoveryIndexAsync(correlation, cancellationToken)
+            .ConfigureAwait(false);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var sourceName = GetSourceName(source);
-            var interpretation = await _sourceInterpreter
-                .InterpretAsync(source, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (interpretation.Status == SourceInterpretationStatus.Usable)
+            foreach (var source in sources)
             {
-                aggregation.AddSource(
-                    interpretation.Source!,
-                    source.SourceSetId,
-                    sourceName,
-                    usableSourceCount);
-                usableSourceCount++;
-                itemStatuses.Add(OperationItemStatus.ProcessedSuccessfully(
-                    source.SourceId.ToString()));
+                cancellationToken.ThrowIfCancellationRequested();
+                var sourceName = GetSourceName(source);
+                var interpretation = await _sourceInterpreter
+                    .InterpretAsync(source, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (interpretation.Status == SourceInterpretationStatus.Usable)
+                {
+                    indexBatch.Add(new DiscoveryIndexedSource(
+                        source,
+                        sourceName,
+                        usableSourceCount,
+                        CreateContributions(
+                            interpretation.Source!,
+                            source.SourceSetId,
+                            discoveredIdentities)));
+                    usableSourceCount++;
+                    if (indexBatch.Count == DiscoveryIndexBatchSize)
+                    {
+                        await FlushIndexBatchAsync(
+                                correlation.OperationId,
+                                indexBatch,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    itemStatuses.Add(OperationItemStatus.ProcessedSuccessfully(
+                        source.SourceId.ToString()));
+                    ReportProgress(progress, ++completedSourceCount, sources.Count);
+                    continue;
+                }
+
+                var failure = interpretation.Failure!;
+                itemStatuses.Add(OperationItemStatus.Failed(
+                    source.SourceId.ToString(),
+                    failure.Code));
+                issues.Add(new DiscoverySourceIssue(
+                    source.SourceId,
+                    failure.Code,
+                    failure.Description));
                 ReportProgress(progress, ++completedSourceCount, sources.Count);
-                continue;
             }
 
-            var failure = interpretation.Failure!;
-            itemStatuses.Add(OperationItemStatus.Failed(
-                source.SourceId.ToString(),
-                failure.Code));
-            issues.Add(new DiscoverySourceIssue(
-                source.SourceId,
-                failure.Code,
-                failure.Description));
-            ReportProgress(progress, ++completedSourceCount, sources.Count);
-        }
+            if (usableSourceCount == 0)
+            {
+                return DiscoveryHostResult.Reject(
+                    OperationCompletion.FromTerminalOutcome(
+                        correlation,
+                        OperationOutcome.Failed,
+                        itemStatuses),
+                    issues,
+                    "discovery-no-usable-sources",
+                    "Discovery could not interpret any source in the active source set.");
+            }
 
-        if (usableSourceCount == 0)
-        {
-            return DiscoveryHostResult.Reject(
-                OperationCompletion.FromTerminalOutcome(
-                    correlation,
-                    OperationOutcome.Failed,
-                    itemStatuses),
+            await FlushIndexBatchAsync(
+                    correlation.OperationId,
+                    indexBatch,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            var information = await _repository.PublishDiscoveryIndexAsync(
+                    correlation.OperationId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var completion = OperationCompletion.FromCompletedItems(correlation, itemStatuses);
+            return DiscoveryHostResult.Accept(
+                information,
                 issues,
-                "discovery-no-usable-sources",
-                "Discovery could not interpret any source in the active source set.");
+                completion);
         }
-
-        var information = aggregation.CreateInformation();
-        var completion = OperationCompletion.FromCompletedItems(correlation, itemStatuses);
-        return DiscoveryHostResult.Accept(
-            information,
-            issues,
-            completion);
+        finally
+        {
+            await _repository.DiscardDiscoveryIndexAsync(
+                    correlation.OperationId,
+                    CancellationToken.None)
+                .ConfigureAwait(false);
+        }
     }
 
     private static void ReportProgress(
@@ -136,35 +174,34 @@ public sealed class DiscoveryService
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(lookup.InformationType);
-        ArgumentException.ThrowIfNullOrWhiteSpace(lookup.StructuralPath);
-        ArgumentNullException.ThrowIfNull(lookup.Source);
-
-        if (lookup.Identity.SourceSetId != lookup.Source.SourceSetId)
-        {
-            throw new ArgumentException(
-                "A Discovery occurrence lookup must target a source from the identified Source Set.",
-                nameof(lookup));
-        }
 
         if (lookup.GlobalOrdinal < 1
-            || lookup.TotalOccurrenceCount < lookup.GlobalOrdinal
-            || lookup.LocalOrdinal < 1
-            || lookup.ExpectedSourceOccurrenceCount < lookup.LocalOrdinal
-            || lookup.ExpectedSourceOccurrenceCount > lookup.TotalOccurrenceCount)
+            || lookup.TotalOccurrenceCount < lookup.GlobalOrdinal)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(lookup),
                 "Discovery occurrence lookup ordinals are invalid.");
         }
 
+        var resolution = await _repository.ResolveDiscoveryOccurrenceAsync(
+                lookup,
+                cancellationToken)
+            .ConfigureAwait(false);
+        if (resolution is null)
+        {
+            return DiscoveryOccurrenceHostResult.Reject(
+                "discovery-preview-out-of-date",
+                "The requested Discovery result is no longer published or its identity has changed.");
+        }
+
         var read = await _sourceOccurrenceReader
             .ReadAsync(
-                lookup.Source,
-                lookup.InformationType,
-                lookup.StructuralPath,
-                lookup.Identity.CandidateKind,
-                lookup.Identity.StructuralIdentity,
-                lookup.LocalOrdinal,
+                resolution.Source,
+                resolution.Identity.InformationType,
+                resolution.Identity.StructuralPath,
+                resolution.Identity.CandidateKind,
+                resolution.Identity.StructuralIdentity,
+                resolution.LocalOrdinal,
                 cancellationToken)
             .ConfigureAwait(false);
         if (!read.Accepted)
@@ -174,7 +211,7 @@ public sealed class DiscoveryService
                 read.Failure.Description);
         }
 
-        if (read.ActualOccurrenceCount != lookup.ExpectedSourceOccurrenceCount
+        if (read.ActualOccurrenceCount != resolution.ExpectedSourceOccurrenceCount
             || read.Value is null)
         {
             return DiscoveryOccurrenceHostResult.Reject(
@@ -184,133 +221,98 @@ public sealed class DiscoveryService
 
         return DiscoveryOccurrenceHostResult.Accept(
             new DiscoveredOccurrence(
-                lookup.Identity,
+                resolution.Identity,
                 lookup.GlobalOrdinal,
                 lookup.TotalOccurrenceCount,
-                lookup.Source.SourceId,
+                resolution.Source.SourceId,
+                resolution.SourceName,
                 read.Value));
     }
 
-    private sealed class DiscoveryAggregation
+    private async Task FlushIndexBatchAsync(
+        OperationId operationId,
+        List<DiscoveryIndexedSource> indexBatch,
+        CancellationToken cancellationToken)
     {
-        private readonly Dictionary<DiscoveryInformationIdentity, InformationAggregation>
-            _information = [];
-
-        public void AddSource(
-            InterpretedSourceDocument source,
-            SourceSetId sourceSetId,
-            string sourceName,
-            int sourceOrder)
+        if (indexBatch.Count == 0)
         {
-            foreach (var value in source.Values)
-            {
-                var identity = new DiscoveryInformationIdentity(
-                    sourceSetId,
-                    value.Lineage?.StructuralPath ?? $"/{value.InformationType}",
-                    value.InformationType,
-                    value.CandidateKind,
-                    value.StructuralIdentity);
-                if (!_information.TryGetValue(identity, out var aggregate))
-                {
-                    aggregate = new InformationAggregation(
-                        identity,
-                        DiscoverySampleValueFormatter.Format(value.Content),
-                        sourceOrder);
-                    _information.Add(identity, aggregate);
-                }
-
-                aggregate.AddOccurrence(
-                    source.OriginatingSourceId,
-                    sourceName,
-                    sourceOrder);
-            }
+            return;
         }
 
-        public IReadOnlyList<DiscoveredInformation> CreateInformation()
-        {
-            return _information.Values
-                .OrderBy(information => information.SourceSetOrder)
-                .ThenBy(information => information.Identity.StructuralIdentity, StringComparer.Ordinal)
-                .ThenBy(information => information.Identity.CandidateKind)
-                .ThenBy(information => information.Identity.InformationType, StringComparer.Ordinal)
-                .Select(information => information.CreateContract())
-                .ToArray();
-        }
+        await _repository.AddDiscoverySourcesAsync(
+                operationId,
+                indexBatch,
+                cancellationToken)
+            .ConfigureAwait(false);
+        indexBatch.Clear();
     }
 
-    private sealed class InformationAggregation
+    public async Task<DiscoveryContributorHostResult> GetContributorsAsync(
+        DiscoveryContributorPageQuery query,
+        CancellationToken cancellationToken = default)
     {
-        private readonly Dictionary<SourceId, SourceContributionAggregation> _sources = [];
-
-        public InformationAggregation(
-            DiscoveryInformationIdentity identity,
-            string sampleValue,
-            int sourceSetOrder)
-        {
-            Identity = identity;
-            SampleValue = sampleValue;
-            SourceSetOrder = sourceSetOrder;
-        }
-
-        public DiscoveryInformationIdentity Identity { get; }
-
-        public int SourceSetOrder { get; }
-
-        private string SampleValue { get; }
-
-        private int TotalOccurrenceCount { get; set; }
-
-        public void AddOccurrence(SourceId sourceId, string sourceName, int sourceOrder)
-        {
-            TotalOccurrenceCount++;
-            if (!_sources.TryGetValue(sourceId, out var source))
-            {
-                source = new SourceContributionAggregation(sourceId, sourceName, sourceOrder);
-                _sources.Add(sourceId, source);
-            }
-
-            source.AddOccurrence();
-        }
-
-        public DiscoveredInformation CreateContract()
-        {
-            return new DiscoveredInformation(
-                Identity,
-                TotalOccurrenceCount,
-                _sources.Values
-                    .OrderBy(source => source.SourceOrder)
-                    .Select(source => source.CreateContract())
-                    .ToArray(),
-                SampleValue);
-        }
+        ArgumentNullException.ThrowIfNull(query);
+        var page = await _repository.ReadDiscoveryContributorsAsync(query, cancellationToken)
+            .ConfigureAwait(false);
+        return page is null
+            ? DiscoveryContributorHostResult.Reject(
+                "discovery-contributors-out-of-date",
+                "The requested Discovery contributor index is no longer current.")
+            : DiscoveryContributorHostResult.Accept(page);
     }
 
-    private sealed class SourceContributionAggregation
+    private static IReadOnlyCollection<DiscoveryIndexContribution> CreateContributions(
+        InterpretedSourceDocument source,
+        SourceSetId sourceSetId,
+        Dictionary<DiscoveryInformationIdentity, int> discoveredIdentities)
     {
-        public SourceContributionAggregation(SourceId sourceId, string sourceName, int sourceOrder)
+        var contributions = new Dictionary<DiscoveryInformationIdentity, SourceContribution>();
+        foreach (var value in source.Values)
         {
-            SourceId = sourceId;
-            SourceName = sourceName;
-            SourceOrder = sourceOrder;
+            var identity = new DiscoveryInformationIdentity(
+                sourceSetId,
+                value.Lineage?.StructuralPath ?? $"/{value.InformationType}",
+                value.InformationType,
+                value.CandidateKind,
+                value.StructuralIdentity);
+            if (!contributions.TryGetValue(identity, out var contribution))
+            {
+                contribution = new SourceContribution(
+                    identity,
+                    DiscoverySampleValueFormatter.Format(value.Content));
+                contributions.Add(identity, contribution);
+            }
+
+            contribution.OccurrenceCount++;
         }
 
-        public SourceId SourceId { get; }
-
-        public string SourceName { get; }
-
-        public int SourceOrder { get; }
-
-        private int OccurrenceCount { get; set; }
-
-        public void AddOccurrence()
+        return contributions.Values.Select(contribution =>
         {
-            OccurrenceCount++;
-        }
+            var definesInformation = !discoveredIdentities.TryGetValue(
+                contribution.Identity,
+                out var informationOrdinal);
+            if (definesInformation)
+            {
+                informationOrdinal = discoveredIdentities.Count;
+                discoveredIdentities.Add(contribution.Identity, informationOrdinal);
+            }
 
-        public DiscoveredSourceContribution CreateContract()
-        {
-            return new DiscoveredSourceContribution(SourceId, SourceName, OccurrenceCount);
-        }
+            return new DiscoveryIndexContribution(
+                informationOrdinal,
+                contribution.Identity,
+                contribution.OccurrenceCount,
+                contribution.SampleValue,
+                definesInformation);
+        }).ToArray();
+    }
+
+    private sealed class SourceContribution(
+        DiscoveryInformationIdentity identity,
+        string sampleValue)
+    {
+        public DiscoveryInformationIdentity Identity { get; } = identity;
+        public string SampleValue { get; } = sampleValue;
+        public int OccurrenceCount { get; set; }
     }
 
     private static string GetSourceName(LoadedSourceContract source)
@@ -367,6 +369,25 @@ public sealed record DiscoveryOccurrenceHostResult(
         return new DiscoveryOccurrenceHostResult(
             false,
             Occurrence: null,
+            new IpcFailure(code, description));
+    }
+}
+
+public sealed record DiscoveryContributorHostResult(
+    bool Accepted,
+    DiscoveryContributorPage? Page,
+    IpcFailure? Failure)
+{
+    internal static DiscoveryContributorHostResult Accept(DiscoveryContributorPage page)
+    {
+        return new DiscoveryContributorHostResult(true, page, Failure: null);
+    }
+
+    internal static DiscoveryContributorHostResult Reject(string code, string description)
+    {
+        return new DiscoveryContributorHostResult(
+            false,
+            Page: null,
             new IpcFailure(code, description));
     }
 }

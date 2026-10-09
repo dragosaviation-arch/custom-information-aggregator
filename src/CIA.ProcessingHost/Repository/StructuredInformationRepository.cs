@@ -7,7 +7,7 @@ namespace CIA.ProcessingHost.Repository;
 
 public sealed partial class StructuredInformationRepository
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
     public const string DatabaseFileName = "cia.sqlite3";
 
     private const string OccurrencesTableName = "indexed_occurrences";
@@ -269,6 +269,7 @@ public sealed partial class StructuredInformationRepository
                 2 => await ApplyVersionThreeAsync(connection, cancellationToken).ConfigureAwait(false),
                 3 => await ApplyVersionFourAsync(connection, cancellationToken).ConfigureAwait(false),
                 4 => await ApplyVersionFiveAsync(connection, cancellationToken).ConfigureAwait(false),
+                5 => await ApplyVersionSixAsync(connection, cancellationToken).ConfigureAwait(false),
                 _ => throw new StructuredInformationRepositoryException(
                     $"No repository migration is available from schema version {version}.")
             };
@@ -824,6 +825,115 @@ public sealed partial class StructuredInformationRepository
             .ConfigureAwait(false);
         await ValidateHierarchyDatabaseSchemaAsync(connection, cancellationToken)
             .ConfigureAwait(false);
+        await ValidateDiscoveryIndexSchemaAsync(connection, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<int> ApplyVersionSixAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                CREATE TABLE discovery_results (
+                    operation_id TEXT PRIMARY KEY CHECK (length(operation_id) = 36),
+                    created_utc TEXT NOT NULL,
+                    result_state INTEGER NOT NULL CHECK (result_state IN (1, 2))
+                );
+                CREATE TABLE discovery_sources (
+                    operation_id TEXT NOT NULL,
+                    source_order INTEGER NOT NULL CHECK (source_order >= 0),
+                    source_id TEXT NOT NULL CHECK (length(source_id) = 36),
+                    source_name TEXT NOT NULL CHECK (length(source_name) > 0),
+                    source_contract_json TEXT NOT NULL CHECK (length(source_contract_json) > 0),
+                    PRIMARY KEY (operation_id, source_id),
+                    UNIQUE (operation_id, source_order),
+                    FOREIGN KEY (operation_id)
+                        REFERENCES discovery_results (operation_id) ON DELETE CASCADE
+                );
+                CREATE TABLE discovery_information (
+                    operation_id TEXT NOT NULL,
+                    information_ordinal INTEGER NOT NULL CHECK (information_ordinal >= 0),
+                    source_set_id TEXT NOT NULL CHECK (length(source_set_id) = 36),
+                    structural_path TEXT NOT NULL CHECK (length(structural_path) > 0),
+                    information_type TEXT NOT NULL CHECK (length(information_type) > 0),
+                    candidate_kind INTEGER NOT NULL,
+                    structural_identity TEXT NOT NULL CHECK (length(structural_identity) > 0),
+                    logical_field_identity TEXT NOT NULL CHECK (length(logical_field_identity) > 0),
+                    first_source_order INTEGER NOT NULL CHECK (first_source_order >= 0),
+                    presentation_order INTEGER NOT NULL DEFAULT 0 CHECK (presentation_order >= 0),
+                    total_occurrence_count INTEGER NOT NULL CHECK (total_occurrence_count >= 1),
+                    sample_value TEXT NOT NULL,
+                    PRIMARY KEY (operation_id, information_ordinal),
+                    UNIQUE (
+                        operation_id, source_set_id, structural_path, information_type,
+                        candidate_kind, structural_identity),
+                    FOREIGN KEY (operation_id)
+                        REFERENCES discovery_results (operation_id) ON DELETE CASCADE
+                );
+                CREATE TABLE discovery_contributions (
+                    operation_id TEXT NOT NULL,
+                    information_ordinal INTEGER NOT NULL CHECK (information_ordinal >= 0),
+                    source_order INTEGER NOT NULL CHECK (source_order >= 0),
+                    occurrence_count INTEGER NOT NULL CHECK (occurrence_count >= 1),
+                    PRIMARY KEY (operation_id, information_ordinal, source_order),
+                    FOREIGN KEY (operation_id, source_order)
+                        REFERENCES discovery_sources (operation_id, source_order) ON DELETE CASCADE,
+                    FOREIGN KEY (operation_id, information_ordinal)
+                        REFERENCES discovery_information (operation_id, information_ordinal)
+                        ON DELETE CASCADE
+                ) WITHOUT ROWID;
+                CREATE INDEX ix_discovery_information_logical
+                    ON discovery_information (
+                        operation_id, source_set_id, candidate_kind,
+                        logical_field_identity, presentation_order);
+                CREATE TABLE discovery_publication (
+                    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                    operation_id TEXT NOT NULL UNIQUE,
+                    FOREIGN KEY (operation_id)
+                        REFERENCES discovery_results (operation_id)
+                );
+                PRAGMA user_version = 6;
+                """;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return 6;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task ValidateDiscoveryIndexSchemaAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        string[] tables =
+        [
+            "discovery_results", "discovery_sources", "discovery_information",
+            "discovery_contributions", "discovery_publication"
+        ];
+        foreach (var table in tables)
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"SELECT 1 FROM {table} LIMIT 0;";
+            try
+            {
+                await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (SqliteException exception)
+            {
+                throw new StructuredInformationRepositoryException(
+                    "The Discovery contributor-index schema is incomplete or invalid.", exception);
+            }
+        }
     }
 
     private static async Task ValidateHierarchyDatabaseSchemaAsync(

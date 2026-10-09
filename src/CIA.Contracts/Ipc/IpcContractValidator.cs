@@ -51,6 +51,9 @@ public static class IpcContractValidator
             case GetDiscoveryOccurrenceCommand command:
                 ValidateGetDiscoveryOccurrenceCommand(command);
                 break;
+            case GetDiscoveryContributorsCommand command:
+                ValidateGetDiscoveryContributorsCommand(command);
+                break;
             case BuildDatabaseCommand command:
                 ValidateBuildDatabaseCommand(command);
                 break;
@@ -91,6 +94,9 @@ public static class IpcContractValidator
                 break;
             case GetDiscoveryOccurrenceResponse response:
                 ValidateGetDiscoveryOccurrenceResponse(response);
+                break;
+            case GetDiscoveryContributorsResponse response:
+                ValidateGetDiscoveryContributorsResponse(response);
                 break;
             case BuildDatabaseResponse response:
                 ValidateBuildDatabaseResponse(response);
@@ -375,27 +381,39 @@ public static class IpcContractValidator
         GetDiscoveryOccurrenceCommand command)
     {
         var lookup = command.Lookup;
-        if (lookup is null || lookup.Source is null)
+        if (lookup is null)
         {
             throw InvalidContract("A Discovery occurrence request requires lookup metadata.");
         }
 
         ValidateOperationId(lookup.DiscoveryOperationId, "Discovery occurrence requests");
-        ValidateLoadedSource(lookup.Source);
-        ValidateDiscoveryInformationIdentity(lookup.Identity);
+        ValidateDetailedIdentitySelection(lookup.DetailedIdentities);
 
-        if (lookup.Identity.SourceSetId != lookup.Source.SourceSetId
-            || lookup.GlobalOrdinal < 1
-            || lookup.TotalOccurrenceCount < lookup.GlobalOrdinal
-            || lookup.LocalOrdinal < 1
-            || lookup.ExpectedSourceOccurrenceCount < lookup.LocalOrdinal
-            || lookup.ExpectedSourceOccurrenceCount > lookup.TotalOccurrenceCount
-            || !lookup.Source.IsIncluded
-            || lookup.Source.Kind != LoadedSourceKind.XmlFile
-            || lookup.Source.Status != LoadedSourceStatus.Ready)
+        if (lookup.GlobalOrdinal < 1
+            || lookup.TotalOccurrenceCount < lookup.GlobalOrdinal)
         {
             throw InvalidContract(
-                "A Discovery occurrence request contains invalid source or ordinal metadata.");
+                "A Discovery occurrence request contains invalid ordinal metadata.");
+        }
+    }
+
+    private static void ValidateGetDiscoveryContributorsCommand(
+        GetDiscoveryContributorsCommand command)
+    {
+        var query = command.Query;
+        if (query is null)
+        {
+            throw InvalidContract("A Discovery contributor request requires query metadata.");
+        }
+
+        ValidateOperationId(query.DiscoveryOperationId, "Discovery contributor requests");
+        ValidateDetailedIdentitySelection(query.DetailedIdentities);
+        if (query.StartIndex < 0
+            || query.PageSize < 1
+            || query.PageSize > DiscoveryContributorPaging.MaximumPageSize
+            || query.ExpectedSourceCount < 1)
+        {
+            throw InvalidContract("A Discovery contributor request contains invalid paging metadata.");
         }
     }
 
@@ -597,8 +615,7 @@ public static class IpcContractValidator
                     DiscoverySampleValueFormatter.Format(information.SampleValue),
                     StringComparison.Ordinal)
                 || information.TotalOccurrenceCount < 1
-                || information.ContributingSources is null
-                || information.ContributingSources.Count == 0)
+                || information.LogicalSourceCount < 1)
             {
                 throw InvalidContract("A discovered information item is invalid.");
             }
@@ -609,28 +626,6 @@ public static class IpcContractValidator
                 throw InvalidContract("Discovered information identities must be unique.");
             }
 
-            var sourceIds = new HashSet<SourceId>();
-            long sourceOccurrenceTotal = 0;
-
-            foreach (var contribution in information.ContributingSources)
-            {
-                if (contribution is null
-                    || !SourceId.IsValid(contribution.SourceId.Value)
-                    || string.IsNullOrWhiteSpace(contribution.SourceName)
-                    || contribution.OccurrenceCount < 1
-                    || !sourceIds.Add(contribution.SourceId))
-                {
-                    throw InvalidContract("A Discovery source contribution is invalid.");
-                }
-
-                sourceOccurrenceTotal += contribution.OccurrenceCount;
-            }
-
-            if (sourceOccurrenceTotal != information.TotalOccurrenceCount)
-            {
-                throw InvalidContract(
-                    "Discovery per-source occurrence counts must match the aggregate count.");
-            }
         }
     }
 
@@ -662,6 +657,56 @@ public static class IpcContractValidator
         {
             throw InvalidContract(
                 "A rejected Discovery occurrence response requires no occurrence and controlled failure information.");
+        }
+
+        ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateGetDiscoveryContributorsResponse(
+        GetDiscoveryContributorsResponse response)
+    {
+        ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+        ValidateOperationId(response.DiscoveryOperationId, "Discovery contributor responses");
+        if (!Enum.IsDefined(response.Acceptance))
+        {
+            throw InvalidContract("The Discovery contributor response has an unsupported acceptance value.");
+        }
+
+        if (response.Acceptance == CommandAcceptance.Accepted)
+        {
+            if (response.Page is null
+                || response.Failure is not null
+                || response.Page.DiscoveryOperationId != response.DiscoveryOperationId
+                || response.Page.StartIndex < 0
+                || response.Page.TotalSourceCount < 1
+                || response.Page.TotalOccurrenceCount < 1
+                || response.Page.Sources is null
+                || response.Page.Sources.Count > DiscoveryContributorPaging.MaximumPageSize
+                || response.Page.StartIndex + response.Page.Sources.Count > response.Page.TotalSourceCount)
+            {
+                throw InvalidContract("An accepted Discovery contributor response is invalid.");
+            }
+
+            var sourceIds = new HashSet<SourceId>();
+            foreach (var source in response.Page.Sources)
+            {
+                if (source is null
+                    || !SourceId.IsValid(source.SourceId.Value)
+                    || string.IsNullOrWhiteSpace(source.SourceName)
+                    || source.OccurrenceCount < 1
+                    || !sourceIds.Add(source.SourceId))
+                {
+                    throw InvalidContract("A Discovery contributor page contains an invalid source.");
+                }
+            }
+
+            return;
+        }
+
+        if (response.Page is not null || response.Failure is null)
+        {
+            throw InvalidContract(
+                "A rejected Discovery contributor response requires controlled failure information.");
         }
 
         ValidateFailure(response.Failure);
@@ -1022,9 +1067,37 @@ public static class IpcContractValidator
         if (occurrence.Ordinal < 1
             || occurrence.TotalOccurrenceCount < occurrence.Ordinal
             || !SourceId.IsValid(occurrence.SourceId.Value)
+            || string.IsNullOrWhiteSpace(occurrence.SourceName)
             || occurrence.Value is null)
         {
             throw InvalidContract("A discovered occurrence is invalid.");
+        }
+    }
+
+    private static void ValidateDetailedIdentitySelection(
+        IReadOnlyList<DiscoveryInformationIdentity> identities)
+    {
+        if (identities is null || identities.Count == 0)
+        {
+            throw InvalidContract("A Discovery query requires at least one detailed identity.");
+        }
+
+        var unique = new HashSet<DiscoveryInformationIdentity>();
+        DiscoveryLogicalIdentity? logicalIdentity = null;
+        foreach (var identity in identities)
+        {
+            ValidateDiscoveryInformationIdentity(identity);
+            if (!unique.Add(identity))
+            {
+                throw InvalidContract("A Discovery query contains a duplicate detailed identity.");
+            }
+
+            var current = DiscoveryLogicalIdentity.Create(identity);
+            logicalIdentity ??= current;
+            if (current != logicalIdentity.Value)
+            {
+                throw InvalidContract("A Discovery query must target one logical information field.");
+            }
         }
     }
 

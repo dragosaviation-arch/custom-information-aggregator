@@ -247,6 +247,8 @@ public sealed class WorkflowNavigationPreferenceTests
 
     private sealed class NavigationDiscoveryClient(DiscoveryScenario scenario) : IDiscoveryClient
     {
+        private SourceId _sourceId;
+
         public Task<DiscoveryClientResult> RunAsync(
             OperationCorrelation correlation,
             IReadOnlyList<LoadedSourceContract> sources,
@@ -258,6 +260,7 @@ public sealed class WorkflowNavigationPreferenceTests
             }
 
             var source = sources.Single();
+            _sourceId = source.SourceId;
             if (scenario == DiscoveryScenario.Failure)
             {
                 return Task.FromResult(new DiscoveryClientResult(
@@ -301,7 +304,7 @@ public sealed class WorkflowNavigationPreferenceTests
                     lookup.Identity,
                     lookup.GlobalOrdinal,
                     lookup.TotalOccurrenceCount,
-                    lookup.Source.SourceId,
+                    _sourceId,
                     "sample"),
                 FailureCode: null,
                 FailureDescription: null));
@@ -314,6 +317,7 @@ public sealed class WorkflowNavigationPreferenceTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _completion =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private SourceId _sourceId;
 
         public Task IntermediateReported => _intermediateReported.Task;
 
@@ -329,6 +333,7 @@ public sealed class WorkflowNavigationPreferenceTests
             IProgress<DiscoveryProgressSnapshot>? progress,
             CancellationToken cancellationToken = default)
         {
+            _sourceId = sources[0].SourceId;
             progress?.Report(new DiscoveryProgressSnapshot(1, sources.Count));
             _intermediateReported.TrySetResult();
             await _completion.Task.WaitAsync(cancellationToken);
@@ -359,7 +364,7 @@ public sealed class WorkflowNavigationPreferenceTests
                     lookup.Identity,
                     lookup.GlobalOrdinal,
                     lookup.TotalOccurrenceCount,
-                    lookup.Source.SourceId,
+                    _sourceId,
                     "sample"),
                 FailureCode: null,
                 FailureDescription: null));

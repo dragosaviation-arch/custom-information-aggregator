@@ -191,7 +191,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
                     lookup.Identity,
                     lookup.GlobalOrdinal,
                     lookup.TotalOccurrenceCount,
-                    lookup.Source.SourceId,
+                    source.SourceId,
                     "first identity value")
                 : throw new IOException("Contained preview read failure."));
         using var viewModel = new DiscoveryWorkspaceViewModel(
@@ -320,7 +320,9 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 lookup.Identity,
                 lookup.GlobalOrdinal,
                 lookup.TotalOccurrenceCount,
-                lookup.Source.SourceId,
+                lookup.Identity.SourceSetId == secondSet.SourceSetId
+                    ? second.SourceId
+                    : first.SourceId,
                 lookup.Identity.StructuralPath.Contains("seller", StringComparison.Ordinal)
                     ? "Seller A"
                     : "Buyer value"));
@@ -439,12 +441,17 @@ public sealed class DiscoveryWorkspaceViewModelTests
             lookup =>
             {
                 occurrenceLookups.Add(lookup);
+                var identity = lookup.GlobalOrdinal <= 4
+                    ? lookup.DetailedIdentities[0]
+                    : lookup.GlobalOrdinal <= 10
+                        ? lookup.DetailedIdentities[1]
+                        : lookup.DetailedIdentities[2];
                 return AcceptOccurrence(
-                    lookup.Identity,
+                    identity,
                     lookup.GlobalOrdinal,
                     lookup.TotalOccurrenceCount,
-                    lookup.Source.SourceId,
-                    $"{lookup.Identity.StructuralPath}:{lookup.LocalOrdinal}");
+                    source.SourceId,
+                    $"{identity.StructuralPath}:{lookup.GlobalOrdinal}");
             });
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
@@ -459,8 +466,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual("toolnbr", logicalField.InformationType);
         Assert.AreEqual(16, logicalField.TotalOccurrenceCount);
         Assert.HasCount(3, logicalField.DetailedIdentities);
-        Assert.HasCount(1, logicalField.ContributingSources);
-        Assert.AreEqual(16, logicalField.ContributingSources[0].OccurrenceCount);
+        Assert.AreEqual(1, logicalField.SourceCount);
         Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
         Assert.AreEqual(16, viewModel.OccurrenceTotal);
 
@@ -468,9 +474,11 @@ public sealed class DiscoveryWorkspaceViewModelTests
         await AwaitOrdinalJumpAsync(viewModel);
 
         Assert.AreEqual(5, viewModel.CurrentOccurrenceOrdinal);
-        Assert.AreEqual("/root/second/toolnbr:1", viewModel.OccurrencePreviewText);
-        Assert.AreEqual("/root/second/toolnbr", occurrenceLookups[^1].Identity.StructuralPath);
-        Assert.AreEqual(1, occurrenceLookups[^1].LocalOrdinal);
+        Assert.AreEqual("/root/second/toolnbr:5", viewModel.OccurrencePreviewText);
+        Assert.AreEqual(
+            "/root/second/toolnbr",
+            occurrenceLookups[^1].DetailedIdentities[1].StructuralPath);
+        Assert.AreEqual(5, occurrenceLookups[^1].GlobalOrdinal);
     }
 
     [TestMethod]
@@ -660,7 +668,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         var result = viewModel.Information[0];
         Assert.AreEqual("SerialNumber", result.InformationType);
         Assert.AreEqual(3, result.TotalOccurrenceCount);
-        Assert.AreEqual(3, result.ContributingSources.Sum(source => source.OccurrenceCount));
+        Assert.AreEqual(1, result.SourceCount);
 
         viewModel.InspectSourcesCommand.Execute(result);
 
@@ -699,6 +707,60 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.HasCount(1, viewModel.Information);
         Assert.AreEqual("0 / 1 sources included", viewModel.IncludedSourceSummary);
         Assert.IsFalse(viewModel.RunDiscoveryCommand.CanExecute(null));
+    }
+
+    [TestMethod]
+    public async Task SourceInspectionLoadsOnlyOneBoundedContributorPageAtATime()
+    {
+        var source = CreateSource("source.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var information = new DiscoveredInformation(
+            "Name",
+            250,
+            250,
+            "sample");
+        var contributors = Enumerable.Range(1, 250)
+            .Select(index => new DiscoveredSourceContribution(
+                SourceId.CreateNew(),
+                $"source-{index:D3}.xml",
+                1))
+            .ToArray();
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => Accept(correlation, sources, [information]),
+            contributorResultFactory: query => new DiscoveryContributorClientResult(
+                true,
+                new DiscoveryContributorPage(
+                    query.DiscoveryOperationId,
+                    query.StartIndex,
+                    contributors.Length,
+                    contributors.Length,
+                    contributors.Skip(query.StartIndex).Take(query.PageSize).ToArray()),
+                null,
+                null));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            new ActiveDiscoveryConfiguration(),
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var logical = viewModel.Information.Single();
+        await viewModel.InspectSourcesCommand.ExecuteAsync(logical);
+
+        Assert.HasCount(100, viewModel.InspectedSources);
+        Assert.AreEqual("source-001.xml", viewModel.InspectedSources[0].SourceName);
+        Assert.AreEqual(0, client.ContributorQueries[0].StartIndex);
+        Assert.AreEqual(DiscoveryContributorPaging.DefaultPageSize,
+            client.ContributorQueries[0].PageSize);
+        Assert.IsTrue(viewModel.NextSourceInspectionPageCommand.CanExecute(null));
+
+        await viewModel.NextSourceInspectionPageCommand.ExecuteAsync(null);
+
+        Assert.HasCount(100, viewModel.InspectedSources);
+        Assert.AreEqual("source-101.xml", viewModel.InspectedSources[0].SourceName);
+        Assert.AreEqual(100, client.ContributorQueries[1].StartIndex);
+        Assert.HasCount(2, client.ContributorQueries);
     }
 
     [TestMethod]
@@ -741,7 +803,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.HasCount(1, viewModel.Information);
         var filtered = viewModel.Information[0];
         Assert.AreEqual("Tag29", filtered.InformationType);
-        Assert.AreEqual(29, filtered.ContributingSources.Sum(item => item.OccurrenceCount));
+        Assert.AreEqual(1, filtered.SourceCount);
     }
 
     [TestMethod]
@@ -1051,8 +1113,8 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 lookup.InformationType,
                 lookup.GlobalOrdinal,
                 lookup.TotalOccurrenceCount,
-                lookup.Source.SourceId,
-                $"Local occurrence {lookup.LocalOrdinal}"));
+                lookup.GlobalOrdinal <= 2 ? first.SourceId : second.SourceId,
+                $"Global occurrence {lookup.GlobalOrdinal}"));
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
             new ActiveDiscoveryConfiguration(),
@@ -1062,18 +1124,15 @@ public sealed class DiscoveryWorkspaceViewModelTests
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
         await AwaitSelectedOccurrenceAsync(viewModel);
 
-        Assert.AreEqual(first.SourceId, client.LastOccurrenceLookup?.Source.SourceId);
-        Assert.AreEqual(1, client.LastOccurrenceLookup?.LocalOrdinal);
-        Assert.AreEqual(2, client.LastOccurrenceLookup?.ExpectedSourceOccurrenceCount);
+        Assert.IsNotNull(client.LastOccurrenceLookup);
+        Assert.AreEqual(1, client.LastOccurrenceLookup.GlobalOrdinal);
+        Assert.HasCount(1, client.LastOccurrenceLookup.DetailedIdentities);
 
         viewModel.OccurrenceOrdinalInput = "4";
         await AwaitOrdinalJumpAsync(viewModel);
 
-        Assert.AreEqual(second.SourceId, client.LastOccurrenceLookup?.Source.SourceId);
         Assert.AreEqual(4, client.LastOccurrenceLookup?.GlobalOrdinal);
-        Assert.AreEqual(2, client.LastOccurrenceLookup?.LocalOrdinal);
-        Assert.AreEqual(3, client.LastOccurrenceLookup?.ExpectedSourceOccurrenceCount);
-        Assert.AreEqual("Local occurrence 2", viewModel.OccurrencePreviewText);
+        Assert.AreEqual("Global occurrence 4", viewModel.OccurrencePreviewText);
     }
 
     [TestMethod]
@@ -1134,7 +1193,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 lookup.InformationType,
                 lookup.GlobalOrdinal,
                 lookup.TotalOccurrenceCount,
-                lookup.Source.SourceId,
+                source.SourceId,
                 lookup.GlobalOrdinal == 1 ? "retained value" : "retained second value"));
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
@@ -1168,7 +1227,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
 
         Assert.AreEqual("retained second value", viewModel.OccurrencePreviewText);
         Assert.AreEqual(2, viewModel.CurrentOccurrenceOrdinal);
-        Assert.AreEqual(source.SourceId, client.LastOccurrenceLookup?.Source.SourceId);
+        Assert.AreEqual(2, client.LastOccurrenceLookup?.GlobalOrdinal);
     }
 
     [TestMethod]
@@ -1699,6 +1758,9 @@ public sealed class DiscoveryWorkspaceViewModelTests
         private readonly Func<
             DiscoveryOccurrenceLookup,
             DiscoveryOccurrenceClientResult>? _occurrenceResultFactory;
+        private readonly Func<
+            DiscoveryContributorPageQuery,
+            DiscoveryContributorClientResult>? _contributorResultFactory;
         private IReadOnlyList<DiscoveredInformation> _lastInformation = [];
 
         public StubDiscoveryClient(
@@ -1708,10 +1770,14 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 DiscoveryClientResult> resultFactory,
             Func<
                 DiscoveryOccurrenceLookup,
-                DiscoveryOccurrenceClientResult>? occurrenceResultFactory = null)
+                DiscoveryOccurrenceClientResult>? occurrenceResultFactory = null,
+            Func<
+                DiscoveryContributorPageQuery,
+                DiscoveryContributorClientResult>? contributorResultFactory = null)
         {
             _resultFactory = resultFactory;
             _occurrenceResultFactory = occurrenceResultFactory;
+            _contributorResultFactory = contributorResultFactory;
         }
 
         public IReadOnlyList<LoadedSourceContract> LastSources { get; private set; } = [];
@@ -1723,6 +1789,8 @@ public sealed class DiscoveryWorkspaceViewModelTests
         public DiscoveryOccurrenceLookup? LastOccurrenceLookup { get; private set; }
 
         public List<DiscoveryOccurrenceLookup> OccurrenceLookups { get; } = [];
+
+        public List<DiscoveryContributorPageQuery> ContributorQueries { get; } = [];
 
         public Task<DiscoveryClientResult> RunAsync(
             OperationCorrelation correlation,
@@ -1749,16 +1817,62 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 return Task.FromResult(_occurrenceResultFactory(lookup));
             }
 
-            var information = _lastInformation.Single(
-                item => item.Identity == lookup.Identity);
+            var localOrdinal = lookup.GlobalOrdinal;
+            DiscoveredInformation? information = null;
+            foreach (var identity in lookup.DetailedIdentities)
+            {
+                information = _lastInformation.Single(item => item.Identity == identity);
+                if (localOrdinal <= information.TotalOccurrenceCount)
+                {
+                    break;
+                }
+
+                localOrdinal -= information.TotalOccurrenceCount;
+            }
+
+            Assert.IsNotNull(information);
+            Assert.IsNotEmpty(LastSources);
             return Task.FromResult(AcceptOccurrence(
-                lookup.Identity,
+                information.Identity,
                 lookup.GlobalOrdinal,
                 lookup.TotalOccurrenceCount,
-                lookup.Source.SourceId,
+                LastSources[0].SourceId,
                 lookup.GlobalOrdinal == 1
                     ? information.SampleValue
                     : $"{lookup.InformationType} occurrence {lookup.GlobalOrdinal}"));
+        }
+
+        public Task<DiscoveryContributorClientResult> GetContributorsAsync(
+            DiscoveryContributorPageQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            ContributorQueries.Add(query);
+            if (_contributorResultFactory is not null)
+            {
+                return Task.FromResult(_contributorResultFactory(query));
+            }
+
+            var totalOccurrences = _lastInformation
+                .Where(item => query.DetailedIdentities.Contains(item.Identity))
+                .Sum(item => item.TotalOccurrenceCount);
+            var contributors = LastSources
+                .Select((source, index) => new DiscoveredSourceContribution(
+                    source.SourceId,
+                    Path.GetFileName(source.Path),
+                    LastSources.Count == 1 ? totalOccurrences : 1))
+                .Skip(query.StartIndex)
+                .Take(query.PageSize)
+                .ToArray();
+            return Task.FromResult(new DiscoveryContributorClientResult(
+                true,
+                new DiscoveryContributorPage(
+                    query.DiscoveryOperationId,
+                    query.StartIndex,
+                    query.ExpectedSourceCount,
+                    totalOccurrences,
+                    contributors),
+                FailureCode: null,
+                FailureDescription: null));
         }
     }
 
@@ -1849,6 +1963,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         private int _activeRequests;
         private int _maximumConcurrentRequests;
         private int _occurrenceCallCount;
+        private SourceId _sourceId;
 
         public Task FirstRequestStarted => _firstRequestStarted.Task;
 
@@ -1866,6 +1981,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
             CancellationToken cancellationToken = default)
         {
             var source = sources.Single();
+            _sourceId = source.SourceId;
             var firstIdentity = new DiscoveryInformationIdentity(
                 source.SourceSetId,
                 "/root/first/toolnbr",
@@ -1920,7 +2036,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
                     lookup.Identity,
                     lookup.GlobalOrdinal,
                     lookup.TotalOccurrenceCount,
-                    lookup.Source.SourceId,
+                    _sourceId,
                     lookup.Identity.StructuralPath.Contains("first", StringComparison.Ordinal)
                         ? "first identity value"
                         : "second identity value");

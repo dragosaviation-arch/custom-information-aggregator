@@ -36,7 +36,12 @@ public static class ProcessingHostApplicationHost
             });
 
         var runtimeOptions = ProcessingHostRuntimeOptions.FromConfiguration(builder.Configuration);
-        var settingsService = ApplicationSettingsService.ForCurrentUser();
+        var configuredLocalApplicationData = builder.Configuration[
+            ApplicationPaths.LocalApplicationDataDirectoryConfigurationKey];
+        var settingsService = string.IsNullOrWhiteSpace(configuredLocalApplicationData)
+            ? ApplicationSettingsService.ForCurrentUser()
+            : new ApplicationSettingsService(
+                new ApplicationSettingsStore(configuredLocalApplicationData));
 
         builder.Services.AddSingleton(settingsService);
         builder.Services.AddSingleton<IProcessingHistoryRecorder, ClefProcessingHistoryRecorder>();

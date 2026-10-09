@@ -30,7 +30,7 @@ public sealed partial class StructuredInformationRepository
                 source.BackupDatabase(destination);
             }
 
-            await RemoveExtractionPublicationAsync(snapshotPath, cancellationToken)
+            await RemoveNonRestorablePublicationsAsync(snapshotPath, cancellationToken)
                 .ConfigureAwait(false);
             var actual = await ValidateWorkingStateSnapshotAsync(
                     snapshotPath,
@@ -104,6 +104,12 @@ public sealed partial class StructuredInformationRepository
             {
                 throw new StructuredInformationRepositoryException(
                     "A working-state SQLite snapshot cannot retain an Extraction publication.");
+            }
+
+            if (await HasDiscoveryIndexAsync(connection, cancellationToken).ConfigureAwait(false))
+            {
+                throw new StructuredInformationRepositoryException(
+                    "A working-state SQLite snapshot cannot retain a Discovery contributor index.");
             }
 
             return actualGeneration;
@@ -184,7 +190,7 @@ public sealed partial class StructuredInformationRepository
         }
     }
 
-    private static async Task RemoveExtractionPublicationAsync(
+    private static async Task RemoveNonRestorablePublicationsAsync(
         string snapshotPath,
         CancellationToken cancellationToken)
     {
@@ -206,6 +212,8 @@ public sealed partial class StructuredInformationRepository
                 DELETE FROM hierarchy_extraction_results;
                 DELETE FROM extraction_publication;
                 DELETE FROM extraction_results;
+                DELETE FROM discovery_publication;
+                DELETE FROM discovery_results;
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -280,6 +288,17 @@ public sealed partial class StructuredInformationRepository
             SELECT EXISTS(SELECT 1 FROM hierarchy_extraction_publication)
                 OR EXISTS(SELECT 1 FROM extraction_publication);
             """;
+        return Convert.ToInt32(
+            await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+            CultureInfo.InvariantCulture) != 0;
+    }
+
+    private static async Task<bool> HasDiscoveryIndexAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM discovery_results);";
         return Convert.ToInt32(
             await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
             CultureInfo.InvariantCulture) != 0;

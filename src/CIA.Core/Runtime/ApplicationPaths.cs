@@ -5,6 +5,8 @@ namespace CIA.Core.Runtime;
 public sealed class ApplicationPaths
 {
     public const string ApplicationDirectoryName = "Custom Information Aggregator";
+    public const string LocalApplicationDataDirectoryConfigurationKey =
+        "ApplicationPaths:LocalApplicationDataDirectory";
 
     private ApplicationPaths(
         string localApplicationDataDirectory,

@@ -376,7 +376,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                     lookup.InformationType,
                     lookup.GlobalOrdinal,
                     lookup.TotalOccurrenceCount,
-                    lookup.Source.SourceId,
+                    sourceId,
                     $"{lookup.InformationType} occurrence {lookup.GlobalOrdinal}"),
                 FailureCode: null,
                 FailureDescription: null));
@@ -385,12 +385,15 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
 
     private sealed class LogicalFieldDiscoveryClient : IDiscoveryClient
     {
+        private SourceId _sourceId;
+
         public Task<DiscoveryClientResult> RunAsync(
             OperationCorrelation correlation,
             IReadOnlyList<LoadedSourceContract> sources,
             CancellationToken cancellationToken = default)
         {
             var source = sources.Single();
+            _sourceId = source.SourceId;
             var contributions = new[]
             {
                 new DiscoveredSourceContribution(source.SourceId, "source.xml", 1)
@@ -438,7 +441,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                     lookup.Identity,
                     lookup.GlobalOrdinal,
                     lookup.TotalOccurrenceCount,
-                    lookup.Source.SourceId,
+                    _sourceId,
                     lookup.Identity.StructuralPath.Contains("first", StringComparison.Ordinal)
                         ? "First"
                         : "Second"),
@@ -470,6 +473,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
         private int _activeRequests;
         private int _maximumConcurrentRequests;
         private int _occurrenceCallCount;
+        private SourceId _sourceId;
 
         public Task FirstRequestStarted => _firstRequestStarted.Task;
 
@@ -487,6 +491,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             CancellationToken cancellationToken = default)
         {
             var source = sources.Single();
+            _sourceId = source.SourceId;
             var first = new DiscoveryInformationIdentity(
                 source.SourceSetId,
                 "/root/first/toolnbr",
@@ -545,7 +550,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                         lookup.Identity,
                         lookup.GlobalOrdinal,
                         lookup.TotalOccurrenceCount,
-                        lookup.Source.SourceId,
+                        _sourceId,
                         lookup.Identity.StructuralPath.Contains("first", StringComparison.Ordinal)
                             ? "first identity value"
                             : "second identity value"),

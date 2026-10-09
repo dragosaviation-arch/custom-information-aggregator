@@ -19,6 +19,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RefreshSourceCommand), "refreshSourceCommand")]
 [JsonDerivedType(typeof(RunDiscoveryCommand), "runDiscoveryCommand")]
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceCommand), "getDiscoveryOccurrenceCommand")]
+[JsonDerivedType(typeof(GetDiscoveryContributorsCommand), "getDiscoveryContributorsCommand")]
 [JsonDerivedType(typeof(BuildDatabaseCommand), "buildDatabaseCommand")]
 [JsonDerivedType(typeof(RunExtractionCommand), "runExtractionCommand")]
 [JsonDerivedType(typeof(RunWorkbookExportCommand), "runWorkbookExportCommand")]
@@ -32,6 +33,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RefreshSourceResponse), "refreshSourceResponse")]
 [JsonDerivedType(typeof(RunDiscoveryResponse), "runDiscoveryResponse")]
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceResponse), "getDiscoveryOccurrenceResponse")]
+[JsonDerivedType(typeof(GetDiscoveryContributorsResponse), "getDiscoveryContributorsResponse")]
 [JsonDerivedType(typeof(BuildDatabaseResponse), "buildDatabaseResponse")]
 [JsonDerivedType(typeof(RunExtractionResponse), "runExtractionResponse")]
 [JsonDerivedType(typeof(RunWorkbookExportResponse), "runWorkbookExportResponse")]
@@ -120,6 +122,12 @@ public sealed record GetDiscoveryOccurrenceCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc,
     DiscoveryOccurrenceLookup Lookup)
+    : IpcCommand(MessageId, TimestampUtc);
+
+public sealed record GetDiscoveryContributorsCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    DiscoveryContributorPageQuery Query)
     : IpcCommand(MessageId, TimestampUtc);
 
 [method: JsonConstructor]
@@ -237,6 +245,16 @@ public sealed record GetDiscoveryOccurrenceResponse(
     OperationId DiscoveryOperationId,
     CommandAcceptance Acceptance,
     DiscoveredOccurrence? Occurrence,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record GetDiscoveryContributorsResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    OperationId DiscoveryOperationId,
+    CommandAcceptance Acceptance,
+    DiscoveryContributorPage? Page,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 

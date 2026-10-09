@@ -137,6 +137,44 @@ public sealed class ProcessingHostDiscoveryClient(
         }
     }
 
+    public async Task<DiscoveryContributorClientResult> GetContributorsAsync(
+        DiscoveryContributorPageQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        try
+        {
+            var host = await hostSupervisor.EnsureAvailableAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (host.State != ProcessingHostLifecycleState.Ready)
+            {
+                return RejectContributors("processing-host-unavailable");
+            }
+
+            var response = await requestClient.RequestDiscoveryContributorsAsync(
+                    query,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return new DiscoveryContributorClientResult(
+                response.Acceptance == CommandAcceptance.Accepted,
+                response.Page,
+                response.Failure?.Code,
+                response.Failure?.Description);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Discovery contributors could not be retrieved from operation {OperationId}",
+                query.DiscoveryOperationId);
+            return RejectContributors("processing-host-unavailable");
+        }
+    }
+
     private static DiscoveryClientResult Reject(
         OperationCorrelation correlation,
         IReadOnlyList<LoadedSourceContract> sources,
@@ -169,6 +207,15 @@ public sealed class ProcessingHostDiscoveryClient(
             Occurrence: null,
             failureCode,
             "The Processing Host could not retrieve the Discovery occurrence.");
+    }
+
+    private static DiscoveryContributorClientResult RejectContributors(string failureCode)
+    {
+        return new DiscoveryContributorClientResult(
+            false,
+            Page: null,
+            failureCode,
+            "The Processing Host could not retrieve the Discovery contributors.");
     }
 
     private static string CreateTechnicalDetail(string category, string message)

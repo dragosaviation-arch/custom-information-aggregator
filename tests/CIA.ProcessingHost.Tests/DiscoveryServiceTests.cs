@@ -7,9 +7,12 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Runtime;
 using CIA.Core.Sources;
 using CIA.ProcessingHost.Discovery;
+using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceInterpretation;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.ProcessingHost.Tests;
@@ -26,7 +29,7 @@ public sealed class DiscoveryServiceTests
         var source = workspace.CreateSource(
             "goodbooks-like.xml",
             $"<book><reviews_widget><![CDATA[{fullValue}]]></reviews_widget></book>");
-        var service = CreateGenericService();
+        var service = CreateGenericService(workspace.Repository);
         var correlation = OperationCorrelation.CreateNew();
 
         var result = await service.RunAsync(correlation, [source]);
@@ -58,6 +61,7 @@ public sealed class DiscoveryServiceTests
     public async Task TenThousandSourcesAggregateAndNavigateWithoutOccurrenceRetention()
     {
         const int sourceCount = 10_000;
+        using var workspace = new DiscoveryWorkspace();
         var sourceSetId = SourceSetId.CreateNew();
         var sources = Enumerable.Range(1, sourceCount)
             .Select(index => new LoadedSourceContract(
@@ -70,7 +74,8 @@ public sealed class DiscoveryServiceTests
             .ToArray();
         var service = new DiscoveryService(
             new SyntheticScaleInterpreter(),
-            new SyntheticScaleOccurrenceReader());
+            new SyntheticScaleOccurrenceReader(),
+            workspace.Repository);
         var correlation = OperationCorrelation.CreateNew();
 
         var result = await service.RunAsync(correlation, sources);
@@ -87,8 +92,20 @@ public sealed class DiscoveryServiceTests
         Assert.IsTrue(result.Accepted);
         Assert.HasCount(3, result.Information);
         Assert.AreEqual(sourceCount, title.TotalOccurrenceCount);
-        Assert.HasCount(sourceCount, title.ContributingSources);
-        Assert.AreEqual(sourceCount, title.ContributingSources.Sum(item => item.OccurrenceCount));
+        Assert.AreEqual(sourceCount, title.LogicalSourceCount);
+        Assert.IsNull(typeof(DiscoveredInformation).GetProperty("ContributingSources"));
+        var contributorPage = await service.GetContributorsAsync(
+            new DiscoveryContributorPageQuery(
+                correlation.OperationId,
+                [title.Identity],
+                StartIndex: 0,
+                PageSize: DiscoveryContributorPaging.MaximumPageSize,
+                ExpectedSourceCount: sourceCount));
+        Assert.IsTrue(contributorPage.Accepted);
+        Assert.AreEqual(sourceCount, contributorPage.Page?.TotalSourceCount);
+        Assert.HasCount(
+            DiscoveryContributorPaging.MaximumPageSize,
+            contributorPage.Page!.Sources);
         Assert.IsTrue(preview.Accepted);
         Assert.AreEqual(sourceCount, preview.Occurrence?.Ordinal);
         Assert.AreEqual(sources[^1].SourceId, preview.Occurrence?.SourceId);
@@ -103,7 +120,7 @@ public sealed class DiscoveryServiceTests
         var second = workspace.CreateSource("second.xml", "<root><value>B</value></root>");
         var progress = new RecordingProgress<DiscoveryProgressSnapshot>();
 
-        var result = await CreateGenericService().RunAsync(
+        var result = await CreateGenericService(workspace.Repository).RunAsync(
             OperationCorrelation.CreateNew(),
             [first, second],
             progress);
@@ -116,6 +133,130 @@ public sealed class DiscoveryServiceTests
                 new DiscoveryProgressSnapshot(2, 2)
             },
             progress.Values.ToArray());
+    }
+
+    [TestMethod]
+    public async Task LogicalSourceUnionContributorPagingAndGlobalOrdinalsUseDurableIndex()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var sources = new[]
+        {
+            workspace.CreateSource("source-1.xml", "<unused />"),
+            workspace.CreateSource("source-2.xml", "<unused />"),
+            workspace.CreateSource("source-3.xml", "<unused />"),
+            workspace.CreateSource("source-4.xml", "<unused />")
+        };
+        var service = new DiscoveryService(
+            new OverlappingLogicalInterpreter(),
+            new OverlappingLogicalOccurrenceReader(),
+            workspace.Repository);
+        var correlation = OperationCorrelation.CreateNew();
+
+        var result = await service.RunAsync(correlation, sources);
+        var logicalDetails = result.Information
+            .Where(item => item.InformationType == "name")
+            .ToArray();
+
+        Assert.HasCount(2, logicalDetails);
+        Assert.IsTrue(logicalDetails.All(item => item.LogicalSourceCount == 4));
+        Assert.AreEqual(6, logicalDetails.Sum(item => item.TotalOccurrenceCount));
+
+        var firstPage = await service.GetContributorsAsync(new DiscoveryContributorPageQuery(
+            correlation.OperationId,
+            logicalDetails.Select(item => item.Identity).ToArray(),
+            StartIndex: 0,
+            PageSize: 2,
+            ExpectedSourceCount: 4));
+        var secondPage = await service.GetContributorsAsync(new DiscoveryContributorPageQuery(
+            correlation.OperationId,
+            logicalDetails.Select(item => item.Identity).ToArray(),
+            StartIndex: 2,
+            PageSize: 2,
+            ExpectedSourceCount: 4));
+
+        Assert.IsTrue(firstPage.Accepted);
+        Assert.IsTrue(secondPage.Accepted);
+        CollectionAssert.AreEqual(
+            sources.Select(source => source.SourceId).ToArray(),
+            firstPage.Page!.Sources.Concat(secondPage.Page!.Sources)
+                .Select(item => item.SourceId)
+                .ToArray());
+        CollectionAssert.AreEqual(
+            new[] { 1, 2, 2, 1 },
+            firstPage.Page.Sources.Concat(secondPage.Page.Sources)
+                .Select(item => item.OccurrenceCount)
+                .ToArray());
+
+        var fourth = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
+            correlation.OperationId,
+            logicalDetails.Select(item => item.Identity).ToArray(),
+            GlobalOrdinal: 4,
+            TotalOccurrenceCount: 6));
+        var sixthFromFreshService = await new DiscoveryService(
+            new OverlappingLogicalInterpreter(),
+            new OverlappingLogicalOccurrenceReader(),
+            workspace.Repository).GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
+                correlation.OperationId,
+                logicalDetails.Select(item => item.Identity).ToArray(),
+                GlobalOrdinal: 6,
+                TotalOccurrenceCount: 6));
+
+        Assert.AreEqual(sources[1].SourceId, fourth.Occurrence?.SourceId);
+        Assert.AreEqual("second:source-2", fourth.Occurrence?.Value);
+        Assert.AreEqual(sources[3].SourceId, sixthFromFreshService.Occurrence?.SourceId);
+        Assert.AreEqual("second:source-4", sixthFromFreshService.Occurrence?.Value);
+    }
+
+    [TestMethod]
+    public async Task PublishedIndexSurvivesFailedRerunAndIsInvalidatedBySuccessfulReplacement()
+    {
+        using var workspace = new DiscoveryWorkspace();
+        var source = workspace.CreateSource("source-1.xml", "<unused />");
+        var service = new DiscoveryService(
+            new OverlappingLogicalInterpreter(),
+            new OverlappingLogicalOccurrenceReader(),
+            workspace.Repository);
+        var firstCorrelation = OperationCorrelation.CreateNew();
+        var first = await service.RunAsync(firstCorrelation, [source]);
+        var firstLookup = new DiscoveryOccurrenceLookup(
+            firstCorrelation.OperationId,
+            first.Information.Select(item => item.Identity).ToArray(),
+            GlobalOrdinal: 1,
+            TotalOccurrenceCount: 1);
+
+        var malformed = workspace.CreateSource("malformed.xml", "<root><value></root>");
+        var failed = await CreateGenericService(workspace.Repository).RunAsync(
+            OperationCorrelation.CreateNew(),
+            [malformed]);
+        var retained = await service.GetOccurrenceAsync(firstLookup);
+        var retainedContributors = await service.GetContributorsAsync(
+            new DiscoveryContributorPageQuery(
+                firstCorrelation.OperationId,
+                first.Information.Select(item => item.Identity).ToArray(),
+                0,
+                1,
+                1));
+
+        Assert.IsFalse(failed.Accepted);
+        Assert.IsTrue(retained.Accepted);
+        Assert.IsTrue(retainedContributors.Accepted);
+
+        var replacementCorrelation = OperationCorrelation.CreateNew();
+        var replacement = await service.RunAsync(replacementCorrelation, [source]);
+        var staleOccurrence = await service.GetOccurrenceAsync(firstLookup);
+        var staleContributors = await service.GetContributorsAsync(
+            new DiscoveryContributorPageQuery(
+                firstCorrelation.OperationId,
+                first.Information.Select(item => item.Identity).ToArray(),
+                0,
+                1,
+                1));
+
+        Assert.IsTrue(replacement.Accepted);
+        Assert.IsFalse(staleOccurrence.Accepted);
+        Assert.AreEqual("discovery-preview-out-of-date", staleOccurrence.Failure?.Code);
+        Assert.IsFalse(staleContributors.Accepted);
+        Assert.AreEqual("discovery-contributors-out-of-date", staleContributors.Failure?.Code);
     }
 
     [TestMethod]
@@ -132,7 +273,7 @@ public sealed class DiscoveryServiceTests
             "second.xml",
             "<root><buyer><name>Buyer B</name></buyer></root>",
             secondSet);
-        var service = CreateGenericService();
+        var service = CreateGenericService(workspace.Repository);
         var correlation = OperationCorrelation.CreateNew();
 
         var result = await service.RunAsync(correlation, [first, second]);
@@ -149,15 +290,12 @@ public sealed class DiscoveryServiceTests
         Assert.AreEqual("name", firstSeller.InformationType);
         Assert.AreEqual("name", secondBuyer.InformationType);
 
-        var preview = await CreateGenericService().GetOccurrenceAsync(
+        var preview = await CreateGenericService(workspace.Repository).GetOccurrenceAsync(
             new DiscoveryOccurrenceLookup(
                 correlation.OperationId,
-                firstSeller.Identity,
-                GlobalOrdinal: 1,
-                TotalOccurrenceCount: 1,
-                first,
-                LocalOrdinal: 1,
-                ExpectedSourceOccurrenceCount: 1));
+                [firstBuyer.Identity, firstSeller.Identity],
+                GlobalOrdinal: 2,
+                TotalOccurrenceCount: 2));
 
         Assert.IsTrue(preview.Accepted);
         Assert.AreEqual("Seller A", preview.Occurrence?.Value);
@@ -183,7 +321,7 @@ public sealed class DiscoveryServiceTests
             "same-name-paths.xml",
             "<root><first><toolnbr>A-100</toolnbr></first>" +
             "<second><toolnbr>B-200</toolnbr></second></root>");
-        var service = CreateGenericService();
+        var service = CreateGenericService(workspace.Repository);
         var correlation = OperationCorrelation.CreateNew();
         var discovery = await service.RunAsync(correlation, [source]);
         var first = discovery.Information.Single(item =>
@@ -193,28 +331,19 @@ public sealed class DiscoveryServiceTests
 
         var firstPreview = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
             correlation.OperationId,
-            first.Identity,
+            [first.Identity, second.Identity],
             GlobalOrdinal: 1,
-            TotalOccurrenceCount: 1,
-            source,
-            LocalOrdinal: 1,
-            ExpectedSourceOccurrenceCount: 1));
+            TotalOccurrenceCount: 2));
         var secondPreview = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
             correlation.OperationId,
-            second.Identity,
-            GlobalOrdinal: 1,
-            TotalOccurrenceCount: 1,
-            source,
-            LocalOrdinal: 1,
-            ExpectedSourceOccurrenceCount: 1));
+            [first.Identity, second.Identity],
+            GlobalOrdinal: 2,
+            TotalOccurrenceCount: 2));
         var firstAgain = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
             correlation.OperationId,
-            first.Identity,
+            [first.Identity, second.Identity],
             GlobalOrdinal: 1,
-            TotalOccurrenceCount: 1,
-            source,
-            LocalOrdinal: 1,
-            ExpectedSourceOccurrenceCount: 1));
+            TotalOccurrenceCount: 2));
 
         Assert.AreEqual("toolnbr", first.InformationType);
         Assert.AreEqual("toolnbr", second.InformationType);
@@ -237,7 +366,7 @@ public sealed class DiscoveryServiceTests
             + "<alternatives><alternative><comment>Second</comment></alternative>"
             + "<alternative><comment /></alternative></alternatives>"
             + "<other><branch><comment /></branch></other></root>");
-        var service = CreateGenericService();
+        var service = CreateGenericService(workspace.Repository);
         var correlation = OperationCorrelation.CreateNew();
 
         var discovery = await service.RunAsync(correlation, [source]);
@@ -257,12 +386,9 @@ public sealed class DiscoveryServiceTests
             var preview = await service.GetOccurrenceAsync(
                 new DiscoveryOccurrenceLookup(
                     correlation.OperationId,
-                    member.Identity,
+                    comments.Select(item => item.Identity).ToArray(),
                     GlobalOrdinal: index + 1,
-                    TotalOccurrenceCount: 2,
-                    source,
-                    LocalOrdinal: 1,
-                    ExpectedSourceOccurrenceCount: 1));
+                    TotalOccurrenceCount: 2));
 
             Assert.IsTrue(preview.Accepted);
             Assert.AreEqual(member.Identity, preview.Occurrence?.Identity);
@@ -284,10 +410,11 @@ public sealed class DiscoveryServiceTests
         var third = workspace.CreateSource(
             "third.xml",
             "<catalog><name>Delta</name><category>Reference</category></catalog>");
-        var service = CreateService();
+        var service = CreateService(workspace.Repository);
+        var correlation = OperationCorrelation.CreateNew();
 
         var result = await service.RunAsync(
-            OperationCorrelation.CreateNew(),
+            correlation,
             [first, second, third]);
 
         Assert.IsTrue(result.Accepted);
@@ -298,27 +425,37 @@ public sealed class DiscoveryServiceTests
         var names = result.Information.Single(item => item.InformationType == "Name");
         Assert.AreEqual(4, names.TotalOccurrenceCount);
         Assert.AreEqual("Alpha", names.SampleValue);
-        Assert.HasCount(3, names.ContributingSources);
+        Assert.AreEqual(3, names.LogicalSourceCount);
+        var contributorResult = await service.GetContributorsAsync(
+            new DiscoveryContributorPageQuery(
+                correlation.OperationId,
+                [names.Identity],
+                StartIndex: 0,
+                PageSize: DiscoveryContributorPaging.DefaultPageSize,
+                ExpectedSourceCount: 3));
+        Assert.IsTrue(contributorResult.Accepted);
+        var contributors = contributorResult.Page!.Sources;
+        Assert.HasCount(3, contributors);
         Assert.AreEqual(
             names.TotalOccurrenceCount,
-            names.ContributingSources.Sum(source => source.OccurrenceCount));
+            contributors.Sum(source => source.OccurrenceCount));
         Assert.AreEqual(
             2,
-            names.ContributingSources.Single(source => source.SourceId == first.SourceId)
+            contributors.Single(source => source.SourceId == first.SourceId)
                 .OccurrenceCount);
         Assert.AreEqual(
             1,
-            names.ContributingSources.Single(source => source.SourceId == second.SourceId)
+            contributors.Single(source => source.SourceId == second.SourceId)
                 .OccurrenceCount);
         Assert.AreEqual(
             1,
-            names.ContributingSources.Single(source => source.SourceId == third.SourceId)
+            contributors.Single(source => source.SourceId == third.SourceId)
                 .OccurrenceCount);
         CollectionAssert.AreEqual(
             new[] { first.SourceId, second.SourceId, third.SourceId },
-            names.ContributingSources.Select(source => source.SourceId).ToArray());
-        Assert.AreEqual("shared.xml", names.ContributingSources[0].SourceName);
-        Assert.AreEqual("shared.xml", names.ContributingSources[1].SourceName);
+            contributors.Select(source => source.SourceId).ToArray());
+        Assert.AreEqual("shared.xml", contributors[0].SourceName);
+        Assert.AreEqual("shared.xml", contributors[1].SourceName);
         CollectionAssert.AreEqual(
             new[] { "Code", "Name", "category" },
             result.Information.Select(item => item.InformationType).ToArray());
@@ -334,7 +471,7 @@ public sealed class DiscoveryServiceTests
         var second = workspace.CreateSource(
             "second.xml",
             "<catalog><name>Charlie</name></catalog>");
-        var service = CreateService();
+        var service = CreateService(workspace.Repository);
         var correlation = OperationCorrelation.CreateNew();
 
         var discovery = await service.RunAsync(correlation, [first, second]);
@@ -391,7 +528,7 @@ public sealed class DiscoveryServiceTests
         var source = workspace.CreateSource(
             "source.xml",
             $"<catalog><name>Sample</name><name>{onDemandOnlyValue}</name></catalog>");
-        var service = CreateService();
+        var service = CreateService(workspace.Repository);
         var correlation = OperationCorrelation.CreateNew();
         var result = await service.RunAsync(correlation, [source]);
         var response = new RunDiscoveryResponse(
@@ -423,22 +560,24 @@ public sealed class DiscoveryServiceTests
 
     [TestMethod]
     [TestCategory("AlphaRegressionGate")]
-    public async Task FreshServiceRetrievesOccurrenceWithoutPriorDiscoveryRun()
+    public async Task FreshServiceRetrievesOccurrenceFromDurablePublishedDiscoveryIndex()
     {
         using var workspace = new DiscoveryWorkspace();
         var usable = workspace.CreateSource(
             "usable.xml",
             "<catalog><name>Retained value</name></catalog>");
-        var lookup = CreateLookup(
-            OperationCorrelation.CreateNew().OperationId,
-            "Name",
-            globalOrdinal: 1,
-            totalOccurrenceCount: 1,
-            usable,
-            localOrdinal: 1,
-            expectedSourceOccurrenceCount: 1);
+        var correlation = OperationCorrelation.CreateNew();
+        var discovery = await CreateService(workspace.Repository).RunAsync(
+            correlation,
+            [usable]);
+        var name = discovery.Information.Single();
+        var lookup = new DiscoveryOccurrenceLookup(
+            correlation.OperationId,
+            [name.Identity],
+            GlobalOrdinal: 1,
+            TotalOccurrenceCount: 1);
 
-        var occurrence = await CreateService().GetOccurrenceAsync(lookup);
+        var occurrence = await CreateService(workspace.Repository).GetOccurrenceAsync(lookup);
 
         Assert.IsTrue(occurrence.Accepted);
         Assert.AreEqual("Retained value", occurrence.Occurrence?.Value);
@@ -454,7 +593,12 @@ public sealed class DiscoveryServiceTests
             .ToArray();
 
         CollectionAssert.AreEquivalent(
-            new[] { typeof(ISourceInterpreter), typeof(ISourceOccurrenceReader) },
+            new[]
+            {
+                typeof(ISourceInterpreter),
+                typeof(ISourceOccurrenceReader),
+                typeof(StructuredInformationRepository)
+            },
             fieldTypes);
     }
 
@@ -491,7 +635,7 @@ public sealed class DiscoveryServiceTests
             "codes.xml",
             "<catalog><code>A-1</code></catalog>");
         var adapter = new CatalogDiscoveryAdapter();
-        var service = CreateService(adapter);
+        var service = CreateService(workspace.Repository, adapter);
         var correlation = OperationCorrelation.CreateNew();
 
         var discovery = await service.RunAsync(correlation, [names, codes]);
@@ -537,7 +681,7 @@ public sealed class DiscoveryServiceTests
         var source = workspace.CreateSource(
             "source.xml",
             "<catalog><name>Alpha</name><name>Bravo</name></catalog>");
-        var service = CreateService();
+        var service = CreateService(workspace.Repository);
         var correlation = OperationCorrelation.CreateNew();
         var discovery = await service.RunAsync(correlation, [source]);
         File.WriteAllText(source.Path, "<catalog><name>Alpha</name></catalog>");
@@ -571,7 +715,7 @@ public sealed class DiscoveryServiceTests
             "second.xml",
             "<catalog><name>Bravo</name></catalog>");
 
-        var result = await CreateService().RunAsync(
+        var result = await CreateService(workspace.Repository).RunAsync(
             OperationCorrelation.CreateNew(),
             [first, malformed, second]);
 
@@ -579,9 +723,17 @@ public sealed class DiscoveryServiceTests
         Assert.AreEqual(OperationOutcome.CompletedWithIssues, result.Completion.Outcome);
         Assert.HasCount(1, result.Information);
         Assert.AreEqual(2, result.Information[0].TotalOccurrenceCount);
+        Assert.AreEqual(2, result.Information[0].LogicalSourceCount);
+        var contributors = await CreateService(workspace.Repository).GetContributorsAsync(
+            new DiscoveryContributorPageQuery(
+                result.Completion.Correlation.OperationId,
+                [result.Information[0].Identity],
+                StartIndex: 0,
+                PageSize: DiscoveryContributorPaging.DefaultPageSize,
+                ExpectedSourceCount: 2));
         CollectionAssert.AreEqual(
             new[] { first.SourceId, second.SourceId },
-            result.Information[0].ContributingSources
+            contributors.Page!.Sources
                 .Select(source => source.SourceId)
                 .ToArray());
         Assert.HasCount(1, result.Issues);
@@ -600,7 +752,7 @@ public sealed class DiscoveryServiceTests
             "malformed.xml",
             "<different><value></different>");
 
-        var result = await CreateService().RunAsync(
+        var result = await CreateService(workspace.Repository).RunAsync(
             OperationCorrelation.CreateNew(),
             [malformed]);
 
@@ -656,16 +808,16 @@ public sealed class DiscoveryServiceTests
         Assert.AreEqual(
             "/catalog/item/@code",
             roundTripped.Information[0].Identity.StructuralIdentity);
-        Assert.AreEqual(sourceId, roundTripped.Information[0].ContributingSources[0].SourceId);
+        Assert.AreEqual(1, roundTripped.Information[0].LogicalSourceCount);
 
         var invalid = response with
         {
             Information =
             [
                 new DiscoveredInformation(
-                    "Name",
+                    response.Information[0].Identity,
                     3,
-                    [new DiscoveredSourceContribution(sourceId, "source.xml", 2)],
+                    LogicalSourceCount: 0,
                     "Alpha")
             ]
         };
@@ -696,7 +848,9 @@ public sealed class DiscoveryServiceTests
             expectedSourceOccurrenceCount);
     }
 
-    private static DiscoveryService CreateService(CatalogDiscoveryAdapter? adapter = null)
+    private static DiscoveryService CreateService(
+        StructuredInformationRepository repository,
+        CatalogDiscoveryAdapter? adapter = null)
     {
         adapter ??= new CatalogDiscoveryAdapter();
         ISourceAdapter[] adapters = [adapter];
@@ -707,10 +861,11 @@ public sealed class DiscoveryServiceTests
             adapters,
             NullLogger<SourceOccurrenceReader>.Instance);
 
-        return new DiscoveryService(interpreter, occurrenceReader);
+        return new DiscoveryService(interpreter, occurrenceReader, repository);
     }
 
-    private static DiscoveryService CreateGenericService()
+    private static DiscoveryService CreateGenericService(
+        StructuredInformationRepository repository)
     {
         ISourceAdapter[] adapters = [];
         var generic = new GenericXmlElementValueSourceAdapter();
@@ -722,7 +877,8 @@ public sealed class DiscoveryServiceTests
             new SourceOccurrenceReader(
                 adapters,
                 generic,
-                NullLogger<SourceOccurrenceReader>.Instance));
+                NullLogger<SourceOccurrenceReader>.Instance),
+            repository);
     }
 
     private sealed class CatalogDiscoveryAdapter : ISourceAdapter, ISourceOccurrenceAdapter
@@ -863,6 +1019,73 @@ public sealed class DiscoveryServiceTests
         }
     }
 
+    private sealed class OverlappingLogicalInterpreter : ISourceInterpreter
+    {
+        public Task<SourceInterpretationResult> InterpretAsync(
+            LoadedSourceContract source,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sourceNumber = Path.GetFileNameWithoutExtension(source.Path)[^1] - '0';
+            var values = new List<InterpretedSourceValue>();
+            if (sourceNumber <= 3)
+            {
+                values.Add(CreateValue(source, "first", $"first:source-{sourceNumber}", 1));
+            }
+
+            if (sourceNumber >= 2)
+            {
+                values.Add(CreateValue(source, "second", $"second:source-{sourceNumber}", 2));
+            }
+
+            return Task.FromResult(SourceInterpretationResult.Usable(
+                new InterpretedSourceDocument(
+                    source.SourceId,
+                    "synthetic.overlap.v1",
+                    values)));
+        }
+
+        private static InterpretedSourceValue CreateValue(
+            LoadedSourceContract source,
+            string context,
+            string value,
+            long instanceOffset)
+        {
+            var lineage = new SourceValueLineage(
+                source.SourceId,
+                [
+                    new SourceElementInstance("root", "", "root", 1),
+                    new SourceElementInstance(context, "", context, 1 + instanceOffset),
+                    new SourceElementInstance("name", "", "name", 10 + instanceOffset)
+                ],
+                traversalOrder: instanceOffset);
+            return new InterpretedSourceValue("name", value, lineage);
+        }
+    }
+
+    private sealed class OverlappingLogicalOccurrenceReader : ISourceOccurrenceReader
+    {
+        public Task<SourceOccurrenceReadResult> ReadAsync(
+            LoadedSourceContract source,
+            string informationType,
+            string structuralPath,
+            SourceValueCandidateKind candidateKind,
+            string structuralIdentity,
+            int localOrdinal,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sourceNumber = Path.GetFileNameWithoutExtension(source.Path)[^1] - '0';
+            var context = structuralPath.Contains("/first/", StringComparison.Ordinal)
+                ? "first"
+                : "second";
+            var exists = context == "first" ? sourceNumber <= 3 : sourceNumber >= 2;
+            return Task.FromResult(SourceOccurrenceReadResult.Accept(
+                exists && localOrdinal == 1 ? $"{context}:source-{sourceNumber}" : null,
+                exists ? 1 : 0));
+        }
+    }
+
     private sealed class SyntheticScaleOccurrenceReader : ISourceOccurrenceReader
     {
         public Task<SourceOccurrenceReadResult> ReadAsync(
@@ -892,9 +1115,14 @@ public sealed class DiscoveryServiceTests
         {
             Path = System.IO.Path.Combine(_testRoot, Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path);
+            Repository = new StructuredInformationRepository(
+                ApplicationPaths.FromLocalApplicationData(
+                    System.IO.Path.Combine(Path, "LocalAppData")));
         }
 
         public string Path { get; }
+
+        public StructuredInformationRepository Repository { get; }
 
         public LoadedSourceContract CreateSource(
             string fileName,
@@ -930,6 +1158,7 @@ public sealed class DiscoveryServiceTests
                     "Refusing to delete a Discovery test directory outside its root.");
             }
 
+            SqliteConnection.ClearAllPools();
             Directory.Delete(target, recursive: true);
         }
     }
