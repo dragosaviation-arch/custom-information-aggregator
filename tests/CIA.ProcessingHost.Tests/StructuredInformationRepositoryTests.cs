@@ -446,6 +446,63 @@ public sealed class StructuredInformationRepositoryTests
     }
 
     [TestMethod]
+    public async Task VersionSixMigrationInvalidatesFamilylessDerivedStateAndRetainsSourceData()
+    {
+        using var workspace = new RepositoryWorkspace();
+        var repository = workspace.CreateRepository();
+        var sourceId = SourceId.CreateNew();
+        await repository.AddBatchAsync([new IndexedOccurrence("Tag", "retained", sourceId)]);
+        var generationId = OperationId.CreateNew().ToString();
+        var extractionId = OperationId.CreateNew().ToString();
+        var sourceSetId = SourceSetId.CreateNew().ToString();
+
+        await using (var connection = await OpenConnectionAsync(repository.DatabasePath))
+        {
+            await ExecuteAsync(
+                connection,
+                $"""
+                INSERT INTO hierarchy_database_generations (
+                    generation_id, created_utc, generation_state)
+                VALUES ('{generationId}', '{DateTimeOffset.UtcNow:O}', 2);
+                INSERT INTO hierarchy_database_datasets (
+                    generation_id, source_set_id, display_name, dataset_ordinal,
+                    repeated_data_layout)
+                VALUES ('{generationId}', '{sourceSetId}', 'Legacy Set', 1, 1);
+                INSERT INTO hierarchy_database_families (
+                    generation_id, source_set_id, family_kind, family_anchor_path,
+                    parent_family_kind, parent_family_anchor_path, family_ordinal,
+                    display_name)
+                VALUES ('{generationId}', '{sourceSetId}', 1, '/legacy', NULL, NULL, 1, 'Root');
+                INSERT INTO hierarchy_database_publication (singleton_id, generation_id)
+                VALUES (1, '{generationId}');
+                INSERT INTO hierarchy_extraction_results (
+                    extraction_id, database_generation_id, database_generation_json, created_utc)
+                VALUES ('{extractionId}', '{generationId}', 'legacy', '{DateTimeOffset.UtcNow:O}');
+                INSERT INTO hierarchy_extraction_publication (singleton_id, extraction_id)
+                VALUES (1, '{extractionId}');
+                PRAGMA user_version = 6;
+                """);
+        }
+
+        var migrated = workspace.CreateRepository();
+        await migrated.InitializeAsync();
+
+        Assert.IsNull(await migrated.ReadPublishedDatabaseGenerationAsync());
+        Assert.IsNull(await migrated.ReadPublishedExtractionResultAsync());
+        var retained = await migrated.QueryBySourceIdAsync(sourceId);
+        Assert.HasCount(1, retained);
+        Assert.AreEqual("retained", retained[0].Value);
+        await using var migratedConnection = await OpenConnectionAsync(migrated.DatabasePath);
+        Assert.AreEqual(7, await ScalarIntAsync(migratedConnection, "PRAGMA user_version;"));
+        Assert.AreEqual(0, await ScalarIntAsync(
+            migratedConnection,
+            "SELECT COUNT(*) FROM hierarchy_database_families;"));
+        Assert.AreEqual(0, await ScalarIntAsync(
+            migratedConnection,
+            "SELECT COUNT(*) FROM hierarchy_extraction_results;"));
+    }
+
+    [TestMethod]
     public async Task FutureAndInvalidCurrentSchemasAreRejectedWithoutReplacement()
     {
         using var futureWorkspace = new RepositoryWorkspace();

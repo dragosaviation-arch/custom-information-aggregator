@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<book>
+  <title>Root Book</title>
+  <num_pages>100</num_pages>
+  <work><original_title>Original Root</original_title></work>
+  <authors>
+    <author><name>Author A</name></author>
+    <author><name>Author B</name></author>
+  </authors>
+  <buy_links>
+    <link><name>Shop A</name></link>
+    <link><name>Shop B</name></link>
+  </buy_links>
+  <series_works>
+    <work><title>Series One</title></work>
+  </series_works>
+  <similar_books>
+    <book>
+      <title>Similar A</title>
+      <num_pages>200</num_pages>
+      <title_without_series>Similar A</title_without_series>
+      <author><name>Similar Author A</name></author>
+    </book>
+    <book>
+      <title>Similar B</title>
+      <num_pages>300</num_pages>
+      <title_without_series>Similar B</title_without_series>
+      <author><name>Similar Author B</name></author>
+    </book>
+  </similar_books>
+</book>

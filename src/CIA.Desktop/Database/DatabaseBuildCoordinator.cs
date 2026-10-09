@@ -179,6 +179,9 @@ public sealed class DatabaseBuildCoordinator(
 
     public DatabaseBuildSpecification CreateBuildSpecification()
     {
+        var familyCatalog = discoveryConfiguration.FamilyCatalog
+            ?? throw new ArgumentException(
+                "Database generation requires a current Row Family catalog.");
         var sourceSetNames = sourceSet.SourceSets.ToDictionary(
             definition => definition.SourceSetId,
             definition => definition.Name);
@@ -186,7 +189,9 @@ public sealed class DatabaseBuildCoordinator(
             discoveryConfiguration.Current,
             discoveryConfiguration.DatabaseTagOverridesByIdentity,
             sourceSet.CreateIncludedReadySnapshot(),
-            sourceSetNames);
+            sourceSetNames,
+            familyCatalog,
+            discoveryConfiguration.FamilyAssignments);
     }
 
 }

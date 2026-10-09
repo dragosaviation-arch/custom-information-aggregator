@@ -5,6 +5,7 @@ using System.Text;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Export;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Database;
@@ -43,6 +44,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private readonly ObservableCollection<DatabaseColumnPresentation> _visibleColumns = [];
     private readonly VirtualizedDatabaseReviewCollection _records;
     private readonly ObservableCollection<DatabaseDatasetPresentation> _datasets = [];
+    private readonly ObservableCollection<DatabaseRowFamilyPresentation> _rowFamilies = [];
     private readonly ObservableCollection<DatabaseMetadataFieldPresentation> _metadataFields = [];
     private readonly ObservableCollection<DatabaseMetadataFieldPresentation> _visibleMetadataFields = [];
     private readonly ObservableCollection<DatabaseColumnChoicePresentation> _columnChoices = [];
@@ -58,6 +60,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private int _publishedValueCount;
     private DatabaseGenerationSummary? _publishedGeneration;
     private DatabaseDatasetPresentation? _selectedDataset;
+    private DatabaseRowFamilyPresentation? _selectedRowFamily;
     private string? _searchText;
     private DatabaseRowInclusionFilter _rowInclusionFilter;
     private DatabaseMetadataVisibilityMode _metadataVisibilityMode = DatabaseMetadataVisibilityMode.None;
@@ -118,6 +121,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             _visibleColumns);
         Records = _records;
         Datasets = new ReadOnlyObservableCollection<DatabaseDatasetPresentation>(_datasets);
+        RowFamilies = new ReadOnlyObservableCollection<DatabaseRowFamilyPresentation>(_rowFamilies);
         MetadataFields = new ReadOnlyObservableCollection<DatabaseMetadataFieldPresentation>(
             _metadataFields);
         VisibleMetadataColumns = new ReadOnlyObservableCollection<DatabaseMetadataFieldPresentation>(
@@ -206,6 +210,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     public ReadOnlyObservableCollection<DatabaseDatasetPresentation> Datasets { get; }
 
+    public ReadOnlyObservableCollection<DatabaseRowFamilyPresentation> RowFamilies { get; }
+
     public ReadOnlyObservableCollection<DatabaseMetadataFieldPresentation> MetadataFields { get; }
 
     public ReadOnlyObservableCollection<DatabaseMetadataFieldPresentation> VisibleMetadataColumns { get; }
@@ -253,8 +259,30 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             {
                 return;
             }
-            ApplyDataset(value.Summary);
+            _rowFamilies.Clear();
+            foreach (var family in value.Summary.RowFamilies.OrderBy(family => family.Ordinal))
+            {
+                _rowFamilies.Add(new DatabaseRowFamilyPresentation(family));
+            }
+            SelectedRowFamily = _rowFamilies.FirstOrDefault();
             ApplyExportDataset(value.Summary);
+            OnPropertyChanged(nameof(RecordCountText));
+        }
+    }
+
+    public DatabaseRowFamilyPresentation? SelectedRowFamily
+    {
+        get => _selectedRowFamily;
+        set
+        {
+            if (!SetProperty(ref _selectedRowFamily, value)
+                || value is null
+                || _publishedGeneration is null)
+            {
+                return;
+            }
+
+            ApplyRowFamily(value.Summary);
             OnPropertyChanged(nameof(RecordCountText));
             _ = BeginReviewSessionAsync(_publishedGeneration.OperationId);
         }
@@ -266,7 +294,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         set
         {
             if (SetProperty(ref _searchText, value) && _publishedGenerationId is { } generationId
-                && SelectedDataset is not null)
+                && SelectedDataset is not null && SelectedRowFamily is not null)
             {
                 _ = BeginReviewSessionAsync(generationId);
             }
@@ -279,7 +307,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         set
         {
             if (SetProperty(ref _rowInclusionFilter, value) && _publishedGenerationId is { } generationId
-                && SelectedDataset is not null)
+                && SelectedDataset is not null && SelectedRowFamily is not null)
             {
                 _ = BeginReviewSessionAsync(generationId);
             }
@@ -377,8 +405,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _ => "Database records will appear after a later Database creation/update workflow."
     };
 
-    public string RecordCountText => SelectedDataset is { } dataset
-        ? $"{dataset.Summary.RowCount:N0} rows · {dataset.Summary.ValueCount:N0} values"
+    public string RecordCountText => SelectedRowFamily is { } family
+        ? $"{family.Summary.RowCount:N0} rows · {family.Summary.ValueCount:N0} values"
         : $"{_publishedValueCount:N0} mapped values";
 
     public bool HasReviewRows => Records.Count > 0;
@@ -1177,6 +1205,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _reviewFailureDescription = null;
         _records.ClearReview();
         _datasets.Clear();
+        _rowFamilies.Clear();
+        SelectedRowFamily = null;
         SelectedDataset = null;
         NotifyReviewChanged();
     }
@@ -1253,12 +1283,12 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void ApplyDataset(DatabaseDatasetSummary dataset)
+    private void ApplyRowFamily(DatabaseRowFamilySummary family)
     {
-        var mappingsByKey = dataset.Mappings
+        var mappingsByKey = SelectedDataset!.Summary.Mappings
             .GroupBy(mapping => mapping.FieldKey, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
-        var columns = dataset.Columns.Select(column =>
+        var columns = family.Columns.Select(column =>
         {
             var mappings = mappingsByKey[column.Identity.FieldKey];
             var header = column.Identity.RepeatCoordinates.Coordinates.Count == 0
@@ -1270,7 +1300,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     .Select(identity => identity.InformationType)
                     .Distinct(StringComparer.Ordinal).ToArray());
         }).ToArray();
-        PublishDatabaseGeneration(columns, dataset.Columns.Select(CreateColumnIdentity).ToArray());
+        PublishDatabaseGeneration(columns, family.Columns.Select(CreateColumnIdentity).ToArray());
     }
 
     private void ApplyExportDataset(DatabaseDatasetSummary dataset)
@@ -1761,6 +1791,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     {
         if (_publishedGenerationId is not { } generationId
             || SelectedDataset is not { } dataset
+            || SelectedRowFamily is not { } family
             || _reviewCancellation is not { } cancellation
             || Records.Count == 0)
         {
@@ -1784,6 +1815,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             await LoadReviewChunkAsync(
                     generationId,
                     dataset.Summary.SourceSetId,
+                    family.Summary.Id,
                     pageStart,
                     cancellation,
                     isInitial: false)
@@ -1793,7 +1825,9 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private async Task BeginReviewSessionAsync(OperationId generationId)
     {
-        if (_databaseReviewClient is null || SelectedDataset is not { } dataset)
+        if (_databaseReviewClient is null
+            || SelectedDataset is not { } dataset
+            || SelectedRowFamily is not { } family)
         {
             return;
         }
@@ -1821,6 +1855,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         await LoadReviewChunkAsync(
                 generationId,
                 dataset.Summary.SourceSetId,
+                family.Summary.Id,
                 startRowOrdinal: 1,
                 cancellation,
                 isInitial: true)
@@ -1830,6 +1865,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private async Task LoadReviewChunkAsync(
         OperationId generationId,
         SourceSetId sourceSetId,
+        RowFamilyId rowFamilyId,
         int startRowOrdinal,
         CancellationTokenSource cancellation,
         bool isInitial)
@@ -1856,6 +1892,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                         new DatabaseReviewQuery(
                             generationId,
                             sourceSetId,
+                            rowFamilyId,
                             startRowOrdinal,
                             DatabaseReviewLimits.MaximumRowsPerPage,
                             SearchText,
@@ -1871,6 +1908,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 {
                     var contextIsCurrent = _publishedGenerationId == generationId
                         && SelectedDataset?.Summary.SourceSetId == sourceSetId
+                        && SelectedRowFamily?.Summary.Id == rowFamilyId
                         && ReferenceEquals(_reviewCancellation, cancellation);
                     if (!contextIsCurrent)
                     {
@@ -1881,6 +1919,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                         || result.Page is null
                         || result.Page.GenerationId != generationId
                         || result.Page.Dataset.SourceSetId != sourceSetId
+                        || result.Page.RowFamily?.Id != rowFamilyId
                         || (!isInitial
                             && result.Page.TotalPresentationRowCount != _records.Count)
                         || !PageMatchesPublishedColumns(result.Page))
@@ -1930,6 +1969,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             {
                 var contextIsCurrent = _publishedGenerationId == generationId
                     && SelectedDataset?.Summary.SourceSetId == sourceSetId
+                    && SelectedRowFamily?.Summary.Id == rowFamilyId
                     && ReferenceEquals(_reviewCancellation, cancellation);
                 if (!contextIsCurrent)
                 {
@@ -2104,7 +2144,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         CreateColumnIdentity(column.Identity);
 
     private static string CreateColumnIdentity(DatabaseColumnIdentity identity) =>
-        $"{identity.SourceSetId}:{identity.FieldKey}:{string.Join(',', identity.RepeatCoordinates.Coordinates)}";
+        $"{identity.RowFamilyId}:{identity.FieldKey}:{string.Join(',', identity.RepeatCoordinates.Coordinates)}";
 
     private void PublishDatabaseGeneration(
         IReadOnlyList<DatabaseColumnMapping> publishedColumns,
@@ -2169,7 +2209,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             .Where(row => !row.IsLoading && row.IsIncluded != included)
             .ToArray();
         if (_databaseReviewClient is null || _publishedGenerationId is not { } generationId
-            || SelectedDataset is null || rowsToChange.Length == 0)
+            || SelectedDataset is null || SelectedRowFamily is null || rowsToChange.Length == 0)
         {
             return;
         }
@@ -2183,7 +2223,10 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         var result = await _databaseReviewClient.SetRowsIncludedAsync(
             new DatabaseRowInclusionChange(
                 generationId, SelectedDataset.Summary.SourceSetId,
-                rowsToChange.Select(row => row.Ordinal).ToArray(), included)).ConfigureAwait(false);
+                rowsToChange.Select(row => row.Ordinal).ToArray(), included)
+            {
+                RowFamilyId = SelectedRowFamily.Summary.Id
+            }).ConfigureAwait(false);
         if (result.Accepted && result.ChangedRowCount > 0)
         {
             _records.InvalidateOrdinals(rowsToChange.Select(row => row.Ordinal));
@@ -2196,6 +2239,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     await LoadReviewChunkAsync(
                             generationId,
                             SelectedDataset.Summary.SourceSetId,
+                            SelectedRowFamily.Summary.Id,
                             pageStart,
                             cancellation,
                             isInitial: false)
@@ -2218,6 +2262,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         _databaseReviewClient is not null
         && _publishedGenerationId is not null
         && SelectedDataset is not null
+        && SelectedRowFamily is not null
         && _workflowCoordinator.Current.Database == WorkflowArtifactStatus.Current
         && _workflowCoordinator.Current.ActiveOperation is null;
 
@@ -2296,6 +2341,14 @@ public sealed record DatabaseDatasetPresentation(DatabaseDatasetSummary Summary)
     public string DisplayName => Summary.DisplayName;
 
     public string Context => $"{Summary.RowCount:N0} rows · {Summary.Columns.Count:N0} columns · {Summary.RepeatedDataLayout}";
+}
+
+public sealed record DatabaseRowFamilyPresentation(DatabaseRowFamilySummary Summary)
+{
+    public string DisplayName => Summary.DisplayName;
+
+    public string Context =>
+        $"{Summary.AnchorPath} · {Summary.RowCount:N0} rows · {Summary.Columns.Count:N0} columns";
 }
 
 public sealed record DatabaseReviewRowPresentation(

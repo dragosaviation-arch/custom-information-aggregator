@@ -7,7 +7,7 @@ namespace CIA.ProcessingHost.Repository;
 
 public sealed partial class StructuredInformationRepository
 {
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
     public const string DatabaseFileName = "cia.sqlite3";
 
     private const string OccurrencesTableName = "indexed_occurrences";
@@ -270,6 +270,7 @@ public sealed partial class StructuredInformationRepository
                 3 => await ApplyVersionFourAsync(connection, cancellationToken).ConfigureAwait(false),
                 4 => await ApplyVersionFiveAsync(connection, cancellationToken).ConfigureAwait(false),
                 5 => await ApplyVersionSixAsync(connection, cancellationToken).ConfigureAwait(false),
+                6 => await ApplyVersionSevenAsync(connection, cancellationToken).ConfigureAwait(false),
                 _ => throw new StructuredInformationRepositoryException(
                     $"No repository migration is available from schema version {version}.")
             };
@@ -936,6 +937,172 @@ public sealed partial class StructuredInformationRepository
         }
     }
 
+    private static async Task<int> ApplyVersionSevenAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                DELETE FROM hierarchy_extraction_publication;
+                DELETE FROM hierarchy_extraction_results;
+                DELETE FROM extraction_publication;
+                DELETE FROM extraction_results;
+
+                DROP TABLE hierarchy_database_publication;
+                DROP TABLE hierarchy_database_cell_values;
+                DROP TABLE hierarchy_database_cells;
+                DROP TABLE hierarchy_database_rows;
+                DROP TABLE hierarchy_database_columns;
+                DROP TABLE hierarchy_database_mappings;
+                DROP TABLE hierarchy_database_sources;
+                DROP TABLE IF EXISTS hierarchy_database_families;
+                DROP TABLE hierarchy_database_datasets;
+                DROP TABLE hierarchy_database_generations;
+
+                CREATE TABLE hierarchy_database_generations (
+                    generation_id TEXT PRIMARY KEY CHECK (length(generation_id) = 36),
+                    created_utc TEXT NOT NULL,
+                    generation_state INTEGER NOT NULL CHECK (generation_state IN (1, 2))
+                );
+                CREATE TABLE hierarchy_database_datasets (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL CHECK (length(source_set_id) = 36),
+                    display_name TEXT NOT NULL CHECK (length(display_name) > 0),
+                    dataset_ordinal INTEGER NOT NULL CHECK (dataset_ordinal >= 1),
+                    repeated_data_layout INTEGER NOT NULL,
+                    PRIMARY KEY (generation_id, source_set_id),
+                    UNIQUE (generation_id, dataset_ordinal),
+                    FOREIGN KEY (generation_id) REFERENCES hierarchy_database_generations (generation_id) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_families (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL CHECK (length(family_anchor_path) > 0),
+                    parent_family_kind INTEGER,
+                    parent_family_anchor_path TEXT,
+                    family_ordinal INTEGER NOT NULL CHECK (family_ordinal >= 1),
+                    display_name TEXT NOT NULL CHECK (length(display_name) > 0),
+                    PRIMARY KEY (generation_id, source_set_id, family_kind, family_anchor_path),
+                    UNIQUE (generation_id, source_set_id, family_ordinal),
+                    FOREIGN KEY (generation_id, source_set_id) REFERENCES hierarchy_database_datasets (generation_id, source_set_id) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_sources (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL CHECK (length(source_id) = 36),
+                    source_ordinal INTEGER NOT NULL CHECK (source_ordinal >= 1),
+                    source_file_name TEXT NOT NULL,
+                    full_source_path TEXT NOT NULL,
+                    source_kind INTEGER NOT NULL,
+                    archive_path TEXT,
+                    archive_member_path TEXT,
+                    file_modified_utc TEXT,
+                    PRIMARY KEY (generation_id, source_set_id, source_id),
+                    UNIQUE (generation_id, source_set_id, source_ordinal),
+                    FOREIGN KEY (generation_id, source_set_id) REFERENCES hierarchy_database_datasets (generation_id, source_set_id) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_mappings (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    mapping_ordinal INTEGER NOT NULL CHECK (mapping_ordinal >= 1),
+                    field_key TEXT NOT NULL,
+                    effective_name TEXT NOT NULL,
+                    is_explicit_override INTEGER NOT NULL CHECK (is_explicit_override IN (0, 1)),
+                    detailed_identities_json TEXT NOT NULL,
+                    PRIMARY KEY (generation_id, source_set_id, family_kind, family_anchor_path, mapping_ordinal),
+                    FOREIGN KEY (generation_id, source_set_id, family_kind, family_anchor_path) REFERENCES hierarchy_database_families (generation_id, source_set_id, family_kind, family_anchor_path) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_columns (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    column_ordinal INTEGER NOT NULL CHECK (column_ordinal >= 1),
+                    field_key TEXT NOT NULL,
+                    effective_name TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    PRIMARY KEY (generation_id, source_set_id, family_kind, family_anchor_path, field_key, repeat_coordinates_json),
+                    UNIQUE (generation_id, source_set_id, family_kind, family_anchor_path, column_ordinal),
+                    FOREIGN KEY (generation_id, source_set_id, family_kind, family_anchor_path) REFERENCES hierarchy_database_families (generation_id, source_set_id, family_kind, family_anchor_path) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_rows (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL CHECK (row_ordinal >= 1),
+                    source_id TEXT NOT NULL,
+                    source_row_ordinal INTEGER NOT NULL CHECK (source_row_ordinal >= 1),
+                    anchor_instance_id INTEGER NOT NULL CHECK (anchor_instance_id >= 1),
+                    projection_ordinal INTEGER NOT NULL CHECK (projection_ordinal >= 1),
+                    record_identity TEXT NOT NULL,
+                    is_included INTEGER NOT NULL DEFAULT 1 CHECK (is_included IN (0, 1)),
+                    PRIMARY KEY (generation_id, source_set_id, family_kind, family_anchor_path, row_ordinal),
+                    FOREIGN KEY (generation_id, source_set_id, source_id) REFERENCES hierarchy_database_sources (generation_id, source_set_id, source_id) ON DELETE CASCADE,
+                    FOREIGN KEY (generation_id, source_set_id, family_kind, family_anchor_path) REFERENCES hierarchy_database_families (generation_id, source_set_id, family_kind, family_anchor_path) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_cells (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL,
+                    field_key TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    has_conflict INTEGER NOT NULL CHECK (has_conflict IN (0, 1)),
+                    PRIMARY KEY (generation_id, source_set_id, family_kind, family_anchor_path, row_ordinal, field_key, repeat_coordinates_json),
+                    FOREIGN KEY (generation_id, source_set_id, family_kind, family_anchor_path, row_ordinal) REFERENCES hierarchy_database_rows (generation_id, source_set_id, family_kind, family_anchor_path, row_ordinal) ON DELETE CASCADE,
+                    FOREIGN KEY (generation_id, source_set_id, family_kind, family_anchor_path, field_key, repeat_coordinates_json) REFERENCES hierarchy_database_columns (generation_id, source_set_id, family_kind, family_anchor_path, field_key, repeat_coordinates_json) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_database_cell_values (
+                    generation_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL,
+                    field_key TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    value_ordinal INTEGER NOT NULL CHECK (value_ordinal >= 1),
+                    value TEXT NOT NULL,
+                    information_type TEXT NOT NULL,
+                    structural_path TEXT NOT NULL,
+                    candidate_kind INTEGER NOT NULL,
+                    structural_identity TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    lineage_json TEXT NOT NULL,
+                    PRIMARY KEY (generation_id, source_set_id, family_kind, family_anchor_path, row_ordinal, field_key, repeat_coordinates_json, value_ordinal),
+                    FOREIGN KEY (generation_id, source_set_id, family_kind, family_anchor_path, row_ordinal, field_key, repeat_coordinates_json) REFERENCES hierarchy_database_cells (generation_id, source_set_id, family_kind, family_anchor_path, row_ordinal, field_key, repeat_coordinates_json) ON DELETE CASCADE
+                );
+                CREATE INDEX ix_hierarchy_database_rows_review
+                    ON hierarchy_database_rows (generation_id, source_set_id, family_kind, family_anchor_path, is_included, row_ordinal);
+                CREATE INDEX ix_hierarchy_database_values_search
+                    ON hierarchy_database_cell_values (generation_id, source_set_id, family_kind, family_anchor_path, value);
+                CREATE TABLE hierarchy_database_publication (
+                    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                    generation_id TEXT NOT NULL UNIQUE,
+                    FOREIGN KEY (generation_id) REFERENCES hierarchy_database_generations (generation_id)
+                );
+                PRAGMA user_version = 7;
+                """;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return 7;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
     private static async Task ValidateHierarchyDatabaseSchemaAsync(
         SqliteConnection connection,
         CancellationToken cancellationToken)
@@ -943,6 +1110,7 @@ public sealed partial class StructuredInformationRepository
         string[] tables =
         [
             "hierarchy_database_generations", "hierarchy_database_datasets",
+            "hierarchy_database_families",
             "hierarchy_database_sources", "hierarchy_database_mappings",
             "hierarchy_database_columns", "hierarchy_database_rows",
             "hierarchy_database_cells", "hierarchy_database_cell_values",

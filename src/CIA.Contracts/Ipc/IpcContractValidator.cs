@@ -429,9 +429,16 @@ public static class IpcContractValidator
         var sourceIds = new HashSet<SourceId>();
         foreach (var dataset in command.Specification.Datasets)
         {
-            if (dataset is null || dataset.Fields.Count == 0 || dataset.Sources.Count == 0)
+            if (dataset is null || dataset.Fields.Count == 0 || dataset.Sources.Count == 0
+                || dataset.RowFamilies.Count == 0)
             {
                 throw InvalidContract("A Database dataset requires fields and sources.");
+            }
+            var familyIds = dataset.RowFamilies.Select(family => family.Id).ToHashSet();
+            if (dataset.RowFamilies.Any(family => family.Id.SourceSetId != dataset.SourceSetId)
+                || dataset.Fields.Any(field => !familyIds.Contains(field.RowFamilyId)))
+            {
+                throw InvalidContract("Database fields must reference a typed Row Family in their dataset.");
             }
             foreach (var source in dataset.Sources)
             {
@@ -458,6 +465,11 @@ public static class IpcContractValidator
         }
         ValidateOperationId(command.Query.GenerationId, "Database review requests");
         ValidateDatabaseReviewRange(command.Query.StartRowOrdinal, command.Query.RowCount);
+        if (command.Query.RowFamilyId is not { } familyId
+            || familyId.SourceSetId != command.Query.SourceSetId)
+        {
+            throw InvalidContract("A Database review request requires a Row Family in its Source Set.");
+        }
     }
 
     private static void ValidateDatabaseRowInclusionChange(DatabaseRowInclusionChange? change)
@@ -469,6 +481,11 @@ public static class IpcContractValidator
             throw InvalidContract("A Database row inclusion request requires unique positive row ordinals.");
         }
         ValidateOperationId(change.GenerationId, "Database row inclusion requests");
+        if (change.RowFamilyId is not { } familyId
+            || familyId.SourceSetId != change.SourceSetId)
+        {
+            throw InvalidContract("A Database row inclusion request requires a Row Family in its Source Set.");
+        }
     }
 
     private static void ValidateRunExtractionCommand(RunExtractionCommand command)

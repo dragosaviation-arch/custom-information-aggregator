@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Database;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -361,6 +362,11 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             IReadOnlyList<LoadedSourceContract> sources,
             CancellationToken cancellationToken = default)
         {
+            var source = sources.Single();
+            var familyId = new RowFamilyId(
+                source.SourceSetId,
+                RowFamilyKind.Root,
+                "/root");
             var completion = OperationCompletion.FromCompletedItems(
                 correlation,
                 sources.Select(source => OperationItemStatus.ProcessedSuccessfully(
@@ -369,20 +375,26 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                 true,
                 [
                     new DiscoveredInformation(
-                        "alpha",
+                        new DiscoveryInformationIdentity(
+                            source.SourceSetId, "/root/alpha", "alpha"),
                         2,
                         [new DiscoveredSourceContribution(sourceId, "source.xml", 2)],
-                        "alpha occurrence 1"),
+                        "alpha occurrence 1") { RowFamilyId = familyId },
                     new DiscoveredInformation(
-                        "beta",
+                        new DiscoveryInformationIdentity(
+                            source.SourceSetId, "/root/beta", "beta"),
                         3,
                         [new DiscoveredSourceContribution(sourceId, "source.xml", 3)],
-                        "beta occurrence 1")
+                        "beta occurrence 1") { RowFamilyId = familyId }
                 ],
                 [],
                 completion,
                 FailureCode: null,
-                FailureDescription: null));
+                FailureDescription: null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog(
+                    [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+            });
         }
 
         public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
@@ -393,7 +405,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             return Task.FromResult(new DiscoveryOccurrenceClientResult(
                 true,
                 new DiscoveredOccurrence(
-                    lookup.InformationType,
+                    lookup.Identity,
                     lookup.GlobalOrdinal,
                     lookup.TotalOccurrenceCount,
                     sourceId,
@@ -421,6 +433,10 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             var completion = OperationCompletion.FromCompletedItems(
                 correlation,
                 [OperationItemStatus.ProcessedSuccessfully(source.SourceId.ToString())]);
+            var familyId = new RowFamilyId(
+                source.SourceSetId,
+                RowFamilyKind.Root,
+                "/root");
             return Task.FromResult(new DiscoveryClientResult(
                 true,
                 [
@@ -433,7 +449,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                             "/root/first/comment"),
                         1,
                         contributions,
-                        "First"),
+                        "First") { RowFamilyId = familyId },
                     new DiscoveredInformation(
                         new DiscoveryInformationIdentity(
                             source.SourceSetId,
@@ -443,12 +459,16 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                             "/root/second/comment"),
                         1,
                         contributions,
-                        "Second")
+                        "Second") { RowFamilyId = familyId }
                 ],
                 [],
                 completion,
                 FailureCode: null,
-                FailureDescription: null));
+                FailureDescription: null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog(
+                    [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+            });
         }
 
         public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
@@ -527,6 +547,10 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             var completion = OperationCompletion.FromCompletedItems(
                 correlation,
                 [OperationItemStatus.ProcessedSuccessfully(source.SourceId.ToString())]);
+            var familyId = new RowFamilyId(
+                source.SourceSetId,
+                RowFamilyKind.Root,
+                "/root");
             return Task.FromResult(new DiscoveryClientResult(
                 true,
                 [
@@ -534,17 +558,21 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                         first,
                         2,
                         [new DiscoveredSourceContribution(source.SourceId, "source.xml", 2)],
-                        "first sample"),
+                        "first sample") { RowFamilyId = familyId },
                     new DiscoveredInformation(
                         second,
                         3,
                         [new DiscoveredSourceContribution(source.SourceId, "source.xml", 3)],
-                        "second sample")
+                        "second sample") { RowFamilyId = familyId }
                 ],
                 [],
                 completion,
                 FailureCode: null,
-                FailureDescription: null));
+                FailureDescription: null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog(
+                    [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+            });
         }
 
         public async Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(

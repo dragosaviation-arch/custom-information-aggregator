@@ -18,6 +18,9 @@ public static class DatabaseGenerationContextComparer
                 && string.Equals(pair.First.DisplayName, pair.Second.DisplayName, StringComparison.Ordinal)
                 && pair.First.Ordinal == pair.Second.Ordinal
                 && pair.First.RepeatedDataLayout == pair.Second.RepeatedDataLayout
+                && pair.First.RowFamilies.Select(family => (family.Id, family.ParentRowFamilyId))
+                    .SequenceEqual(pair.Second.RowFamilies.Select(family =>
+                        (family.Id, family.ParentRowFamilyId)))
                 && FieldMappingsMatch(pair.First.Fields, pair.Second.Mappings));
     }
 
@@ -26,7 +29,7 @@ public static class DatabaseGenerationContextComparer
         IReadOnlyList<DatabaseFieldMapping> actual) =>
         expected.Count == actual.Count
         && expected.Zip(actual).All(pair =>
-            pair.First.LogicalIdentity == pair.Second.LogicalIdentity
+            pair.First.RowFamilyId == pair.Second.RowFamilyId
             && string.Equals(
                 pair.First.EffectiveName,
                 pair.Second.EffectiveName,

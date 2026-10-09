@@ -1,5 +1,6 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Sources;
 using CIA.Core.Sources;
 
@@ -27,6 +28,11 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (request.RowFamilies.Count > 0)
+        {
+            return await FlattenFamiliesAsync(request, cancellationToken).ConfigureAwait(false);
+        }
 
         var flattened = new List<(SourceId SourceId, RowFragment Fragment)>();
         var checkpoint = new CancellationCheckpoint();
@@ -66,6 +72,118 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
             .ToArray();
 
         return new HierarchyFlatteningResult(request.SourceSetId, request.Layout, rows);
+    }
+
+    private async ValueTask<HierarchyFlatteningResult> FlattenFamiliesAsync(
+        HierarchyFlatteningRequest request,
+        CancellationToken cancellationToken)
+    {
+        var rows = new List<FlattenedHierarchyRow>();
+        foreach (var source in request.Sources.OrderBy(source => source.SourceId.Value))
+        {
+            foreach (var family in request.RowFamilies.OrderBy(family => family.Id))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var direct = source.Occurrences
+                    .Where(occurrence => request.FamilyAssignments[occurrence.Identity] == family.Id)
+                    .OrderBy(occurrence => occurrence.Lineage.TraversalOrder)
+                    .ToArray();
+                var anchorGroups = direct
+                    .Select(occurrence => (Occurrence: occurrence, Anchor: FindAnchor(occurrence, family.Id)))
+                    .GroupBy(item => item.Anchor.InstanceId)
+                    .OrderBy(group => group.Min(item => item.Occurrence.Lineage.TraversalOrder));
+
+                foreach (var anchorGroup in anchorGroups)
+                {
+                    var anchor = anchorGroup.First().Anchor;
+                    var familyOccurrences = anchorGroup.Select(item => item.Occurrence).ToArray();
+                    var ancestorContext = FindAncestorContext(
+                        source.Occurrences,
+                        request.FamilyAssignments,
+                        family,
+                        anchorGroup.First().Occurrence)
+                        .Select(CreateCell)
+                        .ToArray();
+
+                    var legacyResult = await FlattenAsync(
+                        new HierarchyFlatteningRequest(
+                            request.SourceSetId,
+                            request.Layout,
+                            [new HierarchySourceInput(source.SourceId, familyOccurrences)]),
+                        cancellationToken).ConfigureAwait(false);
+                    if (request.Layout == RepeatedDataLayout.AllCombinations
+                        && rows.Count > options.MaximumAllCombinationRows - legacyResult.Rows.Count)
+                    {
+                        throw new AllCombinationsLimitExceededException(
+                            (long)rows.Count + legacyResult.Rows.Count,
+                            options.MaximumAllCombinationRows);
+                    }
+
+                    foreach (var projected in legacyResult.Rows)
+                    {
+                        rows.Add(new FlattenedHierarchyRow(
+                            rows.Count + 1,
+                            source.SourceId,
+                            OrderCells(projected.Cells.Concat(ancestorContext)),
+                            family.Id,
+                            anchor.InstanceId,
+                            projected.Ordinal));
+                    }
+                }
+            }
+        }
+
+        return new HierarchyFlatteningResult(request.SourceSetId, request.Layout, rows);
+    }
+
+    private static SourceElementInstance FindAnchor(
+        HierarchySourceOccurrence occurrence,
+        RowFamilyId familyId)
+    {
+        var path = string.Empty;
+        foreach (var element in occurrence.Lineage.ElementPath)
+        {
+            path += "/" + element.ExpandedName;
+            if (string.Equals(path, familyId.AnchorPath, StringComparison.Ordinal))
+            {
+                return element;
+            }
+        }
+
+        throw new InvalidOperationException(
+            "A selected occurrence does not contain its assigned Row Family anchor.");
+    }
+
+    private static IEnumerable<HierarchySourceOccurrence> FindAncestorContext(
+        IReadOnlyList<HierarchySourceOccurrence> occurrences,
+        IReadOnlyDictionary<DiscoveryInformationIdentity, RowFamilyId> assignments,
+        RowFamilyDefinition family,
+        HierarchySourceOccurrence anchoredOccurrence)
+    {
+        if (family.ParentRowFamilyId is null)
+        {
+            return [];
+        }
+
+        var ancestorIds = assignments.Values
+            .Where(candidate => candidate.SourceSetId == family.Id.SourceSetId
+                && family.Id.AnchorPath.StartsWith(
+                    candidate.AnchorPath + "/",
+                    StringComparison.Ordinal))
+            .ToHashSet();
+
+        var anchorInstances = ancestorIds.ToDictionary(
+            ancestor => ancestor,
+            ancestor => FindAnchor(anchoredOccurrence, ancestor).InstanceId);
+        return occurrences
+            .Where(occurrence => assignments.TryGetValue(occurrence.Identity, out var owner)
+                && ancestorIds.Contains(owner)
+                && FindAnchor(occurrence, owner).InstanceId == anchorInstances[owner])
+            .GroupBy(occurrence => occurrence.Identity)
+            .Where(group => group.Count() == 1)
+            .Select(group => group.Single())
+            .OrderBy(occurrence => occurrence.Lineage.TraversalOrder)
+            .ToArray();
     }
 
     private async ValueTask<IReadOnlyList<RowFragment>> FlattenNodeAsync(

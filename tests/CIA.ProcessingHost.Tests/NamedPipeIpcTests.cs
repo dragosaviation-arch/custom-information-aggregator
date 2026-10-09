@@ -158,6 +158,7 @@ public sealed class NamedPipeIpcTests
             new DatabaseReviewQuery(
                 correlation.OperationId,
                 sourceSetId,
+                datasetSummary.RowFamilies.Single().Id,
                 startRowOrdinal: 1,
                 rowCount: DatabaseReviewLimits.MaximumRowsPerPage,
                 searchText: null,
@@ -211,6 +212,9 @@ public sealed class NamedPipeIpcTests
         Assert.IsTrue(responseResult.PublishedGeneration?.IsHierarchyAware);
         Assert.AreEqual(correlation.OperationId, reviewCommandResult.GenerationId);
         Assert.AreEqual(sourceSetId, reviewCommandResult.Query.SourceSetId);
+        Assert.AreEqual(
+            datasetSummary.RowFamilies.Single().Id,
+            reviewCommandResult.Query.RowFamilyId);
         Assert.AreEqual(DatabaseReviewLimits.MaximumRowsPerPage, reviewCommandResult.RowCount);
         Assert.AreEqual(sourceSetId, reviewResponseResult.Page?.Dataset.SourceSetId);
     }

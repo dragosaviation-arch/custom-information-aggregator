@@ -1,4 +1,5 @@
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Sources;
 using CIA.Core.Hierarchy;
 using CIA.Core.Sources;
@@ -10,6 +11,135 @@ namespace CIA.ProcessingHost.Tests;
 [TestClass]
 public sealed class HierarchyFlatteningEngineTests
 {
+    [TestMethod]
+    [DataRow(RepeatedDataLayout.AlignRepeatedGroupsByPosition)]
+    [DataRow(RepeatedDataLayout.StructuralRows)]
+    [DataRow(RepeatedDataLayout.AllCombinations)]
+    [DataRow(RepeatedDataLayout.NumberRepeatedValuesIntoColumns)]
+    public async Task RowFamiliesPartitionBeforeEveryLayoutAndRetainValidAncestorContext(
+        RepeatedDataLayout layout)
+    {
+        using var workspace = new FlatteningWorkspace();
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = workspace.CopyFixture("family-aware-goodbooks.xml", sourceSetId);
+        var document = await InterpretAsync(source);
+        var input = CreateSourceInput(sourceSetId, document);
+        var root = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/book"),
+            parentRowFamilyId: null);
+        var repeated = new[]
+        {
+            "/book/authors/author",
+            "/book/buy_links/link",
+            "/book/series_works/work",
+            "/book/similar_books/book"
+        }.Select(path => new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, path),
+            root.Id)).ToArray();
+        var families = new[] { root }.Concat(repeated).ToArray();
+        var assignments = input.Occurrences
+            .Select(occurrence => occurrence.Identity)
+            .Distinct()
+            .ToDictionary(
+            identity => identity,
+            identity => families
+                .Where(family => identity.StructuralPath == family.Id.AnchorPath
+                    || identity.StructuralPath.StartsWith(
+                        family.Id.AnchorPath + "/",
+                        StringComparison.Ordinal))
+                .OrderByDescending(family => family.Id.AnchorPath.Length)
+                .First().Id);
+
+        var result = await new HierarchyFlatteningEngine().FlattenAsync(
+            new HierarchyFlatteningRequest(
+                sourceSetId,
+                layout,
+                [input],
+                families,
+                assignments));
+
+        Assert.HasCount(8, result.Rows, string.Join(
+            Environment.NewLine,
+            result.Rows.Select(row => $"{row.RowFamilyId}: {string.Join(", ", row.Cells.Select(cell => cell.Value))}")));
+        Assert.HasCount(1, result.Rows.Where(row => row.RowFamilyId == root.Id));
+        Assert.HasCount(2, result.Rows.Where(row =>
+            row.RowFamilyId == repeated[0].Id));
+        Assert.HasCount(2, result.Rows.Where(row =>
+            row.RowFamilyId == repeated[1].Id));
+        Assert.HasCount(1, result.Rows.Where(row =>
+            row.RowFamilyId == repeated[2].Id));
+        Assert.HasCount(2, result.Rows.Where(row =>
+            row.RowFamilyId == repeated[3].Id));
+
+        var similarA = result.Rows.Single(row => Contains(row, "Similar A"));
+        Assert.IsTrue(Contains(similarA, "200"));
+        Assert.IsTrue(Contains(similarA, "Similar Author A"));
+        Assert.IsTrue(Contains(similarA, "Root Book"));
+        Assert.IsFalse(Contains(similarA, "Shop A"));
+        Assert.IsFalse(Contains(similarA, "Author A"));
+        Assert.IsTrue(result.Rows.All(row => row.AnchorInstanceId is > 0
+            && row.ProjectionOrdinal is > 0));
+    }
+
+    [TestMethod]
+    public async Task ProvenNestedFamilyRetainsParentContextWithoutEnteringParentRows()
+    {
+        using var workspace = new FlatteningWorkspace();
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = workspace.CopyFixture("family-aware-nested-authors.xml", sourceSetId);
+        var document = await InterpretAsync(source);
+        var input = CreateSourceInput(sourceSetId, document);
+        var root = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/book"),
+            parentRowFamilyId: null);
+        var similar = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, "/book/similar_books/book"),
+            root.Id);
+        var authors = new RowFamilyDefinition(
+            new RowFamilyId(
+                sourceSetId,
+                RowFamilyKind.Repeated,
+                "/book/similar_books/book/authors/author"),
+            similar.Id);
+        RowFamilyDefinition[] families = [root, similar, authors];
+        var assignments = input.Occurrences
+            .Select(occurrence => occurrence.Identity)
+            .Distinct()
+            .ToDictionary(
+                identity => identity,
+                identity => families
+                    .Where(family => identity.StructuralPath == family.Id.AnchorPath
+                        || identity.StructuralPath.StartsWith(
+                            family.Id.AnchorPath + "/",
+                            StringComparison.Ordinal))
+                    .OrderByDescending(family => family.Id.AnchorPath.Length)
+                    .First().Id);
+
+        var result = await new HierarchyFlatteningEngine().FlattenAsync(
+            new HierarchyFlatteningRequest(
+                sourceSetId,
+                RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+                [input],
+                families,
+                assignments));
+
+        Assert.HasCount(1, result.Rows.Where(row => row.RowFamilyId == root.Id));
+        var similarRows = result.Rows.Where(row => row.RowFamilyId == similar.Id).ToArray();
+        Assert.HasCount(2, similarRows);
+        Assert.IsFalse(similarRows.Any(row => row.Cells.Any(cell =>
+            cell.Value.StartsWith("Author ", StringComparison.Ordinal))));
+        var authorRows = result.Rows.Where(row => row.RowFamilyId == authors.Id).ToArray();
+        Assert.HasCount(3, authorRows);
+        Assert.HasCount(2, authorRows.Where(row => Contains(row, "Similar A")));
+        Assert.HasCount(1, authorRows.Where(row => Contains(row, "Similar B")));
+        Assert.IsFalse(authorRows.Any(row =>
+            Contains(row, "Similar A") && Contains(row, "Author B1")));
+        Assert.IsFalse(authorRows.Any(row =>
+            Contains(row, "Similar B")
+            && (Contains(row, "Author A1") || Contains(row, "Author A2"))));
+        Assert.IsTrue(authorRows.All(row => Contains(row, "Root Book")));
+    }
+
     [TestMethod]
     public async Task ScalarDocumentProducesOneTypedRowWithExactValues()
     {

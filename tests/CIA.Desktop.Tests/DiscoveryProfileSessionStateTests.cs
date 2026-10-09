@@ -1,4 +1,5 @@
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Profiles;
@@ -417,7 +418,13 @@ public sealed class DiscoveryProfileSessionStateTests
             identity,
             1,
             [new DiscoveredSourceContribution(source.SourceId, Path.GetFileName(source.Path), 1)],
-            "value");
+            "value")
+        {
+            RowFamilyId = RootFamily(identity.SourceSetId)
+        };
+
+    private static RowFamilyId RootFamily(SourceSetId sourceSetId) =>
+        new(sourceSetId, RowFamilyKind.Root, "/root");
 
     private static DiscoveryInformationDisposition Disposition(
         ActiveDiscoveryConfiguration configuration,
@@ -535,7 +542,15 @@ public sealed class DiscoveryProfileSessionStateTests
                 [],
                 completion,
                 FailureCode: null,
-                FailureDescription: null));
+                FailureDescription: null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog(
+                    information
+                        .Select(item => item.RowFamilyId!.Value)
+                        .Distinct()
+                        .Select(id => new RowFamilyDefinition(id, parentRowFamilyId: null))
+                        .ToArray())
+            });
         }
 
         public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(

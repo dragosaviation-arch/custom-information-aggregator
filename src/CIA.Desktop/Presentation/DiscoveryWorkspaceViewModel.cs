@@ -853,18 +853,18 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public string SelectedDatabaseTag
     {
-        get => SelectedInformation?.DatabaseTag ?? string.Empty;
+        get => PreviewInformation?.DatabaseTag ?? string.Empty;
         set
         {
-            if (SelectedInformation is not null)
+            if (PreviewInformation is not null)
             {
-                SetDatabaseTagOverride(SelectedInformation, value);
+                SetDatabaseTagOverride(PreviewInformation, value);
             }
         }
     }
 
     public bool CanEditDatabaseTagOverride =>
-        SelectedInformation is not null && CanChangeConfiguration();
+        PreviewInformation is not null && CanChangeConfiguration();
 
     public bool CanConfigureRepeatedDataLayout => CanChangeConfiguration();
 
@@ -892,7 +892,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     }
 
     public string DatabaseTagOverrideActionText =>
-        SelectedInformation?.HasAnyDatabaseTagOverride == true ? "Revert" : "Default";
+        PreviewInformation?.HasAnyDatabaseTagOverride == true ? "Revert" : "Default";
 
     public string OccurrencePreviewText
     {
@@ -1173,7 +1173,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             }
 
             _activeConfiguration.Synchronize(
-                result.Information.Select(information => information.Identity));
+                result.Information,
+                result.FamilyCatalog
+                    ?? throw new InvalidOperationException(
+                        "A successful Discovery result requires a Row Family catalog."));
             _activeConfiguration.SynchronizeSourceSets(
                 _sourceSet.SourceSets.Select(sourceSet => sourceSet.SourceSetId)
                     .Concat(result.Information.Select(information => information.SourceSetId)));
@@ -1515,6 +1518,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         _previewInformation = information;
         OnPropertyChanged(nameof(PreviewInformation));
+        OnPropertyChanged(nameof(SelectedDatabaseTag));
+        OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
+        OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
+        _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
         PrepareOccurrenceSelection(information);
         _selectInformationCommand.Execute(information);
     }
@@ -1616,7 +1623,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool CanClearDatabaseTagOverride()
     {
         return CanEditDatabaseTagOverride
-            && SelectedInformation?.HasAnyDatabaseTagOverride == true;
+            && PreviewInformation?.HasAnyDatabaseTagOverride == true;
     }
 
     private bool CanSelectVisible()
@@ -2001,9 +2008,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     private void ClearDatabaseTagOverride()
     {
-        if (SelectedInformation is not null)
+        if (PreviewInformation is not null)
         {
-            SetDatabaseTagOverride(SelectedInformation, databaseTagOverride: null);
+            SetDatabaseTagOverride(PreviewInformation, databaseTagOverride: null);
         }
     }
 

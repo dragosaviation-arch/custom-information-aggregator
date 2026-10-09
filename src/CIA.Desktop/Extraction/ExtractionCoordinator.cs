@@ -56,12 +56,13 @@ public sealed class ExtractionCoordinator(
             return workflowReadiness;
         }
 
-        return databaseBuildCoordinator.CurrentGeneration is { IsHierarchyAware: true }
+        return databaseBuildCoordinator.CurrentGeneration is
+        { IsHierarchyAware: true, IsRowFamilyAware: false }
             ? WorkflowOperationReadiness.Ready()
             : WorkflowOperationReadiness.Unavailable(
                 workflowPrerequisitesSatisfied: true,
                 WorkflowRejectionCode.OperationFailed,
-                "Extraction requires the active hierarchy-aware published Database to be current.");
+                "Extraction is unavailable for a family-aware Database until its typed family model is implemented.");
     }
 
     public async Task<WorkflowCommandResult> ExtractAsync(

@@ -1,5 +1,6 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Database;
@@ -8,6 +9,7 @@ using CIA.Core.Hierarchy;
 using CIA.Core.Runtime;
 using CIA.Core.Sources;
 using CIA.ProcessingHost.Database;
+using CIA.ProcessingHost.Extraction;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceInterpretation;
@@ -20,6 +22,177 @@ namespace CIA.ProcessingHost.Tests;
 [DoNotParallelize]
 public sealed class HierarchyDatabaseGenerationTests
 {
+    [TestMethod]
+    public async Task GoodbooksLikeFamiliesPublishAndReviewAsIndependentTypedDatasets()
+    {
+        using var workspace = new Workspace();
+        var sourceSet = SourceSetId.CreateNew();
+        var source = workspace.Source(sourceSet, "goodbooks-like.xml", """
+            <book>
+              <title>Root Book</title><num_pages>100</num_pages>
+              <work><original_title>Original Root</original_title></work>
+              <authors><author><name>Author A</name></author><author><name>Author B</name></author></authors>
+              <buy_links><link><name>Shop A</name></link><link><name>Shop B</name></link></buy_links>
+              <series_works><work><title>Series One</title></work></series_works>
+              <similar_books>
+                <book><title>Similar A</title><num_pages>200</num_pages><title_without_series>Similar A</title_without_series><author><name>Similar Author A</name></author></book>
+                <book><title>Similar B</title><num_pages>300</num_pages><title_without_series>Similar B</title_without_series><author><name>Similar Author B</name></author></book>
+              </similar_books>
+            </book>
+            """);
+        var identities = Identities(sourceSet, await workspace.InterpretAsync(source));
+        var root = new RowFamilyDefinition(
+            new RowFamilyId(sourceSet, RowFamilyKind.Root, "/book"),
+            parentRowFamilyId: null);
+        var families = new[]
+        {
+            root,
+            new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
+                "/book/authors/author"), root.Id),
+            new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
+                "/book/buy_links/link"), root.Id),
+            new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
+                "/book/series_works/work"), root.Id),
+            new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
+                "/book/similar_books/book"), root.Id)
+        };
+        var assignments = identities.ToDictionary(
+            identity => identity,
+            identity => families.Where(family => identity.StructuralPath == family.Id.AnchorPath
+                    || identity.StructuralPath.StartsWith(
+                        family.Id.AnchorPath + "/",
+                        StringComparison.Ordinal))
+                .OrderByDescending(family => family.Id.AnchorPath.Length)
+                .First().Id);
+        var fields = DatabaseTagMapper.CreateFieldMappings(
+            sourceSet,
+            identities.Select(identity => new DiscoveryConfigurationItem(
+                identity,
+                DiscoveryInformationDisposition.Selected)),
+            new Dictionary<DiscoveryInformationIdentity, string>(),
+            assignments);
+        var specification = new DatabaseBuildSpecification(
+        [
+            new DatabaseDatasetBuildSpecification(
+                sourceSet,
+                "Goodbooks",
+                1,
+                RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+                [source],
+                families,
+                fields)
+        ]);
+
+        var result = await workspace.Service.BuildAsync(
+            OperationCorrelation.CreateNew(),
+            specification);
+
+        Assert.IsTrue(result.Accepted, result.Failure?.Description);
+        var generation = result.PublishedGeneration!;
+        var dataset = generation.Datasets.Single();
+        Assert.IsTrue(generation.IsRowFamilyAware);
+        Assert.HasCount(5, dataset.RowFamilies);
+        var rowCounts = dataset.RowFamilies.ToDictionary(
+            family => family.AnchorPath,
+            family => family.RowCount,
+            StringComparer.Ordinal);
+        Assert.AreEqual(1, rowCounts["/book"]);
+        Assert.AreEqual(2, rowCounts["/book/authors/author"]);
+        Assert.AreEqual(2, rowCounts["/book/buy_links/link"]);
+        Assert.AreEqual(1, rowCounts["/book/series_works/work"]);
+        Assert.AreEqual(2, rowCounts["/book/similar_books/book"]);
+        foreach (var family in dataset.RowFamilies)
+        {
+            var page = await workspace.Repository.ReadPublishedDatabasePageAsync(
+                new DatabaseReviewQuery(
+                    generation.OperationId,
+                    sourceSet,
+                    family.Id,
+                    1,
+                    100,
+                    null,
+                    DatabaseRowInclusionFilter.All));
+            Assert.IsNotNull(page);
+            Assert.AreEqual(family.Id, page.RowFamily?.Id);
+            Assert.AreEqual(family.RowCount, page.TotalRowCount);
+            Assert.IsTrue(page.Rows.All(row =>
+                row.SemanticIdentity?.RowFamilyId == family.Id
+                && row.Source.SourceId == source.SourceId));
+        }
+
+        var similar = dataset.RowFamilies.Single(family =>
+            family.AnchorPath == "/book/similar_books/book");
+        var similarPage = await workspace.Repository.ReadPublishedDatabasePageAsync(
+            new DatabaseReviewQuery(
+                generation.OperationId,
+                sourceSet,
+                similar.Id,
+                1,
+                100,
+                null,
+                DatabaseRowInclusionFilter.All));
+        Assert.IsTrue(similarPage!.Rows.Any(row =>
+            Values(row).Contains("Similar A")
+            && Values(row).Contains("200")
+            && Values(row).Contains("Similar Author A")));
+        Assert.IsFalse(similarPage.Rows.Any(row => Values(row).Contains("Shop A")));
+
+        var authors = dataset.RowFamilies.Single(family =>
+            family.AnchorPath == "/book/authors/author");
+        var authorSearch = await workspace.Repository.ReadPublishedDatabasePageAsync(
+            new DatabaseReviewQuery(
+                generation.OperationId,
+                sourceSet,
+                authors.Id,
+                1,
+                100,
+                "Author B",
+                DatabaseRowInclusionFilter.All));
+        Assert.AreEqual(1, authorSearch?.TotalRowCount);
+        Assert.AreEqual(1, await workspace.Repository.SetPublishedDatabaseRowsIncludedAsync(
+            new DatabaseRowInclusionChange(
+                generation.OperationId,
+                sourceSet,
+                [1],
+                IsIncluded: false)
+            {
+                RowFamilyId = authors.Id
+            }));
+        var includedAuthors = await workspace.Repository.ReadPublishedDatabasePageAsync(
+            new DatabaseReviewQuery(
+                generation.OperationId,
+                sourceSet,
+                authors.Id,
+                1,
+                100,
+                null,
+                DatabaseRowInclusionFilter.Included));
+        var buyLinks = dataset.RowFamilies.Single(family =>
+            family.AnchorPath == "/book/buy_links/link");
+        var retainedBuyLinks = await workspace.Repository.ReadPublishedDatabasePageAsync(
+            new DatabaseReviewQuery(
+                generation.OperationId,
+                sourceSet,
+                buyLinks.Id,
+                1,
+                100,
+                null,
+                DatabaseRowInclusionFilter.All));
+        Assert.AreEqual(1, includedAuthors?.TotalRowCount);
+        Assert.AreEqual(2, retainedBuyLinks?.TotalRowCount);
+
+        var extraction = await new DatabaseExtractionService(
+                workspace.Repository,
+                new CooperativeOperationCancellation(new NullHistory()),
+                NullLogger<DatabaseExtractionService>.Instance)
+            .ExtractAsync(OperationCorrelation.CreateNew(), generation);
+        Assert.IsFalse(extraction.Accepted);
+        Assert.AreEqual(
+            "row-family-extraction-not-supported",
+            extraction.Failure?.Code);
+        Assert.IsNull(await workspace.Repository.ReadPublishedExtractionResultAsync());
+    }
+
     [TestMethod]
     public void ProductionDatabaseServiceExposesOnlyTypedHierarchyBuildContract()
     {

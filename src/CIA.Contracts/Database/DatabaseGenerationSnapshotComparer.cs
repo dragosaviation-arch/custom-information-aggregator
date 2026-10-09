@@ -29,7 +29,8 @@ public static class DatabaseGenerationSnapshotComparer
                 && pair.First.RowCount == pair.Second.RowCount
                 && pair.First.ValueCount == pair.Second.ValueCount
                 && ColumnsEqual(pair.First.Columns, pair.Second.Columns)
-                && MappingsEqual(pair.First.Mappings, pair.Second.Mappings));
+                && MappingsEqual(pair.First.Mappings, pair.Second.Mappings)
+                && FamiliesEqual(pair.First.RowFamilies, pair.Second.RowFamilies));
     }
 
     public static bool ColumnsEqual(
@@ -46,10 +47,24 @@ public static class DatabaseGenerationSnapshotComparer
         IReadOnlyList<DatabaseFieldMapping> actual) =>
         expected.Count == actual.Count
         && expected.Zip(actual).All(pair =>
-            pair.First.LogicalIdentity == pair.Second.LogicalIdentity
+            pair.First.RowFamilyId == pair.Second.RowFamilyId
             && string.Equals(pair.First.EffectiveName, pair.Second.EffectiveName, StringComparison.Ordinal)
             && pair.First.IsExplicitOverride == pair.Second.IsExplicitOverride
             && pair.First.DetailedIdentities.SequenceEqual(pair.Second.DetailedIdentities));
+
+    private static bool FamiliesEqual(
+        IReadOnlyList<DatabaseRowFamilySummary> expected,
+        IReadOnlyList<DatabaseRowFamilySummary> actual) =>
+        expected.Count == actual.Count
+        && expected.Zip(actual).All(pair =>
+            pair.First.Id == pair.Second.Id
+            && pair.First.ParentRowFamilyId == pair.Second.ParentRowFamilyId
+            && pair.First.Ordinal == pair.Second.Ordinal
+            && string.Equals(pair.First.DisplayName, pair.Second.DisplayName, StringComparison.Ordinal)
+            && pair.First.RowCount == pair.Second.RowCount
+            && pair.First.ValueCount == pair.Second.ValueCount
+            && ColumnsEqual(pair.First.Columns, pair.Second.Columns)
+            && MappingsEqual(pair.First.Mappings, pair.Second.Mappings));
 
     private static bool LegacyMappingsEqual(
         DatabaseMappingSnapshot expected,

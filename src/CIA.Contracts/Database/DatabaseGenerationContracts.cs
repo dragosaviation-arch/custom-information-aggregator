@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 
@@ -85,11 +86,18 @@ public sealed record DatabaseGenerationSummary
     public int RowCount { get; }
 
     public bool IsHierarchyAware { get; }
+
+    [JsonIgnore]
+    public bool IsRowFamilyAware => IsHierarchyAware
+        && Datasets.SelectMany(dataset => dataset.RowFamilies)
+            .Any(family => !string.Equals(
+                family.AnchorPath,
+                "/legacy",
+                StringComparison.Ordinal));
 }
 
 public sealed record DatabaseDatasetSummary
 {
-    [JsonConstructor]
     public DatabaseDatasetSummary(
         SourceSetId sourceSetId,
         string displayName,
@@ -99,6 +107,30 @@ public sealed record DatabaseDatasetSummary
         int valueCount,
         IReadOnlyList<DatabaseColumnDefinition> columns,
         IReadOnlyList<DatabaseFieldMapping> mappings)
+        : this(
+            sourceSetId,
+            displayName,
+            ordinal,
+            repeatedDataLayout,
+            rowCount,
+            valueCount,
+            columns,
+            mappings,
+            [CreateLegacyFamily(sourceSetId, rowCount, valueCount, columns, mappings)])
+    {
+    }
+
+    [JsonConstructor]
+    public DatabaseDatasetSummary(
+        SourceSetId sourceSetId,
+        string displayName,
+        int ordinal,
+        RepeatedDataLayout repeatedDataLayout,
+        int rowCount,
+        int valueCount,
+        IReadOnlyList<DatabaseColumnDefinition> columns,
+        IReadOnlyList<DatabaseFieldMapping> mappings,
+        IReadOnlyList<DatabaseRowFamilySummary> rowFamilies)
     {
         if (!SourceSetId.IsValid(sourceSetId.Value))
         {
@@ -120,14 +152,22 @@ public sealed record DatabaseDatasetSummary
 
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(mappings);
+        ArgumentNullException.ThrowIfNull(rowFamilies);
         var columnArray = columns.ToArray();
         var mappingArray = mappings.ToArray();
+        var familyArray = rowFamilies.ToArray();
         if (columnArray.Length == 0
             || mappingArray.Length == 0
+            || familyArray.Length == 0
             || columnArray.Any(column => column is null
                 || column.Identity.SourceSetId != sourceSetId)
             || mappingArray.Any(mapping => mapping is null
-                || mapping.LogicalIdentity.SourceSetId != sourceSetId)
+                || mapping.RowFamilyId.SourceSetId != sourceSetId)
+            || familyArray.Any(family => family is null
+                || family.Id.SourceSetId != sourceSetId)
+            || familyArray.Select(family => family.Id).Distinct().Count() != familyArray.Length
+            || familyArray.Sum(family => family.RowCount) != rowCount
+            || familyArray.Sum(family => family.ValueCount) != valueCount
             || columnArray.Select(column => column.Identity).Distinct().Count()
                 != columnArray.Length
             || !columnArray.Select(column => column.Ordinal)
@@ -146,6 +186,7 @@ public sealed record DatabaseDatasetSummary
         ValueCount = valueCount;
         Columns = new ReadOnlyCollection<DatabaseColumnDefinition>(columnArray);
         Mappings = new ReadOnlyCollection<DatabaseFieldMapping>(mappingArray);
+        RowFamilies = new ReadOnlyCollection<DatabaseRowFamilySummary>(familyArray);
     }
 
     public SourceSetId SourceSetId { get; }
@@ -157,6 +198,100 @@ public sealed record DatabaseDatasetSummary
     public RepeatedDataLayout RepeatedDataLayout { get; }
 
     public int RowCount { get; }
+
+    public int ValueCount { get; }
+
+    public IReadOnlyList<DatabaseColumnDefinition> Columns { get; }
+
+    public IReadOnlyList<DatabaseFieldMapping> Mappings { get; }
+
+    public IReadOnlyList<DatabaseRowFamilySummary> RowFamilies { get; }
+
+    private static DatabaseRowFamilySummary CreateLegacyFamily(
+        SourceSetId sourceSetId,
+        int rowCount,
+        int valueCount,
+        IReadOnlyList<DatabaseColumnDefinition> columns,
+        IReadOnlyList<DatabaseFieldMapping> mappings)
+    {
+        var id = new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/legacy");
+        return new DatabaseRowFamilySummary(
+            id,
+            parentRowFamilyId: null,
+            ordinal: 1,
+            displayName: "Root",
+            rowCount,
+            includedRowCount: rowCount,
+            valueCount,
+            columns,
+            mappings);
+    }
+}
+
+public sealed record DatabaseRowFamilySummary
+{
+    [JsonConstructor]
+    public DatabaseRowFamilySummary(
+        RowFamilyId id,
+        RowFamilyId? parentRowFamilyId,
+        int ordinal,
+        string displayName,
+        int rowCount,
+        int includedRowCount,
+        int valueCount,
+        IReadOnlyList<DatabaseColumnDefinition> columns,
+        IReadOnlyList<DatabaseFieldMapping> mappings)
+    {
+        _ = new RowFamilyDefinition(id, parentRowFamilyId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+        if (ordinal < 1 || rowCount < 1 || includedRowCount < 0
+            || includedRowCount > rowCount || valueCount < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(rowCount));
+        }
+
+        ArgumentNullException.ThrowIfNull(columns);
+        ArgumentNullException.ThrowIfNull(mappings);
+        var columnArray = columns.ToArray();
+        var mappingArray = mappings.ToArray();
+        if (columnArray.Length == 0
+            || columnArray.Any(column => column is null || column.Identity.RowFamilyId != id)
+            || columnArray.Select(column => column.Identity).Distinct().Count() != columnArray.Length
+            || !columnArray.Select(column => column.Ordinal)
+                .SequenceEqual(Enumerable.Range(1, columnArray.Length))
+            || mappingArray.Any(mapping => mapping is null))
+        {
+            throw new ArgumentException("A Database Row Family summary is inconsistent.");
+        }
+
+        Id = id;
+        ParentRowFamilyId = parentRowFamilyId;
+        Ordinal = ordinal;
+        DisplayName = displayName.Trim();
+        RowCount = rowCount;
+        IncludedRowCount = includedRowCount;
+        ValueCount = valueCount;
+        Columns = new ReadOnlyCollection<DatabaseColumnDefinition>(columnArray);
+        Mappings = new ReadOnlyCollection<DatabaseFieldMapping>(mappingArray);
+    }
+
+    public RowFamilyId Id { get; }
+
+    public RowFamilyKind Kind => Id.Kind;
+
+    public RowFamilyId? ParentRowFamilyId { get; }
+
+    public string AnchorPath => Id.AnchorPath;
+
+    public int Ordinal { get; }
+
+    public string DisplayName { get; }
+
+    public int RowCount { get; }
+
+    public int IncludedRowCount { get; }
+
+    public int ExcludedRowCount => RowCount - IncludedRowCount;
 
     public int ValueCount { get; }
 

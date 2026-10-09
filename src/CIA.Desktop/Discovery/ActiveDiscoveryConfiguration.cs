@@ -1,4 +1,5 @@
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Sources;
 
 namespace CIA.Desktop.Discovery;
@@ -10,6 +11,8 @@ public sealed class ActiveDiscoveryConfiguration
     private Dictionary<DiscoveryInformationIdentity, string> _databaseTagOverrides = [];
     private Dictionary<SourceSetId, RepeatedDataLayout> _repeatedDataLayouts = [];
     private List<SourceSetId> _sourceSetOrder = [];
+    private DiscoveryFamilyCatalog? _familyCatalog;
+    private Dictionary<DiscoveryInformationIdentity, RowFamilyId> _familyAssignments = [];
 
     public DiscoveryConfigurationSnapshot Current
     {
@@ -69,6 +72,28 @@ public sealed class ActiveDiscoveryConfiguration
         }
     }
 
+    public DiscoveryFamilyCatalog? FamilyCatalog
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _familyCatalog;
+            }
+        }
+    }
+
+    public IReadOnlyDictionary<DiscoveryInformationIdentity, RowFamilyId> FamilyAssignments
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return new Dictionary<DiscoveryInformationIdentity, RowFamilyId>(_familyAssignments);
+            }
+        }
+    }
+
     public void Synchronize(IEnumerable<string> informationTypes)
     {
         ArgumentNullException.ThrowIfNull(informationTypes);
@@ -96,6 +121,51 @@ public sealed class ActiveDiscoveryConfiguration
                 .Where(_databaseTagOverrides.ContainsKey)
                 .ToDictionary(identity => identity, identity => _databaseTagOverrides[identity]);
             SynchronizeSourceSetsCore(uniqueIdentities.Select(identity => identity.SourceSetId));
+            var legacyFamilies = uniqueIdentities.Select(identity => identity.SourceSetId)
+                .Distinct()
+                .Select(sourceSetId => new RowFamilyDefinition(
+                    new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/legacy"),
+                    parentRowFamilyId: null))
+                .ToArray();
+            _familyCatalog = legacyFamilies.Length == 0
+                ? null
+                : new DiscoveryFamilyCatalog(legacyFamilies);
+            _familyAssignments = uniqueIdentities.ToDictionary(
+                identity => identity,
+                identity => legacyFamilies.Single(family =>
+                    family.Id.SourceSetId == identity.SourceSetId).Id);
+        }
+    }
+
+    public void Synchronize(
+        IEnumerable<DiscoveredInformation> information,
+        DiscoveryFamilyCatalog familyCatalog)
+    {
+        ArgumentNullException.ThrowIfNull(information);
+        ArgumentNullException.ThrowIfNull(familyCatalog);
+        var discovered = information.ToArray();
+        if (discovered.Any(item => item.RowFamilyId is null))
+        {
+            throw new ArgumentException(
+                "Every discovered field requires a published Row Family assignment.",
+                nameof(information));
+        }
+
+        var familyIds = familyCatalog.Families.Select(family => family.Id).ToHashSet();
+        if (discovered.Any(item => !familyIds.Contains(item.RowFamilyId!.Value)))
+        {
+            throw new ArgumentException(
+                "Every discovered field assignment must reference the published family catalog.",
+                nameof(information));
+        }
+
+        Synchronize(discovered.Select(item => item.Identity));
+        lock (_stateGate)
+        {
+            _familyCatalog = familyCatalog;
+            _familyAssignments = discovered.ToDictionary(
+                item => item.Identity,
+                item => item.RowFamilyId!.Value);
         }
     }
 
@@ -261,6 +331,8 @@ public sealed class ActiveDiscoveryConfiguration
             _repeatedDataLayouts = configuration.SourceSets.ToDictionary(
                 item => item.SourceSetId,
                 item => item.RepeatedDataLayout);
+            _familyCatalog = null;
+            _familyAssignments = [];
         }
     }
 

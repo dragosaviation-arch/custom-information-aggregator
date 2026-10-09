@@ -1,5 +1,6 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Sources;
 using CIA.Core.Database;
 using CIA.ProcessingHost.Repository;
@@ -9,6 +10,53 @@ namespace CIA.ProcessingHost.Tests;
 [TestClass]
 public sealed class DatabaseTagMapperTests
 {
+    [TestMethod]
+    public void FamilyAwareMappingsKeepSameLeafFamiliesAndChildOverridesIndependent()
+    {
+        var sourceSetId = SourceSetId.CreateNew();
+        var author = new DiscoveryInformationIdentity(
+            sourceSetId, "/book/authors/author/name", "name");
+        var vendor = new DiscoveryInformationIdentity(
+            sourceSetId, "/book/buy_links/link/name", "name");
+        var related = new DiscoveryInformationIdentity(
+            sourceSetId, "/book/similar_books/book/author/name", "name");
+        var authorFamily = new RowFamilyId(
+            sourceSetId, RowFamilyKind.Repeated, "/book/authors/author");
+        var vendorFamily = new RowFamilyId(
+            sourceSetId, RowFamilyKind.Repeated, "/book/buy_links/link");
+        var relatedFamily = new RowFamilyId(
+            sourceSetId, RowFamilyKind.Repeated, "/book/similar_books/book");
+        var items = new[] { author, vendor, related }.Select(identity =>
+            new DiscoveryConfigurationItem(
+                identity,
+                DiscoveryInformationDisposition.Selected)).ToArray();
+
+        var mappings = DatabaseTagMapper.CreateFieldMappings(
+            sourceSetId,
+            items,
+            new Dictionary<DiscoveryInformationIdentity, string>
+            {
+                [author] = "Author",
+                [vendor] = "Vendor",
+                [related] = "RelatedAuthor"
+            },
+            new Dictionary<DiscoveryInformationIdentity, RowFamilyId>
+            {
+                [author] = authorFamily,
+                [vendor] = vendorFamily,
+                [related] = relatedFamily
+            });
+
+        Assert.HasCount(3, mappings);
+        Assert.AreEqual("Author", mappings.Single(mapping =>
+            mapping.RowFamilyId == authorFamily).EffectiveName);
+        Assert.AreEqual("Vendor", mappings.Single(mapping =>
+            mapping.RowFamilyId == vendorFamily).EffectiveName);
+        Assert.AreEqual("RelatedAuthor", mappings.Single(mapping =>
+            mapping.RowFamilyId == relatedFamily).EffectiveName);
+        Assert.HasCount(3, mappings.Select(mapping => mapping.FieldKey).Distinct());
+    }
+
     [TestMethod]
     public void SelectedTagsProduceDeterministicDefaultOverrideAndSharedNameColumns()
     {

@@ -1,4 +1,6 @@
 using CIA.Contracts.Database;
+using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -78,9 +80,26 @@ public sealed class DatabaseGenerationService(
 
                             var input = HierarchySourceInput.FromInterpretedSource(
                                 dataset.SourceSetId, interpretation.Source, selectedIdentities);
+                            var isLegacyCompatibility = dataset.RowFamilies.All(family =>
+                                string.Equals(family.Id.AnchorPath, "/legacy", StringComparison.Ordinal));
+                            var familyAssignments = dataset.Fields
+                                .SelectMany(field => field.DetailedIdentities.Select(identity =>
+                                    new KeyValuePair<DiscoveryInformationIdentity, RowFamilyId>(
+                                        identity,
+                                        field.RowFamilyId)))
+                                .ToDictionary(item => item.Key, item => item.Value);
                             var flattened = await hierarchyFlattening.FlattenAsync(
-                                new HierarchyFlatteningRequest(
-                                    dataset.SourceSetId, dataset.RepeatedDataLayout, [input]),
+                                isLegacyCompatibility
+                                    ? new HierarchyFlatteningRequest(
+                                        dataset.SourceSetId,
+                                        dataset.RepeatedDataLayout,
+                                        [input])
+                                    : new HierarchyFlatteningRequest(
+                                        dataset.SourceSetId,
+                                        dataset.RepeatedDataLayout,
+                                        [input],
+                                        dataset.RowFamilies,
+                                        familyAssignments),
                                 sourceCancellation.Token).ConfigureAwait(false);
                             if (flattened.Rows.Any(row => row.SourceId != source.SourceId))
                             {
@@ -89,7 +108,16 @@ public sealed class DatabaseGenerationService(
                             }
 
                             var metadata = CreateSourceMetadata(dataset, source);
-                            var rows = flattened.Rows.Select(row => CreateDatabaseRow(
+                            var normalizedRows = isLegacyCompatibility
+                                ? flattened.Rows.Select(row => new FlattenedHierarchyRow(
+                                    row.Ordinal,
+                                    row.SourceId,
+                                    row.Cells,
+                                    dataset.RowFamilies.Single().Id,
+                                    row.Cells.Min(cell => cell.Lineage.ElementPath[0].InstanceId),
+                                    row.Ordinal))
+                                : flattened.Rows;
+                            var rows = normalizedRows.Select(row => CreateDatabaseRow(
                                 dataset, source, metadata, row)).ToArray();
                             await repository.WriteHierarchyDatabaseCandidateSourceAsync(
                                 candidate, dataset.SourceSetId, source.SourceId, rows,
@@ -256,7 +284,11 @@ public sealed class DatabaseGenerationService(
             Coordinates = new DatabaseRepeatCoordinatePath(cell.ColumnIdentity.RepeatCoordinates.Coordinates)
         })
             .GroupBy(item => new DatabaseColumnIdentity(
-                dataset.SourceSetId, item.Mapping.FieldKey, item.Coordinates));
+                row.RowFamilyId
+                    ?? throw new InvalidOperationException(
+                        "Family-aware Database generation requires a Row Family on every row."),
+                item.Mapping.FieldKey,
+                item.Coordinates));
         var cells = mapped.Select(group =>
         {
             var values = group.Select(item => new DatabaseReviewValue(
@@ -277,8 +309,13 @@ public sealed class DatabaseGenerationService(
                 .Distinct(StringComparer.Ordinal).Skip(1).Any();
             return new DatabaseReviewCell(group.Key, conflict, values);
         }).ToArray();
+        var recordIdentity = new DatabaseRecordIdentity(
+            row.RowFamilyId!.Value,
+            source.SourceId,
+            row.AnchorInstanceId!.Value,
+            row.ProjectionOrdinal!.Value);
         return new DatabaseReviewRow(
-            row.Ordinal, true, $"{source.SourceId}:{row.Ordinal}", metadata, cells);
+            row.Ordinal, true, recordIdentity, metadata, cells);
     }
 
     private static DatabaseSourceMetadata CreateSourceMetadata(

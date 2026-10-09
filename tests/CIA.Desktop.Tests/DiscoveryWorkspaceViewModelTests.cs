@@ -647,6 +647,20 @@ public sealed class DiscoveryWorkspaceViewModelTests
         viewModel.ClearDatabaseTagOverrideCommand.Execute(null);
         Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
             !configuration.DatabaseTagOverridesByIdentity.ContainsKey(identity)));
+
+        var firstChild = logicalField.Children[0];
+        var secondChild = logicalField.Children[1];
+        viewModel.SelectDetailedInformationCommand.Execute(firstChild);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        viewModel.SelectedDatabaseTag = "Child Only";
+
+        Assert.AreEqual(
+            "Child Only",
+            configuration.DatabaseTagOverridesByIdentity[firstChild.Identity]);
+        Assert.IsFalse(configuration.DatabaseTagOverridesByIdentity.ContainsKey(
+            secondChild.Identity));
+        Assert.AreEqual("Child Only", firstChild.DatabaseTag);
+        Assert.AreEqual("toolname", secondChild.DatabaseTag);
         Assert.HasCount(2, configuration.Current.Items);
     }
 

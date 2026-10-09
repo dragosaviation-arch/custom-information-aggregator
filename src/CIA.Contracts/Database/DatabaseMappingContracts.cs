@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Sources;
 
 namespace CIA.Contracts.Database;
@@ -53,34 +54,50 @@ public sealed record DatabaseLogicalFieldIdentity(
 
 public sealed record DatabaseFieldMapping
 {
-    [JsonConstructor]
     public DatabaseFieldMapping(
         DatabaseLogicalFieldIdentity logicalIdentity,
         string effectiveName,
         bool isExplicitOverride,
         IReadOnlyList<DiscoveryInformationIdentity> detailedIdentities)
+        : this(
+            new RowFamilyId(logicalIdentity.SourceSetId, RowFamilyKind.Root, "/legacy"),
+            effectiveName,
+            isExplicitOverride,
+            detailedIdentities)
     {
-        ArgumentNullException.ThrowIfNull(logicalIdentity);
+    }
+
+    [JsonConstructor]
+    public DatabaseFieldMapping(
+        RowFamilyId rowFamilyId,
+        string effectiveName,
+        bool isExplicitOverride,
+        IReadOnlyList<DiscoveryInformationIdentity> detailedIdentities)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(effectiveName);
         ArgumentNullException.ThrowIfNull(detailedIdentities);
         var details = detailedIdentities.ToArray();
         if (details.Length == 0
             || details.Any(identity => identity is null
-                || identity.SourceSetId != logicalIdentity.SourceSetId
-                || DatabaseLogicalFieldIdentity.Create(identity) != logicalIdentity)
+                || identity.SourceSetId != rowFamilyId.SourceSetId)
             || details.Distinct().Count() != details.Length)
         {
             throw new ArgumentException(
-                "A Database field mapping requires unique detailed identities for one logical field.",
+                "A Database field mapping requires unique detailed identities from one Row Family Source Set.",
                 nameof(detailedIdentities));
         }
 
-        LogicalIdentity = logicalIdentity;
-        EffectiveName = effectiveName;
+        RowFamilyId = rowFamilyId;
+        LogicalIdentity = DatabaseLogicalFieldIdentity.Create(details[0]);
+        EffectiveName = effectiveName.Trim();
         IsExplicitOverride = isExplicitOverride;
         DetailedIdentities = new ReadOnlyCollection<DiscoveryInformationIdentity>(details);
     }
 
+    public RowFamilyId RowFamilyId { get; }
+
+    // Retained for legacy migration and presentation consumers. Family-aware mapping
+    // authority is RowFamilyId + EffectiveName + DetailedIdentities.
     public DatabaseLogicalFieldIdentity LogicalIdentity { get; }
 
     public string EffectiveName { get; }
@@ -90,9 +107,13 @@ public sealed record DatabaseFieldMapping
     public IReadOnlyList<DiscoveryInformationIdentity> DetailedIdentities { get; }
 
     [JsonIgnore]
-    public string FieldKey => IsExplicitOverride
-        ? $"mapped:{EffectiveName}"
-        : $"logical:{(int)LogicalIdentity.CandidateKind}:{LogicalIdentity.CanonicalFieldIdentity}";
+    public string FieldKey => string.Equals(RowFamilyId.AnchorPath, "/legacy", StringComparison.Ordinal)
+        ? IsExplicitOverride
+            ? $"mapped:{EffectiveName}"
+            : $"logical:{(int)LogicalIdentity.CandidateKind}:{LogicalIdentity.CanonicalFieldIdentity}"
+        : string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"family:{(int)RowFamilyId.Kind}:{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(RowFamilyId.AnchorPath))}:{EffectiveName}");
 }
 
 public sealed record DatabaseDatasetBuildSpecification
@@ -104,6 +125,27 @@ public sealed record DatabaseDatasetBuildSpecification
         int ordinal,
         RepeatedDataLayout repeatedDataLayout,
         IReadOnlyList<LoadedSourceContract> sources,
+        IReadOnlyList<DatabaseFieldMapping> fields)
+        : this(
+            sourceSetId,
+            displayName,
+            ordinal,
+            repeatedDataLayout,
+            sources,
+            fields.Select(field => new RowFamilyDefinition(field.RowFamilyId, null))
+                .DistinctBy(family => family.Id)
+                .ToArray(),
+            fields)
+    {
+    }
+
+    public DatabaseDatasetBuildSpecification(
+        SourceSetId sourceSetId,
+        string displayName,
+        int ordinal,
+        RepeatedDataLayout repeatedDataLayout,
+        IReadOnlyList<LoadedSourceContract> sources,
+        IReadOnlyList<RowFamilyDefinition> rowFamilies,
         IReadOnlyList<DatabaseFieldMapping> fields)
     {
         if (!SourceSetId.IsValid(sourceSetId.Value))
@@ -123,8 +165,10 @@ public sealed record DatabaseDatasetBuildSpecification
         }
 
         ArgumentNullException.ThrowIfNull(sources);
+        ArgumentNullException.ThrowIfNull(rowFamilies);
         ArgumentNullException.ThrowIfNull(fields);
         var sourceArray = sources.ToArray();
+        var familyArray = rowFamilies.ToArray();
         var fieldArray = fields.ToArray();
         if (sourceArray.Length == 0
             || sourceArray.Any(source => source is null
@@ -138,11 +182,21 @@ public sealed record DatabaseDatasetBuildSpecification
                 nameof(sources));
         }
 
-        if (fieldArray.Length == 0
+        var familyIds = familyArray.Select(family => family.Id).ToHashSet();
+        if (familyArray.Length == 0
+            || familyArray.Any(family => family is null
+                || family.Id.SourceSetId != sourceSetId)
+            || familyIds.Count != familyArray.Length
+            || fieldArray.Length == 0
             || fieldArray.Any(field => field is null
-                || field.LogicalIdentity.SourceSetId != sourceSetId)
-            || fieldArray.Select(field => field.LogicalIdentity).Distinct().Count()
-                != fieldArray.Length
+                || field.RowFamilyId.SourceSetId != sourceSetId
+                || !familyIds.Contains(field.RowFamilyId))
+            || (!familyArray.All(family => string.Equals(
+                    family.Id.AnchorPath,
+                    "/legacy",
+                    StringComparison.Ordinal))
+                && fieldArray.Select(field => (field.RowFamilyId, field.EffectiveName))
+                    .Distinct().Count() != fieldArray.Length)
             || fieldArray.SelectMany(field => field.DetailedIdentities).Distinct().Count()
                 != fieldArray.Sum(field => field.DetailedIdentities.Count))
         {
@@ -156,6 +210,7 @@ public sealed record DatabaseDatasetBuildSpecification
         Ordinal = ordinal;
         RepeatedDataLayout = repeatedDataLayout;
         Sources = new ReadOnlyCollection<LoadedSourceContract>(sourceArray);
+        RowFamilies = new ReadOnlyCollection<RowFamilyDefinition>(familyArray);
         Fields = new ReadOnlyCollection<DatabaseFieldMapping>(fieldArray);
     }
 
@@ -168,6 +223,8 @@ public sealed record DatabaseDatasetBuildSpecification
     public RepeatedDataLayout RepeatedDataLayout { get; }
 
     public IReadOnlyList<LoadedSourceContract> Sources { get; }
+
+    public IReadOnlyList<RowFamilyDefinition> RowFamilies { get; }
 
     public IReadOnlyList<DatabaseFieldMapping> Fields { get; }
 }
@@ -266,29 +323,81 @@ public sealed class DatabaseRepeatCoordinatePath :
 
 public sealed record DatabaseColumnIdentity
 {
-    [JsonConstructor]
     public DatabaseColumnIdentity(
         SourceSetId sourceSetId,
         string fieldKey,
         DatabaseRepeatCoordinatePath repeatCoordinates)
+        : this(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/legacy"),
+            fieldKey,
+            repeatCoordinates)
     {
-        if (!SourceSetId.IsValid(sourceSetId.Value))
-        {
-            throw new ArgumentException("A Database column requires a Source Set ID.", nameof(sourceSetId));
-        }
+    }
 
+    [JsonConstructor]
+    public DatabaseColumnIdentity(
+        RowFamilyId rowFamilyId,
+        string fieldKey,
+        DatabaseRepeatCoordinatePath repeatCoordinates)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(fieldKey);
         ArgumentNullException.ThrowIfNull(repeatCoordinates);
-        SourceSetId = sourceSetId;
+        RowFamilyId = rowFamilyId;
         FieldKey = fieldKey;
         RepeatCoordinates = repeatCoordinates;
     }
 
-    public SourceSetId SourceSetId { get; }
+    public RowFamilyId RowFamilyId { get; }
+
+    [JsonIgnore]
+    public SourceSetId SourceSetId => RowFamilyId.SourceSetId;
 
     public string FieldKey { get; }
 
     public DatabaseRepeatCoordinatePath RepeatCoordinates { get; }
+}
+
+public sealed record DatabaseRecordIdentity
+{
+    [JsonConstructor]
+    public DatabaseRecordIdentity(
+        RowFamilyId rowFamilyId,
+        SourceId sourceId,
+        long anchorInstanceId,
+        int projectionOrdinal)
+    {
+        if (!SourceId.IsValid(sourceId.Value))
+        {
+            throw new ArgumentException("A Database record requires a Source ID.", nameof(sourceId));
+        }
+
+        if (anchorInstanceId < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(anchorInstanceId));
+        }
+
+        if (projectionOrdinal < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(projectionOrdinal));
+        }
+
+        RowFamilyId = rowFamilyId;
+        SourceId = sourceId;
+        AnchorInstanceId = anchorInstanceId;
+        ProjectionOrdinal = projectionOrdinal;
+    }
+
+    public RowFamilyId RowFamilyId { get; }
+
+    public SourceId SourceId { get; }
+
+    public long AnchorInstanceId { get; }
+
+    public int ProjectionOrdinal { get; }
+
+    public override string ToString() => string.Create(
+        System.Globalization.CultureInfo.InvariantCulture,
+        $"{RowFamilyId.SourceSetId}|{(int)RowFamilyId.Kind}|{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(RowFamilyId.AnchorPath))}|{SourceId}|{AnchorInstanceId}|{ProjectionOrdinal}");
 }
 
 public sealed record DatabaseColumnDefinition(
