@@ -4,6 +4,7 @@ using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Export;
 using CIA.Contracts.Extraction;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -23,6 +24,29 @@ namespace CIA.ProcessingHost.Tests;
 [TestClass]
 public sealed class ExcelWorkbookExportServiceTests
 {
+    [TestMethod]
+    public async Task FamilyAwareExtractionIsRejectedBeforeWorkbookGeneration()
+    {
+        using var workspace = new ExportWorkspace();
+        var dataset = DatasetFixture.Create("Family", 1, familyAware: true);
+        dataset.AddRow(dataset.Cell("value"));
+        var extraction = CreateExtraction(dataset);
+        var configuration = CreateSeparateWorkbookConfiguration(dataset);
+        workspace.Source.Set(extraction, dataset);
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            configuration,
+            CreatePublicationPlan(configuration, extraction, workspace.Root));
+
+        Assert.IsFalse(result.Accepted);
+        Assert.AreEqual("row-family-export-not-supported", result.Failure?.Code);
+        Assert.AreEqual(0, workspace.Source.PublishedResultReadCount);
+        Assert.IsEmpty(workspace.Source.StreamedSourceSets);
+        AssertNoExportArtifacts(workspace.Root);
+    }
+
     [TestMethod]
     [TestCategory("AlphaRegressionGate")]
     public async Task RoutedBatchStreamsSemanticRowsAcrossWorkbooksAndWorksheets()
@@ -928,9 +952,14 @@ public sealed class ExcelWorkbookExportServiceTests
             string displayName,
             int ordinal,
             bool twoColumns = false,
-            DatabaseRepeatCoordinatePath? repeatCoordinates = null)
+            DatabaseRepeatCoordinatePath? repeatCoordinates = null,
+            bool familyAware = false)
         {
             var sourceSetId = SourceSetId.CreateNew();
+            var rowFamilyId = new RowFamilyId(
+                sourceSetId,
+                RowFamilyKind.Root,
+                familyAware ? "/root/record" : "/legacy");
             var names = twoColumns ? new[] { "tag", "other" } : ["tag"];
             var mappings = names.Select(name =>
             {
@@ -941,14 +970,14 @@ public sealed class ExcelWorkbookExportServiceTests
                     SourceValueCandidateKind.Element,
                     $"/root/record/{name}");
                 return new DatabaseFieldMapping(
-                    DatabaseLogicalFieldIdentity.Create(identity),
+                    rowFamilyId,
                     name == "tag" ? "Shared" : "Other",
                     false,
                     [identity]);
             }).ToArray();
             var columns = mappings.Select((mapping, index) => new DatabaseColumnDefinition(
                 new DatabaseColumnIdentity(
-                    sourceSetId,
+                    rowFamilyId,
                     mapping.FieldKey,
                     repeatCoordinates ?? DatabaseRepeatCoordinatePath.Empty),
                 mapping.EffectiveName,
@@ -1002,24 +1031,87 @@ public sealed class ExcelWorkbookExportServiceTests
             _pendingSourceId = null;
         }
 
-        internal DatabaseDatasetSummary DatabaseSummary() => new(
-            SourceSetId,
-            DisplayName,
-            Ordinal,
-            RepeatedDataLayout.StructuralRows,
-            Rows.Count,
-            Rows.SelectMany(row => row.Cells).SelectMany(cell => cell.Values).Count(),
-            Columns,
-            _mappings);
+        internal DatabaseDatasetSummary DatabaseSummary()
+        {
+            var valueCount = Rows.SelectMany(row => row.Cells)
+                .SelectMany(cell => cell.Values).Count();
+            if (string.Equals(
+                    Columns[0].Identity.RowFamilyId.AnchorPath,
+                    "/legacy",
+                    StringComparison.Ordinal))
+            {
+                return new DatabaseDatasetSummary(
+                    SourceSetId,
+                    DisplayName,
+                    Ordinal,
+                    RepeatedDataLayout.StructuralRows,
+                    Rows.Count,
+                    valueCount,
+                    Columns,
+                    _mappings);
+            }
 
-        internal ExtractionDatasetSummary ExtractionSummary() => new(
-            SourceSetId,
-            DisplayName,
-            Ordinal,
-            RepeatedDataLayout.StructuralRows,
-            Rows.Count,
-            Rows.SelectMany(row => row.Cells).SelectMany(cell => cell.Values).Count(),
-            Columns);
+            var family = new DatabaseRowFamilySummary(
+                Columns[0].Identity.RowFamilyId,
+                parentRowFamilyId: null,
+                ordinal: 1,
+                displayName: "Root",
+                Rows.Count,
+                includedRowCount: Rows.Count,
+                valueCount,
+                Columns,
+                _mappings);
+            return new DatabaseDatasetSummary(
+                SourceSetId,
+                DisplayName,
+                Ordinal,
+                RepeatedDataLayout.StructuralRows,
+                Rows.Count,
+                valueCount,
+                Columns,
+                _mappings,
+                [family]);
+        }
+
+        internal ExtractionDatasetSummary ExtractionSummary()
+        {
+            var valueCount = Rows.SelectMany(row => row.Cells)
+                .SelectMany(cell => cell.Values).Count();
+            if (string.Equals(
+                    Columns[0].Identity.RowFamilyId.AnchorPath,
+                    "/legacy",
+                    StringComparison.Ordinal))
+            {
+                return new ExtractionDatasetSummary(
+                    SourceSetId,
+                    DisplayName,
+                    Ordinal,
+                    RepeatedDataLayout.StructuralRows,
+                    Rows.Count,
+                    valueCount,
+                    Columns);
+            }
+
+            var family = new ExtractionRowFamilySummary(
+                Columns[0].Identity.RowFamilyId,
+                parentRowFamilyId: null,
+                ordinal: 1,
+                displayName: "Root",
+                databaseRowCount: Rows.Count,
+                rowCount: Rows.Count,
+                excludedRowCount: 0,
+                valueCount,
+                Columns);
+            return new ExtractionDatasetSummary(
+                SourceSetId,
+                DisplayName,
+                Ordinal,
+                RepeatedDataLayout.StructuralRows,
+                Rows.Count,
+                valueCount,
+                Columns,
+                [family]);
+        }
 
         private static DatabaseLineageEvidence CreateLineage(
             DiscoveryInformationIdentity identity,

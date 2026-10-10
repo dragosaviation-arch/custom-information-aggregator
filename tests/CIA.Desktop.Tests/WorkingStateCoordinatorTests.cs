@@ -1,6 +1,7 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Contracts.WorkingState;
@@ -9,6 +10,7 @@ using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
+using CIA.Desktop.Extraction;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
@@ -212,10 +214,22 @@ public sealed class WorkingStateCoordinatorTests
             "missing.xml");
         var identity = new DiscoveryInformationIdentity(restoredSet, "/records/code", "code");
         var generation = CreateGeneration(restoredSet, identity);
+        var extraction = new ExtractionResultSummary(
+            OperationId.CreateNew(),
+            generation,
+            generation.Datasets.Select(dataset => new ExtractionDatasetSummary(
+                dataset.SourceSetId,
+                dataset.DisplayName,
+                dataset.Ordinal,
+                dataset.RepeatedDataLayout,
+                dataset.RowCount,
+                dataset.ValueCount,
+                dataset.Columns)).ToArray());
         var snapshot = new WorkingStateSnapshot(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             generation,
+            extraction,
             [new WorkingStateSourceSet(restoredSet, "Restored set", 1)],
             restoredSet,
             [new LoadedSourceContract(
@@ -250,9 +264,10 @@ public sealed class WorkingStateCoordinatorTests
             RepeatedDataLayout.StructuralRows,
             context.Configuration.RepeatedDataLayouts[restoredSet]);
         Assert.AreSame(generation, context.Database.CurrentGeneration);
+        Assert.AreSame(extraction, context.Extraction.CurrentResult);
         Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Discovery);
         Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Database);
-        Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Extraction);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
         Assert.IsFalse(context.Workflow.Current.HasValidSourceSelection);
     }
 
@@ -363,14 +378,27 @@ public sealed class WorkingStateCoordinatorTests
             new UnusedDatabaseClient(),
             NullLogger<DatabaseBuildCoordinator>.Instance);
         var client = new StubWorkingStateClient();
+        var extraction = new ExtractionCoordinator(
+            database,
+            workflow,
+            new UnusedExtractionClient(),
+            NullLogger<ExtractionCoordinator>.Instance);
         var coordinator = new WorkingStateCoordinator(
             sources,
             configuration,
             database,
             workflow,
             client,
-            NullLogger<WorkingStateCoordinator>.Instance);
-        return new TestContext(sources, configuration, workflow, database, client, coordinator);
+            NullLogger<WorkingStateCoordinator>.Instance,
+            extraction);
+        return new TestContext(
+            sources,
+            configuration,
+            workflow,
+            database,
+            extraction,
+            client,
+            coordinator);
     }
 
     private static async Task<PreparedContext> CreateCurrentDatabaseContextAsync()
@@ -467,8 +495,18 @@ public sealed class WorkingStateCoordinatorTests
         ActiveDiscoveryConfiguration Configuration,
         ApplicationWorkflowCoordinator Workflow,
         DatabaseBuildCoordinator Database,
+        ExtractionCoordinator Extraction,
         StubWorkingStateClient Client,
         WorkingStateCoordinator Coordinator);
+
+    private sealed class UnusedExtractionClient : IExtractionClient
+    {
+        public Task<ExtractionClientResult> ExtractAsync(
+            OperationCorrelation correlation,
+            DatabaseGenerationSummary databaseGeneration,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Extraction should not run in working-state tests.");
+    }
 
     private sealed record PreparedContext(
         TestContext Context,

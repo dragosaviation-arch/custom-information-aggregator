@@ -953,6 +953,15 @@ public sealed partial class StructuredInformationRepository
                 DELETE FROM extraction_publication;
                 DELETE FROM extraction_results;
 
+                DROP TABLE hierarchy_extraction_publication;
+                DROP TABLE hierarchy_extraction_cell_values;
+                DROP TABLE hierarchy_extraction_cells;
+                DROP TABLE hierarchy_extraction_rows;
+                DROP TABLE hierarchy_extraction_columns;
+                DROP TABLE IF EXISTS hierarchy_extraction_families;
+                DROP TABLE hierarchy_extraction_datasets;
+                DROP TABLE hierarchy_extraction_results;
+
                 DROP TABLE hierarchy_database_publication;
                 DROP TABLE hierarchy_database_cell_values;
                 DROP TABLE hierarchy_database_cells;
@@ -1090,6 +1099,120 @@ public sealed partial class StructuredInformationRepository
                     generation_id TEXT NOT NULL UNIQUE,
                     FOREIGN KEY (generation_id) REFERENCES hierarchy_database_generations (generation_id)
                 );
+
+                CREATE TABLE hierarchy_extraction_results (
+                    extraction_id TEXT PRIMARY KEY CHECK (length(extraction_id) = 36),
+                    database_generation_id TEXT NOT NULL CHECK (length(database_generation_id) = 36),
+                    database_generation_json TEXT NOT NULL,
+                    created_utc TEXT NOT NULL
+                );
+                CREATE TABLE hierarchy_extraction_datasets (
+                    extraction_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL CHECK (length(source_set_id) = 36),
+                    display_name TEXT NOT NULL CHECK (length(display_name) > 0),
+                    dataset_ordinal INTEGER NOT NULL CHECK (dataset_ordinal >= 1),
+                    repeated_data_layout INTEGER NOT NULL,
+                    row_count INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+                    value_count INTEGER NOT NULL DEFAULT 0 CHECK (value_count >= 0),
+                    PRIMARY KEY (extraction_id, source_set_id),
+                    UNIQUE (extraction_id, dataset_ordinal),
+                    FOREIGN KEY (extraction_id) REFERENCES hierarchy_extraction_results (extraction_id) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_extraction_families (
+                    extraction_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL CHECK (length(family_anchor_path) > 0),
+                    parent_family_kind INTEGER,
+                    parent_family_anchor_path TEXT,
+                    family_ordinal INTEGER NOT NULL CHECK (family_ordinal >= 1),
+                    display_name TEXT NOT NULL CHECK (length(display_name) > 0),
+                    database_row_count INTEGER NOT NULL CHECK (database_row_count >= 1),
+                    row_count INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+                    excluded_row_count INTEGER NOT NULL DEFAULT 0 CHECK (excluded_row_count >= 0),
+                    value_count INTEGER NOT NULL DEFAULT 0 CHECK (value_count >= 0),
+                    PRIMARY KEY (extraction_id, source_set_id, family_kind, family_anchor_path),
+                    UNIQUE (extraction_id, source_set_id, family_ordinal),
+                    FOREIGN KEY (extraction_id, source_set_id) REFERENCES hierarchy_extraction_datasets (extraction_id, source_set_id) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_extraction_columns (
+                    extraction_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    column_ordinal INTEGER NOT NULL CHECK (column_ordinal >= 1),
+                    field_key TEXT NOT NULL,
+                    effective_name TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    PRIMARY KEY (extraction_id, source_set_id, family_kind, family_anchor_path, field_key, repeat_coordinates_json),
+                    UNIQUE (extraction_id, source_set_id, family_kind, family_anchor_path, column_ordinal),
+                    FOREIGN KEY (extraction_id, source_set_id, family_kind, family_anchor_path) REFERENCES hierarchy_extraction_families (extraction_id, source_set_id, family_kind, family_anchor_path) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_extraction_rows (
+                    extraction_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL CHECK (row_ordinal >= 1),
+                    database_row_ordinal INTEGER NOT NULL CHECK (database_row_ordinal >= 1),
+                    source_row_ordinal INTEGER NOT NULL CHECK (source_row_ordinal >= 1),
+                    anchor_instance_id INTEGER NOT NULL CHECK (anchor_instance_id >= 1),
+                    projection_ordinal INTEGER NOT NULL CHECK (projection_ordinal >= 1),
+                    record_identity TEXT NOT NULL,
+                    source_id TEXT NOT NULL CHECK (length(source_id) = 36),
+                    source_set_name TEXT NOT NULL,
+                    source_file_name TEXT NOT NULL,
+                    full_source_path TEXT NOT NULL,
+                    source_kind INTEGER NOT NULL,
+                    archive_path TEXT,
+                    archive_member_path TEXT,
+                    file_modified_utc TEXT,
+                    PRIMARY KEY (extraction_id, source_set_id, family_kind, family_anchor_path, row_ordinal),
+                    UNIQUE (extraction_id, source_set_id, family_kind, family_anchor_path, database_row_ordinal),
+                    FOREIGN KEY (extraction_id, source_set_id, family_kind, family_anchor_path) REFERENCES hierarchy_extraction_families (extraction_id, source_set_id, family_kind, family_anchor_path) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_extraction_cells (
+                    extraction_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL,
+                    field_key TEXT NOT NULL,
+                    effective_name TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    has_conflict INTEGER NOT NULL CHECK (has_conflict IN (0, 1)),
+                    PRIMARY KEY (extraction_id, source_set_id, family_kind, family_anchor_path, row_ordinal, field_key, repeat_coordinates_json),
+                    FOREIGN KEY (extraction_id, source_set_id, family_kind, family_anchor_path, row_ordinal) REFERENCES hierarchy_extraction_rows (extraction_id, source_set_id, family_kind, family_anchor_path, row_ordinal) ON DELETE CASCADE,
+                    FOREIGN KEY (extraction_id, source_set_id, family_kind, family_anchor_path, field_key, repeat_coordinates_json) REFERENCES hierarchy_extraction_columns (extraction_id, source_set_id, family_kind, family_anchor_path, field_key, repeat_coordinates_json) ON DELETE CASCADE
+                );
+                CREATE TABLE hierarchy_extraction_cell_values (
+                    extraction_id TEXT NOT NULL,
+                    source_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL,
+                    field_key TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    value_ordinal INTEGER NOT NULL CHECK (value_ordinal >= 1),
+                    value TEXT NOT NULL,
+                    information_type TEXT NOT NULL,
+                    structural_path TEXT NOT NULL,
+                    candidate_kind INTEGER NOT NULL,
+                    structural_identity TEXT NOT NULL,
+                    source_id TEXT NOT NULL CHECK (length(source_id) = 36),
+                    lineage_json TEXT NOT NULL,
+                    PRIMARY KEY (extraction_id, source_set_id, family_kind, family_anchor_path, row_ordinal, field_key, repeat_coordinates_json, value_ordinal),
+                    FOREIGN KEY (extraction_id, source_set_id, family_kind, family_anchor_path, row_ordinal, field_key, repeat_coordinates_json) REFERENCES hierarchy_extraction_cells (extraction_id, source_set_id, family_kind, family_anchor_path, row_ordinal, field_key, repeat_coordinates_json) ON DELETE CASCADE
+                );
+                CREATE INDEX ix_hierarchy_extraction_rows_order
+                    ON hierarchy_extraction_rows (extraction_id, source_set_id, family_kind, family_anchor_path, row_ordinal);
+                CREATE INDEX ix_hierarchy_extraction_values_order
+                    ON hierarchy_extraction_cell_values (extraction_id, source_set_id, family_kind, family_anchor_path, row_ordinal, field_key, repeat_coordinates_json, value_ordinal);
+                CREATE TABLE hierarchy_extraction_publication (
+                    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+                    extraction_id TEXT NOT NULL UNIQUE,
+                    FOREIGN KEY (extraction_id) REFERENCES hierarchy_extraction_results (extraction_id)
+                );
                 PRAGMA user_version = 7;
                 """;
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -1226,6 +1349,7 @@ public sealed partial class StructuredInformationRepository
         [
             "hierarchy_extraction_results",
             "hierarchy_extraction_datasets",
+            "hierarchy_extraction_families",
             "hierarchy_extraction_columns",
             "hierarchy_extraction_rows",
             "hierarchy_extraction_cells",

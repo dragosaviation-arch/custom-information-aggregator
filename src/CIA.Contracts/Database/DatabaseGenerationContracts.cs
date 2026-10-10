@@ -130,7 +130,7 @@ public sealed record DatabaseDatasetSummary
         int valueCount,
         IReadOnlyList<DatabaseColumnDefinition> columns,
         IReadOnlyList<DatabaseFieldMapping> mappings,
-        IReadOnlyList<DatabaseRowFamilySummary> rowFamilies)
+        IReadOnlyList<DatabaseRowFamilySummary>? rowFamilies)
     {
         if (!SourceSetId.IsValid(sourceSetId.Value))
         {
@@ -152,10 +152,10 @@ public sealed record DatabaseDatasetSummary
 
         ArgumentNullException.ThrowIfNull(columns);
         ArgumentNullException.ThrowIfNull(mappings);
-        ArgumentNullException.ThrowIfNull(rowFamilies);
         var columnArray = columns.ToArray();
         var mappingArray = mappings.ToArray();
-        var familyArray = rowFamilies.ToArray();
+        var familyArray = rowFamilies?.ToArray()
+            ?? [CreateLegacyFamily(sourceSetId, rowCount, valueCount, columns, mappings)];
         if (columnArray.Length == 0
             || mappingArray.Length == 0
             || familyArray.Length == 0

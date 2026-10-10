@@ -2,13 +2,15 @@ using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Sources;
 
 namespace CIA.Contracts.WorkingState;
 
 public static class WorkingStatePackageFormat
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int MinimumSupportedSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
     public const string ManifestEntryName = "manifest.json";
     public const string DatabaseEntryName = "database.sqlite3";
     public const long MaximumManifestLength = 4 * 1024 * 1024;
@@ -69,11 +71,34 @@ public sealed record WorkingStateDatabaseTagOverride
 
 public sealed record WorkingStateSnapshot
 {
+    public WorkingStateSnapshot(
+        Guid packageId,
+        DateTimeOffset savedAtUtc,
+        DatabaseGenerationSummary? databaseGeneration,
+        IReadOnlyList<WorkingStateSourceSet> sourceSets,
+        SourceSetId? activeSourceSetId,
+        IReadOnlyList<LoadedSourceContract> sources,
+        DiscoveryConfigurationSnapshot discoveryConfiguration,
+        IReadOnlyList<WorkingStateDatabaseTagOverride> databaseTagOverrides)
+        : this(
+            packageId,
+            savedAtUtc,
+            databaseGeneration,
+            extractionResult: null,
+            sourceSets,
+            activeSourceSetId,
+            sources,
+            discoveryConfiguration,
+            databaseTagOverrides)
+    {
+    }
+
     [JsonConstructor]
     public WorkingStateSnapshot(
         Guid packageId,
         DateTimeOffset savedAtUtc,
         DatabaseGenerationSummary? databaseGeneration,
+        ExtractionResultSummary? extractionResult,
         IReadOnlyList<WorkingStateSourceSet> sourceSets,
         SourceSetId? activeSourceSetId,
         IReadOnlyList<LoadedSourceContract> sources,
@@ -98,6 +123,7 @@ public sealed record WorkingStateSnapshot
         PackageId = packageId;
         SavedAtUtc = savedAtUtc;
         DatabaseGeneration = databaseGeneration;
+        ExtractionResult = extractionResult;
         SourceSets = new ReadOnlyCollection<WorkingStateSourceSet>(sourceSets.ToArray());
         ActiveSourceSetId = activeSourceSetId;
         Sources = new ReadOnlyCollection<LoadedSourceContract>(sources
@@ -130,6 +156,8 @@ public sealed record WorkingStateSnapshot
 
     public DatabaseGenerationSummary? DatabaseGeneration { get; }
 
+    public ExtractionResultSummary? ExtractionResult { get; }
+
     public IReadOnlyList<WorkingStateSourceSet> SourceSets { get; }
 
     public SourceSetId? ActiveSourceSetId { get; }
@@ -150,7 +178,8 @@ public sealed record WorkingStateManifest
         string databaseSha256,
         WorkingStateSnapshot snapshot)
     {
-        if (packageSchemaVersion != WorkingStatePackageFormat.CurrentSchemaVersion)
+        if (packageSchemaVersion is < WorkingStatePackageFormat.MinimumSupportedSchemaVersion
+            or > WorkingStatePackageFormat.CurrentSchemaVersion)
         {
             throw new NotSupportedException(
                 $"Working-state package schema version {packageSchemaVersion} is not supported.");
@@ -240,6 +269,16 @@ public static class WorkingStateContractValidator
             && generation.Datasets.Any(dataset => !sourceSetIds.Contains(dataset.SourceSetId)))
         {
             throw new ArgumentException("The saved Database references an unknown Source Set.");
+        }
+
+        if (snapshot.ExtractionResult is { } extraction
+            && (snapshot.DatabaseGeneration is not { } database
+                || !DatabaseGenerationSnapshotComparer.AreEquivalent(
+                    extraction.DatabaseGeneration,
+                    database)))
+        {
+            throw new ArgumentException(
+                "The saved Extraction Result does not match the saved Database generation.");
         }
     }
 

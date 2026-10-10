@@ -2,6 +2,7 @@ using CIA.Contracts.Operations;
 using CIA.Contracts.WorkingState;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
+using CIA.Desktop.Extraction;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using Microsoft.Extensions.Logging;
@@ -34,7 +35,8 @@ public sealed class WorkingStateCoordinator(
     DatabaseBuildCoordinator databaseBuildCoordinator,
     IApplicationWorkflowCoordinator workflowCoordinator,
     IWorkingStateClient client,
-    ILogger<WorkingStateCoordinator> logger) : IWorkingStateCoordinator
+    ILogger<WorkingStateCoordinator> logger,
+    ExtractionCoordinator? extractionCoordinator = null) : IWorkingStateCoordinator
 {
     public WorkflowOperationReadiness EvaluateSaveReadiness()
     {
@@ -189,10 +191,12 @@ public sealed class WorkingStateCoordinator(
                 snapshot.DiscoveryConfiguration,
                 snapshot.DatabaseTagOverrides);
             databaseBuildCoordinator.AdoptRestoredGeneration(snapshot.DatabaseGeneration);
+            extractionCoordinator?.AdoptRestoredResult(snapshot.ExtractionResult);
 
             var stateResult = workflowCoordinator.RecordWorkingStateRestored(
                 sourceSet.CreateIncludedReadySnapshot().Count > 0,
-                snapshot.DatabaseGeneration is not null);
+                snapshot.DatabaseGeneration is not null,
+                snapshot.ExtractionResult is not null);
             if (!stateResult.Accepted)
             {
                 throw new InvalidOperationException(
@@ -242,6 +246,7 @@ public sealed class WorkingStateCoordinator(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             databaseBuildCoordinator.CurrentGeneration,
+            extractionCoordinator?.CurrentResult,
             sourceSets,
             sourceSet.ActiveSourceSet?.SourceSetId,
             sourceSet.CreateWorkingStateSourceSnapshot(),
@@ -256,12 +261,21 @@ public sealed class WorkingStateCoordinator(
 
     private WorkflowOperationReadiness EvaluateDatabaseSaveCoherence()
     {
-        return databaseBuildCoordinator.CurrentGeneration is not null
-            && workflowCoordinator.Current.Database != WorkflowArtifactStatus.Current
+        if (databaseBuildCoordinator.CurrentGeneration is not null
+            && workflowCoordinator.Current.Database != WorkflowArtifactStatus.Current)
+        {
+            return WorkflowOperationReadiness.Unavailable(
+                    workflowPrerequisitesSatisfied: true,
+                    WorkflowRejectionCode.OperationFailed,
+                    "The published Database is out of date. Update or rebuild the Database before saving working state, or remove the published Database to save without one.");
+        }
+
+        return extractionCoordinator?.CurrentResult is not null
+            && workflowCoordinator.Current.Extraction != WorkflowArtifactStatus.Current
                 ? WorkflowOperationReadiness.Unavailable(
                     workflowPrerequisitesSatisfied: true,
                     WorkflowRejectionCode.OperationFailed,
-                    "The published Database is out of date. Update or rebuild the Database before saving working state, or remove the published Database to save without one.")
+                    "The published Extraction Result is out of date. Prepare it again before saving working state.")
                 : WorkflowOperationReadiness.Ready();
     }
 }

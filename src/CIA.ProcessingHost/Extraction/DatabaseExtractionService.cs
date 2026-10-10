@@ -37,20 +37,6 @@ public sealed class DatabaseExtractionService(
                 "Extraction requires a hierarchy-aware published Database generation.");
         }
 
-        if (databaseGeneration.IsRowFamilyAware)
-        {
-            var completion = OperationCompletion.FromTerminalOutcome(
-                correlation,
-                OperationOutcome.Failed,
-                [OperationItemStatus.Unprocessed(
-                    PublicationItemId,
-                    "row-family-extraction-not-supported")]);
-            return DatabaseExtractionHostResult.Reject(
-                completion,
-                "row-family-extraction-not-supported",
-                "Extraction is unavailable for a family-aware Database until its typed family model is implemented.");
-        }
-
         var operation = operationCancellation.BeginOperation(
             correlation,
             "Extraction",

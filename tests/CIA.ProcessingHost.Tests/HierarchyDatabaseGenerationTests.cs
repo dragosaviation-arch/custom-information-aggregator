@@ -1,5 +1,6 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -35,7 +36,7 @@ public sealed class HierarchyDatabaseGenerationTests
               <buy_links><link><name>Shop A</name></link><link><name>Shop B</name></link></buy_links>
               <series_works><work><title>Series One</title></work></series_works>
               <similar_books>
-                <book><title>Similar A</title><num_pages>200</num_pages><title_without_series>Similar A</title_without_series><author><name>Similar Author A</name></author></book>
+                <book><title>Similar A</title><num_pages>200</num_pages><title_without_series>Similar A</title_without_series><author><name>Similar Author A1</name></author><author><name>Similar Author A2</name></author></book>
                 <book><title>Similar B</title><num_pages>300</num_pages><title_without_series>Similar B</title_without_series><author><name>Similar Author B</name></author></book>
               </similar_books>
             </book>
@@ -44,17 +45,26 @@ public sealed class HierarchyDatabaseGenerationTests
         var root = new RowFamilyDefinition(
             new RowFamilyId(sourceSet, RowFamilyKind.Root, "/book"),
             parentRowFamilyId: null);
+        var authorsFamily = new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
+            "/book/authors/author"), root.Id);
+        var buyLinksFamily = new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
+            "/book/buy_links/link"), root.Id);
+        var seriesFamily = new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
+            "/book/series_works/work"), root.Id);
+        var similarFamily = new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
+            "/book/similar_books/book"), root.Id);
+        var nestedAuthorsFamily = new RowFamilyDefinition(new RowFamilyId(
+            sourceSet,
+            RowFamilyKind.Repeated,
+            "/book/similar_books/book/author"), similarFamily.Id);
         var families = new[]
         {
             root,
-            new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
-                "/book/authors/author"), root.Id),
-            new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
-                "/book/buy_links/link"), root.Id),
-            new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
-                "/book/series_works/work"), root.Id),
-            new RowFamilyDefinition(new RowFamilyId(sourceSet, RowFamilyKind.Repeated,
-                "/book/similar_books/book"), root.Id)
+            authorsFamily,
+            buyLinksFamily,
+            seriesFamily,
+            similarFamily,
+            nestedAuthorsFamily
         };
         var assignments = identities.ToDictionary(
             identity => identity,
@@ -91,7 +101,7 @@ public sealed class HierarchyDatabaseGenerationTests
         var generation = result.PublishedGeneration!;
         var dataset = generation.Datasets.Single();
         Assert.IsTrue(generation.IsRowFamilyAware);
-        Assert.HasCount(5, dataset.RowFamilies);
+        Assert.HasCount(6, dataset.RowFamilies);
         var rowCounts = dataset.RowFamilies.ToDictionary(
             family => family.AnchorPath,
             family => family.RowCount,
@@ -101,6 +111,7 @@ public sealed class HierarchyDatabaseGenerationTests
         Assert.AreEqual(2, rowCounts["/book/buy_links/link"]);
         Assert.AreEqual(1, rowCounts["/book/series_works/work"]);
         Assert.AreEqual(2, rowCounts["/book/similar_books/book"]);
+        Assert.AreEqual(3, rowCounts["/book/similar_books/book/author"]);
         foreach (var family in dataset.RowFamilies)
         {
             var page = await workspace.Repository.ReadPublishedDatabasePageAsync(
@@ -133,8 +144,8 @@ public sealed class HierarchyDatabaseGenerationTests
                 DatabaseRowInclusionFilter.All));
         Assert.IsTrue(similarPage!.Rows.Any(row =>
             Values(row).Contains("Similar A")
-            && Values(row).Contains("200")
-            && Values(row).Contains("Similar Author A")));
+            && Values(row).Contains("200")));
+        Assert.IsFalse(similarPage.Rows.Any(row => Values(row).Contains("Similar Author A1")));
         Assert.IsFalse(similarPage.Rows.Any(row => Values(row).Contains("Shop A")));
 
         var authors = dataset.RowFamilies.Single(family =>
@@ -178,19 +189,77 @@ public sealed class HierarchyDatabaseGenerationTests
                 100,
                 null,
                 DatabaseRowInclusionFilter.All));
-        Assert.AreEqual(1, includedAuthors?.TotalRowCount);
-        Assert.AreEqual(2, retainedBuyLinks?.TotalRowCount);
+        Assert.IsNotNull(includedAuthors);
+        Assert.IsNotNull(retainedBuyLinks);
+        Assert.AreEqual(1, includedAuthors.TotalRowCount);
+        Assert.AreEqual(2, retainedBuyLinks.TotalRowCount);
+        Assert.IsTrue(retainedBuyLinks.Rows.All(row => row.IsIncluded));
 
         var extraction = await new DatabaseExtractionService(
                 workspace.Repository,
                 new CooperativeOperationCancellation(new NullHistory()),
                 NullLogger<DatabaseExtractionService>.Instance)
             .ExtractAsync(OperationCorrelation.CreateNew(), generation);
-        Assert.IsFalse(extraction.Accepted);
+        Assert.IsTrue(extraction.Accepted, extraction.Failure?.Description);
+        var extracted = extraction.PublishedResult!;
+        Assert.IsTrue(extracted.IsRowFamilyAware);
+        var extractedFamilies = extracted.Datasets.Single().RowFamilies;
+        Assert.HasCount(6, extractedFamilies);
+        Assert.AreEqual(1, extractedFamilies.Single(family => family.Id == root.Id).RowCount);
+        Assert.AreEqual(1, extractedFamilies.Single(family => family.Id == authors.Id).RowCount);
+        Assert.AreEqual(2, extractedFamilies.Single(family => family.Id == buyLinks.Id).RowCount);
+        Assert.AreEqual(1, extractedFamilies.Single(family =>
+            family.AnchorPath == "/book/series_works/work").RowCount);
+        Assert.AreEqual(2, extractedFamilies.Single(family => family.Id == similar.Id).RowCount);
+        Assert.AreEqual(3, extractedFamilies.Single(family =>
+            family.Id == nestedAuthorsFamily.Id).RowCount);
         Assert.AreEqual(
-            "row-family-extraction-not-supported",
-            extraction.Failure?.Code);
-        Assert.IsNull(await workspace.Repository.ReadPublishedExtractionResultAsync());
+            similar.Id,
+            extractedFamilies.Single(family => family.Id == nestedAuthorsFamily.Id)
+                .ParentRowFamilyId);
+
+        var similarRows = new List<CIA.Contracts.Extraction.ExtractionResultRow>();
+        await foreach (var row in workspace.Repository.StreamPublishedExtractionRowsAsync(
+                           extracted.OperationId,
+                           similar.Id))
+        {
+            similarRows.Add(row);
+        }
+
+        Assert.HasCount(2, similarRows);
+        Assert.IsTrue(similarRows.All(row =>
+            row.SemanticIdentity?.RowFamilyId == similar.Id
+            && row.Source.SourceId == source.SourceId));
+        Assert.IsTrue(similarRows.Any(row => Values(row).Contains("Similar A")
+            && Values(row).Contains("200")));
+        Assert.IsFalse(similarRows.Any(row => Values(row).Contains("Similar Author A1")));
+        Assert.IsFalse(similarRows.Any(row => Values(row).Contains("Shop A")));
+        Assert.IsTrue(similarRows.SelectMany(row => row.Cells)
+            .SelectMany(cell => cell.Values)
+            .All(value => value.OriginatingRowFamilyId is not null
+                && value.SourceId == source.SourceId
+                && value.Lineage.NodeInstanceId > 0));
+        Assert.IsTrue(similarRows.SelectMany(row => row.Cells)
+            .SelectMany(cell => cell.Values)
+            .Any(value => value.OriginatingRowFamilyId == root.Id));
+
+        var nestedAuthorRows = new List<ExtractionResultRow>();
+        await foreach (var row in workspace.Repository.StreamPublishedExtractionRowsAsync(
+                           extracted.OperationId,
+                           nestedAuthorsFamily.Id))
+        {
+            nestedAuthorRows.Add(row);
+        }
+
+        Assert.HasCount(3, nestedAuthorRows);
+        Assert.IsTrue(nestedAuthorRows.Any(row => Values(row).Contains("Similar Author A1")));
+        Assert.IsTrue(nestedAuthorRows.Any(row => Values(row).Contains("Similar Author A2")));
+        Assert.IsTrue(nestedAuthorRows.Any(row => Values(row).Contains("Similar Author B")));
+        Assert.IsTrue(nestedAuthorRows.All(row =>
+            row.SemanticIdentity?.RowFamilyId == nestedAuthorsFamily.Id));
+
+        var published = await workspace.Repository.ReadPublishedExtractionResultAsync();
+        Assert.IsTrue(ExtractionResultSnapshotComparer.AreEquivalent(extracted, published));
     }
 
     [TestMethod]
@@ -804,6 +873,10 @@ public sealed class HierarchyDatabaseGenerationTests
     }
 
     private static IReadOnlyList<string> Values(DatabaseReviewRow row) =>
+        row.Cells.SelectMany(cell => cell.Values).Select(value => value.Value).ToArray();
+
+    private static IReadOnlyList<string> Values(
+        CIA.Contracts.Extraction.ExtractionResultRow row) =>
         row.Cells.SelectMany(cell => cell.Values).Select(value => value.Value).ToArray();
 
     private static void AssertRowValues(DatabaseReviewRow row, params string[] expected) =>

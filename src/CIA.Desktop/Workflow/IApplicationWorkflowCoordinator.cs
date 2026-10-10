@@ -18,6 +18,12 @@ public interface IApplicationWorkflowCoordinator
         bool hasValidSourceSelection,
         bool hasPublishedDatabase);
 
+    WorkflowCommandResult RecordWorkingStateRestored(
+        bool hasValidSourceSelection,
+        bool hasPublishedDatabase,
+        bool hasPublishedExtraction) =>
+        RecordWorkingStateRestored(hasValidSourceSelection, hasPublishedDatabase);
+
     Task<WorkflowCommandResult> BeginOperationAsync(
         WorkflowOperationKind operationKind,
         CancellationToken cancellationToken = default);

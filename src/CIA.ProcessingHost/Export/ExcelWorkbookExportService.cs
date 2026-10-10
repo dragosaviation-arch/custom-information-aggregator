@@ -53,6 +53,19 @@ public sealed class ExcelWorkbookExportService
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(publicationPlan);
 
+        if (extractionResult.IsRowFamilyAware)
+        {
+            return WorkbookExportHostResult.Reject(
+                OperationCompletion.FromTerminalOutcome(
+                    correlation,
+                    OperationOutcome.Failed,
+                    [OperationItemStatus.Unprocessed(
+                        PublicationItemId,
+                        "row-family-export-not-supported")]),
+                "row-family-export-not-supported",
+                "Export of family-aware Extraction Results requires Row Family worksheet routing from Batch 5.");
+        }
+
         var operation = _operationCancellation.BeginOperation(
             correlation,
             "Workbook export",

@@ -95,6 +95,15 @@ public sealed class WorkbookExportCoordinator(
                 "Export requires the active prepared Extraction Result to be current.");
         }
 
+
+        if (extractionResult.IsRowFamilyAware)
+        {
+            return WorkflowOperationReadiness.Unavailable(
+                workflowPrerequisitesSatisfied: true,
+                WorkflowRejectionCode.OperationFailed,
+                "Export of family-aware Extraction Results is unavailable until Row Family worksheet routing is implemented.");
+        }
+
         if (configuration is null)
         {
             return WorkflowOperationReadiness.Unavailable(
