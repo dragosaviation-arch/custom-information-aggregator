@@ -17,7 +17,10 @@ using CIA.Core.Hierarchy;
 using CIA.Core.Runtime;
 using CIA.Core.Sources;
 using CIA.Core.WorkingState;
+using CIA.Desktop.Export;
 using CIA.ProcessingHost.Database;
+using CIA.ProcessingHost.Discovery;
+using CIA.ProcessingHost.Export;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceInterpretation;
@@ -192,6 +195,20 @@ public sealed class WorkingStatePackageTests
             && row.Cells.SelectMany(cell => cell.Values).All(value =>
                 value.OriginatingRowFamilyId is not null
                 && value.SourceId == row.Source.SourceId)));
+
+        var exportDirectory = Path.Combine(workspace.Root, "restored-v2-export");
+        Directory.CreateDirectory(exportDirectory);
+        var restoredConfiguration = result.Manifest!.Snapshot.ExportConfiguration!;
+        var exported = await restored.CreateExportService().ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            restoredConfiguration,
+            CreatePublicationPlan(restoredConfiguration, extraction, exportDirectory));
+        Assert.IsTrue(exported.Accepted, exported.Failure?.Description);
+        Assert.AreEqual(
+            restoredConfiguration.SourceSets.Count(set => set.IsEnabled),
+            exported.Batch!.Workbooks.SelectMany(workbook => workbook.Worksheets).Count());
+        Assert.IsEmpty(Directory.GetFiles(exportDirectory, "*.incomplete"));
     }
 
     private static ExportConfigurationSnapshot CreateFamilyExportConfiguration(
@@ -226,6 +243,23 @@ public sealed class WorkingStatePackageTests
                     column.EffectiveName,
                     false)).ToArray(),
                 [])).ToArray());
+    }
+
+    private static WorkbookPublicationPlan CreatePublicationPlan(
+        ExportConfigurationSnapshot configuration,
+        ExtractionResultSummary extraction,
+        string directory)
+    {
+        var validation = ExportConfigurationValidator.Validate(configuration, extraction);
+        Assert.IsTrue(
+            validation.IsValid,
+            string.Join("; ", validation.Failures.Select(failure => failure.Description)));
+        return new WorkbookPublicationPlan(
+            directory,
+            validation.RunnableWorkbooks.Select(workbook => new WorkbookPublicationTarget(
+                workbook.Workbook.WorkbookDefinitionId,
+                Path.Combine(directory, workbook.Workbook.FileName),
+                WorkbookPublicationDisposition.CreateNew)).ToArray());
     }
 
     [TestMethod]
@@ -264,13 +298,69 @@ public sealed class WorkingStatePackageTests
         Assert.IsNull(await restored.Repository.ReadPublishedExtractionResultAsync());
         CollectionAssert.AreEqual(originalBytes, await File.ReadAllBytesAsync(versionOnePath));
 
+        var restoredSnapshot = result.Manifest.Snapshot;
+        var discovery = await restored.DiscoveryService.RunAsync(
+            OperationCorrelation.CreateNew(),
+            restoredSnapshot.Sources);
+        Assert.IsTrue(discovery.Accepted, discovery.Failure?.Description);
+        var specification = DatabaseBuildSpecificationFactory.Create(
+            restoredSnapshot.DiscoveryConfiguration,
+            restoredSnapshot.DatabaseTagOverrides.ToDictionary(
+                item => item.Identity,
+                item => item.DatabaseTagName),
+            restoredSnapshot.Sources,
+            restoredSnapshot.SourceSets.ToDictionary(
+                sourceSet => sourceSet.SourceSetId,
+                sourceSet => sourceSet.Name),
+            discovery.FamilyCatalog!,
+            discovery.Information.ToDictionary(
+                item => item.Identity,
+                item => item.RowFamilyId
+                    ?? throw new AssertFailedException(
+                        $"Discovery did not assign {item.StructuralPath} to a Row Family.")));
+        var rebuilt = await restored.DatabaseService.BuildAsync(
+            OperationCorrelation.CreateNew(),
+            specification);
+        Assert.IsTrue(rebuilt.Accepted, rebuilt.Failure?.Description);
+        var regeneratedExtraction = await restored.Repository.ExtractPublishedDatabaseAsync(
+            OperationCorrelation.CreateNew(),
+            rebuilt.PublishedGeneration!);
+        var routing = new ExportRoutingConfigurationPresentation();
+        routing.Synchronize(rebuilt.PublishedGeneration!);
+        var regeneratedConfiguration = routing.Capture();
+        var exportDirectory = Path.Combine(workspace.Root, "migrated-v1-export");
+        Directory.CreateDirectory(exportDirectory);
+        var exported = await restored.CreateExportService().ExportAsync(
+            OperationCorrelation.CreateNew(),
+            regeneratedExtraction,
+            regeneratedConfiguration,
+            CreatePublicationPlan(
+                regeneratedConfiguration,
+                regeneratedExtraction,
+                exportDirectory));
+        Assert.IsTrue(exported.Accepted, exported.Failure?.Description);
+
         var resavedPath = Path.Combine(workspace.Root, "migrated-v2.cia");
         var resaved = await restored.PackageService.SaveAsync(
             OperationCorrelation.CreateNew(),
             resavedPath,
-            result.Manifest.Snapshot);
+            new WorkingStateSnapshot(
+                restoredSnapshot.PackageId,
+                restoredSnapshot.SavedAtUtc,
+                rebuilt.PublishedGeneration,
+                regeneratedExtraction,
+                regeneratedConfiguration,
+                restoredSnapshot.SourceSets,
+                restoredSnapshot.ActiveSourceSetId,
+                restoredSnapshot.Sources,
+                restoredSnapshot.DiscoveryConfiguration,
+                restoredSnapshot.DatabaseTagOverrides));
         Assert.IsTrue(resaved.Accepted, resaved.Failure?.Description);
         Assert.AreEqual(2, resaved.Manifest?.PackageSchemaVersion);
+        Assert.IsNotNull(resaved.Manifest?.Snapshot.DatabaseGeneration);
+        Assert.IsNotNull(resaved.Manifest?.Snapshot.ExtractionResult);
+        Assert.IsNotNull(resaved.Manifest?.Snapshot.ExportConfiguration);
+        Assert.IsEmpty(Directory.GetFiles(exportDirectory, "*.incomplete"));
     }
 
     [TestMethod]
@@ -825,6 +915,7 @@ public sealed class WorkingStatePackageTests
                 new HierarchyFlatteningEngine(),
                 new CooperativeOperationCancellation(new NullHistory()),
                 NullLogger<DatabaseGenerationService>.Instance);
+            DiscoveryService = CreateDiscoveryService(Repository, _interpreter);
             PackageService = CreatePackageService(Repository, _paths);
         }
 
@@ -840,6 +931,7 @@ public sealed class WorkingStatePackageTests
                 new HierarchyFlatteningEngine(),
                 new CooperativeOperationCancellation(new NullHistory()),
                 NullLogger<DatabaseGenerationService>.Instance);
+            DiscoveryService = CreateDiscoveryService(Repository, _interpreter);
             PackageService = CreatePackageService(Repository, _paths);
         }
 
@@ -849,7 +941,15 @@ public sealed class WorkingStatePackageTests
 
         public DatabaseGenerationService DatabaseService { get; }
 
+        public DiscoveryService DiscoveryService { get; }
+
         public WorkingStatePackageService PackageService { get; }
+
+        public ExcelWorkbookExportService CreateExportService() =>
+            new(
+                Repository,
+                new CooperativeOperationCancellation(new NullHistory()),
+                NullLogger<ExcelWorkbookExportService>.Instance);
 
         public WorkingStatePackageService CreatePackageService(
             IWorkingStatePackagePublisher publisher) =>
@@ -1061,6 +1161,14 @@ public sealed class WorkingStatePackageTests
                 paths,
                 new CooperativeOperationCancellation(new NullHistory()),
                 NullLogger<WorkingStatePackageService>.Instance);
+
+        private static DiscoveryService CreateDiscoveryService(
+            StructuredInformationRepository repository,
+            SourceInterpreter interpreter) =>
+            new(
+                interpreter,
+                new SourceOccurrenceReader([], NullLogger<SourceOccurrenceReader>.Instance),
+                repository);
     }
 
     private sealed class GatedWorkingStatePackagePublisher : IWorkingStatePackagePublisher

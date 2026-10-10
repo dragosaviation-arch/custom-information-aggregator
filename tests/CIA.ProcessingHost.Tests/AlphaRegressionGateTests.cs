@@ -11,6 +11,7 @@ using CIA.Core.Diagnostics;
 using CIA.Core.Hierarchy;
 using CIA.Core.Runtime;
 using CIA.Core.Sources;
+using CIA.Desktop.Export;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Discovery;
 using CIA.ProcessingHost.Database;
@@ -19,6 +20,7 @@ using CIA.ProcessingHost.Export;
 using CIA.ProcessingHost.Extraction;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
+using CIA.ProcessingHost.SourceIntake;
 using CIA.ProcessingHost.SourceInterpretation;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
@@ -99,6 +101,291 @@ public sealed class AlphaRegressionGateTests
             && item.SampleValue == "same-content");
         Assert.AreEqual(3, repeatedNote.TotalOccurrenceCount);
         Assert.AreEqual(2, repeatedNote.LogicalSourceCount);
+    }
+
+    [TestMethod]
+    [TestCategory(GateCategory)]
+    [DataRow(RepeatedDataLayout.AlignRepeatedGroupsByPosition)]
+    [DataRow(RepeatedDataLayout.StructuralRows)]
+    [DataRow(RepeatedDataLayout.AllCombinations)]
+    [DataRow(RepeatedDataLayout.NumberRepeatedValuesIntoColumns)]
+    public async Task GoodbooksLikeSourceFlowsThroughIndependentFamilyWorksheetsInEveryLayout(
+        RepeatedDataLayout layout)
+    {
+        using var workspace = new AlphaWorkspace();
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = await workspace.LoadStructuralFixtureAsync(
+            sourceSetId,
+            "spr201-end-to-end.xml");
+        var discovery = await workspace.Discovery.RunAsync(
+            OperationCorrelation.CreateNew(),
+            [source]);
+
+        Assert.IsTrue(discovery.Accepted, discovery.Failure?.Description);
+        Assert.IsNotNull(discovery.FamilyCatalog);
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                "/book",
+                "/book/authors/author",
+                "/book/buy_links/link",
+                "/book/series_works/work",
+                "/book/similar_books/book"
+            },
+            discovery.FamilyCatalog.Families.Select(family => family.Id.AnchorPath).ToArray());
+        Assert.IsTrue(discovery.Information.All(item => item.RowFamilyId is not null));
+
+        var specification = CreateDiscoveredSpecification(
+            discovery,
+            [source],
+            new Dictionary<SourceSetId, string> { [sourceSetId] = "Goodbooks" },
+            layout);
+        var first = await RunGoodbooksFlowAsync(workspace, specification, "first");
+        var second = await RunGoodbooksFlowAsync(workspace, specification, "second");
+
+        var expectedRows = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["/book"] = 1,
+            ["/book/authors/author"] = 2,
+            ["/book/buy_links/link"] = 2,
+            ["/book/series_works/work"] = 1,
+            ["/book/similar_books/book"] = 2
+        };
+        CollectionAssert.AreEqual(
+            expectedRows.Keys.ToArray(),
+            first.Generation.Datasets.Single().RowFamilies
+                .Select(family => family.AnchorPath).ToArray());
+        foreach (var family in first.Generation.Datasets.Single().RowFamilies)
+        {
+            Assert.AreEqual(expectedRows[family.AnchorPath], family.RowCount, family.AnchorPath);
+            Assert.AreEqual(
+                expectedRows[family.AnchorPath],
+                first.Extraction.Datasets.Single().RowFamilies.Single(candidate =>
+                    candidate.Id == family.Id).RowCount,
+                family.AnchorPath);
+        }
+        Assert.AreEqual(8, first.Generation.RowCount);
+        Assert.AreEqual(8, first.Extraction.RowCount);
+
+        AssertFamilyOwnsPaths(
+            first.Generation,
+            "/book",
+            "/book/num_pages",
+            "/book/title",
+            "/book/work/original_title");
+        AssertFamilyOwnsPaths(
+            first.Generation,
+            "/book/authors/author",
+            "/book/authors/author/name");
+        AssertFamilyOwnsPaths(
+            first.Generation,
+            "/book/buy_links/link",
+            "/book/buy_links/link/name");
+        AssertFamilyOwnsPaths(
+            first.Generation,
+            "/book/series_works/work",
+            "/book/series_works/work/title");
+        AssertFamilyOwnsPaths(
+            first.Generation,
+            "/book/similar_books/book",
+            "/book/similar_books/book/author/name",
+            "/book/similar_books/book/num_pages",
+            "/book/similar_books/book/title",
+            "/book/similar_books/book/title_without_series");
+
+        Assert.IsTrue(first.DatabaseRows["/book"].Single().Contains("Root Book"));
+        Assert.IsTrue(first.DatabaseRows["/book"].Single().Contains("Original Root"));
+        CollectionAssert.AreEquivalent(
+            new[] { "Author A", "Author B" },
+            first.DatabaseRows["/book/authors/author"].SelectMany(row => row)
+                .Where(value => value.StartsWith("Author ", StringComparison.Ordinal)).ToArray());
+        CollectionAssert.AreEquivalent(
+            new[] { "Shop A", "Shop B" },
+            first.DatabaseRows["/book/buy_links/link"].SelectMany(row => row)
+                .Where(value => value.StartsWith("Shop ", StringComparison.Ordinal)).ToArray());
+        Assert.IsTrue(first.DatabaseRows["/book/similar_books/book"].Any(row =>
+            row.Contains("Similar A") && row.Contains("200") && row.Contains("Similar Author A")));
+        Assert.IsTrue(first.DatabaseRows["/book/similar_books/book"].Any(row =>
+            row.Contains("Similar B") && row.Contains("300") && row.Contains("Similar Author B")));
+        Assert.IsFalse(first.DatabaseRows["/book/similar_books/book"].Any(row =>
+            row.Contains("Shop A") || row.Contains("Author A")));
+
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                "Goodbooks - Root",
+                "Goodbooks - author",
+                "Goodbooks - link",
+                "Goodbooks - work",
+                "Goodbooks - book"
+            },
+            first.WorksheetNames.ToArray());
+        Assert.HasCount(5, first.WorksheetNames);
+        AssertWorksheetContains(first, "Goodbooks - author", "Author A");
+        AssertWorksheetDoesNotContain(first, "Goodbooks - author", "Shop A");
+        AssertWorksheetContains(first, "Goodbooks - book", "Similar B");
+        AssertWorksheetDoesNotContain(first, "Goodbooks - book", "Shop A");
+
+        CollectionAssert.AreEqual(
+            first.FamilySignatures.ToArray(),
+            second.FamilySignatures.ToArray());
+        CollectionAssert.AreEqual(
+            first.ExtractionSignatures.ToArray(),
+            second.ExtractionSignatures.ToArray());
+        CollectionAssert.AreEqual(
+            first.WorksheetNames.ToArray(),
+            second.WorksheetNames.ToArray());
+        foreach (var sheetName in first.WorksheetNames)
+        {
+            CollectionAssert.AreEqual(
+                first.WorksheetCells[sheetName].ToArray(),
+                second.WorksheetCells[sheetName].ToArray(),
+                sheetName);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory(GateCategory)]
+    public async Task ProvenNestedAuthorFamilyFlowsSeparatelyThroughExtractionAndExcel()
+    {
+        using var workspace = new AlphaWorkspace();
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = await workspace.LoadStructuralFixtureAsync(
+            sourceSetId,
+            "family-aware-nested-authors.xml");
+        var discovery = await workspace.Discovery.RunAsync(
+            OperationCorrelation.CreateNew(),
+            [source]);
+        var specification = CreateDiscoveredSpecification(
+            discovery,
+            [source],
+            new Dictionary<SourceSetId, string> { [sourceSetId] = "Nested" },
+            RepeatedDataLayout.StructuralRows);
+
+        var flow = await RunGoodbooksFlowAsync(workspace, specification, "nested");
+
+        var families = flow.Generation.Datasets.Single().RowFamilies.ToDictionary(
+            family => family.AnchorPath,
+            StringComparer.Ordinal);
+        Assert.AreEqual(1, families["/book"].RowCount);
+        Assert.AreEqual(2, families["/book/similar_books/book"].RowCount);
+        Assert.AreEqual(3, families["/book/similar_books/book/authors/author"].RowCount);
+        Assert.AreEqual(
+            families["/book/similar_books/book"].Id,
+            families["/book/similar_books/book/authors/author"].ParentRowFamilyId);
+        Assert.IsFalse(flow.DatabaseRows["/book/similar_books/book"].Any(row =>
+            row.Any(value => value.StartsWith("Author ", StringComparison.Ordinal))));
+        CollectionAssert.AreEquivalent(
+            new[] { "Author A1", "Author A2", "Author B1" },
+            flow.DatabaseRows["/book/similar_books/book/authors/author"]
+                .SelectMany(row => row)
+                .Where(value => value.StartsWith("Author ", StringComparison.Ordinal)).ToArray());
+        Assert.IsTrue(flow.WorksheetNames.Any(name =>
+            name.EndsWith(" - author", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    [TestCategory(GateCategory)]
+    public async Task MultipleSetsAndFamiliesRouteAcrossWorkbooksWithoutCrossSetValues()
+    {
+        using var workspace = new AlphaWorkspace();
+        var firstSet = SourceSetId.CreateNew();
+        var secondSet = SourceSetId.CreateNew();
+        var firstSource = await workspace.LoadStructuralFixtureAsync(
+            firstSet,
+            "spr201-end-to-end.xml");
+        var secondSource = await workspace.LoadStructuralFixtureAsync(
+            secondSet,
+            "spr201-end-to-end.xml");
+        var discovery = await workspace.Discovery.RunAsync(
+            OperationCorrelation.CreateNew(),
+            [firstSource, secondSource]);
+        var reversedDiscovery = await workspace.Discovery.RunAsync(
+            OperationCorrelation.CreateNew(),
+            [secondSource, firstSource]);
+        CollectionAssert.AreEqual(
+            discovery.FamilyCatalog!.Families.Select(family =>
+                $"{family.Id}|{family.ParentRowFamilyId}").ToArray(),
+            reversedDiscovery.FamilyCatalog!.Families.Select(family =>
+                $"{family.Id}|{family.ParentRowFamilyId}").ToArray());
+        CollectionAssert.AreEqual(
+            discovery.Information.Select(item => $"{item.Identity}|{item.RowFamilyId}")
+                .Order(StringComparer.Ordinal).ToArray(),
+            reversedDiscovery.Information.Select(item =>
+                $"{item.Identity}|{item.RowFamilyId}").Order(StringComparer.Ordinal).ToArray());
+        var specification = CreateDiscoveredSpecification(
+            discovery,
+            [firstSource, secondSource],
+            new Dictionary<SourceSetId, string>
+            {
+                [firstSet] = "Catalog",
+                [secondSet] = "Catalog"
+            },
+            RepeatedDataLayout.StructuralRows);
+        var built = await workspace.Database.BuildAsync(
+            OperationCorrelation.CreateNew(),
+            specification);
+        Assert.IsTrue(built.Accepted, built.Failure?.Description);
+        var extracted = await workspace.Extraction.ExtractAsync(
+            OperationCorrelation.CreateNew(),
+            built.PublishedGeneration!);
+        Assert.IsTrue(extracted.Accepted, extracted.Failure?.Description);
+
+        var routing = new ExportRoutingConfigurationPresentation();
+        routing.Synchronize(built.PublishedGeneration!);
+        Assert.HasCount(10, routing.SourceSets);
+        Assert.HasCount(1, routing.Workbooks);
+        Assert.HasCount(
+            10,
+            routing.SourceSets.Select(set => set.WorksheetName)
+                .Distinct(StringComparer.OrdinalIgnoreCase));
+        Assert.IsTrue(routing.SourceSets.Any(set =>
+            set.WorksheetName.EndsWith(" (2)", StringComparison.Ordinal)));
+        foreach (var family in routing.SourceSets)
+        {
+            family.Fields[0].IsSourceIdExported = true;
+        }
+
+        var separated = routing.SourceSets.Last(set => set.SourceSetId == secondSet);
+        var siblingRoutesBefore = routing.SourceSets
+            .Where(set => set.RowFamilyId != separated.RowFamilyId)
+            .ToDictionary(set => set.RowFamilyId, set => set.WorkbookDefinitionId);
+        var separateWorkbook = routing.CreateWorkbookFor(separated.RowFamilyId);
+        routing.Workbooks.Single(workbook =>
+            workbook.WorkbookDefinitionId != separateWorkbook.WorkbookDefinitionId).FileName =
+            "Shared.xlsx";
+        separateWorkbook.FileName = "Separate.xlsx";
+        Assert.IsTrue(routing.SourceSets
+            .Where(set => set.RowFamilyId != separated.RowFamilyId)
+            .All(set => set.WorkbookDefinitionId == siblingRoutesBefore[set.RowFamilyId]));
+
+        var configuration = routing.Capture();
+        var exportDirectory = Path.Combine(workspace.Root, "multi-set-export");
+        Directory.CreateDirectory(exportDirectory);
+        var exported = await workspace.Export.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extracted.PublishedResult!,
+            configuration,
+            CreatePublicationPlan(configuration, extracted.PublishedResult!, exportDirectory));
+
+        Assert.IsTrue(exported.Accepted, exported.Failure?.Description);
+        Assert.HasCount(2, exported.Batch!.Workbooks);
+        foreach (var route in configuration.SourceSets)
+        {
+            var worksheet = configuration.Workbooks.SelectMany(workbook => workbook.Worksheets)
+                .Single(sheet => sheet.RowFamilyId == route.RowFamilyId);
+            var workbook = configuration.Workbooks.Single(candidate =>
+                candidate.WorkbookDefinitionId == worksheet.WorkbookDefinitionId);
+            using var document = SpreadsheetDocument.Open(
+                Path.Combine(exportDirectory, workbook.FileName),
+                isEditable: false);
+            var values = ReadCells(document, worksheet.Name).Values.ToArray();
+            var expectedSource = route.SourceSetId == firstSet ? firstSource : secondSource;
+            var foreignSource = route.SourceSetId == firstSet ? secondSource : firstSource;
+            Assert.IsTrue(values.Contains(expectedSource.SourceId.ToString()), worksheet.Name);
+            Assert.IsFalse(values.Contains(foreignSource.SourceId.ToString()), worksheet.Name);
+        }
+        Assert.IsEmpty(Directory.GetFiles(exportDirectory, "*.incomplete"));
     }
 
     [TestMethod]
@@ -427,6 +714,137 @@ public sealed class AlphaRegressionGateTests
     private static IReadOnlyList<string> RowValues(ExtractionResultRow row) =>
         row.Cells.SelectMany(cell => cell.Values).Select(value => value.Value).ToArray();
 
+    private static DatabaseBuildSpecification CreateDiscoveredSpecification(
+        DiscoveryHostResult discovery,
+        IReadOnlyList<LoadedSourceContract> sources,
+        IReadOnlyDictionary<SourceSetId, string> sourceSetNames,
+        RepeatedDataLayout layout)
+    {
+        Assert.IsTrue(discovery.Accepted, discovery.Failure?.Description);
+        Assert.IsNotNull(discovery.FamilyCatalog);
+        var configuration = new DiscoveryConfigurationSnapshot(
+            discovery.Information.Select(item => new DiscoveryConfigurationItem(
+                item.Identity,
+                DiscoveryInformationDisposition.Selected)).ToArray(),
+            sourceSetNames.Keys.Select(sourceSetId => new SourceSetDiscoveryConfiguration(
+                sourceSetId,
+                layout)).ToArray());
+        var assignments = discovery.Information.ToDictionary(
+            item => item.Identity,
+            item => item.RowFamilyId
+                ?? throw new AssertFailedException(
+                    $"Discovery did not assign {item.Identity.StructuralPath} to a Row Family."));
+        return DatabaseBuildSpecificationFactory.Create(
+            configuration,
+            new Dictionary<DiscoveryInformationIdentity, string>(),
+            sources,
+            sourceSetNames,
+            discovery.FamilyCatalog,
+            assignments);
+    }
+
+    private static async Task<GoodbooksFlowResult> RunGoodbooksFlowAsync(
+        AlphaWorkspace workspace,
+        DatabaseBuildSpecification specification,
+        string runName)
+    {
+        var built = await workspace.Database.BuildAsync(
+            OperationCorrelation.CreateNew(),
+            specification);
+        Assert.IsTrue(built.Accepted, built.Failure?.Description);
+        var generation = built.PublishedGeneration!;
+        var databaseRows = new Dictionary<string, IReadOnlyList<IReadOnlyList<string>>>(
+            StringComparer.Ordinal);
+        foreach (var family in generation.Datasets.Single().RowFamilies)
+        {
+            var page = await workspace.ReadDatabaseFamilyPageAsync(generation, family.Id);
+            databaseRows[family.AnchorPath] = page.Rows.Select(row =>
+                (IReadOnlyList<string>)RowValues(row)).ToArray();
+        }
+
+        var extracted = await workspace.Extraction.ExtractAsync(
+            OperationCorrelation.CreateNew(),
+            generation);
+        Assert.IsTrue(extracted.Accepted, extracted.Failure?.Description);
+        var extraction = extracted.PublishedResult!;
+        var routing = new ExportRoutingConfigurationPresentation();
+        routing.Synchronize(generation);
+        var configuration = routing.Capture();
+        var exportDirectory = Path.Combine(workspace.Root, $"goodbooks-{runName}");
+        Directory.CreateDirectory(exportDirectory);
+        var exported = await workspace.Export.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            configuration,
+            CreatePublicationPlan(configuration, extraction, exportDirectory));
+        Assert.IsTrue(exported.Accepted, exported.Failure?.Description);
+        var workbook = configuration.Workbooks.Single();
+        var workbookPath = Path.Combine(exportDirectory, workbook.FileName);
+        using var document = SpreadsheetDocument.Open(workbookPath, isEditable: false);
+        var worksheetNames = SheetNames(document);
+        foreach (var worksheet in workbook.Worksheets)
+        {
+            var family = extraction.Datasets.SelectMany(dataset => dataset.RowFamilies)
+                .Single(candidate => candidate.Id == worksheet.RowFamilyId);
+            Assert.AreEqual(family.RowCount, DataRowCount(document, worksheet.Name));
+            CollectionAssert.AreEqual(
+                configuration.CreateIncludedOutputColumns(family.Id)
+                    .Select(column => column.Header).ToArray(),
+                ReadRowTexts(document, worksheet.Name, 1).ToArray(),
+                worksheet.Name);
+        }
+        var worksheetCells = worksheetNames.ToDictionary(
+            sheetName => sheetName,
+            sheetName => (IReadOnlyList<string>)ReadCells(document, sheetName)
+                .OrderBy(cell => cell.Key, StringComparer.Ordinal)
+                .Select(cell => $"{cell.Key}={cell.Value}")
+                .ToArray(),
+            StringComparer.Ordinal);
+        Assert.IsEmpty(Directory.GetFiles(exportDirectory, "*.incomplete"));
+        return new GoodbooksFlowResult(
+            generation,
+            extraction,
+            databaseRows,
+            generation.Datasets.Single().RowFamilies.Select(family =>
+                $"{family.Ordinal}|{family.Id}|{family.ParentRowFamilyId}|{family.RowCount}")
+                .ToArray(),
+            extraction.Datasets.Single().RowFamilies.Select(family =>
+                $"{family.Ordinal}|{family.Id}|{family.ParentRowFamilyId}|{family.RowCount}")
+                .ToArray(),
+            worksheetNames,
+            worksheetCells);
+    }
+
+    private static void AssertFamilyOwnsPaths(
+        DatabaseGenerationSummary generation,
+        string familyPath,
+        params string[] expectedPaths)
+    {
+        var family = generation.Datasets.Single().RowFamilies.Single(candidate =>
+            candidate.AnchorPath == familyPath);
+        CollectionAssert.AreEqual(
+            expectedPaths.Order(StringComparer.Ordinal).ToArray(),
+            family.Mappings.SelectMany(mapping => mapping.DetailedIdentities)
+                .Select(identity => identity.StructuralPath)
+                .Order(StringComparer.Ordinal)
+                .ToArray(),
+            familyPath);
+    }
+
+    private static void AssertWorksheetContains(
+        GoodbooksFlowResult result,
+        string sheetName,
+        string value) =>
+        Assert.IsTrue(result.WorksheetCells[sheetName].Any(cell =>
+            cell.EndsWith($"={value}", StringComparison.Ordinal)));
+
+    private static void AssertWorksheetDoesNotContain(
+        GoodbooksFlowResult result,
+        string sheetName,
+        string value) =>
+        Assert.IsFalse(result.WorksheetCells[sheetName].Any(cell =>
+            cell.EndsWith($"={value}", StringComparison.Ordinal)));
+
     private static void AssertEvidencePreserved(
         IEnumerable<ValueEvidence> expected,
         IEnumerable<ValueEvidence> actual)
@@ -547,6 +965,17 @@ public sealed class AlphaRegressionGateTests
         GetWorksheet(document, sheetName).Descendants<Row>()
             .Count(row => row.RowIndex?.Value > 1);
 
+    private static IReadOnlyList<string> ReadRowTexts(
+        SpreadsheetDocument document,
+        string sheetName,
+        uint rowIndex) =>
+        GetWorksheet(document, sheetName).Descendants<Row>()
+            .Single(row => row.RowIndex?.Value == rowIndex)
+            .Elements<Cell>()
+            .Select(cell => cell.InlineString?.Text?.Text
+                ?? throw new AssertFailedException("A tested cell requires inline text."))
+            .ToArray();
+
     private static Worksheet GetWorksheet(SpreadsheetDocument document, string sheetName)
     {
         var workbookPart = document.WorkbookPart
@@ -596,16 +1025,27 @@ public sealed class AlphaRegressionGateTests
                 value.Lineage.TraversalOrder);
     }
 
+    private sealed record GoodbooksFlowResult(
+        DatabaseGenerationSummary Generation,
+        ExtractionResultSummary Extraction,
+        IReadOnlyDictionary<string, IReadOnlyList<IReadOnlyList<string>>> DatabaseRows,
+        IReadOnlyList<string> FamilySignatures,
+        IReadOnlyList<string> ExtractionSignatures,
+        IReadOnlyList<string> WorksheetNames,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> WorksheetCells);
+
     private sealed class AlphaWorkspace : IDisposable
     {
         private readonly SourceInterpreter _interpreter;
+        private readonly ApplicationPaths _paths;
 
         public AlphaWorkspace()
         {
             Root = Path.Combine(Path.GetTempPath(), "CIA.SPR142.Tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Root);
-            Repository = new StructuredInformationRepository(
-                ApplicationPaths.FromLocalApplicationData(Path.Combine(Root, "LocalAppData")));
+            _paths = ApplicationPaths.FromLocalApplicationData(
+                Path.Combine(Root, "LocalAppData"));
+            Repository = new StructuredInformationRepository(_paths);
             var history = new NullHistory();
             var cancellation = new CooperativeOperationCancellation(history);
             _interpreter = new SourceInterpreter([], NullLogger<SourceInterpreter>.Instance);
@@ -635,6 +1075,33 @@ public sealed class AlphaRegressionGateTests
         public DatabaseGenerationService Database { get; }
         public DatabaseExtractionService Extraction { get; }
         public ExcelWorkbookExportService Export { get; }
+
+        public async Task<LoadedSourceContract> LoadStructuralFixtureAsync(
+            SourceSetId sourceSetId,
+            string fileName)
+        {
+            var sourcePath = Path.Combine(
+                AppContext.BaseDirectory,
+                "Fixtures",
+                "StructuralDiscovery",
+                fileName);
+            var targetPath = Path.Combine(Root, sourceSetId.ToString(), fileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            File.Copy(sourcePath, targetPath);
+            var intake = new SourceIntakeService(new ArchiveExtractionService(_paths));
+            var result = await intake.LoadAsync(
+                SourceSelectionKind.XmlFile,
+                targetPath,
+                SourceLoadSettings.Default,
+                progress: null,
+                cancellationToken: default,
+                sourceSetId);
+            Assert.IsTrue(result.Accepted, result.Failure?.Description);
+            Assert.HasCount(1, result.Sources);
+            var loaded = result.Sources[0] with { SourceSetId = sourceSetId };
+            Assert.AreEqual(LoadedSourceStatus.Ready, loaded.Status);
+            return loaded;
+        }
 
         public AlphaFixture LoadFixture()
         {
@@ -781,6 +1248,24 @@ public sealed class AlphaRegressionGateTests
             }
 
             return pages;
+        }
+
+        public async Task<DatabaseReviewPage> ReadDatabaseFamilyPageAsync(
+            DatabaseGenerationSummary generation,
+            RowFamilyId rowFamilyId)
+        {
+            var page = await Repository.ReadPublishedDatabasePageAsync(
+                new DatabaseReviewQuery(
+                    generation.OperationId,
+                    rowFamilyId.SourceSetId,
+                    rowFamilyId,
+                    1,
+                    DatabaseReviewLimits.MaximumRowsPerPage,
+                    null,
+                    DatabaseRowInclusionFilter.All));
+            Assert.IsNotNull(page);
+            Assert.HasCount(page.TotalRowCount, page.Rows);
+            return page;
         }
 
         public async Task<IReadOnlyList<ExtractionResultRow>> ReadAllExtractionRowsAsync(
