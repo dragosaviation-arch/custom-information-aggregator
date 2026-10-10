@@ -220,6 +220,90 @@ public sealed class NamedPipeIpcTests
     }
 
     [TestMethod]
+    public async Task DatabaseBuildCommandRoundTripPreservesRepeatedFamilyParents()
+    {
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            sourceSetId,
+            Path.GetFullPath("hierarchy-source.xml"),
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
+        var root = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/book"),
+            parentRowFamilyId: null);
+        var authors = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, "/book/authors/author"),
+            root.Id);
+        var similarBooks = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, "/book/similar_books/book"),
+            root.Id);
+        var similarAuthors = new RowFamilyDefinition(
+            new RowFamilyId(
+                sourceSetId,
+                RowFamilyKind.Repeated,
+                "/book/similar_books/book/authors/author"),
+            similarBooks.Id);
+        RowFamilyDefinition[] families = [root, authors, similarBooks, similarAuthors];
+        var fields = families.Select((family, index) =>
+        {
+            var informationType = $"field-{index + 1}";
+            var path = $"{family.Id.AnchorPath}/{informationType}";
+            var identity = new DiscoveryInformationIdentity(
+                sourceSetId,
+                path,
+                informationType,
+                SourceValueCandidateKind.Element,
+                path);
+            return new DatabaseFieldMapping(
+                family.Id,
+                $"Field {index + 1}",
+                isExplicitOverride: false,
+                [identity]);
+        }).ToArray();
+        var command = new BuildDatabaseCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            OperationCorrelation.CreateNew(),
+            new DatabaseBuildSpecification(
+            [
+                new DatabaseDatasetBuildSpecification(
+                    sourceSetId,
+                    "Set 1",
+                    1,
+                    RepeatedDataLayout.StructuralRows,
+                    [source],
+                    families,
+                    fields)
+            ]));
+        await using var stream = new MemoryStream();
+
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
+        stream.Position = 0;
+        var roundTripped = Assert.IsInstanceOfType<BuildDatabaseCommand>(
+            await LengthPrefixedJsonMessageFramer.ReadAsync(stream));
+
+        var dataset = roundTripped.Specification.Datasets.Single();
+        var roundTrippedFamilies = dataset.RowFamilies.ToDictionary(family => family.Id);
+        Assert.HasCount(families.Length, roundTrippedFamilies);
+        Assert.IsNull(roundTrippedFamilies[root.Id].ParentRowFamilyId);
+        Assert.AreEqual(root.Id, roundTrippedFamilies[authors.Id].ParentRowFamilyId);
+        Assert.AreEqual(root.Id, roundTrippedFamilies[similarBooks.Id].ParentRowFamilyId);
+        Assert.AreEqual(similarBooks.Id, roundTrippedFamilies[similarAuthors.Id].ParentRowFamilyId);
+        CollectionAssert.AreEqual(
+            families.Select(family => family.Id).ToArray(),
+            dataset.RowFamilies.Select(family => family.Id).ToArray());
+        CollectionAssert.AreEqual(
+            fields.Select(FieldSignature).ToArray(),
+            dataset.Fields.Select(FieldSignature).ToArray());
+
+        static string FieldSignature(DatabaseFieldMapping field) =>
+            $"{field.RowFamilyId}|{field.EffectiveName}|{field.IsExplicitOverride}|" +
+            string.Join('|', field.DetailedIdentities);
+    }
+
+    [TestMethod]
     public void DatabaseIpcPublicEntryPointsRequireTypedHierarchyContracts()
     {
         var buildConstructors = typeof(BuildDatabaseCommand).GetConstructors();

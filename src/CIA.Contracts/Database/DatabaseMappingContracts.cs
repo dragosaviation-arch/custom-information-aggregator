@@ -118,7 +118,6 @@ public sealed record DatabaseFieldMapping
 
 public sealed record DatabaseDatasetBuildSpecification
 {
-    [JsonConstructor]
     public DatabaseDatasetBuildSpecification(
         SourceSetId sourceSetId,
         string displayName,
@@ -139,6 +138,7 @@ public sealed record DatabaseDatasetBuildSpecification
     {
     }
 
+    [JsonConstructor]
     public DatabaseDatasetBuildSpecification(
         SourceSetId sourceSetId,
         string displayName,
