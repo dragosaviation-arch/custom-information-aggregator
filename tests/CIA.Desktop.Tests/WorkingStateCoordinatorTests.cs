@@ -2,6 +2,7 @@ using CIA.Contracts.Database;
 using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Extraction;
+using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Contracts.WorkingState;
@@ -11,6 +12,7 @@ using CIA.Core.Runtime;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Extraction;
+using CIA.Desktop.Export;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
@@ -364,6 +366,41 @@ public sealed class WorkingStateCoordinatorTests
         Assert.IsFalse(context.Sources.Items.Single().IsIncluded);
     }
 
+    [TestMethod]
+    public async Task VersionTwoSnapshotRestoresFamilyExportRouteAndEnablement()
+    {
+        var prepared = await CreateCurrentDatabaseContextAsync();
+        var context = prepared.Context;
+        var generation = context.Database.CurrentGeneration!;
+        context.ExportRouting.Synchronize(generation);
+        var family = context.ExportRouting.SourceSets.Single();
+        family.IsEnabled = false;
+        family.Fields.Single().ExcelHeader = "Saved Header";
+        var workbook = context.ExportRouting.CreateWorkbookFor(family.RowFamilyId);
+        var snapshot = context.Coordinator.CaptureSnapshot();
+
+        Assert.IsNotNull(snapshot.ExportConfiguration);
+        var saved = snapshot.ExportConfiguration.SourceSets.Single();
+        Assert.AreEqual(family.RowFamilyId, saved.RowFamilyId);
+        Assert.IsFalse(saved.IsEnabled);
+        Assert.AreEqual("Saved Header", saved.Fields.Single().ExcelHeader);
+
+        context.ExportRouting.Synchronize(generation);
+        family.IsEnabled = true;
+        family.Fields.Single().ExcelHeader = "Changed";
+        context.Client.RestoreManifest = CreateManifest(snapshot);
+        var restored = await context.Coordinator.RestoreAsync("C:\\saved\\state.cia");
+
+        Assert.IsTrue(restored.Accepted);
+        var restoredFamily = context.ExportRouting.GetSet(family.RowFamilyId);
+        Assert.IsFalse(restoredFamily.IsEnabled);
+        Assert.AreEqual("Saved Header", restoredFamily.Fields.Single().ExcelHeader);
+        Assert.AreEqual(workbook.WorkbookDefinitionId, restoredFamily.WorkbookDefinitionId);
+        Assert.AreEqual(
+            saved.WorksheetDefinitionId,
+            restoredFamily.WorksheetDefinitionId);
+    }
+
     private static TestContext CreateContext()
     {
         var sources = new ActiveLoadedSourceSet();
@@ -383,6 +420,7 @@ public sealed class WorkingStateCoordinatorTests
             workflow,
             new UnusedExtractionClient(),
             NullLogger<ExtractionCoordinator>.Instance);
+        var exportRouting = new ExportRoutingConfigurationPresentation();
         var coordinator = new WorkingStateCoordinator(
             sources,
             configuration,
@@ -390,13 +428,15 @@ public sealed class WorkingStateCoordinatorTests
             workflow,
             client,
             NullLogger<WorkingStateCoordinator>.Instance,
-            extraction);
+            extraction,
+            exportRouting);
         return new TestContext(
             sources,
             configuration,
             workflow,
             database,
             extraction,
+            exportRouting,
             client,
             coordinator);
     }
@@ -496,6 +536,7 @@ public sealed class WorkingStateCoordinatorTests
         ApplicationWorkflowCoordinator Workflow,
         DatabaseBuildCoordinator Database,
         ExtractionCoordinator Extraction,
+        ExportRoutingConfigurationPresentation ExportRouting,
         StubWorkingStateClient Client,
         WorkingStateCoordinator Coordinator);
 

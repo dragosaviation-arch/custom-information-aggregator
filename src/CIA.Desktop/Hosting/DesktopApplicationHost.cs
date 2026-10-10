@@ -99,6 +99,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<IWorkbookExportClient, ProcessingHostWorkbookExportClient>();
         builder.Services.AddSingleton<WorkbookExportCoordinator>();
         builder.Services.AddSingleton<IWorkingStateClient, ProcessingHostWorkingStateClient>();
+        builder.Services.AddSingleton<ExportRoutingConfigurationPresentation>();
         builder.Services.AddSingleton<WorkingStateCoordinator>();
         builder.Services.AddSingleton<IWorkingStateCoordinator>(
             services => services.GetRequiredService<WorkingStateCoordinator>());

@@ -652,8 +652,8 @@
                                 </Grid.ColumnDefinitions>
                                 <CheckBox x:Name="ExportEnabledToggle"
                                           VerticalAlignment="Center"
-                                          AutomationProperties.Name="Export selected Source Set"
-                                          Content="Export this Set"
+                                          AutomationProperties.Name="Export selected Row Family"
+                                          Content="Export this family"
                                           IsChecked="{Binding IsSelectedSetExportEnabled}" />
                                 <ComboBox x:Name="WorkbookDefinitionSelector"
                                           Grid.Column="1"

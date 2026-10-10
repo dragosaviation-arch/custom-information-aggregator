@@ -3,6 +3,7 @@ using CIA.Contracts.WorkingState;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Extraction;
+using CIA.Desktop.Export;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using Microsoft.Extensions.Logging;
@@ -36,7 +37,8 @@ public sealed class WorkingStateCoordinator(
     IApplicationWorkflowCoordinator workflowCoordinator,
     IWorkingStateClient client,
     ILogger<WorkingStateCoordinator> logger,
-    ExtractionCoordinator? extractionCoordinator = null) : IWorkingStateCoordinator
+    ExtractionCoordinator? extractionCoordinator = null,
+    ExportRoutingConfigurationPresentation? exportRouting = null) : IWorkingStateCoordinator
 {
     public WorkflowOperationReadiness EvaluateSaveReadiness()
     {
@@ -192,6 +194,14 @@ public sealed class WorkingStateCoordinator(
                 snapshot.DatabaseTagOverrides);
             databaseBuildCoordinator.AdoptRestoredGeneration(snapshot.DatabaseGeneration);
             extractionCoordinator?.AdoptRestoredResult(snapshot.ExtractionResult);
+            if (snapshot.DatabaseGeneration is { } restoredGeneration)
+            {
+                exportRouting?.Restore(restoredGeneration, snapshot.ExportConfiguration);
+            }
+            else
+            {
+                exportRouting?.Reset();
+            }
 
             var stateResult = workflowCoordinator.RecordWorkingStateRestored(
                 sourceSet.CreateIncludedReadySnapshot().Count > 0,
@@ -242,11 +252,18 @@ public sealed class WorkingStateCoordinator(
                         sourceSet.SourceSetId,
                         CIA.Contracts.Discovery.RepeatedDataLayout.AlignRepeatedGroupsByPosition)))
                 .ToArray());
+        var databaseGeneration = databaseBuildCoordinator.CurrentGeneration;
+        if (databaseGeneration is not null)
+        {
+            exportRouting?.Synchronize(databaseGeneration);
+        }
+
         return new WorkingStateSnapshot(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
-            databaseBuildCoordinator.CurrentGeneration,
+            databaseGeneration,
             extractionCoordinator?.CurrentResult,
+            databaseGeneration is null ? null : exportRouting?.Capture(),
             sourceSets,
             sourceSet.ActiveSourceSet?.SourceSetId,
             sourceSet.CreateWorkingStateSourceSnapshot(),

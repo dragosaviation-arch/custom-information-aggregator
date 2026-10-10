@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
 using CIA.Contracts.Operations;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Sources;
 
 namespace CIA.Contracts.Export;
@@ -102,10 +103,29 @@ public sealed record WorkbookPublicationPlan
 
 public sealed record WorkbookExportWorksheetSummary
 {
+    public WorkbookExportWorksheetSummary(
+        WorksheetDefinitionId worksheetDefinitionId,
+        SourceSetId sourceSetId,
+        string name,
+        int order,
+        int rowCount,
+        int columnCount)
+        : this(
+            worksheetDefinitionId,
+            sourceSetId,
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/legacy"),
+            name,
+            order,
+            rowCount,
+            columnCount)
+    {
+    }
+
     [JsonConstructor]
     public WorkbookExportWorksheetSummary(
         WorksheetDefinitionId worksheetDefinitionId,
         SourceSetId sourceSetId,
+        RowFamilyId rowFamilyId,
         string name,
         int order,
         int rowCount,
@@ -116,6 +136,13 @@ public sealed record WorkbookExportWorksheetSummary
         {
             throw new ArgumentException(
                 "An exported worksheet requires stable worksheet and Source Set identities.");
+        }
+
+        if (rowFamilyId.SourceSetId != sourceSetId)
+        {
+            throw new ArgumentException(
+                "An exported worksheet Row Family must belong to its Source Set.",
+                nameof(rowFamilyId));
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -129,6 +156,7 @@ public sealed record WorkbookExportWorksheetSummary
 
         WorksheetDefinitionId = worksheetDefinitionId;
         SourceSetId = sourceSetId;
+        RowFamilyId = rowFamilyId;
         Name = name;
         Order = order;
         RowCount = rowCount;
@@ -137,6 +165,7 @@ public sealed record WorkbookExportWorksheetSummary
 
     public WorksheetDefinitionId WorksheetDefinitionId { get; }
     public SourceSetId SourceSetId { get; }
+    public RowFamilyId RowFamilyId { get; }
     public string Name { get; }
     public int Order { get; }
     public int RowCount { get; }

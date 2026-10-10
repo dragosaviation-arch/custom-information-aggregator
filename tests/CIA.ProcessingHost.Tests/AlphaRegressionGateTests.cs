@@ -3,6 +3,7 @@ using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Export;
 using CIA.Contracts.Extraction;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Database;
@@ -170,6 +171,29 @@ public sealed class AlphaRegressionGateTests
             Assert.IsTrue(associated.All(row => RowValues(row).Contains("2")));
             Assert.IsFalse(associated.Any(row => RowValues(row).Contains("5")));
         }
+
+        var extracted = await workspace.Extraction.ExtractAsync(
+            OperationCorrelation.CreateNew(),
+            result.PublishedGeneration);
+        Assert.IsTrue(extracted.Accepted, extracted.Failure?.Description);
+        var publishedExtraction = extracted.PublishedResult!;
+        var configuration = CreateRouting(publishedExtraction);
+        var exportDirectory = Path.Combine(workspace.Root, $"layout-{layout}");
+        Directory.CreateDirectory(exportDirectory);
+        var exported = await workspace.Export.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            publishedExtraction,
+            configuration,
+            CreatePublicationPlan(configuration, publishedExtraction, exportDirectory));
+        Assert.IsTrue(exported.Accepted, exported.Failure?.Description);
+        Assert.AreEqual(
+            publishedExtraction.Datasets.Sum(dataset => dataset.RowFamilies.Count),
+            exported.Batch!.Workbooks.Sum(workbook => workbook.Worksheets.Count));
+        Assert.IsTrue(exported.Batch.Workbooks.SelectMany(workbook => workbook.Worksheets)
+            .All(sheet => publishedExtraction.Datasets
+                .SelectMany(dataset => dataset.RowFamilies)
+                .Single(family => family.Id == sheet.RowFamilyId).RowCount == sheet.RowCount));
+        Assert.IsEmpty(Directory.GetFiles(exportDirectory, "*.incomplete"));
     }
 
     [TestMethod]
@@ -226,31 +250,40 @@ public sealed class AlphaRegressionGateTests
         Assert.IsTrue(File.Exists(combinedPath));
         Assert.IsTrue(File.Exists(separatePath));
         using var combined = SpreadsheetDocument.Open(combinedPath, isEditable: false);
+        var combinedDefinition = configuration.Workbooks.Single(workbook =>
+            workbook.FileName == "Combined.xlsx");
         CollectionAssert.AreEqual(
-            new[] { "Set B", "Set A" },
+            combinedDefinition.Worksheets.OrderBy(sheet => sheet.Order)
+                .Select(sheet => sheet.Name).ToArray(),
             SheetNames(combined).ToArray());
         using var separate = SpreadsheetDocument.Open(separatePath, isEditable: false);
-        CollectionAssert.AreEqual(new[] { "Set C" }, SheetNames(separate).ToArray());
+        var separateDefinition = configuration.Workbooks.Single(workbook =>
+            workbook.FileName == "Separate.xlsx");
+        CollectionAssert.AreEqual(
+            separateDefinition.Worksheets.OrderBy(sheet => sheet.Order)
+                .Select(sheet => sheet.Name).ToArray(),
+            SheetNames(separate).ToArray());
 
-        var setBCells = ReadCells(combined, "Set B");
+        var setBSheet = combinedDefinition.Worksheets.Single(sheet =>
+            sheet.SourceSetId == fixture.SetB);
+        var setBCells = ReadCells(combined, setBSheet.Name);
         Assert.IsTrue(setBCells.Values.Contains("=SUM(A1:A2)"));
-        var formulaCells = Cells(combined, "Set B").Where(cell =>
+        var formulaCells = Cells(combined, setBSheet.Name).Where(cell =>
             cell.InlineString?.Text?.Text == "=SUM(A1:A2)").ToArray();
         Assert.IsNotEmpty(formulaCells);
         Assert.IsTrue(formulaCells.All(cell => cell.CellFormula is null
             && cell.DataType?.Value == CellValues.InlineString));
         Assert.IsTrue(setBCells.Values.Contains("  preserved whitespace  "));
 
-        foreach (var dataset in extracted.PublishedResult.Datasets)
+        foreach (var family in extracted.PublishedResult.Datasets.SelectMany(dataset =>
+                     dataset.RowFamilies))
         {
-            var workbook = dataset.SourceSetId == fixture.SetC ? separate : combined;
-            var sheetName = dataset.SourceSetId switch
-            {
-                var id when id == fixture.SetA => "Set A",
-                var id when id == fixture.SetB => "Set B",
-                _ => "Set C"
-            };
-            Assert.AreEqual(dataset.RowCount, DataRowCount(workbook, sheetName));
+            var definition = configuration.Workbooks.Single(workbook =>
+                workbook.Worksheets.Any(sheet => sheet.RowFamilyId == family.Id));
+            var workbook = definition.FileName == "Separate.xlsx" ? separate : combined;
+            var sheetName = definition.Worksheets.Single(sheet =>
+                sheet.RowFamilyId == family.Id).Name;
+            Assert.AreEqual(family.RowCount, DataRowCount(workbook, sheetName));
         }
         Assert.IsEmpty(Directory.GetFiles(exportDirectory, "*.incomplete"));
     }
@@ -295,6 +328,7 @@ public sealed class AlphaRegressionGateTests
             RowValues(row).Contains("MAIN-001") && RowValues(row).Contains("ALT-001")));
 
         var dataset = extracted.PublishedResult!.Datasets.Single();
+        var family = dataset.RowFamilies.Single();
         var workbookId = WorkbookDefinitionId.CreateNew();
         var worksheetId = WorksheetDefinitionId.CreateNew();
         var configuration = new ExportConfigurationSnapshot(
@@ -306,13 +340,15 @@ public sealed class AlphaRegressionGateTests
                     worksheetId,
                     workbookId,
                     dataset.SourceSetId,
+                    family.Id,
                     "Results",
                     1)])],
             [new SourceSetExportConfiguration(
                 dataset.SourceSetId,
+                family.Id,
                 true,
                 worksheetId,
-                dataset.Columns.Select(column => new ExportFieldConfiguration(
+                family.Columns.Select(column => new ExportFieldConfiguration(
                     column.Identity,
                     true,
                     column.EffectiveName,
@@ -413,28 +449,47 @@ public sealed class AlphaRegressionGateTests
     private static ExportConfigurationSnapshot CreateRouting(ExtractionResultSummary extraction)
     {
         var datasets = extraction.Datasets.OrderBy(dataset => dataset.Ordinal).ToArray();
+        var families = datasets.SelectMany(dataset => dataset.RowFamilies
+            .OrderBy(family => family.Ordinal)
+            .Select(family => (Dataset: dataset, Family: family))).ToArray();
         var combinedId = WorkbookDefinitionId.CreateNew();
         var separateId = WorkbookDefinitionId.CreateNew();
         var emptyId = WorkbookDefinitionId.CreateNew();
-        var sheets = datasets.Select(_ => WorksheetDefinitionId.CreateNew()).ToArray();
+        var sheets = families.ToDictionary(
+            item => item.Family.Id,
+            _ => WorksheetDefinitionId.CreateNew());
+        var combinedFamilies = families.Where(item => item.Dataset.Ordinal != 3).ToArray();
+        var separateFamilies = families.Where(item => item.Dataset.Ordinal == 3).ToArray();
         return new ExportConfigurationSnapshot(
             [new WorkbookDefinition(
                  combinedId,
                  "Combined.xlsx",
                  1,
-                 [new WorksheetDefinition(sheets[1], combinedId, datasets[1].SourceSetId, "Set B", 1),
-                  new WorksheetDefinition(sheets[0], combinedId, datasets[0].SourceSetId, "Set A", 2)]),
+                 combinedFamilies.Select((item, index) => new WorksheetDefinition(
+                     sheets[item.Family.Id],
+                     combinedId,
+                     item.Dataset.SourceSetId,
+                     item.Family.Id,
+                     $"{item.Dataset.DisplayName} - {item.Family.Ordinal}",
+                     index + 1)).ToArray()),
              new WorkbookDefinition(
                  separateId,
                  "Separate.xlsx",
                  2,
-                 [new WorksheetDefinition(sheets[2], separateId, datasets[2].SourceSetId, "Set C", 1)]),
+                 separateFamilies.Select((item, index) => new WorksheetDefinition(
+                     sheets[item.Family.Id],
+                     separateId,
+                     item.Dataset.SourceSetId,
+                     item.Family.Id,
+                     $"{item.Dataset.DisplayName} - {item.Family.Ordinal}",
+                     index + 1)).ToArray()),
              new WorkbookDefinition(emptyId, "Empty.xlsx", 3, [])],
-            datasets.Select((dataset, index) => new SourceSetExportConfiguration(
-                dataset.SourceSetId,
+            families.Select(item => new SourceSetExportConfiguration(
+                item.Dataset.SourceSetId,
+                item.Family.Id,
                 true,
-                sheets[index],
-                dataset.Columns.Select((column, columnIndex) => new ExportFieldConfiguration(
+                sheets[item.Family.Id],
+                item.Family.Columns.Select((column, columnIndex) => new ExportFieldConfiguration(
                     column.Identity,
                     true,
                     column.EffectiveName,

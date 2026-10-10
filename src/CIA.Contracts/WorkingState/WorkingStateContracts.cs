@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Extraction;
+using CIA.Contracts.Export;
 using CIA.Contracts.Sources;
 
 namespace CIA.Contracts.WorkingState;
@@ -85,6 +86,31 @@ public sealed record WorkingStateSnapshot
             savedAtUtc,
             databaseGeneration,
             extractionResult: null,
+            exportConfiguration: null,
+            sourceSets,
+            activeSourceSetId,
+            sources,
+            discoveryConfiguration,
+            databaseTagOverrides)
+    {
+    }
+
+    public WorkingStateSnapshot(
+        Guid packageId,
+        DateTimeOffset savedAtUtc,
+        DatabaseGenerationSummary? databaseGeneration,
+        ExtractionResultSummary? extractionResult,
+        IReadOnlyList<WorkingStateSourceSet> sourceSets,
+        SourceSetId? activeSourceSetId,
+        IReadOnlyList<LoadedSourceContract> sources,
+        DiscoveryConfigurationSnapshot discoveryConfiguration,
+        IReadOnlyList<WorkingStateDatabaseTagOverride> databaseTagOverrides)
+        : this(
+            packageId,
+            savedAtUtc,
+            databaseGeneration,
+            extractionResult,
+            exportConfiguration: null,
             sourceSets,
             activeSourceSetId,
             sources,
@@ -99,6 +125,7 @@ public sealed record WorkingStateSnapshot
         DateTimeOffset savedAtUtc,
         DatabaseGenerationSummary? databaseGeneration,
         ExtractionResultSummary? extractionResult,
+        ExportConfigurationSnapshot? exportConfiguration,
         IReadOnlyList<WorkingStateSourceSet> sourceSets,
         SourceSetId? activeSourceSetId,
         IReadOnlyList<LoadedSourceContract> sources,
@@ -124,6 +151,7 @@ public sealed record WorkingStateSnapshot
         SavedAtUtc = savedAtUtc;
         DatabaseGeneration = databaseGeneration;
         ExtractionResult = extractionResult;
+        ExportConfiguration = exportConfiguration;
         SourceSets = new ReadOnlyCollection<WorkingStateSourceSet>(sourceSets.ToArray());
         ActiveSourceSetId = activeSourceSetId;
         Sources = new ReadOnlyCollection<LoadedSourceContract>(sources
@@ -157,6 +185,8 @@ public sealed record WorkingStateSnapshot
     public DatabaseGenerationSummary? DatabaseGeneration { get; }
 
     public ExtractionResultSummary? ExtractionResult { get; }
+
+    public ExportConfigurationSnapshot? ExportConfiguration { get; }
 
     public IReadOnlyList<WorkingStateSourceSet> SourceSets { get; }
 
@@ -279,6 +309,16 @@ public static class WorkingStateContractValidator
         {
             throw new ArgumentException(
                 "The saved Extraction Result does not match the saved Database generation.");
+        }
+
+        if (snapshot.ExportConfiguration is { } exportConfiguration
+            && (snapshot.DatabaseGeneration is not { } exportDatabase
+                || !ExportConfigurationValidator.Validate(
+                    exportConfiguration,
+                    exportDatabase).IsValid))
+        {
+            throw new ArgumentException(
+                "The saved export configuration does not match the saved Database generation.");
         }
     }
 

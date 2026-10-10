@@ -2,6 +2,7 @@ using CIA.Contracts.Database;
 using CIA.Contracts.Export;
 using CIA.Contracts.Extraction;
 using CIA.Contracts.Ipc;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.ProcessingHost.Operations;
@@ -52,19 +53,6 @@ public sealed class ExcelWorkbookExportService
         ArgumentNullException.ThrowIfNull(extractionResult);
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(publicationPlan);
-
-        if (extractionResult.IsRowFamilyAware)
-        {
-            return WorkbookExportHostResult.Reject(
-                OperationCompletion.FromTerminalOutcome(
-                    correlation,
-                    OperationOutcome.Failed,
-                    [OperationItemStatus.Unprocessed(
-                        PublicationItemId,
-                        "row-family-export-not-supported")]),
-                "row-family-export-not-supported",
-                "Export of family-aware Extraction Results requires Row Family worksheet routing from Batch 5.");
-        }
 
         var operation = _operationCancellation.BeginOperation(
             correlation,
@@ -133,8 +121,9 @@ public sealed class ExcelWorkbookExportService
                     var worksheetCounters = runnableWorkbook.Worksheets.Select(worksheet =>
                         new WorksheetWriteCounter(
                             worksheet,
-                            extractionResult.Datasets.Single(dataset =>
-                                dataset.SourceSetId == worksheet.Worksheet.SourceSetId).RowCount))
+                            extractionResult.Datasets.SelectMany(dataset => dataset.RowFamilies)
+                                .Single(family =>
+                                    family.Id == worksheet.Worksheet.RowFamilyId).RowCount))
                         .ToArray();
                     allWorksheetCounters.AddRange(worksheetCounters);
                     var plans = worksheetCounters.Select(counter => new ExcelWorksheetWritePlan(
@@ -143,7 +132,7 @@ public sealed class ExcelWorkbookExportService
                             writer,
                             extractionResult.OperationId,
                             configuration.CreateIncludedOutputColumns(
-                                counter.Definition.Worksheet.SourceSetId),
+                                counter.Definition.Worksheet.RowFamilyId),
                             counter,
                             token))).ToArray();
 
@@ -160,6 +149,7 @@ public sealed class ExcelWorkbookExportService
                             new WorkbookExportWorksheetSummary(
                                 counter.Definition.Worksheet.WorksheetDefinitionId,
                                 counter.Definition.Worksheet.SourceSetId,
+                                counter.Definition.Worksheet.RowFamilyId,
                                 counter.Definition.Worksheet.Name,
                                 counter.Definition.Worksheet.Order,
                                 counter.RowCount,
@@ -251,7 +241,7 @@ public sealed class ExcelWorkbookExportService
         var rowIndex = 1;
         await foreach (var row in _rowSource.StreamRowsAsync(
                            extractionResultId,
-                           counter.Definition.Worksheet.SourceSetId,
+                           counter.Definition.Worksheet.RowFamilyId,
                            cancellationToken).ConfigureAwait(false))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -408,22 +398,7 @@ public sealed class ExcelWorkbookExportService
     private static bool ExtractionResultsMatch(
         ExtractionResultSummary expected,
         ExtractionResultSummary? actual) =>
-        actual is not null
-        && expected.OperationId == actual.OperationId
-        && DatabaseGenerationSnapshotComparer.AreEquivalent(
-            expected.DatabaseGeneration,
-            actual.DatabaseGeneration)
-        && expected.Datasets.Count == actual.Datasets.Count
-        && expected.Datasets.Zip(actual.Datasets).All(pair =>
-            pair.First.SourceSetId == pair.Second.SourceSetId
-            && string.Equals(pair.First.DisplayName, pair.Second.DisplayName, StringComparison.Ordinal)
-            && pair.First.Ordinal == pair.Second.Ordinal
-            && pair.First.RepeatedDataLayout == pair.Second.RepeatedDataLayout
-            && pair.First.RowCount == pair.Second.RowCount
-            && pair.First.ValueCount == pair.Second.ValueCount
-            && DatabaseGenerationSnapshotComparer.ColumnsEqual(
-                pair.First.Columns,
-                pair.Second.Columns));
+        ExtractionResultSnapshotComparer.AreEquivalent(expected, actual);
 
     private sealed class WorksheetWriteCounter(
         RunnableWorksheetDefinition definition,
@@ -443,7 +418,7 @@ internal interface IExtractionExportRowSource
 
     IAsyncEnumerable<ExtractionResultRow> StreamRowsAsync(
         OperationId extractionResultId,
-        SourceSetId sourceSetId,
+        RowFamilyId rowFamilyId,
         CancellationToken cancellationToken = default);
 }
 
@@ -456,11 +431,11 @@ internal sealed class RepositoryExtractionExportRowSource(
 
     public IAsyncEnumerable<ExtractionResultRow> StreamRowsAsync(
         OperationId extractionResultId,
-        SourceSetId sourceSetId,
+        RowFamilyId rowFamilyId,
         CancellationToken cancellationToken = default) =>
         repository.StreamPublishedExtractionRowsAsync(
             extractionResultId,
-            sourceSetId,
+            rowFamilyId,
             cancellationToken);
 }
 

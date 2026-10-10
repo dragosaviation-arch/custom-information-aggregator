@@ -25,7 +25,7 @@ namespace CIA.ProcessingHost.Tests;
 public sealed class ExcelWorkbookExportServiceTests
 {
     [TestMethod]
-    public async Task FamilyAwareExtractionIsRejectedBeforeWorkbookGeneration()
+    public async Task FamilyAwareExtractionStreamsItsRowFamilyAndPublishesWorkbook()
     {
         using var workspace = new ExportWorkspace();
         var dataset = DatasetFixture.Create("Family", 1, familyAware: true);
@@ -40,11 +40,13 @@ public sealed class ExcelWorkbookExportServiceTests
             configuration,
             CreatePublicationPlan(configuration, extraction, workspace.Root));
 
-        Assert.IsFalse(result.Accepted);
-        Assert.AreEqual("row-family-export-not-supported", result.Failure?.Code);
-        Assert.AreEqual(0, workspace.Source.PublishedResultReadCount);
-        Assert.IsEmpty(workspace.Source.StreamedSourceSets);
-        AssertNoExportArtifacts(workspace.Root);
+        Assert.IsTrue(result.Accepted, result.Failure?.Description);
+        Assert.IsNull(result.Failure);
+        Assert.AreEqual(2, workspace.Source.PublishedResultReadCount);
+        CollectionAssert.AreEqual(
+            new[] { dataset.SourceSetId },
+            workspace.Source.StreamedSourceSets.ToArray());
+        Assert.IsTrue(File.Exists(Path.Combine(workspace.Root, "Family.xlsx")));
     }
 
     [TestMethod]
@@ -617,10 +619,12 @@ public sealed class ExcelWorkbookExportServiceTests
                     [new WorkbookExportWorksheetSummary(
                         worksheet.WorksheetDefinitionId,
                         worksheet.SourceSetId,
+                        worksheet.RowFamilyId,
                         worksheet.Name,
                         worksheet.Order,
                         dataset.Rows.Count,
-                        configuration.CreateIncludedOutputColumns(dataset.SourceSetId).Count)])]),
+                        configuration.CreateIncludedOutputColumns(
+                            worksheet.RowFamilyId).Count)])]),
             null);
         await using var responseStream = new MemoryStream();
         await LengthPrefixedJsonMessageFramer.WriteAsync(responseStream, response);
@@ -730,13 +734,13 @@ public sealed class ExcelWorkbookExportServiceTests
                 combinedId,
                 "Combined.xlsx",
                 1,
-                [new WorksheetDefinition(secondSheetId, combinedId, second.SourceSetId, "Set B", 1),
-                 new WorksheetDefinition(firstSheetId, combinedId, first.SourceSetId, "Set A", 2)]),
+                [new WorksheetDefinition(secondSheetId, combinedId, second.SourceSetId, second.RowFamilyId, "Set B", 1),
+                 new WorksheetDefinition(firstSheetId, combinedId, first.SourceSetId, first.RowFamilyId, "Set A", 2)]),
              new WorkbookDefinition(
                 separateId,
                 "Separate.xlsx",
                 2,
-                [new WorksheetDefinition(thirdSheetId, separateId, third.SourceSetId, "Set C", 1)]),
+                [new WorksheetDefinition(thirdSheetId, separateId, third.SourceSetId, third.RowFamilyId, "Set C", 1)]),
              new WorkbookDefinition(
                 disabledId,
                 "Disabled.xlsx",
@@ -745,6 +749,7 @@ public sealed class ExcelWorkbookExportServiceTests
                     disabledSheetId,
                     disabledId,
                     disabled.SourceSetId,
+                    disabled.RowFamilyId,
                     "Disabled",
                     1)])],
             [SourceConfiguration(first, firstSheetId, includeSourceId: true, includeMetadata: true),
@@ -770,6 +775,7 @@ public sealed class ExcelWorkbookExportServiceTests
                     worksheetId,
                     workbookId,
                     fixtures[index].SourceSetId,
+                    fixtures[index].RowFamilyId,
                     fixtures[index].DisplayName,
                     1)]));
             sourceSets.Add(SourceConfiguration(fixtures[index], worksheetId));
@@ -786,6 +792,7 @@ public sealed class ExcelWorkbookExportServiceTests
         bool enabled = true) =>
         new(
             fixture.SourceSetId,
+            fixture.RowFamilyId,
             enabled,
             worksheetId,
             fixture.Columns.Select((column, index) => new ExportFieldConfiguration(
@@ -876,7 +883,7 @@ public sealed class ExcelWorkbookExportServiceTests
 
     private sealed class FakeExtractionExportRowSource : IExtractionExportRowSource
     {
-        private readonly Dictionary<SourceSetId, IReadOnlyList<ExtractionResultRow>> _rows = [];
+        private readonly Dictionary<RowFamilyId, IReadOnlyList<ExtractionResultRow>> _rows = [];
 
         internal ExtractionResultSummary? Result { get; private set; }
         internal List<SourceSetId> StreamedSourceSets { get; } = [];
@@ -889,13 +896,17 @@ public sealed class ExcelWorkbookExportServiceTests
             Result = result;
             foreach (var fixture in fixtures)
             {
-                _rows[fixture.SourceSetId] = fixture.Rows;
+                var familyId = result.Datasets.Single(dataset =>
+                    dataset.SourceSetId == fixture.SourceSetId).RowFamilies.Single().Id;
+                _rows[familyId] = fixture.Rows;
             }
         }
 
         internal void SetRows(
             SourceSetId sourceSetId,
-            IReadOnlyList<ExtractionResultRow> rows) => _rows[sourceSetId] = rows;
+            IReadOnlyList<ExtractionResultRow> rows) =>
+            _rows[Result!.Datasets.Single(dataset => dataset.SourceSetId == sourceSetId)
+                .RowFamilies.Single().Id] = rows;
 
         internal void ChangePublishedResult(ExtractionResultSummary result) => Result = result;
 
@@ -909,11 +920,11 @@ public sealed class ExcelWorkbookExportServiceTests
 
         public async IAsyncEnumerable<ExtractionResultRow> StreamRowsAsync(
             OperationId extractionResultId,
-            SourceSetId sourceSetId,
+            RowFamilyId rowFamilyId,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            StreamedSourceSets.Add(sourceSetId);
-            foreach (var row in _rows[sourceSetId])
+            StreamedSourceSets.Add(rowFamilyId.SourceSetId);
+            foreach (var row in _rows[rowFamilyId])
             {
                 BeforeYield?.Invoke();
                 cancellationToken.ThrowIfCancellationRequested();
@@ -943,6 +954,7 @@ public sealed class ExcelWorkbookExportServiceTests
         }
 
         internal SourceSetId SourceSetId { get; }
+        internal RowFamilyId RowFamilyId => Columns[0].Identity.RowFamilyId;
         internal string DisplayName { get; }
         internal int Ordinal { get; }
         internal IReadOnlyList<DatabaseColumnDefinition> Columns { get; }

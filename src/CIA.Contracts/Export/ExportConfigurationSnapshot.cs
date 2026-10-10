@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using CIA.Contracts.Database;
 using CIA.Contracts.Extraction;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Sources;
 
 namespace CIA.Contracts.Export;
@@ -129,9 +130,26 @@ public sealed record ExportMetadataFieldConfiguration
 
 public sealed record SourceSetExportConfiguration
 {
+    public SourceSetExportConfiguration(
+        SourceSetId sourceSetId,
+        bool isEnabled,
+        WorksheetDefinitionId? worksheetDefinitionId,
+        IReadOnlyList<ExportFieldConfiguration> fields,
+        IReadOnlyList<ExportMetadataFieldConfiguration> metadataFields)
+        : this(
+            sourceSetId,
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/legacy"),
+            isEnabled,
+            worksheetDefinitionId,
+            fields,
+            metadataFields)
+    {
+    }
+
     [JsonConstructor]
     public SourceSetExportConfiguration(
         SourceSetId sourceSetId,
+        RowFamilyId rowFamilyId,
         bool isEnabled,
         WorksheetDefinitionId? worksheetDefinitionId,
         IReadOnlyList<ExportFieldConfiguration> fields,
@@ -159,7 +177,15 @@ public sealed record SourceSetExportConfiguration
                 "A Source Set export configuration contains duplicate or null fields.");
         }
 
+        if (rowFamilyId.SourceSetId != sourceSetId)
+        {
+            throw new ArgumentException(
+                "A Row Family export configuration must belong to its Source Set.",
+                nameof(rowFamilyId));
+        }
+
         SourceSetId = sourceSetId;
+        RowFamilyId = rowFamilyId;
         IsEnabled = isEnabled;
         WorksheetDefinitionId = worksheetDefinitionId;
         Fields = new ReadOnlyCollection<ExportFieldConfiguration>(fieldArray);
@@ -167,6 +193,8 @@ public sealed record SourceSetExportConfiguration
     }
 
     public SourceSetId SourceSetId { get; }
+
+    public RowFamilyId RowFamilyId { get; }
 
     public bool IsEnabled { get; }
 
@@ -179,11 +207,28 @@ public sealed record SourceSetExportConfiguration
 
 public sealed record WorksheetDefinition
 {
+    public WorksheetDefinition(
+        WorksheetDefinitionId worksheetDefinitionId,
+        WorkbookDefinitionId workbookDefinitionId,
+        SourceSetId sourceSetId,
+        string name,
+        int order)
+        : this(
+            worksheetDefinitionId,
+            workbookDefinitionId,
+            sourceSetId,
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/legacy"),
+            name,
+            order)
+    {
+    }
+
     [JsonConstructor]
     public WorksheetDefinition(
         WorksheetDefinitionId worksheetDefinitionId,
         WorkbookDefinitionId workbookDefinitionId,
         SourceSetId sourceSetId,
+        RowFamilyId rowFamilyId,
         string name,
         int order)
     {
@@ -195,10 +240,18 @@ public sealed record WorksheetDefinition
                 "A worksheet definition requires stable worksheet, workbook, and Source Set identities.");
         }
 
+        if (rowFamilyId.SourceSetId != sourceSetId)
+        {
+            throw new ArgumentException(
+                "A worksheet Row Family must belong to its Source Set.",
+                nameof(rowFamilyId));
+        }
+
         ArgumentNullException.ThrowIfNull(name);
         WorksheetDefinitionId = worksheetDefinitionId;
         WorkbookDefinitionId = workbookDefinitionId;
         SourceSetId = sourceSetId;
+        RowFamilyId = rowFamilyId;
         Name = name;
         Order = order;
     }
@@ -208,6 +261,8 @@ public sealed record WorksheetDefinition
     public WorkbookDefinitionId WorkbookDefinitionId { get; }
 
     public SourceSetId SourceSetId { get; }
+
+    public RowFamilyId RowFamilyId { get; }
 
     public string Name { get; }
 
@@ -303,7 +358,7 @@ public sealed record ExportConfigurationSnapshot
             || workbookArray.Select(workbook => workbook.WorkbookDefinitionId)
                 .Distinct().Count() != workbookArray.Length
             || sourceSetArray.Any(sourceSet => sourceSet is null)
-            || sourceSetArray.Select(sourceSet => sourceSet.SourceSetId)
+            || sourceSetArray.Select(sourceSet => sourceSet.RowFamilyId)
                 .Distinct().Count() != sourceSetArray.Length)
         {
             throw new ArgumentException(
@@ -318,9 +373,9 @@ public sealed record ExportConfigurationSnapshot
 
     public IReadOnlyList<SourceSetExportConfiguration> SourceSets { get; }
 
-    public IReadOnlyList<ExportOutputColumn> CreateIncludedOutputColumns(SourceSetId sourceSetId)
+    public IReadOnlyList<ExportOutputColumn> CreateIncludedOutputColumns(RowFamilyId rowFamilyId)
     {
-        var configuration = SourceSets.Single(set => set.SourceSetId == sourceSetId);
+        var configuration = SourceSets.Single(set => set.RowFamilyId == rowFamilyId);
         var columns = new List<ExportOutputColumn>();
         foreach (var field in configuration.Fields.Where(field => field.IsValueIncluded))
         {
@@ -351,7 +406,7 @@ public sealed record ExportConfigurationSnapshot
 
     public int IncludedOutputColumnCount => SourceSets
         .Where(sourceSet => sourceSet.IsEnabled)
-        .Sum(sourceSet => CreateIncludedOutputColumns(sourceSet.SourceSetId).Count);
+        .Sum(sourceSet => CreateIncludedOutputColumns(sourceSet.RowFamilyId).Count);
 }
 
 public sealed record ExportConfigurationValidationFailure(
@@ -359,7 +414,8 @@ public sealed record ExportConfigurationValidationFailure(
     string Description,
     SourceSetId? SourceSetId = null,
     WorkbookDefinitionId? WorkbookDefinitionId = null,
-    WorksheetDefinitionId? WorksheetDefinitionId = null);
+    WorksheetDefinitionId? WorksheetDefinitionId = null,
+    RowFamilyId? RowFamilyId = null);
 
 public sealed record RunnableWorksheetDefinition(
     WorksheetDefinition Worksheet,
@@ -390,10 +446,11 @@ public static class ExportConfigurationValidator
         ArgumentNullException.ThrowIfNull(extractionResult);
         return Validate(
             configuration,
-            extractionResult.Datasets.Select(dataset => new DatasetShape(
-                dataset.SourceSetId,
-                dataset.RowCount,
-                dataset.Columns)).ToArray());
+            extractionResult.Datasets.SelectMany(dataset => dataset.RowFamilies)
+                .Select(family => new DatasetShape(
+                    family.Id,
+                    family.RowCount,
+                    family.Columns)).ToArray());
     }
 
     public static ExportConfigurationValidationResult Validate(
@@ -403,10 +460,11 @@ public static class ExportConfigurationValidator
         ArgumentNullException.ThrowIfNull(databaseGeneration);
         return Validate(
             configuration,
-            databaseGeneration.Datasets.Select(dataset => new DatasetShape(
-                dataset.SourceSetId,
-                dataset.RowCount,
-                dataset.Columns)).ToArray());
+            databaseGeneration.Datasets.SelectMany(dataset => dataset.RowFamilies)
+                .Select(family => new DatasetShape(
+                    family.Id,
+                    family.RowCount,
+                    family.Columns)).ToArray());
     }
 
     private static ExportConfigurationValidationResult Validate(
@@ -422,12 +480,20 @@ public static class ExportConfigurationValidator
                 (Workbook: workbook, Worksheet: worksheet)))
             .ToArray();
         var allWorksheets = worksheetOwners.Select(owner => owner.Worksheet).ToArray();
-        var configuredSourceSetIds = configuration.SourceSets
-            .Select(sourceSet => sourceSet.SourceSetId)
+        var configuredRowFamilyIds = configuration.SourceSets
+            .Select(sourceSet => sourceSet.RowFamilyId)
             .ToHashSet();
+        var datasetRowFamilyIds = datasets.Select(dataset => dataset.RowFamilyId).ToHashSet();
         var worksheetById = allWorksheets
             .GroupBy(worksheet => worksheet.WorksheetDefinitionId)
             .ToDictionary(group => group.Key, group => group.ToArray());
+
+        if (!configuredRowFamilyIds.SetEquals(datasetRowFamilyIds))
+        {
+            failures.Add(new ExportConfigurationValidationFailure(
+                "row-family-configuration-mismatch",
+                "Export configuration must explicitly include every published Row Family."));
+        }
 
         foreach (var owner in worksheetOwners.Where(owner =>
                      owner.Worksheet.WorkbookDefinitionId != owner.Workbook.WorkbookDefinitionId))
@@ -448,24 +514,26 @@ public static class ExportConfigurationValidator
                 WorksheetDefinitionId: group.Key));
         }
 
-        foreach (var group in allWorksheets.GroupBy(worksheet => worksheet.SourceSetId)
+        foreach (var group in allWorksheets.GroupBy(worksheet => worksheet.RowFamilyId)
                      .Where(group => group.Count() != 1))
         {
             failures.Add(new ExportConfigurationValidationFailure(
-                "source-set-route-count",
-                "A Source Set must own exactly one worksheet route.",
-                group.Key));
+                "row-family-route-count",
+                "A Row Family must own exactly one worksheet route.",
+                group.Key.SourceSetId,
+                RowFamilyId: group.Key));
         }
 
         foreach (var worksheet in allWorksheets.Where(worksheet =>
-                     !configuredSourceSetIds.Contains(worksheet.SourceSetId)))
+                     !configuredRowFamilyIds.Contains(worksheet.RowFamilyId)))
         {
             failures.Add(new ExportConfigurationValidationFailure(
                 "orphaned-worksheet-route",
-                "A worksheet route references a Source Set without export configuration.",
+                "A worksheet route references a Row Family without export configuration.",
                 worksheet.SourceSetId,
                 worksheet.WorkbookDefinitionId,
-                worksheet.WorksheetDefinitionId));
+                worksheet.WorksheetDefinitionId,
+                worksheet.RowFamilyId));
         }
 
         if (configuration.Workbooks.Any(workbook => workbook.Order < 1)
@@ -481,7 +549,7 @@ public static class ExportConfigurationValidator
         foreach (var setConfiguration in configuration.SourceSets)
         {
             var dataset = datasets.SingleOrDefault(dataset =>
-                dataset.SourceSetId == setConfiguration.SourceSetId);
+                dataset.RowFamilyId == setConfiguration.RowFamilyId);
             if (!setConfiguration.IsEnabled)
             {
                 continue;
@@ -491,16 +559,18 @@ public static class ExportConfigurationValidator
             {
                 failures.Add(new ExportConfigurationValidationFailure(
                     "missing-extraction-dataset",
-                    "The enabled Source Set does not exist in the Extraction Result.",
-                    setConfiguration.SourceSetId));
+                    "The enabled Row Family does not exist in the Extraction Result.",
+                    setConfiguration.SourceSetId,
+                    RowFamilyId: setConfiguration.RowFamilyId));
             }
 
             else if (dataset.RowCount > ExcelWorkbookLimits.MaximumDataRows)
             {
                 failures.Add(new ExportConfigurationValidationFailure(
                     "export-row-limit-exceeded",
-                    "The enabled Source Set exceeds Excel's worksheet row limit.",
-                    setConfiguration.SourceSetId));
+                    "The enabled Row Family exceeds Excel's worksheet row limit.",
+                    setConfiguration.SourceSetId,
+                    RowFamilyId: setConfiguration.RowFamilyId));
             }
 
             if (setConfiguration.WorksheetDefinitionId is not { } worksheetId
@@ -509,20 +579,22 @@ public static class ExportConfigurationValidator
             {
                 failures.Add(new ExportConfigurationValidationFailure(
                     "missing-worksheet-route",
-                    "The enabled Source Set requires exactly one worksheet route.",
-                    setConfiguration.SourceSetId));
+                    "The enabled Row Family requires exactly one worksheet route.",
+                    setConfiguration.SourceSetId,
+                    RowFamilyId: setConfiguration.RowFamilyId));
                 continue;
             }
 
             var worksheet = matchingWorksheets[0];
-            if (worksheet.SourceSetId != setConfiguration.SourceSetId)
+            if (worksheet.RowFamilyId != setConfiguration.RowFamilyId)
             {
                 failures.Add(new ExportConfigurationValidationFailure(
                     "shared-worksheet-route",
-                    "A worksheet cannot be shared by multiple Source Sets.",
+                    "A worksheet cannot be shared by multiple Row Families.",
                     setConfiguration.SourceSetId,
                     worksheet.WorkbookDefinitionId,
-                    worksheet.WorksheetDefinitionId));
+                    worksheet.WorksheetDefinitionId,
+                    setConfiguration.RowFamilyId));
                 continue;
             }
 
@@ -530,10 +602,11 @@ public static class ExportConfigurationValidator
             {
                 failures.Add(new ExportConfigurationValidationFailure(
                     "missing-workbook-route",
-                    "The enabled Source Set worksheet requires an existing workbook.",
+                    "The enabled Row Family worksheet requires an existing workbook.",
                     setConfiguration.SourceSetId,
                     worksheet.WorkbookDefinitionId,
-                    worksheet.WorksheetDefinitionId));
+                    worksheet.WorksheetDefinitionId,
+                    setConfiguration.RowFamilyId));
                 continue;
             }
 
@@ -670,12 +743,13 @@ public static class ExportConfigurationValidator
         var datasetIdentities = dataset.Columns.Select(column => column.Identity).ToHashSet();
         if (!configuredIdentities.SetEquals(datasetIdentities)
             || setConfiguration.Fields.Any(field =>
-                field.DatabaseColumnIdentity.SourceSetId != setConfiguration.SourceSetId))
+                field.DatabaseColumnIdentity.RowFamilyId != setConfiguration.RowFamilyId))
         {
             failures.Add(new ExportConfigurationValidationFailure(
                 "database-field-mismatch",
-                "Export fields must exactly match the typed Database columns for the Source Set.",
-                setConfiguration.SourceSetId));
+                "Export fields must exactly match the typed Database columns for the Row Family.",
+                setConfiguration.SourceSetId,
+                RowFamilyId: setConfiguration.RowFamilyId));
         }
 
         if (setConfiguration.Fields.Any(field => string.IsNullOrWhiteSpace(field.ExcelHeader)
@@ -697,13 +771,14 @@ public static class ExportConfigurationValidator
         {
             failures.Add(new ExportConfigurationValidationFailure(
                 "invalid-output-column-count",
-                "Each enabled Source Set requires at least one output column within Excel limits.",
-                setConfiguration.SourceSetId));
+                "Each enabled Row Family requires at least one output column within Excel limits.",
+                setConfiguration.SourceSetId,
+                RowFamilyId: setConfiguration.RowFamilyId));
         }
     }
 
     private sealed record DatasetShape(
-        SourceSetId SourceSetId,
+        RowFamilyId RowFamilyId,
         int RowCount,
         IReadOnlyList<DatabaseColumnDefinition> Columns);
 }

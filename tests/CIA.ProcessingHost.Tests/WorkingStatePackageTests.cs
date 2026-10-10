@@ -6,6 +6,7 @@ using CIA.Contracts.Database;
 using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Extraction;
+using CIA.Contracts.Export;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -114,15 +115,27 @@ public sealed class WorkingStatePackageTests
     {
         using var workspace = new Workspace();
         var state = await workspace.CreateFamilyPublishedStateAsync();
+        var exportConfiguration = CreateFamilyExportConfiguration(state.Generation);
+        var snapshot = new WorkingStateSnapshot(
+            state.Snapshot.PackageId,
+            state.Snapshot.SavedAtUtc,
+            state.Snapshot.DatabaseGeneration,
+            state.Snapshot.ExtractionResult,
+            exportConfiguration,
+            state.Snapshot.SourceSets,
+            state.Snapshot.ActiveSourceSetId,
+            state.Snapshot.Sources,
+            state.Snapshot.DiscoveryConfiguration,
+            state.Snapshot.DatabaseTagOverrides);
         var packagePath = Path.Combine(workspace.Root, "family-v2.cia");
-        WorkingStateDatabaseCoherenceValidator.Validate(state.Snapshot);
+        WorkingStateDatabaseCoherenceValidator.Validate(snapshot);
         var directSnapshotPath = Path.Combine(workspace.Root, "family-v2.sqlite3");
         await workspace.Repository.CreateWorkingStateSnapshotAsync(
             directSnapshotPath,
             state.Generation,
-            state.Snapshot.ExtractionResult);
+            snapshot.ExtractionResult);
         var contractJson = JsonSerializer.Serialize(
-            new WorkingStateManifest(2, 7, new string('0', 64), state.Snapshot),
+            new WorkingStateManifest(2, 7, new string('0', 64), snapshot),
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
         Assert.IsNotNull(JsonSerializer.Deserialize<WorkingStateManifest>(
             contractJson,
@@ -131,10 +144,10 @@ public sealed class WorkingStatePackageTests
         var saved = await workspace.PackageService.SaveAsync(
             OperationCorrelation.CreateNew(),
             packagePath,
-            state.Snapshot);
+            snapshot);
         Assert.IsTrue(saved.Accepted, saved.Failure?.Description);
         Assert.AreEqual(2, saved.Manifest?.PackageSchemaVersion);
-        foreach (var source in state.Snapshot.Sources)
+        foreach (var source in snapshot.Sources)
         {
             File.Delete(source.Path);
         }
@@ -151,8 +164,11 @@ public sealed class WorkingStatePackageTests
             state.Generation,
             database));
         Assert.IsTrue(ExtractionResultSnapshotComparer.AreEquivalent(
-            state.Snapshot.ExtractionResult,
+            snapshot.ExtractionResult,
             extraction));
+        Assert.AreEqual(
+            JsonSerializer.Serialize(exportConfiguration),
+            JsonSerializer.Serialize(result.Manifest?.Snapshot.ExportConfiguration));
         Assert.IsTrue(state.Generation.Datasets.Single().RowFamilies
             .Select(family => family.Id)
             .SequenceEqual(database!.Datasets.Single().RowFamilies.Select(family => family.Id)));
@@ -176,6 +192,40 @@ public sealed class WorkingStatePackageTests
             && row.Cells.SelectMany(cell => cell.Values).All(value =>
                 value.OriginatingRowFamilyId is not null
                 && value.SourceId == row.Source.SourceId)));
+    }
+
+    private static ExportConfigurationSnapshot CreateFamilyExportConfiguration(
+        DatabaseGenerationSummary generation)
+    {
+        var workbookId = WorkbookDefinitionId.CreateNew();
+        var families = generation.Datasets.SelectMany(dataset => dataset.RowFamilies)
+            .OrderBy(family => family.Ordinal).ToArray();
+        var worksheetIds = families.ToDictionary(
+            family => family.Id,
+            _ => WorksheetDefinitionId.CreateNew());
+        return new ExportConfigurationSnapshot(
+            [new WorkbookDefinition(
+                workbookId,
+                "Families.xlsx",
+                1,
+                families.Select((family, index) => new WorksheetDefinition(
+                    worksheetIds[family.Id],
+                    workbookId,
+                    family.Id.SourceSetId,
+                    family.Id,
+                    $"Family {index + 1}",
+                    index + 1)).ToArray())],
+            families.Select((family, index) => new SourceSetExportConfiguration(
+                family.Id.SourceSetId,
+                family.Id,
+                isEnabled: index != 1,
+                worksheetIds[family.Id],
+                family.Columns.Select(column => new ExportFieldConfiguration(
+                    column.Identity,
+                    true,
+                    column.EffectiveName,
+                    false)).ToArray(),
+                [])).ToArray());
     }
 
     [TestMethod]

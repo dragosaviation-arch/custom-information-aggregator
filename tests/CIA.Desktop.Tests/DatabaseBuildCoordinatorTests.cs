@@ -295,7 +295,7 @@ public sealed class DatabaseBuildCoordinatorTests
         CollectionAssert.AreEqual(
             new[] { "Combined Excel", "Combined Excel SourceId", "Source ID" },
             exportConfiguration.CreateIncludedOutputColumns(
-                viewModel.SelectedDataset!.Summary.SourceSetId)
+                viewModel.SelectedRowFamily!.Summary.Id)
                 .Select(column => column.Header).ToArray());
         Assert.AreEqual("Combined", combined.DatabaseField);
         Assert.HasCount(1, reviewClient.Requests);
