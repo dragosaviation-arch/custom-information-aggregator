@@ -89,7 +89,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _setDefaultBlacklistProfileCommand;
     private readonly RelayCommand _clearDefaultBlacklistProfileCommand;
     private readonly SemaphoreSlim _previewRequestGate = new(1, 1);
+    private readonly SemaphoreSlim _outputPreviewRequestGate = new(1, 1);
     private readonly object _previewRequestStateGate = new();
+    private readonly object _outputPreviewRequestStateGate = new();
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private IReadOnlyList<DiscoveredInformationItemViewModel> _allInformation = [];
     private IReadOnlyList<DiscoveredInformationItemViewModel> _filteredInformation = [];
@@ -128,6 +130,16 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool _isOccurrenceLoading;
     private int _previewRequestVersion;
     private CancellationTokenSource _previewRequestCancellation = new();
+    private int _outputPreviewRequestVersion;
+    private CancellationTokenSource _outputPreviewRequestCancellation = new();
+    private DiscoverySelectionImpactPresentation _selectionImpact =
+        DiscoverySelectionImpactPresentation.Empty;
+    private IReadOnlyList<DiscoveryOutputPreviewGroupPresentation> _outputPreviewGroups = [];
+    private DiscoveryOutputPreviewGroupPresentation? _selectedOutputPreviewGroup;
+    private bool _isOutputPreviewLoading;
+    private string _outputPreviewStatusText =
+        "Select output fields and an occurrence to preview the projected result.";
+    private string _outputPreviewSourceText = string.Empty;
     private IReadOnlyList<InformationSelectionProfileItem> _informationSelectionProfiles = [];
     private InformationSelectionProfileItem? _selectedInformationSelectionProfile;
     private string _newProfileName = string.Empty;
@@ -334,6 +346,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             RefreshBlacklistProfiles();
         }
         RefreshPresentation();
+        RefreshSelectionImpact();
     }
 
     public ReadOnlyObservableCollection<DiscoveredInformationItemViewModel> Information =>
@@ -361,6 +374,15 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             {
                 OnPropertyChanged(nameof(IsInputMode));
                 OnPropertyChanged(nameof(IsOutputMode));
+                if (value == DiscoveryMode.Output)
+                {
+                    RefreshSelectionImpact();
+                    ScheduleOutputPreview();
+                }
+                else
+                {
+                    SupersedeOutputPreviewRequest(clearPresentation: false);
+                }
             }
         }
     }
@@ -368,6 +390,58 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public bool IsInputMode => Mode == DiscoveryMode.Input;
 
     public bool IsOutputMode => Mode == DiscoveryMode.Output;
+
+    public DiscoverySelectionImpactPresentation SelectionImpact
+    {
+        get => _selectionImpact;
+        private set
+        {
+            if (SetProperty(ref _selectionImpact, value))
+            {
+                OnPropertyChanged(nameof(HasSelectionImpact));
+            }
+        }
+    }
+
+    public bool HasSelectionImpact => SelectionImpact.Groups.Count > 0;
+
+    public IReadOnlyList<DiscoveryOutputPreviewGroupPresentation> OutputPreviewGroups
+    {
+        get => _outputPreviewGroups;
+        private set
+        {
+            if (SetProperty(ref _outputPreviewGroups, value))
+            {
+                OnPropertyChanged(nameof(HasOutputPreviewGroups));
+            }
+        }
+    }
+
+    public bool HasOutputPreviewGroups => OutputPreviewGroups.Count > 0;
+
+    public DiscoveryOutputPreviewGroupPresentation? SelectedOutputPreviewGroup
+    {
+        get => _selectedOutputPreviewGroup;
+        set => SetProperty(ref _selectedOutputPreviewGroup, value);
+    }
+
+    public bool IsOutputPreviewLoading
+    {
+        get => _isOutputPreviewLoading;
+        private set => SetProperty(ref _isOutputPreviewLoading, value);
+    }
+
+    public string OutputPreviewStatusText
+    {
+        get => _outputPreviewStatusText;
+        private set => SetProperty(ref _outputPreviewStatusText, value);
+    }
+
+    public string OutputPreviewSourceText
+    {
+        get => _outputPreviewSourceText;
+        private set => SetProperty(ref _outputPreviewSourceText, value);
+    }
 
     public IAsyncRelayCommand RunDiscoveryCommand { get; }
 
@@ -1070,6 +1144,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             Interlocked.Increment(ref _previewRequestVersion);
             _previewRequestCancellation.Cancel();
         }
+
+        lock (_outputPreviewRequestStateGate)
+        {
+            Interlocked.Increment(ref _outputPreviewRequestVersion);
+            _outputPreviewRequestCancellation.Cancel();
+        }
     }
 
     private bool CanRunDiscovery()
@@ -1239,6 +1319,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             _hasCompletedDiscovery = true;
             _currentPage = 1;
             RefreshPresentation();
+            RefreshSelectionImpact();
             SelectedInformation = Information.FirstOrDefault();
             StatusTitle = result.Issues.Count == 0
                 ? "Discovery complete"
@@ -1329,6 +1410,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private void PrepareOccurrenceSelection(DiscoveredInformationItemViewModel? information)
     {
         SupersedePreviewRequest();
+        SupersedeOutputPreviewRequest(clearPresentation: true);
         var canLoadOccurrence = information is not null
             && _publishedDiscoveryOperationId is not null;
         IsOccurrenceLoading = canLoadOccurrence;
@@ -1463,6 +1545,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             CurrentOccurrenceOrdinal = occurrence.Ordinal;
             SetOccurrenceOrdinalInput(
                 occurrence.Ordinal.ToString(CultureInfo.InvariantCulture));
+            ScheduleOutputPreview();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1513,6 +1596,255 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 _previewRequestCancellation.Token);
         }
     }
+
+    private void RefreshSelectionImpact()
+    {
+        SelectionImpact = TryCreateCurrentBuildSpecification(out var specification)
+            ? DiscoverySelectionImpactBuilder.Create(specification)
+            : DiscoverySelectionImpactPresentation.Empty;
+    }
+
+    private bool TryCreateCurrentBuildSpecification(out DatabaseBuildSpecification specification)
+    {
+        try
+        {
+            if (_databaseBuildCoordinator is null)
+            {
+                specification = null!;
+                return false;
+            }
+
+            specification = _databaseBuildCoordinator.CreateBuildSpecification();
+            return specification.Datasets.Count > 0;
+        }
+        catch (ArgumentException)
+        {
+            specification = null!;
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            specification = null!;
+            return false;
+        }
+    }
+
+    private void ScheduleOutputPreview()
+    {
+        var requestState = SupersedeOutputPreviewRequest(clearPresentation: true);
+        if (!IsOutputMode)
+        {
+            return;
+        }
+
+        if (!TryCreateOutputPreviewRequest(out var request, out var unavailableReason))
+        {
+            OutputPreviewStatusText = unavailableReason;
+            return;
+        }
+
+        IsOutputPreviewLoading = true;
+        OutputPreviewStatusText = "Occurrence output preview processing…";
+        _ = LoadOutputPreviewAsync(
+            request,
+            requestState.Version,
+            requestState.CancellationToken);
+    }
+
+    private bool TryCreateOutputPreviewRequest(
+        out DiscoveryOutputPreviewRequest request,
+        out string unavailableReason)
+    {
+        if (!HasSelectionImpact || !TryCreateCurrentBuildSpecification(out var specification))
+        {
+            request = null!;
+            unavailableReason = "Select at least one field to preview the projected output.";
+            return false;
+        }
+
+        var information = PreviewInformation;
+        var discoveryOperationId = _publishedDiscoveryOperationId;
+        if (information is null
+            || discoveryOperationId is null
+            || CurrentOccurrenceOrdinal < 1
+            || !TryCreateOccurrenceLookup(
+                discoveryOperationId.Value,
+                information,
+                CurrentOccurrenceOrdinal,
+                out var lookup))
+        {
+            request = null!;
+            unavailableReason = "Select a valid occurrence to preview the projected output.";
+            return false;
+        }
+
+        var dataset = specification.Datasets.FirstOrDefault(candidate =>
+            candidate.SourceSetId == information.SourceSetId);
+        if (dataset is null)
+        {
+            request = null!;
+            unavailableReason =
+                "The selected occurrence contributes to no selected output table.";
+            return false;
+        }
+
+        request = new DiscoveryOutputPreviewRequest(
+            lookup,
+            new DiscoveryOutputProjectionSpecification(
+                dataset.SourceSetId,
+                dataset.DisplayName,
+                dataset.RepeatedDataLayout,
+                dataset.RowFamilies,
+                dataset.Fields));
+        unavailableReason = string.Empty;
+        return true;
+    }
+
+    private async Task LoadOutputPreviewAsync(
+        DiscoveryOutputPreviewRequest request,
+        int requestVersion,
+        CancellationToken cancellationToken)
+    {
+        var enteredGate = false;
+        try
+        {
+            await Task.Delay(125, cancellationToken).ConfigureAwait(false);
+            await _outputPreviewRequestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            enteredGate = true;
+            if (!IsCurrentOutputPreviewRequest(request, requestVersion))
+            {
+                return;
+            }
+
+            // Once framed IPC begins, drain the response before another request uses the shared
+            // connection. Superseded work is discarded by version instead of abandoning a frame.
+            var result = await _discoveryClient.GetOutputPreviewAsync(request)
+                .ConfigureAwait(false);
+            if (!IsCurrentOutputPreviewRequest(request, requestVersion))
+            {
+                return;
+            }
+
+            DispatchToUi(() => ApplyOutputPreviewResult(request, requestVersion, result));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            if (IsCurrentOutputPreviewRequest(request, requestVersion))
+            {
+                DispatchToUi(() =>
+                {
+                    OutputPreviewStatusText =
+                        "The occurrence output preview could not be generated.";
+                    OutputPreviewGroups = [];
+                    SelectedOutputPreviewGroup = null;
+                });
+            }
+        }
+        finally
+        {
+            if (enteredGate)
+            {
+                _outputPreviewRequestGate.Release();
+            }
+
+            if (requestVersion == Volatile.Read(ref _outputPreviewRequestVersion))
+            {
+                DispatchToUi(() => IsOutputPreviewLoading = false);
+            }
+        }
+    }
+
+    private void ApplyOutputPreviewResult(
+        DiscoveryOutputPreviewRequest request,
+        int requestVersion,
+        DiscoveryOutputPreviewClientResult result)
+    {
+        if (!IsCurrentOutputPreviewRequest(request, requestVersion))
+        {
+            return;
+        }
+
+        var preview = result.Preview;
+        if (!result.Accepted
+            || preview is null
+            || preview.DiscoveryOperationId != request.Occurrence.DiscoveryOperationId
+            || preview.OccurrenceOrdinal != request.Occurrence.GlobalOrdinal
+            || !request.Occurrence.DetailedIdentities.Contains(preview.OccurrenceIdentity))
+        {
+            OutputPreviewGroups = [];
+            SelectedOutputPreviewGroup = null;
+            OutputPreviewSourceText = string.Empty;
+            OutputPreviewStatusText = result.FailureDescription
+                ?? "The occurrence output preview could not be generated.";
+            return;
+        }
+
+        var impactByFamily = SelectionImpact.Groups.ToDictionary(group => group.RowFamilyId);
+        var groups = preview.Groups
+            .Where(group => impactByFamily.ContainsKey(group.RowFamilyId))
+            .Select(group => new DiscoveryOutputPreviewGroupPresentation(
+                impactByFamily[group.RowFamilyId],
+                group))
+            .ToArray();
+        var previousFamily = SelectedOutputPreviewGroup?.RowFamilyId;
+        OutputPreviewGroups = groups;
+        SelectedOutputPreviewGroup = previousFamily is { } selectedFamily
+            ? groups.FirstOrDefault(group => group.RowFamilyId == selectedFamily)
+                ?? groups.FirstOrDefault()
+            : groups.FirstOrDefault();
+        OutputPreviewSourceText =
+            $"Occurrence {preview.OccurrenceOrdinal:N0} · {preview.SourceName}";
+        OutputPreviewStatusText = groups.Length == 0
+            ? "The selected occurrence contributes to no selected output table."
+            : $"Projected with {GetLayoutDisplayName(preview.RepeatedDataLayout)}.";
+    }
+
+    private bool IsCurrentOutputPreviewRequest(
+        DiscoveryOutputPreviewRequest request,
+        int requestVersion)
+    {
+        return Volatile.Read(ref _disposed) == 0
+            && IsOutputMode
+            && requestVersion == Volatile.Read(ref _outputPreviewRequestVersion)
+            && _publishedDiscoveryOperationId == request.Occurrence.DiscoveryOperationId
+            && CurrentOccurrenceOrdinal == request.Occurrence.GlobalOrdinal;
+    }
+
+    private PreviewRequest SupersedeOutputPreviewRequest(bool clearPresentation)
+    {
+        lock (_outputPreviewRequestStateGate)
+        {
+            _outputPreviewRequestCancellation.Cancel();
+            _outputPreviewRequestCancellation.Dispose();
+            _outputPreviewRequestCancellation = new CancellationTokenSource();
+            var request = new PreviewRequest(
+                Interlocked.Increment(ref _outputPreviewRequestVersion),
+                _outputPreviewRequestCancellation.Token);
+            if (clearPresentation)
+            {
+                OutputPreviewGroups = [];
+                SelectedOutputPreviewGroup = null;
+                OutputPreviewSourceText = string.Empty;
+                IsOutputPreviewLoading = false;
+            }
+
+            return request;
+        }
+    }
+
+    private static string GetLayoutDisplayName(RepeatedDataLayout layout) => layout switch
+    {
+        RepeatedDataLayout.AlignRepeatedGroupsByPosition =>
+            "Align repeated groups by position",
+        RepeatedDataLayout.StructuralRows => "Structural rows",
+        RepeatedDataLayout.AllCombinations => "All combinations",
+        RepeatedDataLayout.NumberRepeatedValuesIntoColumns =>
+            "Number repeated values into columns",
+        _ => "the current layout"
+    };
 
     private static bool TryCreateOccurrenceLookup(
         OperationId discoveryOperationId,
@@ -2147,6 +2479,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
         _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
         RefreshPresentation();
+        RefreshSelectionImpact();
+        ScheduleOutputPreview();
         NotifyProfileCommandsChanged();
     }
 
@@ -2167,6 +2501,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         OnPropertyChanged(nameof(DatabaseStateText));
+        RefreshSelectionImpact();
+        ScheduleOutputPreview();
         return true;
     }
 

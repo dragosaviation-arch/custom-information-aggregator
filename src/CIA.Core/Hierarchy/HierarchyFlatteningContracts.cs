@@ -46,7 +46,8 @@ public sealed class HierarchyFlatteningRequest
         RepeatedDataLayout layout,
         IEnumerable<HierarchySourceInput> sources,
         IEnumerable<RowFamilyDefinition> rowFamilies,
-        IReadOnlyDictionary<DiscoveryInformationIdentity, RowFamilyId> familyAssignments)
+        IReadOnlyDictionary<DiscoveryInformationIdentity, RowFamilyId> familyAssignments,
+        int? maximumRowsPerFamily = null)
     {
         if (sourceSetId == default)
         {
@@ -63,6 +64,12 @@ public sealed class HierarchyFlatteningRequest
         ArgumentNullException.ThrowIfNull(sources);
         ArgumentNullException.ThrowIfNull(rowFamilies);
         ArgumentNullException.ThrowIfNull(familyAssignments);
+        if (maximumRowsPerFamily is < 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumRowsPerFamily),
+                "A hierarchy preview row limit must be positive.");
+        }
         var sourceArray = sources.ToArray();
         var familyArray = rowFamilies.ToArray();
         if (sourceArray.Any(source => source is null))
@@ -115,6 +122,7 @@ public sealed class HierarchyFlatteningRequest
         Sources = new ReadOnlyCollection<HierarchySourceInput>(sourceArray);
         RowFamilies = new ReadOnlyCollection<RowFamilyDefinition>(familyArray);
         FamilyAssignments = new Dictionary<DiscoveryInformationIdentity, RowFamilyId>(familyAssignments);
+        MaximumRowsPerFamily = maximumRowsPerFamily;
     }
 
     public SourceSetId SourceSetId { get; }
@@ -126,6 +134,12 @@ public sealed class HierarchyFlatteningRequest
     public IReadOnlyList<RowFamilyDefinition> RowFamilies { get; }
 
     public IReadOnlyDictionary<DiscoveryInformationIdentity, RowFamilyId> FamilyAssignments { get; }
+
+    /// <summary>
+    /// Optional bounded-projection limit used by ephemeral previews. Authoritative Database
+    /// generation leaves this unset and therefore retains the complete projection.
+    /// </summary>
+    public int? MaximumRowsPerFamily { get; }
 }
 
 public sealed class HierarchySourceInput
@@ -499,7 +513,9 @@ public sealed class HierarchyFlatteningResult
     public HierarchyFlatteningResult(
         SourceSetId sourceSetId,
         RepeatedDataLayout layout,
-        IEnumerable<FlattenedHierarchyRow> rows)
+        IEnumerable<FlattenedHierarchyRow> rows,
+        bool isTruncated = false,
+        IEnumerable<RowFamilyId>? truncatedRowFamilies = null)
     {
         if (sourceSetId == default)
         {
@@ -525,6 +541,11 @@ public sealed class HierarchyFlatteningResult
         SourceSetId = sourceSetId;
         Layout = layout;
         Rows = new ReadOnlyCollection<FlattenedHierarchyRow>(rowArray);
+        IsTruncated = isTruncated;
+        TruncatedRowFamilies = (truncatedRowFamilies ?? [])
+            .Distinct()
+            .OrderBy(family => family)
+            .ToArray();
     }
 
     public SourceSetId SourceSetId { get; }
@@ -532,6 +553,10 @@ public sealed class HierarchyFlatteningResult
     public RepeatedDataLayout Layout { get; }
 
     public IReadOnlyList<FlattenedHierarchyRow> Rows { get; }
+
+    public bool IsTruncated { get; }
+
+    public IReadOnlyList<RowFamilyId> TruncatedRowFamilies { get; }
 }
 
 public sealed class AllCombinationsLimitExceededException : InvalidOperationException

@@ -178,6 +178,44 @@ public sealed class ProcessingHostDiscoveryClient(
         }
     }
 
+    public async Task<DiscoveryOutputPreviewClientResult> GetOutputPreviewAsync(
+        DiscoveryOutputPreviewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            var host = await hostSupervisor.EnsureAvailableAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (host.State != ProcessingHostLifecycleState.Ready)
+            {
+                return RejectOutputPreview("processing-host-unavailable");
+            }
+
+            var response = await requestClient.RequestDiscoveryOutputPreviewAsync(
+                    request,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return new DiscoveryOutputPreviewClientResult(
+                response.Acceptance == CommandAcceptance.Accepted,
+                response.Preview,
+                response.Failure?.Code,
+                response.Failure?.Description);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                exception,
+                "Discovery output preview could not be retrieved from operation {OperationId}",
+                request.Occurrence.DiscoveryOperationId);
+            return RejectOutputPreview("processing-host-unavailable");
+        }
+    }
+
     private static DiscoveryClientResult Reject(
         OperationCorrelation correlation,
         IReadOnlyList<LoadedSourceContract> sources,
@@ -219,6 +257,15 @@ public sealed class ProcessingHostDiscoveryClient(
             Page: null,
             failureCode,
             "The Processing Host could not retrieve the Discovery contributors.");
+    }
+
+    private static DiscoveryOutputPreviewClientResult RejectOutputPreview(string failureCode)
+    {
+        return new DiscoveryOutputPreviewClientResult(
+            false,
+            Preview: null,
+            failureCode,
+            "The Processing Host could not generate the occurrence output preview.");
     }
 
     private static string CreateTechnicalDetail(string category, string message)

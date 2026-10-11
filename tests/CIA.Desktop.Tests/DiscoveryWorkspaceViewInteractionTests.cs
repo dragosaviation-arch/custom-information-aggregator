@@ -353,6 +353,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             var ordinalInput = (TextBox)view.FindName("OccurrenceOrdinalInput");
             var inputMode = (Button)view.FindName("InputModeButton");
             var outputMode = (Button)view.FindName("OutputModeButton");
+            var outputGroupSelector = (ComboBox)view.FindName("OutputPreviewGroupSelector");
 
             Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
             Assert.IsTrue(inputPreview.IsVisible);
@@ -374,9 +375,11 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsFalse(databaseTagField.IsVisible,
                 "Collapsed Input controls must not remain in the active focus tree.");
             Assert.IsFalse(databaseTagField.Focus());
-            Assert.IsNull(FindVisualDescendant<Control>(
-                outputPreview,
-                control => control.Focusable));
+            Assert.IsTrue(outputGroupSelector.IsVisible);
+            Assert.IsTrue(outputGroupSelector.Focusable);
+            Assert.AreEqual(
+                outputGroupSelector,
+                FindVisualDescendant<ComboBox>(outputPreview, control => control.Focusable));
             Assert.IsNull(FindVisualDescendant<Control>(
                 outputSettings,
                 control => control.Focusable));

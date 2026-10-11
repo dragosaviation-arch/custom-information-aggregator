@@ -24,6 +24,17 @@ public interface IDiscoveryClient
         DiscoveryOccurrenceLookup lookup,
         CancellationToken cancellationToken = default);
 
+    Task<DiscoveryOutputPreviewClientResult> GetOutputPreviewAsync(
+        DiscoveryOutputPreviewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(new DiscoveryOutputPreviewClientResult(
+            false,
+            Preview: null,
+            "discovery-output-preview-unavailable",
+            "Occurrence output preview is unavailable."));
+    }
+
     Task<DiscoveryContributorClientResult> GetContributorsAsync(
         DiscoveryContributorPageQuery query,
         CancellationToken cancellationToken = default)
@@ -52,6 +63,12 @@ public sealed record DiscoveryClientResult(
 public sealed record DiscoveryOccurrenceClientResult(
     bool Accepted,
     DiscoveredOccurrence? Occurrence,
+    string? FailureCode,
+    string? FailureDescription);
+
+public sealed record DiscoveryOutputPreviewClientResult(
+    bool Accepted,
+    DiscoveryOutputPreview? Preview,
     string? FailureCode,
     string? FailureDescription);
 

@@ -586,6 +586,59 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         }
     }
 
+    public async Task<GetDiscoveryOutputPreviewResponse> RequestDiscoveryOutputPreviewAsync(
+        DiscoveryOutputPreviewRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ThrowIfDisposed();
+        await _lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (!IsCurrentHostReady())
+            {
+                throw new InvalidOperationException(
+                    "The Processing Host is not ready for Discovery output preview requests.");
+            }
+
+            var connection = _connection!;
+            await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var command = new GetDiscoveryOutputPreviewCommand(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    request);
+                await connection.SendAsync(command, cancellationToken).ConfigureAwait(false);
+                var response = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+                if (response is not GetDiscoveryOutputPreviewResponse previewResponse
+                    || previewResponse.CommandMessageId != command.MessageId
+                    || previewResponse.DiscoveryOperationId
+                        != request.Occurrence.DiscoveryOperationId
+                    || previewResponse.Preview is { } preview
+                    && (preview.OccurrenceOrdinal != request.Occurrence.GlobalOrdinal
+                        || preview.Groups.Any(group =>
+                            group.Rows.Count > request.MaximumRowsPerGroup)))
+                {
+                    throw new IpcProtocolException(
+                        IpcProtocolError.InvalidContract,
+                        "The Processing Host returned an invalid Discovery output preview response.");
+                }
+
+                return previewResponse;
+            }
+            finally
+            {
+                _requestGate.Release();
+            }
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
     public async Task<BuildDatabaseResponse> RequestDatabaseBuildAsync(
         OperationCorrelation correlation,
         DatabaseBuildSpecification specification,

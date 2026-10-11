@@ -36,6 +36,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
 
         var flattened = new List<(SourceId SourceId, RowFragment Fragment)>();
         var checkpoint = new CancellationCheckpoint();
+        var tracker = new ProjectionLimitTracker();
+        var maximumRows = request.MaximumRowsPerFamily;
 
         foreach (var source in request.Sources.OrderBy(source => source.SourceId.Value))
         {
@@ -48,6 +50,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                         root,
                         repeatedFamilyPaths,
                         request.Layout,
+                        maximumRows,
+                        tracker,
                         checkpoint,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -60,7 +64,26 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                         options.MaximumAllCombinationRows);
                 }
 
-                flattened.AddRange(fragments.Select(fragment => (source.SourceId, fragment)));
+                var remaining = maximumRows is null
+                    ? int.MaxValue
+                    : Math.Max(0, maximumRows.Value - flattened.Count);
+                if (fragments.Count > remaining)
+                {
+                    tracker.MarkTruncated();
+                }
+
+                flattened.AddRange(fragments.Take(remaining)
+                    .Select(fragment => (source.SourceId, fragment)));
+                if (maximumRows is not null && flattened.Count >= maximumRows.Value)
+                {
+                    tracker.MarkTruncated();
+                    break;
+                }
+            }
+
+            if (maximumRows is not null && flattened.Count >= maximumRows.Value)
+            {
+                break;
             }
         }
 
@@ -71,7 +94,11 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                 OrderCells(item.Fragment.Cells)))
             .ToArray();
 
-        return new HierarchyFlatteningResult(request.SourceSetId, request.Layout, rows);
+        return new HierarchyFlatteningResult(
+            request.SourceSetId,
+            request.Layout,
+            rows,
+            tracker.WasTruncated);
     }
 
     private async ValueTask<HierarchyFlatteningResult> FlattenFamiliesAsync(
@@ -79,11 +106,21 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
         CancellationToken cancellationToken)
     {
         var rows = new List<FlattenedHierarchyRow>();
+        var familyRowCounts = new Dictionary<RowFamilyId, int>();
+        var truncatedFamilies = new HashSet<RowFamilyId>();
         foreach (var source in request.Sources.OrderBy(source => source.SourceId.Value))
         {
             foreach (var family in request.RowFamilies.OrderBy(family => family.Id))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var currentFamilyCount = familyRowCounts.GetValueOrDefault(family.Id);
+                if (request.MaximumRowsPerFamily is { } familyLimit
+                    && currentFamilyCount >= familyLimit)
+                {
+                    truncatedFamilies.Add(family.Id);
+                    continue;
+                }
+
                 var direct = source.Occurrences
                     .Where(occurrence => request.FamilyAssignments[occurrence.Identity] == family.Id)
                     .OrderBy(occurrence => occurrence.Lineage.TraversalOrder)
@@ -91,10 +128,19 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                 var anchorGroups = direct
                     .Select(occurrence => (Occurrence: occurrence, Anchor: FindAnchor(occurrence, family.Id)))
                     .GroupBy(item => item.Anchor.InstanceId)
-                    .OrderBy(group => group.Min(item => item.Occurrence.Lineage.TraversalOrder));
+                    .OrderBy(group => group.Min(item => item.Occurrence.Lineage.TraversalOrder))
+                    .ToArray();
 
-                foreach (var anchorGroup in anchorGroups)
+                for (var anchorIndex = 0; anchorIndex < anchorGroups.Length; anchorIndex++)
                 {
+                    if (request.MaximumRowsPerFamily is { } maximumRows
+                        && currentFamilyCount >= maximumRows)
+                    {
+                        truncatedFamilies.Add(family.Id);
+                        break;
+                    }
+
+                    var anchorGroup = anchorGroups[anchorIndex];
                     var anchor = anchorGroup.First().Anchor;
                     var familyOccurrences = anchorGroup.Select(item => item.Occurrence).ToArray();
                     var ancestorContext = FindAncestorContext(
@@ -109,8 +155,17 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                         new HierarchyFlatteningRequest(
                             request.SourceSetId,
                             request.Layout,
-                            [new HierarchySourceInput(source.SourceId, familyOccurrences)]),
+                            [new HierarchySourceInput(source.SourceId, familyOccurrences)],
+                            [],
+                            new Dictionary<DiscoveryInformationIdentity, RowFamilyId>(),
+                            request.MaximumRowsPerFamily is null
+                                ? null
+                                : request.MaximumRowsPerFamily.Value - currentFamilyCount),
                         cancellationToken).ConfigureAwait(false);
+                    if (legacyResult.IsTruncated)
+                    {
+                        truncatedFamilies.Add(family.Id);
+                    }
                     if (request.Layout == RepeatedDataLayout.AllCombinations
                         && rows.Count > options.MaximumAllCombinationRows - legacyResult.Rows.Count)
                     {
@@ -128,12 +183,19 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                             family.Id,
                             anchor.InstanceId,
                             projected.Ordinal));
+                        currentFamilyCount++;
+                        familyRowCounts[family.Id] = currentFamilyCount;
                     }
                 }
             }
         }
 
-        return new HierarchyFlatteningResult(request.SourceSetId, request.Layout, rows);
+        return new HierarchyFlatteningResult(
+            request.SourceSetId,
+            request.Layout,
+            rows,
+            truncatedFamilies.Count > 0,
+            truncatedFamilies);
     }
 
     private static SourceElementInstance FindAnchor(
@@ -190,6 +252,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
         SourceTreeNode node,
         IReadOnlySet<string> repeatedFamilyPaths,
         RepeatedDataLayout layout,
+        int? maximumRows,
+        ProjectionLimitTracker tracker,
         CancellationCheckpoint checkpoint,
         CancellationToken cancellationToken)
     {
@@ -226,16 +290,24 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                             sibling,
                             repeatedFamilyPaths,
                             layout,
+                            maximumRows,
+                            tracker,
                             checkpoint,
                             cancellationToken)
                         .ConfigureAwait(false);
-                    repeatedBranch.AddRange(
-                        layout == RepeatedDataLayout.NumberRepeatedValuesIntoColumns
-                            ? siblingFragments.Select(fragment =>
-                                PrependRepeatCoordinate(
-                                    fragment,
-                                    checked(siblingIndex + 1)))
-                            : siblingFragments);
+                    var projectedFragments = layout == RepeatedDataLayout.NumberRepeatedValuesIntoColumns
+                        ? siblingFragments.Select(fragment =>
+                            PrependRepeatCoordinate(
+                                fragment,
+                                checked(siblingIndex + 1)))
+                        : siblingFragments;
+                    AddBounded(repeatedBranch, projectedFragments, maximumRows, tracker);
+                    if (maximumRows is { } repeatedLimit
+                        && repeatedBranch.Count >= repeatedLimit)
+                    {
+                        tracker.MarkTruncated();
+                        break;
+                    }
                 }
 
                 if (repeatedBranch.Count > 0)
@@ -259,6 +331,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                         child,
                         repeatedFamilyPaths,
                         layout,
+                        maximumRows,
+                        tracker,
                         checkpoint,
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -303,9 +377,16 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
         if (variableBranches.Count == 1
             && !variableBranches[0].IsDirectRepeatedFamily)
         {
-            return variableBranches[0].Rows
+            var projected = variableBranches[0].Rows
                 .Select(fragment => Merge(fixedCells, fragment.Cells))
+                .Take(maximumRows ?? int.MaxValue)
                 .ToArray();
+            if (projected.Length < variableBranches[0].Rows.Count)
+            {
+                tracker.MarkTruncated();
+            }
+
+            return projected;
         }
 
         var canAssociateBranches = structuralAlternativeBranches.Count == 0
@@ -321,6 +402,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                     fixedCells,
                     branchRows,
                     layout,
+                    maximumRows,
+                    tracker,
                     checkpoint,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -332,6 +415,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                 await AlignByPositionAsync(
                         fixedCells,
                         branchRows,
+                        maximumRows,
+                        tracker,
                         checkpoint,
                         cancellationToken)
                     .ConfigureAwait(false),
@@ -339,6 +424,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                 await CreateStructuralRowsAsync(
                         fixedCells,
                         branchRows,
+                        maximumRows,
+                        tracker,
                         checkpoint,
                         cancellationToken)
                     .ConfigureAwait(false),
@@ -346,6 +433,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                 await CreateAllCombinationsAsync(
                         fixedCells,
                         branchRows,
+                        maximumRows,
+                        tracker,
                         checkpoint,
                         cancellationToken)
                     .ConfigureAwait(false),
@@ -353,6 +442,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                 await NumberIntoColumnsAsync(
                         fixedCells,
                         branchRows,
+                        maximumRows,
+                        tracker,
                         checkpoint,
                         cancellationToken)
                     .ConfigureAwait(false),
@@ -364,6 +455,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
         IReadOnlyList<FlattenedHierarchyCell> fixedCells,
         IReadOnlyList<IReadOnlyList<RowFragment>> branches,
         RepeatedDataLayout layout,
+        int? maximumRows,
+        ProjectionLimitTracker tracker,
         CancellationCheckpoint checkpoint,
         CancellationToken cancellationToken)
     {
@@ -376,14 +469,26 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                 var numbered = await NumberIntoColumnsAsync(
                         fixedCells,
                         [branch],
+                        maximumRows,
+                        tracker,
                         checkpoint,
                         cancellationToken)
                     .ConfigureAwait(false);
-                rows.AddRange(numbered);
+                AddBounded(rows, numbered, maximumRows, tracker);
             }
             else
             {
-                rows.AddRange(branch.Select(fragment => Merge(fixedCells, fragment.Cells)));
+                AddBounded(
+                    rows,
+                    branch.Select(fragment => Merge(fixedCells, fragment.Cells)),
+                    maximumRows,
+                    tracker);
+            }
+
+            if (maximumRows is { } rowLimit && rows.Count >= rowLimit)
+            {
+                tracker.MarkTruncated();
+                break;
             }
         }
 
@@ -393,10 +498,17 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
     private static async ValueTask<IReadOnlyList<RowFragment>> AlignByPositionAsync(
         IReadOnlyList<FlattenedHierarchyCell> fixedCells,
         IReadOnlyList<IReadOnlyList<RowFragment>> branches,
+        int? maximumRows,
+        ProjectionLimitTracker tracker,
         CancellationCheckpoint checkpoint,
         CancellationToken cancellationToken)
     {
-        var rowCount = branches.Max(branch => branch.Count);
+        var projectedRowCount = branches.Max(branch => branch.Count);
+        var rowCount = Math.Min(projectedRowCount, maximumRows ?? int.MaxValue);
+        if (rowCount < projectedRowCount)
+        {
+            tracker.MarkTruncated();
+        }
         var rows = new List<RowFragment>(rowCount);
         for (var index = 0; index < rowCount; index++)
         {
@@ -419,6 +531,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
     private static async ValueTask<IReadOnlyList<RowFragment>> CreateStructuralRowsAsync(
         IReadOnlyList<FlattenedHierarchyCell> fixedCells,
         IReadOnlyList<IReadOnlyList<RowFragment>> branches,
+        int? maximumRows,
+        ProjectionLimitTracker tracker,
         CancellationCheckpoint checkpoint,
         CancellationToken cancellationToken)
     {
@@ -429,6 +543,11 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
             {
                 await checkpoint.CheckAsync(cancellationToken).ConfigureAwait(false);
                 rows.Add(Merge(fixedCells, fragment.Cells));
+                if (maximumRows is { } rowLimit && rows.Count >= rowLimit)
+                {
+                    tracker.MarkTruncated();
+                    return rows;
+                }
             }
         }
 
@@ -438,6 +557,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
     private async ValueTask<IReadOnlyList<RowFragment>> CreateAllCombinationsAsync(
         IReadOnlyList<FlattenedHierarchyCell> fixedCells,
         IReadOnlyList<IReadOnlyList<RowFragment>> branches,
+        int? maximumRows,
+        ProjectionLimitTracker tracker,
         CancellationCheckpoint checkpoint,
         CancellationToken cancellationToken)
     {
@@ -469,13 +590,30 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
         var combinations = new List<RowFragment> { new(fixedCells) };
         foreach (var branch in branches)
         {
-            var expanded = new List<RowFragment>(checked(combinations.Count * branch.Count));
+            var targetCount = checked(combinations.Count * branch.Count);
+            var expanded = new List<RowFragment>(Math.Min(
+                targetCount,
+                maximumRows ?? targetCount));
             foreach (var combination in combinations)
             {
                 foreach (var fragment in branch)
                 {
                     await checkpoint.CheckAsync(cancellationToken).ConfigureAwait(false);
                     expanded.Add(Merge(combination.Cells, fragment.Cells));
+                    if (maximumRows is { } rowLimit && expanded.Count >= rowLimit)
+                    {
+                        if (targetCount > rowLimit)
+                        {
+                            tracker.MarkTruncated();
+                        }
+
+                        break;
+                    }
+                }
+
+                if (maximumRows is { } expandedLimit && expanded.Count >= expandedLimit)
+                {
+                    break;
                 }
             }
 
@@ -488,6 +626,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
     private static async ValueTask<IReadOnlyList<RowFragment>> NumberIntoColumnsAsync(
         IReadOnlyList<FlattenedHierarchyCell> fixedCells,
         IReadOnlyList<IReadOnlyList<RowFragment>> branches,
+        int? maximumRows,
+        ProjectionLimitTracker tracker,
         CancellationCheckpoint checkpoint,
         CancellationToken cancellationToken)
     {
@@ -502,6 +642,24 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
         }
 
         return [new RowFragment(cells)];
+    }
+
+    private static void AddBounded(
+        List<RowFragment> target,
+        IEnumerable<RowFragment> values,
+        int? maximumRows,
+        ProjectionLimitTracker tracker)
+    {
+        foreach (var value in values)
+        {
+            if (maximumRows is { } limit && target.Count >= limit)
+            {
+                tracker.MarkTruncated();
+                return;
+            }
+
+            target.Add(value);
+        }
     }
 
     private static bool IsRepeatedFamily(
@@ -708,6 +866,13 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                 .Select(cell => cell.DetailedIdentity)
                 .Distinct()
                 .Count() == 1;
+    }
+
+    private sealed class ProjectionLimitTracker
+    {
+        public bool WasTruncated { get; private set; }
+
+        public void MarkTruncated() => WasTruncated = true;
     }
 
     private sealed class SourceTreeNode(

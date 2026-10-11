@@ -51,6 +51,9 @@ public static class IpcContractValidator
             case GetDiscoveryOccurrenceCommand command:
                 ValidateGetDiscoveryOccurrenceCommand(command);
                 break;
+            case GetDiscoveryOutputPreviewCommand command:
+                ValidateGetDiscoveryOutputPreviewCommand(command);
+                break;
             case GetDiscoveryContributorsCommand command:
                 ValidateGetDiscoveryContributorsCommand(command);
                 break;
@@ -94,6 +97,9 @@ public static class IpcContractValidator
                 break;
             case GetDiscoveryOccurrenceResponse response:
                 ValidateGetDiscoveryOccurrenceResponse(response);
+                break;
+            case GetDiscoveryOutputPreviewResponse response:
+                ValidateGetDiscoveryOutputPreviewResponse(response);
                 break;
             case GetDiscoveryContributorsResponse response:
                 ValidateGetDiscoveryContributorsResponse(response);
@@ -659,6 +665,28 @@ public static class IpcContractValidator
         }
     }
 
+    private static void ValidateGetDiscoveryOutputPreviewCommand(
+        GetDiscoveryOutputPreviewCommand command)
+    {
+        if (command.Request is null)
+        {
+            throw InvalidContract("A Discovery output preview request is required.");
+        }
+
+        ValidateGetDiscoveryOccurrenceCommand(new GetDiscoveryOccurrenceCommand(
+            command.MessageId,
+            command.TimestampUtc,
+            command.Request.Occurrence));
+        if (command.Request.MaximumRowsPerGroup is < 1
+            or > DiscoveryOutputPreviewLimits.MaximumRowsPerGroup
+            || command.Request.Projection.RowFamilies.Count is < 1
+                or > DiscoveryOutputPreviewLimits.MaximumGroups
+            || command.Request.Projection.Fields.Count == 0)
+        {
+            throw InvalidContract("A Discovery output preview request exceeds its bounded limits.");
+        }
+    }
+
     private static void ValidateDiscoveryFamilyCatalog(DiscoveryFamilyCatalog catalog)
     {
         var ids = catalog.Families.Select(family => family.Id).ToHashSet();
@@ -714,6 +742,55 @@ public static class IpcContractValidator
         }
 
         ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateGetDiscoveryOutputPreviewResponse(
+        GetDiscoveryOutputPreviewResponse response)
+    {
+        ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+        ValidateOperationId(response.DiscoveryOperationId, "Discovery output preview responses");
+        if (!Enum.IsDefined(response.Acceptance))
+        {
+            throw InvalidContract(
+                "The Discovery output preview response has an unsupported acceptance value.");
+        }
+
+        if (response.Acceptance == CommandAcceptance.Rejected)
+        {
+            if (response.Preview is not null || response.Failure is null)
+            {
+                throw InvalidContract(
+                    "A rejected Discovery output preview requires controlled failure information.");
+            }
+
+            ValidateFailure(response.Failure);
+            return;
+        }
+
+        var preview = response.Preview;
+        if (preview is null
+            || response.Failure is not null
+            || preview.DiscoveryOperationId != response.DiscoveryOperationId
+            || preview.OccurrenceOrdinal < 1
+            || !SourceId.IsValid(preview.SourceId.Value)
+            || string.IsNullOrWhiteSpace(preview.SourceName)
+            || preview.Groups.Count > DiscoveryOutputPreviewLimits.MaximumGroups)
+        {
+            throw InvalidContract("An accepted Discovery output preview is invalid.");
+        }
+
+        foreach (var group in preview.Groups)
+        {
+            if (group.Columns.Count > DiscoveryOutputPreviewLimits.MaximumColumnsPerGroup
+                || group.Rows.Count > DiscoveryOutputPreviewLimits.MaximumRowsPerGroup
+                || group.Columns.Any(column => column.Identity.RowFamilyId != group.RowFamilyId)
+                || group.Rows.Any(row => row.RecordIdentity.RowFamilyId != group.RowFamilyId
+                    || row.Cells.Any(cell => cell.ColumnIdentity.RowFamilyId != group.RowFamilyId
+                        || cell.Values.Count > DiscoveryOutputPreviewLimits.MaximumValuesPerCell)))
+            {
+                throw InvalidContract("A Discovery output preview group exceeds its bounded contract.");
+            }
+        }
     }
 
     private static void ValidateGetDiscoveryContributorsResponse(
