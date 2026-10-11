@@ -369,6 +369,14 @@ public sealed class InformationSelectionProfileCoordinatorTests
         var confirmation = new StubProfileDeleteConfirmation(accepted: false);
         using var viewModel = CreateProfileViewModel(environment, coordinator, confirmation);
         viewModel.SelectedInformationSelectionProfile = viewModel.InformationSelectionProfiles.Single();
+        var selectedProfile = viewModel.SelectedInformationSelectionProfile;
+
+        viewModel.ShowOutputModeCommand.Execute(null);
+        Assert.AreEqual(DiscoveryMode.Output, viewModel.Mode);
+        Assert.AreSame(selectedProfile, viewModel.SelectedInformationSelectionProfile);
+        viewModel.ShowInputModeCommand.Execute(null);
+        Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
+        Assert.AreSame(selectedProfile, viewModel.SelectedInformationSelectionProfile);
 
         await viewModel.DeleteProfileCommand.ExecuteAsync(null);
 

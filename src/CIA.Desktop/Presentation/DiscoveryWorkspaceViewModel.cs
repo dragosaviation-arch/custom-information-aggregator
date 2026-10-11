@@ -19,6 +19,12 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace CIA.Desktop.Presentation;
 
+public enum DiscoveryMode
+{
+    Input,
+    Output
+}
+
 public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 {
     internal const string SourceSetColumnKey = "discovery.sourceSet";
@@ -46,6 +52,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _readOnlySourceSetLayouts;
     private readonly RelayCommand _previousPageCommand;
     private readonly RelayCommand _nextPageCommand;
+    private readonly RelayCommand _showInputModeCommand;
+    private readonly RelayCommand _showOutputModeCommand;
     private readonly AsyncRelayCommand<DiscoveredInformationItemViewModel?> _selectInformationCommand;
     private readonly RelayCommand<DiscoveredInformationItemViewModel> _selectDetailedInformationCommand;
     private readonly AsyncRelayCommand _previousOccurrenceCommand;
@@ -85,6 +93,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private IReadOnlyList<DiscoveredInformationItemViewModel> _allInformation = [];
     private IReadOnlyList<DiscoveredInformationItemViewModel> _filteredInformation = [];
+    private DiscoveryMode _mode = DiscoveryMode.Input;
     private string _searchText = string.Empty;
     private string _sortColumn = "Tag";
     private bool _sortAscending = true;
@@ -203,6 +212,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _nextPageCommand = new RelayCommand(
             () => CurrentPage++,
             () => CurrentPage < PageCount);
+        _showInputModeCommand = new RelayCommand(
+            () => Mode = DiscoveryMode.Input);
+        _showOutputModeCommand = new RelayCommand(
+            () => Mode = DiscoveryMode.Output);
         _selectInformationCommand = new AsyncRelayCommand<DiscoveredInformationItemViewModel?>(
             SelectInformationAsync,
             _ => true,
@@ -339,9 +352,30 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     public IReadOnlyList<int> PageSizes { get; } = [25, 50, 100, 250];
 
+    public DiscoveryMode Mode
+    {
+        get => _mode;
+        private set
+        {
+            if (SetProperty(ref _mode, value))
+            {
+                OnPropertyChanged(nameof(IsInputMode));
+                OnPropertyChanged(nameof(IsOutputMode));
+            }
+        }
+    }
+
+    public bool IsInputMode => Mode == DiscoveryMode.Input;
+
+    public bool IsOutputMode => Mode == DiscoveryMode.Output;
+
     public IAsyncRelayCommand RunDiscoveryCommand { get; }
 
     public IAsyncRelayCommand BuildDatabaseCommand { get; }
+
+    public IRelayCommand ShowInputModeCommand => _showInputModeCommand;
+
+    public IRelayCommand ShowOutputModeCommand => _showOutputModeCommand;
 
     public string DatabaseBuildButtonText =>
         _databaseBuildCoordinator?.CurrentGeneration is null

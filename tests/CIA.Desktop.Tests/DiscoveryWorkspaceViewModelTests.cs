@@ -737,6 +737,14 @@ public sealed class DiscoveryWorkspaceViewModelTests
 
         viewModel.ToggleSelectionCommand.Execute(parent.Children[0]);
         Assert.IsNull(parent.SelectionState);
+        viewModel.ShowOutputModeCommand.Execute(null);
+        Assert.AreEqual(DiscoveryMode.Output, viewModel.Mode);
+        Assert.IsNull(parent.SelectionState);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
+        viewModel.ShowInputModeCommand.Execute(null);
+        Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
+        Assert.IsNull(parent.SelectionState);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
         var reconstructed = viewModel.Information.Single();
         Assert.IsNull(reconstructed.SelectionState);

@@ -27,7 +27,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(20);
 
     [TestMethod]
-    public async Task SelectionCheckboxAlsoSelectsPreviewAndLoadsFirstOccurrence()
+    public async Task SelectionCheckboxAndInputOutputShellPreservePreviewState()
     {
         await WpfTestApplication.RunAsync(VerifyInteractionAsync).WaitAsync(TestTimeout);
     }
@@ -234,11 +234,19 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
         Assert.IsTrue(load.Accepted);
 
         var client = new RecordingDiscoveryClient(source.SourceId);
+        var configuration = new ActiveDiscoveryConfiguration();
+        var databaseBuild = new DatabaseBuildCoordinator(
+            configuration,
+            sourceSet,
+            workflow,
+            new UnexpectedDatabaseClient(),
+            NullLogger<DatabaseBuildCoordinator>.Instance);
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
-            new ActiveDiscoveryConfiguration(),
+            configuration,
             sourceSet,
-            workflow);
+            workflow,
+            databaseBuild);
         var view = new DiscoveryWorkspaceView
         {
             DataContext = viewModel
@@ -323,6 +331,90 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.AreEqual("Mapped beta", beta.DatabaseTag);
             Assert.IsTrue(beta.HasDatabaseTagOverride);
             Assert.AreEqual("Mapped beta", viewModel.SelectedDatabaseTag);
+
+            var selectedLayout = viewModel.SourceSetLayouts.Single();
+            selectedLayout.SelectedLayout = RepeatedDataLayout.StructuralRows;
+            viewModel.ShowBlacklisted = false;
+            viewModel.ShowOnlySelected = true;
+            viewModel.ShowOnlyDatabaseTagOverrides = true;
+            rows.SelectedItem = beta;
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            await AwaitOccurrencePreviewAsync(viewModel);
+            Assert.AreSame(beta, viewModel.SelectedInformation);
+            var runCalls = client.RunCallCount;
+            var occurrenceCalls = client.OccurrenceCallCount;
+            var previewText = viewModel.OccurrencePreviewText;
+
+            var inputPreview = (Grid)view.FindName("InputPreviewContent");
+            var outputPreview = (Border)view.FindName("OutputPreviewContent");
+            var inputSettings = (Grid)view.FindName("InputSettingsContent");
+            var outputSettings = (Grid)view.FindName("OutputSettingsContent");
+            var navigator = (WrapPanel)view.FindName("OccurrenceNavigator");
+            var ordinalInput = (TextBox)view.FindName("OccurrenceOrdinalInput");
+            var inputMode = (Button)view.FindName("InputModeButton");
+            var outputMode = (Button)view.FindName("OutputModeButton");
+
+            Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
+            Assert.IsTrue(inputPreview.IsVisible);
+            Assert.IsTrue(inputSettings.IsVisible);
+            Assert.IsFalse(outputPreview.IsVisible);
+            Assert.IsFalse(outputSettings.IsVisible);
+            Assert.IsTrue(inputMode.IsTabStop);
+            Assert.IsTrue(outputMode.IsTabStop);
+            Assert.IsNotNull(outputMode.Command);
+
+            outputMode.Command!.Execute(outputMode.CommandParameter);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+
+            Assert.AreEqual(DiscoveryMode.Output, viewModel.Mode);
+            Assert.IsFalse(inputPreview.IsVisible);
+            Assert.IsFalse(inputSettings.IsVisible);
+            Assert.IsTrue(outputPreview.IsVisible);
+            Assert.IsTrue(outputSettings.IsVisible);
+            Assert.IsFalse(databaseTagField.IsVisible,
+                "Collapsed Input controls must not remain in the active focus tree.");
+            Assert.IsFalse(databaseTagField.Focus());
+            Assert.IsNull(FindVisualDescendant<Control>(
+                outputPreview,
+                control => control.Focusable));
+            Assert.IsNull(FindVisualDescendant<Control>(
+                outputSettings,
+                control => control.Focusable));
+            Assert.IsTrue(navigator.IsVisible);
+            Assert.IsTrue(ordinalInput.IsVisible);
+            Assert.AreSame(beta, viewModel.SelectedInformation);
+            Assert.IsTrue(beta.IsSelected);
+            Assert.AreEqual("Mapped beta", beta.DatabaseTag);
+            Assert.AreEqual(RepeatedDataLayout.StructuralRows, selectedLayout.SelectedLayout);
+            Assert.IsFalse(viewModel.ShowBlacklisted);
+            Assert.IsTrue(viewModel.ShowOnlySelected);
+            Assert.IsTrue(viewModel.ShowOnlyDatabaseTagOverrides);
+            Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+            Assert.AreEqual(3, viewModel.OccurrenceTotal);
+            Assert.AreEqual(previewText, viewModel.OccurrencePreviewText);
+            Assert.AreEqual(runCalls, client.RunCallCount);
+            Assert.AreEqual(occurrenceCalls, client.OccurrenceCallCount);
+
+            Assert.IsNotNull(inputMode.Command);
+            inputMode.Command!.Execute(inputMode.CommandParameter);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+
+            Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
+            Assert.IsTrue(inputPreview.IsVisible);
+            Assert.IsTrue(inputSettings.IsVisible);
+            Assert.IsFalse(outputPreview.IsVisible);
+            Assert.IsFalse(outputSettings.IsVisible);
+            Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+            Assert.AreEqual(3, viewModel.OccurrenceTotal);
+            Assert.AreEqual(previewText, viewModel.OccurrencePreviewText);
+
+            window.Width = 1000;
+            await Dispatcher.Yield(DispatcherPriority.Render);
+            view.UpdateLayout();
+            Assert.AreEqual(0, Grid.GetRow((Border)view.FindName("PreviewPanel")));
+            Assert.AreEqual(0, Grid.GetRow((Border)view.FindName("SettingsPanel")));
+            Assert.AreEqual(0, Grid.GetColumn((Border)view.FindName("PreviewPanel")));
+            Assert.AreEqual(2, Grid.GetColumn((Border)view.FindName("SettingsPanel")));
         }
         finally
         {
@@ -355,6 +447,10 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
 
     private sealed class RecordingDiscoveryClient(SourceId sourceId) : IDiscoveryClient
     {
+        public int RunCallCount { get; private set; }
+
+        public int OccurrenceCallCount { get; private set; }
+
         public DiscoveryOccurrenceLookup? LastOccurrenceLookup { get; private set; }
 
         public Task<DiscoveryClientResult> RunAsync(
@@ -362,6 +458,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             IReadOnlyList<LoadedSourceContract> sources,
             CancellationToken cancellationToken = default)
         {
+            RunCallCount++;
             var source = sources.Single();
             var familyId = new RowFamilyId(
                 source.SourceSetId,
@@ -401,6 +498,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             DiscoveryOccurrenceLookup lookup,
             CancellationToken cancellationToken = default)
         {
+            OccurrenceCallCount++;
             LastOccurrenceLookup = lookup;
             return Task.FromResult(new DiscoveryOccurrenceClientResult(
                 true,

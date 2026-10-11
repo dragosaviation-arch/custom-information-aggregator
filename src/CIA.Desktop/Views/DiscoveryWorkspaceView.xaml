@@ -539,14 +539,95 @@
                     </Grid.RowDefinitions>
                     <Border Style="{StaticResource CiaPanelHeaderStyle}">
                         <Grid>
-                            <TextBlock Style="{StaticResource CiaPanelTitleTextStyle}"
-                                       Text="TAG PREVIEW" />
-                            <TextBlock HorizontalAlignment="Right"
-                                       Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Readable occurrence content" />
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Grid VerticalAlignment="Center">
+                                <TextBlock Text="INPUT PREVIEW">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock"
+                                               BasedOn="{StaticResource CiaPanelTitleTextStyle}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsInputMode}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="OUTPUT PREVIEW">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock"
+                                               BasedOn="{StaticResource CiaPanelTitleTextStyle}">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsOutputMode}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button x:Name="InputModeButton"
+                                        MinWidth="58"
+                                        Margin="0,0,4,0"
+                                        AutomationProperties.Name="Show Discovery input context"
+                                        Command="{Binding ShowInputModeCommand}"
+                                        Content="Input">
+                                    <Button.Style>
+                                        <Style TargetType="Button"
+                                               BasedOn="{StaticResource CiaGhostButtonStyle}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsInputMode}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource CiaAccentSoftBrush}" />
+                                                    <Setter Property="BorderBrush" Value="{StaticResource CiaAccentBrush}" />
+                                                    <Setter Property="Foreground" Value="{StaticResource CiaAccentBrush}" />
+                                                    <Setter Property="FontWeight" Value="Bold" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <Button x:Name="OutputModeButton"
+                                        MinWidth="62"
+                                        AutomationProperties.Name="Show Discovery output context"
+                                        Command="{Binding ShowOutputModeCommand}"
+                                        Content="Output">
+                                    <Button.Style>
+                                        <Style TargetType="Button"
+                                               BasedOn="{StaticResource CiaGhostButtonStyle}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsOutputMode}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource CiaAccentSoftBrush}" />
+                                                    <Setter Property="BorderBrush" Value="{StaticResource CiaAccentBrush}" />
+                                                    <Setter Property="Foreground" Value="{StaticResource CiaAccentBrush}" />
+                                                    <Setter Property="FontWeight" Value="Bold" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                            </StackPanel>
                         </Grid>
                     </Border>
-                    <Grid Grid.Row="1" Margin="10,8" MinHeight="0">
+                    <Grid x:Name="InputPreviewContent"
+                          Grid.Row="1"
+                          Margin="10,8"
+                          MinHeight="0">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsInputMode}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="7" />
@@ -640,7 +721,39 @@
                             </TextBlock>
                         </Grid>
                     </Grid>
-                    <WrapPanel Grid.Row="2"
+                    <Border x:Name="OutputPreviewContent"
+                            Grid.Row="1"
+                            Margin="10,8"
+                            Padding="18"
+                            Background="{StaticResource CiaPanelAlternateBrush}"
+                            BorderBrush="{StaticResource CiaBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsOutputMode}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <TextBlock HorizontalAlignment="Center"
+                                       FontWeight="SemiBold"
+                                       Text="No output preview is available." />
+                            <TextBlock MaxWidth="300"
+                                       Margin="0,5,0,0"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="Output consequences will appear here when output configuration is available." />
+                        </StackPanel>
+                    </Border>
+                    <WrapPanel x:Name="OccurrenceNavigator"
+                               Grid.Row="2"
                                Margin="10,7"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center">
@@ -652,9 +765,11 @@
                                    VerticalAlignment="Center"
                                    Style="{StaticResource CiaSecondaryTextStyle}"
                                    Text="Occurrence" />
-                        <TextBox Width="56"
+                        <TextBox x:Name="OccurrenceOrdinalInput"
+                                 Width="56"
                                  Height="29"
                                  Padding="4,0"
+                                 AutomationProperties.Name="Discovery occurrence ordinal"
                                  HorizontalContentAlignment="Center"
                                  VerticalContentAlignment="Center"
                                  KeyDown="OnOccurrenceOrdinalKeyDown"
@@ -687,11 +802,23 @@
                     Grid.Column="0"
                     Style="{StaticResource CiaPanelStyle}">
                 <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
-                    </Grid.RowDefinitions>
-                    <TabControl Background="Transparent" BorderThickness="0">
+                    <Grid x:Name="InputSettingsContent"
+                          AutomationProperties.Name="Input Discovery settings">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsInputMode}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TabControl Background="Transparent" BorderThickness="0">
                         <TabItem Header="General">
                             <ScrollViewer Padding="10,8" VerticalScrollBarVisibility="Auto">
                                 <Grid>
@@ -844,32 +971,60 @@
                                            Text="{Binding BlacklistProfileStatusText}" />
                             </StackPanel>
                         </TabItem>
-                    </TabControl>
-                    <Border Grid.Row="1"
-                            Padding="9,7"
-                            Background="#FFFCFCFE"
-                            BorderBrush="{StaticResource CiaBorderBrush}"
-                            BorderThickness="0,1,0,0">
-                        <WrapPanel VerticalAlignment="Center">
-                            <Border Margin="0,0,6,0" Style="{StaticResource CiaNeutralStateBadgeStyle}">
-                                <TextBlock VerticalAlignment="Center"
+                        </TabControl>
+                        <Border Grid.Row="1"
+                                Padding="9,7"
+                                Background="#FFFCFCFE"
+                                BorderBrush="{StaticResource CiaBorderBrush}"
+                                BorderThickness="0,1,0,0">
+                            <WrapPanel VerticalAlignment="Center">
+                                <Border Margin="0,0,6,0" Style="{StaticResource CiaNeutralStateBadgeStyle}">
+                                    <TextBlock VerticalAlignment="Center"
+                                               Style="{StaticResource CiaSecondaryTextStyle}"
+                                               Text="{Binding DatabaseStateText}" />
+                                </Border>
+                                <TextBlock Margin="0,0,6,0"
+                                           VerticalAlignment="Center"
                                            Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="{Binding DatabaseStateText}" />
-                            </Border>
-                            <TextBlock Margin="0,0,6,0"
-                                       VerticalAlignment="Center"
+                                           Text="Build from the current selected Discovery mapping." />
+                                <Button x:Name="BuildDatabaseButton"
+                                        Command="{Binding BuildDatabaseCommand}"
+                                        MinHeight="32"
+                                        Padding="14,5"
+                                        FontWeight="SemiBold"
+                                        Style="{StaticResource CiaPrimaryButtonStyle}"
+                                        Content="{Binding DatabaseBuildButtonText}"
+                                        ToolTip="{Binding DatabaseBuildAvailabilityReason}" />
+                            </WrapPanel>
+                        </Border>
+                    </Grid>
+                    <Grid x:Name="OutputSettingsContent"
+                          AutomationProperties.Name="Output Discovery settings">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsOutputMode}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
+                        <StackPanel HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <TextBlock HorizontalAlignment="Center"
+                                       FontSize="10"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource CiaAccentBrush}"
+                                       Text="OUTPUT SETTINGS" />
+                            <TextBlock MaxWidth="320"
+                                       Margin="0,7,0,0"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"
                                        Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Build from the current selected Discovery mapping." />
-                            <Button x:Name="BuildDatabaseButton"
-                                    Command="{Binding BuildDatabaseCommand}"
-                                    MinHeight="32"
-                                    Padding="14,5"
-                                    FontWeight="SemiBold"
-                                    Style="{StaticResource CiaPrimaryButtonStyle}"
-                                    Content="{Binding DatabaseBuildButtonText}"
-                                    ToolTip="{Binding DatabaseBuildAvailabilityReason}" />
-                        </WrapPanel>
-                    </Border>
+                                       Text="No output settings are available yet. Input configuration remains unchanged." />
+                        </StackPanel>
+                    </Grid>
                 </Grid>
             </Border>
         </Grid>
