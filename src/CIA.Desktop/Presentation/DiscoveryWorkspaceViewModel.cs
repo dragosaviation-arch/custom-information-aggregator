@@ -3377,14 +3377,45 @@ public sealed class SourceSetLayoutItemViewModel : ObservableObject
 
     public IReadOnlyList<RepeatedDataLayoutOption> Options { get; }
 
+    public bool IsRecommended
+    {
+        get => SelectedLayout == DiscoveryOutputLayoutDefaults.Recommended;
+        set
+        {
+            if (value)
+            {
+                SelectedLayout = DiscoveryOutputLayoutDefaults.Recommended;
+                if (!IsRecommended)
+                {
+                    OnPropertyChanged(nameof(IsRecommended));
+                }
+            }
+        }
+    }
+
+    public string InterpretationModeText => IsRecommended
+        ? "Preserve relationships — Recommended"
+        : $"Advanced — {Options.Single(option => option.Mode == SelectedLayout).DisplayName}";
+
     public RepeatedDataLayout SelectedLayout
     {
         get => _selectedLayout;
         set
         {
-            if (_selectedLayout != value && _changeLayout(SourceSetId, value))
+            if (_selectedLayout == value)
+            {
+                return;
+            }
+
+            if (_changeLayout(SourceSetId, value))
             {
                 SetProperty(ref _selectedLayout, value);
+                OnPropertyChanged(nameof(IsRecommended));
+                OnPropertyChanged(nameof(InterpretationModeText));
+            }
+            else
+            {
+                OnPropertyChanged(nameof(SelectedLayout));
             }
         }
     }

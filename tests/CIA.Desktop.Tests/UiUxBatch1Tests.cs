@@ -104,14 +104,15 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(loadCode, "DetailsRow.Height = new GridLength(38");
         StringAssert.Contains(loadCode, "SettingsRow.Height = new GridLength(62");
 
-        var layoutTab = discoveryDocument.Descendants(presentationNamespace + "TabItem")
-            .Single(tab => string.Equals(tab.Attribute("Header")?.Value, "Layout", StringComparison.Ordinal));
+        Assert.IsFalse(discoveryDocument.Descendants(presentationNamespace + "TabItem")
+            .Any(tab => string.Equals(tab.Attribute("Header")?.Value, "Layout", StringComparison.Ordinal)));
         var generalTab = discoveryDocument.Descendants(presentationNamespace + "TabItem")
             .Single(tab => string.Equals(tab.Attribute("Header")?.Value, "General", StringComparison.Ordinal));
-        Assert.IsTrue(layoutTab.Descendants().Any(element =>
-            string.Equals(element.Attribute("Text")?.Value, "REPEATED DATA LAYOUT", StringComparison.Ordinal)));
         Assert.IsFalse(generalTab.Descendants().Any(element =>
             string.Equals(element.Attribute("Text")?.Value, "REPEATED DATA LAYOUT", StringComparison.Ordinal)));
+        Assert.IsNotNull(FindNamedElement(discovery, "RecommendedOutputInterpretations"));
+        Assert.IsNotNull(FindNamedElement(discovery, "OutputAdvancedOptionsExpander"));
+        Assert.IsNotNull(FindNamedElement(discovery, "AdvancedOutputLayouts"));
         StringAssert.Contains(discovery, "Command=\"{Binding DataContext.ToggleBlacklistCommand");
         StringAssert.Contains(discovery, "Content=\"{Binding BlacklistActionText}\"");
         StringAssert.Contains(discovery, "x:Name=\"PreviewRow\" Height=\"2*\"");

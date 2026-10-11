@@ -250,7 +250,7 @@ public sealed class WorkingStateCoordinator(
                     sourceSet.SourceSetId,
                     layouts.GetValueOrDefault(
                         sourceSet.SourceSetId,
-                        CIA.Contracts.Discovery.RepeatedDataLayout.AlignRepeatedGroupsByPosition)))
+                        CIA.Contracts.Discovery.DiscoveryOutputLayoutDefaults.Recommended)))
                 .ToArray());
         var databaseGeneration = databaseBuildCoordinator.CurrentGeneration;
         if (databaseGeneration is not null)

@@ -428,7 +428,7 @@ public sealed class ActiveDiscoveryConfiguration
             sourceSetId => sourceSetId,
             sourceSetId => _repeatedDataLayouts.GetValueOrDefault(
                 sourceSetId,
-                RepeatedDataLayout.AlignRepeatedGroupsByPosition));
+                DiscoveryOutputLayoutDefaults.Recommended));
     }
 
     private DiscoveryConfigurationSnapshot CreateSnapshot()

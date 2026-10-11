@@ -333,7 +333,6 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.AreEqual("Mapped beta", viewModel.SelectedDatabaseTag);
 
             var selectedLayout = viewModel.SourceSetLayouts.Single();
-            selectedLayout.SelectedLayout = RepeatedDataLayout.StructuralRows;
             viewModel.ShowBlacklisted = false;
             viewModel.ShowOnlySelected = true;
             viewModel.ShowOnlyDatabaseTagOverrides = true;
@@ -354,6 +353,11 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             var inputMode = (Button)view.FindName("InputModeButton");
             var outputMode = (Button)view.FindName("OutputModeButton");
             var outputGroupSelector = (ComboBox)view.FindName("OutputPreviewGroupSelector");
+            var inputSettingsTabs = (TabControl)view.FindName("InputSettingsTabs");
+            var recommendedInterpretations =
+                (ItemsControl)view.FindName("RecommendedOutputInterpretations");
+            var advancedOptions = (Expander)view.FindName("OutputAdvancedOptionsExpander");
+            var decomposer = (Button)view.FindName("DecomposerButton");
 
             Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
             Assert.IsTrue(inputPreview.IsVisible);
@@ -363,6 +367,8 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsTrue(inputMode.IsTabStop);
             Assert.IsTrue(outputMode.IsTabStop);
             Assert.IsNotNull(outputMode.Command);
+            Assert.IsFalse(inputSettingsTabs.Items.Cast<TabItem>().Any(item =>
+                string.Equals(item.Header?.ToString(), "Layout", StringComparison.Ordinal)));
 
             outputMode.Command!.Execute(outputMode.CommandParameter);
             await Dispatcher.Yield(DispatcherPriority.DataBind);
@@ -380,15 +386,53 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.AreEqual(
                 outputGroupSelector,
                 FindVisualDescendant<ComboBox>(outputPreview, control => control.Focusable));
-            Assert.IsNull(FindVisualDescendant<Control>(
+            Assert.AreEqual(Visibility.Visible, advancedOptions.Visibility);
+            Assert.IsFalse(advancedOptions.IsExpanded);
+            Assert.HasCount(1, recommendedInterpretations.Items);
+            Assert.IsTrue(selectedLayout.IsRecommended);
+            Assert.AreEqual(DiscoveryOutputLayoutDefaults.Recommended, selectedLayout.SelectedLayout);
+            var hiddenAdvancedLayout = FindVisualDescendant<ComboBox>(
                 outputSettings,
-                control => control.Focusable));
+                control => string.Equals(
+                    AutomationProperties.GetName(control),
+                    "Advanced repeated data layout",
+                    StringComparison.Ordinal));
+            Assert.IsNull(hiddenAdvancedLayout,
+                "Collapsed advanced controls must not enter the visual focus tree.");
+            Assert.IsNull(FindVisualDescendant<ComboBox>(
+                outputSettings,
+                control => control.IsVisible));
+            Assert.IsFalse(decomposer.IsVisible);
+
+            advancedOptions.IsExpanded = true;
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            view.UpdateLayout();
+            var advancedLayout = FindVisualDescendant<ComboBox>(
+                outputSettings,
+                control => string.Equals(
+                    AutomationProperties.GetName(control),
+                    "Advanced repeated data layout",
+                    StringComparison.Ordinal));
+            Assert.IsNotNull(advancedLayout);
+            Assert.AreEqual(Visibility.Visible, advancedLayout.Visibility);
+            Assert.IsTrue(advancedLayout.Focusable);
+            Assert.HasCount(4, advancedLayout.Items);
+            Assert.AreEqual(DiscoveryOutputLayoutDefaults.Recommended, advancedLayout.SelectedValue);
+            Assert.AreEqual(Visibility.Visible, decomposer.Visibility);
+            Assert.IsFalse(decomposer.IsEnabled);
+
+            advancedLayout.SelectedValue = RepeatedDataLayout.AllCombinations;
+            advancedLayout.GetBindingExpression(ComboBox.SelectedValueProperty)?.UpdateSource();
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+
+            Assert.AreEqual(RepeatedDataLayout.AllCombinations, selectedLayout.SelectedLayout);
+            Assert.IsFalse(selectedLayout.IsRecommended);
             Assert.IsTrue(navigator.IsVisible);
             Assert.IsTrue(ordinalInput.IsVisible);
             Assert.AreSame(beta, viewModel.SelectedInformation);
             Assert.IsTrue(beta.IsSelected);
             Assert.AreEqual("Mapped beta", beta.DatabaseTag);
-            Assert.AreEqual(RepeatedDataLayout.StructuralRows, selectedLayout.SelectedLayout);
+            Assert.AreEqual(RepeatedDataLayout.AllCombinations, selectedLayout.SelectedLayout);
             Assert.IsFalse(viewModel.ShowBlacklisted);
             Assert.IsTrue(viewModel.ShowOnlySelected);
             Assert.IsTrue(viewModel.ShowOnlyDatabaseTagOverrides);
@@ -407,6 +451,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsTrue(inputSettings.IsVisible);
             Assert.IsFalse(outputPreview.IsVisible);
             Assert.IsFalse(outputSettings.IsVisible);
+            Assert.AreEqual(RepeatedDataLayout.AllCombinations, selectedLayout.SelectedLayout);
             Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
             Assert.AreEqual(3, viewModel.OccurrenceTotal);
             Assert.AreEqual(previewText, viewModel.OccurrencePreviewText);

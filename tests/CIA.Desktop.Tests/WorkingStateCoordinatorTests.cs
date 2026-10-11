@@ -190,7 +190,7 @@ public sealed class WorkingStateCoordinatorTests
             case "layout":
                 Assert.IsTrue(prepared.Context.Configuration.SetRepeatedDataLayout(
                     prepared.Identity.SourceSetId,
-                    RepeatedDataLayout.StructuralRows));
+                    RepeatedDataLayout.AllCombinations));
                 break;
             default:
                 Assert.Fail($"Unsupported test change {changeKind}.");

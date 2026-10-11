@@ -19,6 +19,11 @@ public enum RepeatedDataLayout
     NumberRepeatedValuesIntoColumns = 3
 }
 
+public static class DiscoveryOutputLayoutDefaults
+{
+    public const RepeatedDataLayout Recommended = RepeatedDataLayout.StructuralRows;
+}
+
 public sealed record DiscoveryConfigurationItem
 {
     public DiscoveryConfigurationItem(
@@ -93,7 +98,7 @@ public sealed record DiscoveryConfigurationSnapshot
                 .Distinct()
                 .Select(sourceSetId => new SourceSetDiscoveryConfiguration(
                     sourceSetId,
-                    RepeatedDataLayout.AlignRepeatedGroupsByPosition))
+                    DiscoveryOutputLayoutDefaults.Recommended))
                 .ToArray())
     {
     }
