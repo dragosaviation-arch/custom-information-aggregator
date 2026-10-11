@@ -1115,80 +1115,34 @@
                                            FontWeight="Bold"
                                            Foreground="{StaticResource CiaAccentBrush}"
                                            Text="OUTPUT INTERPRETATION" />
-                                <TextBlock Margin="0,5,0,9"
-                                           Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="CIA keeps independently structured records separate and avoids inventing relationships merely to flatten them."
-                                           TextWrapping="Wrap" />
-                                <ItemsControl x:Name="RecommendedOutputInterpretations"
-                                              ItemsSource="{Binding SourceSetLayouts}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Border Margin="0,0,0,8"
-                                                    Padding="10,8"
-                                                    Background="#FFFAFAFC"
-                                                    BorderBrush="{StaticResource CiaBorderBrush}"
-                                                    BorderThickness="1"
-                                                    CornerRadius="4">
-                                                <StackPanel>
-                                                    <TextBlock Margin="0,0,0,5"
-                                                               FontWeight="SemiBold"
-                                                               Text="{Binding SourceSetName}"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               ToolTip="{Binding SourceSetName}" />
-                                                    <RadioButton AutomationProperties.Name="Preserve relationships recommended output interpretation"
-                                                                 Content="Preserve relationships — Recommended"
-                                                                 IsChecked="{Binding IsRecommended, Mode=TwoWay}"
-                                                                 IsEnabled="{Binding DataContext.CanConfigureRepeatedDataLayout, RelativeSource={RelativeSource AncestorType=UserControl}}" />
-                                                    <TextBlock Margin="22,3,0,0"
-                                                               Style="{StaticResource CiaSecondaryTextStyle}"
-                                                               Text="{Binding InterpretationModeText}"
-                                                               TextWrapping="Wrap" />
-                                                </StackPanel>
-                                            </Border>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
+                                <Border x:Name="OutputInterpretationSummary"
+                                        Margin="0,5,0,8"
+                                        Padding="10,8"
+                                        Background="#FFFAFAFC"
+                                        BorderBrush="{StaticResource CiaBorderBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="4">
+                                    <StackPanel>
+                                        <TextBlock FontWeight="SemiBold"
+                                                   Text="Preserve relationships" />
+                                        <TextBlock Margin="0,3,0,0"
+                                                   Style="{StaticResource CiaSecondaryTextStyle}"
+                                                   Text="CIA keeps independently structured records separate and preserves source-defined relationships."
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
                                 <Expander x:Name="OutputAdvancedOptionsExpander"
                                           Margin="0,2,0,0"
                                           AutomationProperties.Name="Advanced output interpretation options"
                                           Header="Advanced options">
                                     <StackPanel Margin="0,8,0,0">
-                                        <TextBlock FontSize="10"
-                                                   FontWeight="Bold"
-                                                   Foreground="{StaticResource CiaAccentBrush}"
-                                                   Text="REPEATED DATA LAYOUT" />
-                                        <TextBlock Margin="0,4,0,8"
-                                                   Style="{StaticResource CiaSecondaryTextStyle}"
-                                                   Text="Choose an advanced layout only when the recommended relationship-preserving interpretation is not suitable."
-                                                   TextWrapping="Wrap" />
-                                        <ItemsControl x:Name="AdvancedOutputLayouts"
-                                                      ItemsSource="{Binding SourceSetLayouts}">
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <StackPanel Margin="0,0,0,8">
-                                                        <TextBlock Margin="0,0,0,3"
-                                                                   FontWeight="SemiBold"
-                                                                   Text="{Binding SourceSetName}"
-                                                                   TextTrimming="CharacterEllipsis"
-                                                                   ToolTip="{Binding SourceSetName}" />
-                                                        <ComboBox Height="28"
-                                                                  AutomationProperties.Name="Advanced repeated data layout"
-                                                                  DisplayMemberPath="DisplayName"
-                                                                  Focusable="{Binding IsExpanded, RelativeSource={RelativeSource AncestorType=Expander}}"
-                                                                  IsEnabled="{Binding DataContext.CanConfigureRepeatedDataLayout, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                                  IsTabStop="{Binding IsExpanded, RelativeSource={RelativeSource AncestorType=Expander}}"
-                                                                  ItemsSource="{Binding Options}"
-                                                                  SelectedValue="{Binding SelectedLayout, Mode=TwoWay}"
-                                                                  SelectedValuePath="Mode" />
-                                                    </StackPanel>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
                                         <Button x:Name="DecomposerButton"
                                                 HorizontalAlignment="Left"
                                                 AutomationProperties.HelpText="Decomposer is not available in this release candidate build."
-                                                Content="Customize structure with Decomposer…"
+                                                Content="Customize structure with Decomposer..."
+                                                Focusable="False"
                                                 IsEnabled="False"
+                                                IsTabStop="False"
                                                 Style="{StaticResource CiaGhostButtonStyle}"
                                                 ToolTip="Decomposer is not available in this release candidate build." />
                                     </StackPanel>

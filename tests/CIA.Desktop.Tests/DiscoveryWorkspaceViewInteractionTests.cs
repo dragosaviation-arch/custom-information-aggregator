@@ -333,6 +333,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.AreEqual("Mapped beta", viewModel.SelectedDatabaseTag);
 
             var selectedLayout = viewModel.SourceSetLayouts.Single();
+            selectedLayout.SelectedLayout = RepeatedDataLayout.AllCombinations;
             viewModel.ShowBlacklisted = false;
             viewModel.ShowOnlySelected = true;
             viewModel.ShowOnlyDatabaseTagOverrides = true;
@@ -354,8 +355,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             var outputMode = (Button)view.FindName("OutputModeButton");
             var outputGroupSelector = (ComboBox)view.FindName("OutputPreviewGroupSelector");
             var inputSettingsTabs = (TabControl)view.FindName("InputSettingsTabs");
-            var recommendedInterpretations =
-                (ItemsControl)view.FindName("RecommendedOutputInterpretations");
+            var interpretationSummary = (Border)view.FindName("OutputInterpretationSummary");
             var advancedOptions = (Expander)view.FindName("OutputAdvancedOptionsExpander");
             var decomposer = (Button)view.FindName("DecomposerButton");
 
@@ -386,47 +386,23 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.AreEqual(
                 outputGroupSelector,
                 FindVisualDescendant<ComboBox>(outputPreview, control => control.Focusable));
+            Assert.AreEqual(Visibility.Visible, interpretationSummary.Visibility);
             Assert.AreEqual(Visibility.Visible, advancedOptions.Visibility);
             Assert.IsFalse(advancedOptions.IsExpanded);
-            Assert.HasCount(1, recommendedInterpretations.Items);
-            Assert.IsTrue(selectedLayout.IsRecommended);
-            Assert.AreEqual(DiscoveryOutputLayoutDefaults.Recommended, selectedLayout.SelectedLayout);
-            var hiddenAdvancedLayout = FindVisualDescendant<ComboBox>(
-                outputSettings,
-                control => string.Equals(
-                    AutomationProperties.GetName(control),
-                    "Advanced repeated data layout",
-                    StringComparison.Ordinal));
-            Assert.IsNull(hiddenAdvancedLayout,
-                "Collapsed advanced controls must not enter the visual focus tree.");
             Assert.IsNull(FindVisualDescendant<ComboBox>(
                 outputSettings,
-                control => control.IsVisible));
+                control => true),
+                "Historical layout choices must not remain in the Output Settings visual tree.");
             Assert.IsFalse(decomposer.IsVisible);
 
             advancedOptions.IsExpanded = true;
             await Dispatcher.Yield(DispatcherPriority.DataBind);
             view.UpdateLayout();
-            var advancedLayout = FindVisualDescendant<ComboBox>(
-                outputSettings,
-                control => string.Equals(
-                    AutomationProperties.GetName(control),
-                    "Advanced repeated data layout",
-                    StringComparison.Ordinal));
-            Assert.IsNotNull(advancedLayout);
-            Assert.AreEqual(Visibility.Visible, advancedLayout.Visibility);
-            Assert.IsTrue(advancedLayout.Focusable);
-            Assert.HasCount(4, advancedLayout.Items);
-            Assert.AreEqual(DiscoveryOutputLayoutDefaults.Recommended, advancedLayout.SelectedValue);
             Assert.AreEqual(Visibility.Visible, decomposer.Visibility);
             Assert.IsFalse(decomposer.IsEnabled);
-
-            advancedLayout.SelectedValue = RepeatedDataLayout.AllCombinations;
-            advancedLayout.GetBindingExpression(ComboBox.SelectedValueProperty)?.UpdateSource();
-            await Dispatcher.Yield(DispatcherPriority.DataBind);
-
+            Assert.IsFalse(decomposer.Focusable);
+            Assert.IsFalse(decomposer.IsTabStop);
             Assert.AreEqual(RepeatedDataLayout.AllCombinations, selectedLayout.SelectedLayout);
-            Assert.IsFalse(selectedLayout.IsRecommended);
             Assert.IsTrue(navigator.IsVisible);
             Assert.IsTrue(ordinalInput.IsVisible);
             Assert.AreSame(beta, viewModel.SelectedInformation);

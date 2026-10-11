@@ -18,51 +18,6 @@ namespace CIA.Desktop.Tests;
 public sealed class DiscoveryWorkspaceViewModelTests
 {
     [TestMethod]
-    public void OutputSettingsExposeRecommendedAliasAndEveryAdvancedLayoutWithoutParallelState()
-    {
-        var sourceSetId = SourceSetId.CreateNew();
-        var options = Enum.GetValues<RepeatedDataLayout>()
-            .Select(layout => new RepeatedDataLayoutOption(layout, layout.ToString()))
-            .ToArray();
-        var effectiveLayout = DiscoveryOutputLayoutDefaults.Recommended;
-        var item = new SourceSetLayoutItemViewModel(
-            sourceSetId,
-            "Set 1",
-            effectiveLayout,
-            options,
-            (changedSourceSetId, layout) =>
-            {
-                Assert.AreEqual(sourceSetId, changedSourceSetId);
-                effectiveLayout = layout;
-                return true;
-            });
-
-        Assert.IsTrue(item.IsRecommended);
-        Assert.AreEqual(RepeatedDataLayout.StructuralRows, item.SelectedLayout);
-        Assert.AreEqual("Preserve relationships — Recommended", item.InterpretationModeText);
-        CollectionAssert.AreEquivalent(
-            Enum.GetValues<RepeatedDataLayout>(),
-            item.Options.Select(option => option.Mode).ToArray());
-
-        foreach (var layout in Enum.GetValues<RepeatedDataLayout>())
-        {
-            item.SelectedLayout = layout;
-            Assert.AreEqual(layout, item.SelectedLayout);
-            Assert.AreEqual(layout, effectiveLayout);
-        }
-
-        item.SelectedLayout = RepeatedDataLayout.AllCombinations;
-        Assert.IsFalse(item.IsRecommended);
-        Assert.IsTrue(item.InterpretationModeText.StartsWith("Advanced —", StringComparison.Ordinal));
-
-        item.IsRecommended = true;
-
-        Assert.IsTrue(item.IsRecommended);
-        Assert.AreEqual(DiscoveryOutputLayoutDefaults.Recommended, item.SelectedLayout);
-        Assert.AreEqual(DiscoveryOutputLayoutDefaults.Recommended, effectiveLayout);
-    }
-
-    [TestMethod]
     public void SelectionImpactKeepsRootRepeatedNestedAndSameNameFamiliesSeparate()
     {
         var sourceSetId = SourceSetId.CreateNew();
@@ -262,6 +217,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.IsFalse(viewModel.SelectedOutputPreviewGroup!.Rows
             .SelectMany(row => row.Cells)
             .Any(cell => cell.Value == "stale-preview"));
+        Assert.AreEqual("Projected with Preserve relationships.", viewModel.OutputPreviewStatusText);
         Assert.AreEqual(
             RepeatedDataLayout.AllCombinations,
             client.OutputPreviewRequests[^1].Projection.RepeatedDataLayout);
@@ -626,8 +582,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
             Enum.GetValues<RepeatedDataLayout>(),
             viewModel.RepeatedDataLayoutOptions.Select(option => option.Mode).ToArray());
         Assert.IsTrue(viewModel.SourceSetLayouts.All(layout =>
-            layout.IsRecommended
-            && layout.SelectedLayout == DiscoveryOutputLayoutDefaults.Recommended));
+            layout.SelectedLayout == DiscoveryOutputLayoutDefaults.Recommended));
 
         var database = await workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
         workflow.CompleteOperation(database.Operation!.OperationId, OperationOutcome.CompletedSuccessfully);
@@ -643,22 +598,12 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Discovery);
         Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Database);
         Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Extraction);
-        Assert.IsFalse(firstLayout.IsRecommended);
         Assert.AreEqual(RepeatedDataLayout.AllCombinations, firstLayout.SelectedLayout);
         Assert.AreEqual(
             DiscoveryOutputLayoutDefaults.Recommended,
             secondLayout.SelectedLayout);
         Assert.AreEqual(
             RepeatedDataLayout.AllCombinations,
-            configuration.Current.SourceSets.Single(item =>
-                item.SourceSetId == firstLayout.SourceSetId).RepeatedDataLayout);
-
-        firstLayout.IsRecommended = true;
-
-        Assert.IsTrue(firstLayout.IsRecommended);
-        Assert.AreEqual(DiscoveryOutputLayoutDefaults.Recommended, firstLayout.SelectedLayout);
-        Assert.AreEqual(
-            DiscoveryOutputLayoutDefaults.Recommended,
             configuration.Current.SourceSets.Single(item =>
                 item.SourceSetId == firstLayout.SourceSetId).RepeatedDataLayout);
 

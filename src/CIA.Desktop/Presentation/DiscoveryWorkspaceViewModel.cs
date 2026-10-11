@@ -1799,7 +1799,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             $"Occurrence {preview.OccurrenceOrdinal:N0} · {preview.SourceName}";
         OutputPreviewStatusText = groups.Length == 0
             ? "The selected occurrence contributes to no selected output table."
-            : $"Projected with {GetLayoutDisplayName(preview.RepeatedDataLayout)}.";
+            : "Projected with Preserve relationships.";
     }
 
     private bool IsCurrentOutputPreviewRequest(
@@ -1834,17 +1834,6 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return request;
         }
     }
-
-    private static string GetLayoutDisplayName(RepeatedDataLayout layout) => layout switch
-    {
-        RepeatedDataLayout.AlignRepeatedGroupsByPosition =>
-            "Align repeated groups by position",
-        RepeatedDataLayout.StructuralRows => "Structural rows",
-        RepeatedDataLayout.AllCombinations => "All combinations",
-        RepeatedDataLayout.NumberRepeatedValuesIntoColumns =>
-            "Number repeated values into columns",
-        _ => "the current layout"
-    };
 
     private static bool TryCreateOccurrenceLookup(
         OperationId discoveryOperationId,
@@ -3377,45 +3366,14 @@ public sealed class SourceSetLayoutItemViewModel : ObservableObject
 
     public IReadOnlyList<RepeatedDataLayoutOption> Options { get; }
 
-    public bool IsRecommended
-    {
-        get => SelectedLayout == DiscoveryOutputLayoutDefaults.Recommended;
-        set
-        {
-            if (value)
-            {
-                SelectedLayout = DiscoveryOutputLayoutDefaults.Recommended;
-                if (!IsRecommended)
-                {
-                    OnPropertyChanged(nameof(IsRecommended));
-                }
-            }
-        }
-    }
-
-    public string InterpretationModeText => IsRecommended
-        ? "Preserve relationships — Recommended"
-        : $"Advanced — {Options.Single(option => option.Mode == SelectedLayout).DisplayName}";
-
     public RepeatedDataLayout SelectedLayout
     {
         get => _selectedLayout;
         set
         {
-            if (_selectedLayout == value)
-            {
-                return;
-            }
-
-            if (_changeLayout(SourceSetId, value))
+            if (_selectedLayout != value && _changeLayout(SourceSetId, value))
             {
                 SetProperty(ref _selectedLayout, value);
-                OnPropertyChanged(nameof(IsRecommended));
-                OnPropertyChanged(nameof(InterpretationModeText));
-            }
-            else
-            {
-                OnPropertyChanged(nameof(SelectedLayout));
             }
         }
     }
