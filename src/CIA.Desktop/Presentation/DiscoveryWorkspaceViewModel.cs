@@ -368,6 +368,14 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public ReadOnlyObservableCollection<DiscoveryOutputSetItemViewModel> OutputSets =>
         _readOnlyOutputSets;
 
+    public IReadOnlyList<DiscoveryOutputSetGroupPresentation> OutputSetGroups => OutputSets
+        .GroupBy(item => new { item.ParentSourceSetId, item.ParentSourceSetName })
+        .Select(group => new DiscoveryOutputSetGroupPresentation(
+            group.Key.ParentSourceSetId,
+            group.Key.ParentSourceSetName,
+            group.ToArray()))
+        .ToArray();
+
     public DiscoveryOutputPlanSnapshot OutputPlan => _outputPlan.Current;
 
     public IReadOnlyList<RepeatedDataLayoutOption> RepeatedDataLayoutOptions { get; } =
@@ -1682,6 +1690,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             _outputSets.Add(item);
         }
 
+        OnPropertyChanged(nameof(OutputSetGroups));
+
         var selected = selectedOutputSetId is { } retainedId
             ? items.FirstOrDefault(item => item.OutputSetId == retainedId)
             : null;
@@ -1886,6 +1896,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         request = new DiscoveryOutputPreviewRequest(
+            selectedOutputSet.OutputSetId,
             lookup,
             new DiscoveryOutputProjectionSpecification(
                 dataset.SourceSetId,
@@ -1967,6 +1978,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         var preview = result.Preview;
         if (!result.Accepted
             || preview is null
+            || preview.OutputSetId != request.OutputSetId
             || preview.DiscoveryOperationId != request.Occurrence.DiscoveryOperationId
             || preview.OccurrenceOrdinal != request.Occurrence.GlobalOrdinal
             || !request.Occurrence.DetailedIdentities.Contains(preview.OccurrenceIdentity))
@@ -2006,6 +2018,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         return Volatile.Read(ref _disposed) == 0
             && IsOutputMode
             && requestVersion == Volatile.Read(ref _outputPreviewRequestVersion)
+            && SelectedOutputSet?.OutputSetId == request.OutputSetId
             && _publishedDiscoveryOperationId == request.Occurrence.DiscoveryOperationId
             && CurrentOccurrenceOrdinal == request.Occurrence.GlobalOrdinal;
     }

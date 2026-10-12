@@ -522,9 +522,11 @@
                 <ColumnDefinition x:Name="SettingsColumn" Width="0" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
-                <RowDefinition x:Name="PreviewRow" Height="2*" />
+                <RowDefinition x:Name="PreviewRow" Height="*" />
                 <RowDefinition x:Name="RightRailGapRow" Height="8" />
-                <RowDefinition x:Name="SettingsRow" Height="3*" />
+                <RowDefinition x:Name="SettingsRow" Height="*" />
+                <RowDefinition x:Name="SharedActionGapRow" Height="8" />
+                <RowDefinition x:Name="SharedActionRow" Height="Auto" />
             </Grid.RowDefinitions>
 
             <Border x:Name="PreviewPanel"
@@ -535,7 +537,6 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
-                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <Border Style="{StaticResource CiaPanelHeaderStyle}">
                         <Grid>
@@ -724,7 +725,7 @@
                     <Border x:Name="OutputPreviewContent"
                             Grid.Row="1"
                             Margin="10,8"
-                            Padding="18"
+                            Padding="10"
                             Background="{StaticResource CiaPanelAlternateBrush}"
                             BorderBrush="{StaticResource CiaBorderBrush}"
                             BorderThickness="1"
@@ -739,6 +740,9 @@
                                 </Style.Triggers>
                             </Style>
                         </Border.Style>
+                        <ScrollViewer x:Name="OutputPreviewScrollViewer"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
@@ -758,29 +762,36 @@
                                     <TextBlock Margin="0,3,0,0"
                                                FontWeight="SemiBold"
                                                Text="{Binding OutputPlanStatusText}" />
-                                    <ItemsControl Margin="0,5,0,0"
-                                                  ItemsSource="{Binding OutputSets}">
+                                    <ItemsControl x:Name="OutputPlanGroups"
+                                                  Margin="0,5,0,0"
+                                                  ItemsSource="{Binding OutputSetGroups}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Grid Margin="0,2,0,0">
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="150" />
-                                                        <ColumnDefinition Width="*" />
-                                                    </Grid.ColumnDefinitions>
-                                                    <StackPanel>
-                                                        <TextBlock FontWeight="SemiBold"
-                                                                   Text="{Binding DisplayLabel}" />
-                                                        <TextBlock FontSize="10"
-                                                                   Style="{StaticResource CiaSecondaryTextStyle}"
-                                                                   Text="{Binding ParentSourceSetName}" />
-                                                    </StackPanel>
-                                                    <TextBlock Grid.Column="1"
-                                                               Margin="8,0,0,0"
-                                                               VerticalAlignment="Center"
-                                                               Text="{Binding ColumnsText}"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               ToolTip="{Binding StructuralContext}" />
-                                                </Grid>
+                                                <StackPanel Margin="0,2,0,3">
+                                                    <TextBlock FontSize="10"
+                                                               FontWeight="SemiBold"
+                                                               Style="{StaticResource CiaSecondaryTextStyle}"
+                                                               Text="{Binding ParentSourceSetName, StringFormat=Parent: {0}}" />
+                                                    <ItemsControl ItemsSource="{Binding OutputSets}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Grid Margin="0,1,0,0">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="150" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBlock FontWeight="SemiBold"
+                                                                               Text="{Binding CompactDisplayLabel}"
+                                                                               TextTrimming="CharacterEllipsis" />
+                                                                    <TextBlock Grid.Column="1"
+                                                                               Margin="8,0,0,0"
+                                                                               Text="{Binding ColumnsText}"
+                                                                               TextTrimming="CharacterEllipsis" />
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
@@ -827,7 +838,7 @@
                                         BorderThickness="1"
                                         CornerRadius="6">
                                     <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                                                  VerticalScrollBarVisibility="Auto">
+                                                  VerticalScrollBarVisibility="Disabled">
                                         <StackPanel>
                                             <ItemsControl ItemsSource="{Binding SelectedOutputPreviewGroup.Columns}">
                                                 <ItemsControl.ItemsPanel>
@@ -884,73 +895,8 @@
                                            Text="{Binding SelectedOutputPreviewGroup.RowSummary}" />
                             </Grid>
                         </Grid>
+                        </ScrollViewer>
                     </Border>
-                    <WrapPanel x:Name="SharedDiscoveryActions"
-                               Grid.Row="2"
-                               Margin="10,7"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center">
-                        <WrapPanel x:Name="OccurrenceNavigator"
-                                   Margin="0,0,10,0"
-                                   VerticalAlignment="Center">
-                            <Button Margin="0,0,6,0"
-                                    Command="{Binding PreviousOccurrenceCommand}"
-                                    Style="{StaticResource CiaButtonStyle}"
-                                    Content="&#x2039; Previous" />
-                            <TextBlock Margin="0,0,5,0"
-                                       VerticalAlignment="Center"
-                                       Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Occurrence" />
-                            <TextBox x:Name="OccurrenceOrdinalInput"
-                                     Width="56"
-                                     Height="29"
-                                     Padding="4,0"
-                                     AutomationProperties.Name="Discovery occurrence ordinal"
-                                     HorizontalContentAlignment="Center"
-                                     VerticalContentAlignment="Center"
-                                     KeyDown="OnOccurrenceOrdinalKeyDown"
-                                     LostFocus="OnOccurrenceOrdinalLostFocus"
-                                     Text="{Binding OccurrenceOrdinalInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
-                                <TextBox.Style>
-                                    <Style TargetType="TextBox"
-                                           BasedOn="{StaticResource CiaTextInputStyle}">
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding CurrentOccurrenceOrdinal}" Value="0">
-                                                <Setter Property="IsEnabled" Value="False" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBox.Style>
-                            </TextBox>
-                            <TextBlock Margin="5,0,6,0"
-                                       VerticalAlignment="Center"
-                                       Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="{Binding OccurrenceTotalText}" />
-                            <Button Command="{Binding NextOccurrenceCommand}"
-                                    Style="{StaticResource CiaButtonStyle}"
-                                    Content="Next &#x203A;" />
-                        </WrapPanel>
-                        <WrapPanel x:Name="SharedDatabaseAction"
-                                   VerticalAlignment="Center">
-                            <Border Margin="0,0,6,0" Style="{StaticResource CiaNeutralStateBadgeStyle}">
-                                <TextBlock VerticalAlignment="Center"
-                                           Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="{Binding DatabaseStateText}" />
-                            </Border>
-                            <TextBlock Margin="0,0,6,0"
-                                       VerticalAlignment="Center"
-                                       Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Build from the current selected Discovery mapping." />
-                            <Button x:Name="BuildDatabaseButton"
-                                    Command="{Binding BuildDatabaseCommand}"
-                                    MinHeight="32"
-                                    Padding="14,5"
-                                    FontWeight="SemiBold"
-                                    Style="{StaticResource CiaPrimaryButtonStyle}"
-                                    Content="{Binding DatabaseBuildButtonText}"
-                                    ToolTip="{Binding DatabaseBuildAvailabilityReason}" />
-                        </WrapPanel>
-                    </WrapPanel>
                 </Grid>
             </Border>
 
@@ -1114,39 +1060,59 @@
                                             Style="{StaticResource CiaSecondaryTextStyle}"
                                             Text="{Binding OutputPlanStatusText}"
                                             TextWrapping="Wrap" />
-                                 <ItemsControl ItemsSource="{Binding OutputSets}">
+                                 <ItemsControl x:Name="OutputSettingsGroups"
+                                               ItemsSource="{Binding OutputSetGroups}">
                                      <ItemsControl.ItemTemplate>
                                          <DataTemplate>
-                                             <Border Margin="0,0,0,7"
-                                                     Padding="9,7"
-                                                     Background="#FFFAFAFC"
-                                                     BorderBrush="{StaticResource CiaBorderBrush}"
-                                                     BorderThickness="1"
-                                                     CornerRadius="4">
-                                                 <Grid>
-                                                     <Grid.ColumnDefinitions>
-                                                         <ColumnDefinition Width="Auto" />
-                                                         <ColumnDefinition Width="*" />
-                                                     </Grid.ColumnDefinitions>
-                                                     <CheckBox Margin="0,0,8,0"
-                                                               VerticalAlignment="Center"
-                                                               AutomationProperties.Name="Enable Output Set"
-                                                               IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
-                                                     <StackPanel Grid.Column="1">
-                                                         <TextBlock FontSize="10"
-                                                                    Style="{StaticResource CiaSecondaryTextStyle}"
-                                                                    Text="{Binding SetNumberText}" />
-                                                         <TextBox Margin="0,2,0,0"
-                                                                  AutomationProperties.Name="Output Set name"
-                                                                  Style="{StaticResource CiaTextInputStyle}"
-                                                                  Text="{Binding Name, Mode=TwoWay}" />
-                                                         <TextBlock Margin="0,3,0,0"
-                                                                    Style="{StaticResource CiaSecondaryTextStyle}"
-                                                                    Text="{Binding RelationshipText}"
-                                                                    TextWrapping="Wrap" />
-                                                     </StackPanel>
-                                                 </Grid>
-                                             </Border>
+                                             <StackPanel Margin="0,0,0,6">
+                                                 <TextBlock Margin="0,0,0,3"
+                                                            FontSize="10"
+                                                            FontWeight="SemiBold"
+                                                            Style="{StaticResource CiaSecondaryTextStyle}"
+                                                            Text="{Binding ParentSourceSetName, StringFormat=Parent: {0}}" />
+                                                 <ItemsControl ItemsSource="{Binding OutputSets}">
+                                                     <ItemsControl.ItemTemplate>
+                                                         <DataTemplate>
+                                                             <Border Margin="0,0,0,4"
+                                                                     Padding="7,4"
+                                                                     Background="#FFFAFAFC"
+                                                                     BorderBrush="{StaticResource CiaBorderBrush}"
+                                                                     BorderThickness="1"
+                                                                     CornerRadius="4">
+                                                                 <Grid>
+                                                                     <Grid.ColumnDefinitions>
+                                                                         <ColumnDefinition Width="Auto" />
+                                                                         <ColumnDefinition Width="*" />
+                                                                     </Grid.ColumnDefinitions>
+                                                                     <CheckBox Margin="0,0,7,0"
+                                                                               VerticalAlignment="Center"
+                                                                               AutomationProperties.Name="Enable Output Set"
+                                                                               IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+                                                                     <Grid Grid.Column="1">
+                                                                         <Grid.ColumnDefinitions>
+                                                                             <ColumnDefinition Width="52" />
+                                                                             <ColumnDefinition Width="*" />
+                                                                         </Grid.ColumnDefinitions>
+                                                                         <TextBlock VerticalAlignment="Center"
+                                                                                    FontSize="10"
+                                                                                    Style="{StaticResource CiaSecondaryTextStyle}"
+                                                                                    Text="{Binding SetNumberText}" />
+                                                                         <StackPanel Grid.Column="1">
+                                                                             <TextBox AutomationProperties.Name="Output Set name"
+                                                                                      Style="{StaticResource CiaTextInputStyle}"
+                                                                                      Text="{Binding Name, Mode=TwoWay}" />
+                                                                             <TextBlock Margin="0,2,0,0"
+                                                                                        Style="{StaticResource CiaSecondaryTextStyle}"
+                                                                                        Text="{Binding RelationshipText}"
+                                                                                        TextTrimming="CharacterEllipsis" />
+                                                                         </StackPanel>
+                                                                     </Grid>
+                                                                 </Grid>
+                                                             </Border>
+                                                         </DataTemplate>
+                                                     </ItemsControl.ItemTemplate>
+                                                 </ItemsControl>
+                                             </StackPanel>
                                          </DataTemplate>
                                      </ItemsControl.ItemTemplate>
                                  </ItemsControl>
@@ -1191,6 +1157,73 @@
                     </Grid>
                 </Grid>
             </Border>
+            <WrapPanel x:Name="SharedDiscoveryActions"
+                       Grid.Row="4"
+                       Grid.Column="0"
+                       Grid.ColumnSpan="3"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center">
+                <WrapPanel x:Name="OccurrenceNavigator"
+                           Margin="0,0,10,0"
+                           VerticalAlignment="Center">
+                    <Button Margin="0,0,6,0"
+                            Command="{Binding PreviousOccurrenceCommand}"
+                            Style="{StaticResource CiaButtonStyle}"
+                            Content="&#x2039; Previous" />
+                    <TextBlock Margin="0,0,5,0"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CiaSecondaryTextStyle}"
+                               Text="Occurrence" />
+                    <TextBox x:Name="OccurrenceOrdinalInput"
+                             Width="56"
+                             Height="29"
+                             Padding="4,0"
+                             AutomationProperties.Name="Discovery occurrence ordinal"
+                             HorizontalContentAlignment="Center"
+                             VerticalContentAlignment="Center"
+                             KeyDown="OnOccurrenceOrdinalKeyDown"
+                             LostFocus="OnOccurrenceOrdinalLostFocus"
+                             Text="{Binding OccurrenceOrdinalInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                        <TextBox.Style>
+                            <Style TargetType="TextBox"
+                                   BasedOn="{StaticResource CiaTextInputStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding CurrentOccurrenceOrdinal}" Value="0">
+                                        <Setter Property="IsEnabled" Value="False" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBox.Style>
+                    </TextBox>
+                    <TextBlock Margin="5,0,6,0"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CiaSecondaryTextStyle}"
+                               Text="{Binding OccurrenceTotalText}" />
+                    <Button Command="{Binding NextOccurrenceCommand}"
+                            Style="{StaticResource CiaButtonStyle}"
+                            Content="Next &#x203A;" />
+                </WrapPanel>
+                <WrapPanel x:Name="SharedDatabaseAction"
+                           VerticalAlignment="Center">
+                    <Border Margin="0,0,6,0" Style="{StaticResource CiaNeutralStateBadgeStyle}">
+                        <TextBlock VerticalAlignment="Center"
+                                   Style="{StaticResource CiaSecondaryTextStyle}"
+                                   Text="{Binding DatabaseStateText}" />
+                    </Border>
+                    <TextBlock Margin="0,0,6,0"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CiaSecondaryTextStyle}"
+                               Text="Build from the current selected Discovery mapping." />
+                    <Button x:Name="BuildDatabaseButton"
+                            Command="{Binding BuildDatabaseCommand}"
+                            MinHeight="32"
+                            Padding="14,5"
+                            FontWeight="SemiBold"
+                            Style="{StaticResource CiaPrimaryButtonStyle}"
+                            Content="{Binding DatabaseBuildButtonText}"
+                            ToolTip="{Binding DatabaseBuildAvailabilityReason}" />
+                </WrapPanel>
+            </WrapPanel>
         </Grid>
 
         <Grid x:Name="DeleteInformationSelectionProfileConfirmation"

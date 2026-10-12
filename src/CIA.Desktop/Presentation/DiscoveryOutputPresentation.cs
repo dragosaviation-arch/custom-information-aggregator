@@ -96,6 +96,11 @@ public sealed record DiscoveryOutputPreviewCellPresentation(
     bool HasConflict,
     bool IsTruncated);
 
+public sealed record DiscoveryOutputSetGroupPresentation(
+    SourceSetId ParentSourceSetId,
+    string ParentSourceSetName,
+    IReadOnlyList<DiscoveryOutputSetItemViewModel> OutputSets);
+
 public sealed class DiscoveryOutputSetItemViewModel : ObservableObject
 {
     private readonly Func<OutputSetId, bool, bool> _setEnabled;
@@ -158,6 +163,19 @@ public sealed class DiscoveryOutputSetItemViewModel : ObservableObject
 
     public string DisplayLabel => $"Set {SetNumber}: {Name}";
 
+    public string CompactName
+    {
+        get
+        {
+            var parentPrefix = ParentSourceSetName + " — ";
+            return Name.StartsWith(parentPrefix, StringComparison.Ordinal)
+                ? Name[parentPrefix.Length..]
+                : Name;
+        }
+    }
+
+    public string CompactDisplayLabel => $"Set {SetNumber} — {CompactName}";
+
     public string Name
     {
         get => _name;
@@ -173,6 +191,8 @@ public sealed class DiscoveryOutputSetItemViewModel : ObservableObject
             _name = value.Trim();
             OnPropertyChanged();
             OnPropertyChanged(nameof(DisplayLabel));
+            OnPropertyChanged(nameof(CompactName));
+            OnPropertyChanged(nameof(CompactDisplayLabel));
         }
     }
 

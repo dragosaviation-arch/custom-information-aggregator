@@ -355,6 +355,9 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             var inputMode = (Button)view.FindName("InputModeButton");
             var outputMode = (Button)view.FindName("OutputModeButton");
             var outputGroupSelector = (ComboBox)view.FindName("OutputPreviewGroupSelector");
+            var outputPreviewScroll = (ScrollViewer)view.FindName("OutputPreviewScrollViewer");
+            var outputPlanGroups = (ItemsControl)view.FindName("OutputPlanGroups");
+            var outputSettingsGroups = (ItemsControl)view.FindName("OutputSettingsGroups");
             var inputSettingsTabs = (TabControl)view.FindName("InputSettingsTabs");
             var interpretationSummary = (Border)view.FindName("OutputInterpretationSummary");
             var advancedOptions = (Expander)view.FindName("OutputAdvancedOptionsExpander");
@@ -364,6 +367,8 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             var buildDatabase = (Button)view.FindName("BuildDatabaseButton");
             var buildCommand = viewModel.BuildDatabaseCommand;
             var initialCanBuild = buildCommand.CanExecute(null);
+            var previewRow = (RowDefinition)view.FindName("PreviewRow");
+            var settingsRow = (RowDefinition)view.FindName("SettingsRow");
 
             Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
             Assert.IsTrue(inputPreview.IsVisible);
@@ -376,6 +381,14 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsFalse(inputSettingsTabs.Items.Cast<TabItem>().Any(item =>
                 string.Equals(item.Header?.ToString(), "Layout", StringComparison.Ordinal)));
             Assert.IsTrue(sharedActions.IsVisible);
+            Assert.AreEqual(4, Grid.GetRow(sharedActions));
+            Assert.AreEqual(GridUnitType.Star, previewRow.Height.GridUnitType);
+            Assert.AreEqual(GridUnitType.Star, settingsRow.Height.GridUnitType);
+            Assert.AreEqual(previewRow.Height.Value, settingsRow.Height.Value);
+            Assert.IsNull(FindVisualDescendant<WrapPanel>(
+                (Border)view.FindName("PreviewPanel"),
+                panel => ReferenceEquals(panel, sharedActions)),
+                "Shared actions must remain outside the Preview/Settings allocation.");
             Assert.IsTrue(sharedDatabaseAction.IsVisible);
             Assert.IsTrue(buildDatabase.IsVisible);
             Assert.AreSame(buildCommand, buildDatabase.Command);
@@ -398,8 +411,16 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsFalse(databaseTagField.IsVisible,
                 "Collapsed Input controls must not remain in the active focus tree.");
             Assert.IsFalse(databaseTagField.Focus());
+            outputGroupSelector.BringIntoView();
+            view.UpdateLayout();
             Assert.IsTrue(outputGroupSelector.IsVisible);
             Assert.IsTrue(outputGroupSelector.Focusable);
+            Assert.AreEqual(ScrollBarVisibility.Auto, outputPreviewScroll.VerticalScrollBarVisibility);
+            Assert.AreEqual(viewModel.OutputSetGroups.Count, outputPlanGroups.Items.Count);
+            Assert.AreEqual(viewModel.OutputSetGroups.Count, outputSettingsGroups.Items.Count);
+            Assert.AreEqual(
+                viewModel.OutputSets.Count,
+                viewModel.OutputSetGroups.Sum(group => group.OutputSets.Count));
             view.UpdateLayout();
             var outputSetToggle = FindVisualDescendant<CheckBox>(
                 outputSettings,
@@ -483,6 +504,8 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.AreEqual(0, Grid.GetRow((Border)view.FindName("SettingsPanel")));
             Assert.AreEqual(0, Grid.GetColumn((Border)view.FindName("PreviewPanel")));
             Assert.AreEqual(2, Grid.GetColumn((Border)view.FindName("SettingsPanel")));
+            Assert.AreEqual(4, Grid.GetRow(sharedActions));
+            Assert.IsTrue(sharedActions.IsVisible);
             Assert.IsTrue(buildDatabase.IsVisible);
             Assert.AreSame(buildCommand, buildDatabase.Command);
         }

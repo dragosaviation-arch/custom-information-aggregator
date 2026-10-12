@@ -159,7 +159,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 return Task.FromResult(CreateOutputPreviewResult(
                     request,
                     source.SourceId,
-                    $"preview-{call}"));
+                    $"occurrence-{request.Occurrence.GlobalOrdinal}"));
             });
         var configuration = new ActiveDiscoveryConfiguration();
         var databaseCoordinator = new DatabaseBuildCoordinator(
@@ -203,20 +203,28 @@ public sealed class DiscoveryWorkspaceViewModelTests
         await WaitUntilAsync(() => viewModel.SelectedOutputPreviewGroup is not null
             && viewModel.SelectedOutputPreviewGroup.Rows
                 .SelectMany(row => row.Cells)
-                .Any(cell => cell.Value == "preview-2"));
+                .Any(cell => cell.Value == "occurrence-1"));
 
         viewModel.ToggleSelectionCommand.Execute(viewModel.SelectedInformation);
         await WaitUntilAsync(() => client.OutputPreviewRequests.Count >= 3);
         var selectionImpactBeforeLayoutChange = viewModel.SelectionImpact;
         viewModel.SourceSetLayouts.Single().SelectedLayout = RepeatedDataLayout.AllCombinations;
         await WaitUntilAsync(() => client.OutputPreviewRequests.Count >= 4);
+        var planBeforeNavigation = viewModel.OutputPlan.OutputSets.Select(set =>
+            (set.OutputSetId, set.Name, set.SetNumber, set.IsEnabled)).ToArray();
         await viewModel.NextOccurrenceCommand.ExecuteAsync(null);
         await WaitUntilAsync(() => client.OutputPreviewRequests.Count >= 5);
+        await WaitUntilAsync(() => viewModel.SelectedOutputPreviewGroup is not null
+            && viewModel.SelectedOutputPreviewGroup.Rows.SelectMany(row => row.Cells)
+                .Any(cell => cell.Value == "occurrence-2"));
         var buildSpecification = databaseCoordinator.CreateBuildSpecification();
 
         Assert.IsFalse(viewModel.SelectedOutputPreviewGroup!.Rows
             .SelectMany(row => row.Cells)
             .Any(cell => cell.Value == "stale-preview"));
+        Assert.IsTrue(viewModel.SelectedOutputPreviewGroup.Rows
+            .SelectMany(row => row.Cells)
+            .Any(cell => cell.Value == "occurrence-2"));
         Assert.AreEqual("Projected with Preserve relationships.", viewModel.OutputPreviewStatusText);
         Assert.AreEqual(
             RepeatedDataLayout.AllCombinations,
@@ -226,7 +234,14 @@ public sealed class DiscoveryWorkspaceViewModelTests
             buildSpecification.Datasets.Single().RepeatedDataLayout);
         Assert.AreNotSame(selectionImpactBeforeLayoutChange, viewModel.SelectionImpact);
         Assert.AreEqual(2, client.OutputPreviewRequests[^1].Occurrence.GlobalOrdinal);
+        Assert.AreEqual(
+            viewModel.SelectedOutputSet!.OutputSetId,
+            client.OutputPreviewRequests[^1].OutputSetId);
         Assert.HasCount(1, client.OutputPreviewRequests[^1].Projection.Fields);
+        CollectionAssert.AreEqual(
+            planBeforeNavigation,
+            viewModel.OutputPlan.OutputSets.Select(set =>
+                (set.OutputSetId, set.Name, set.SetNumber, set.IsEnabled)).ToArray());
     }
 
     [TestMethod]
@@ -2245,6 +2260,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         return new DiscoveryOutputPreviewClientResult(
             true,
             new DiscoveryOutputPreview(
+                request.OutputSetId,
                 request.Occurrence.DiscoveryOperationId,
                 request.Occurrence.DetailedIdentities[0],
                 request.Occurrence.GlobalOrdinal,

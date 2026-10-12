@@ -2,7 +2,9 @@ using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Ipc;
+using CIA.Contracts.Sources;
 using CIA.Core.Hierarchy;
+using CIA.Core.Sources;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceInterpretation;
@@ -70,6 +72,7 @@ public sealed class DiscoveryOutputPreviewService(
                     "The selected source changed after Discovery. Run Discovery again before previewing output.");
             }
 
+            var selectedOccurrence = matchingOccurrences[resolution.LocalOrdinal - 1];
             var dataset = new DatabaseDatasetBuildSpecification(
                 request.Projection.SourceSetId,
                 request.Projection.SourceSetName,
@@ -78,15 +81,16 @@ public sealed class DiscoveryOutputPreviewService(
                 [resolution.Source],
                 request.Projection.RowFamilies,
                 request.Projection.Fields);
-            var projected = await sourceProjection.ProjectAsync(
-                    dataset,
-                    resolution.Source,
-                    interpretation.Source,
-                    request.MaximumRowsPerGroup,
-                    cancellationToken)
-                .ConfigureAwait(false);
+            var projected = await ProjectSelectedOccurrenceAsync(
+                dataset,
+                resolution.Source,
+                interpretation.Source,
+                selectedOccurrence,
+                request.MaximumRowsPerGroup,
+                cancellationToken).ConfigureAwait(false);
             var groups = CreateGroups(dataset, projected);
             return DiscoveryOutputPreviewHostResult.Accept(new DiscoveryOutputPreview(
+                request.OutputSetId,
                 request.Occurrence.DiscoveryOperationId,
                 resolution.Identity,
                 request.Occurrence.GlobalOrdinal,
@@ -111,23 +115,110 @@ public sealed class DiscoveryOutputPreviewService(
         }
     }
 
+    private async Task<DatabaseSourceProjection> ProjectSelectedOccurrenceAsync(
+        DatabaseDatasetBuildSpecification dataset,
+        LoadedSourceContract source,
+        InterpretedSourceDocument interpretedSource,
+        HierarchySourceOccurrence selectedOccurrence,
+        int maximumRowsPerGroup,
+        CancellationToken cancellationToken)
+    {
+        var rows = new List<DatabaseReviewRow>();
+        var truncatedFamilies = new List<RowFamilyId>();
+        foreach (var family in dataset.RowFamilies)
+        {
+            var context = ResolveProjectionContext(selectedOccurrence, family.Id);
+            if (context is null)
+            {
+                continue;
+            }
+
+            var scopedValues = interpretedSource.Values
+                .Where(value => value.Lineage is not null
+                    && IsWithinContext(value.Lineage, context.Value))
+                .ToArray();
+            var scopedSource = new InterpretedSourceDocument(
+                interpretedSource.OriginatingSourceId,
+                interpretedSource.StructureId,
+                scopedValues,
+                interpretedSource.ArchiveProvenance,
+                interpretedSource.StructuralCardinality);
+            var familyDataset = new DatabaseDatasetBuildSpecification(
+                dataset.SourceSetId,
+                dataset.DisplayName,
+                dataset.Ordinal,
+                dataset.RepeatedDataLayout,
+                dataset.Sources,
+                [family],
+                dataset.Fields.Where(field => field.RowFamilyId == family.Id).ToArray());
+            var projection = await sourceProjection.ProjectAsync(
+                    familyDataset,
+                    source,
+                    scopedSource,
+                    maximumRowsPerGroup,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            rows.AddRange(projection.Rows);
+            truncatedFamilies.AddRange(projection.TruncatedRowFamilies);
+        }
+
+        return new DatabaseSourceProjection(
+            rows,
+            truncatedFamilies.Count > 0,
+            truncatedFamilies.Distinct().ToArray());
+    }
+
+    private static ProjectionContext? ResolveProjectionContext(
+        HierarchySourceOccurrence occurrence,
+        RowFamilyId familyId)
+    {
+        var path = string.Empty;
+        ProjectionContext? context = null;
+        foreach (var element in occurrence.Lineage.ElementPath)
+        {
+            path += "/" + element.ExpandedName;
+            if (string.Equals(path, familyId.AnchorPath, StringComparison.Ordinal)
+                || familyId.AnchorPath.StartsWith(path + "/", StringComparison.Ordinal))
+            {
+                context = new ProjectionContext(path, element.InstanceId);
+            }
+        }
+
+        return context;
+    }
+
+    private static bool IsWithinContext(
+        SourceValueLineage lineage,
+        ProjectionContext context)
+    {
+        var path = string.Empty;
+        foreach (var element in lineage.ElementPath)
+        {
+            path += "/" + element.ExpandedName;
+            if (string.Equals(path, context.StructuralPath, StringComparison.Ordinal))
+            {
+                return element.InstanceId == context.InstanceId;
+            }
+        }
+
+        return false;
+    }
+
     private static IReadOnlyList<DiscoveryOutputPreviewGroup> CreateGroups(
         DatabaseDatasetBuildSpecification dataset,
         DatabaseSourceProjection projection)
     {
         var truncatedFamilies = projection.TruncatedRowFamilies.ToHashSet();
-        return projection.Rows
-            .GroupBy(row => row.SemanticIdentity?.RowFamilyId
-                ?? throw new InvalidOperationException(
-                    "A family-aware output preview row requires semantic record identity."))
-            .OrderBy(group => group.Key)
+        return dataset.RowFamilies
+            .OrderBy(family => family.Id)
             .Take(DiscoveryOutputPreviewLimits.MaximumGroups)
-            .Select(group => CreateGroup(
+            .Select(family => CreateGroup(
                 dataset,
-                group.Key,
-                group.ToArray(),
+                family.Id,
+                projection.Rows.Where(row => row.SemanticIdentity?.RowFamilyId == family.Id)
+                    .ToArray(),
                 projection.IsTruncated && truncatedFamilies.Count == 0
-                    || truncatedFamilies.Contains(group.Key)))
+                    || truncatedFamilies.Contains(family.Id)))
             .ToArray();
     }
 
@@ -140,6 +231,17 @@ public sealed class DiscoveryOutputPreviewService(
         var allColumns = rows
             .SelectMany(row => row.Cells)
             .Select(cell => cell.ColumnIdentity)
+            .Concat(dataset.Fields
+                .Where(field => field.RowFamilyId == familyId)
+                .Where(field => rows.SelectMany(row => row.Cells).All(cell =>
+                    !string.Equals(
+                        cell.ColumnIdentity.FieldKey,
+                        field.FieldKey,
+                        StringComparison.Ordinal)))
+                .Select(field => new DatabaseColumnIdentity(
+                    familyId,
+                    field.FieldKey,
+                    DatabaseRepeatCoordinatePath.Empty)))
             .Distinct()
             .OrderBy(identity => ResolveFieldOrdinal(dataset, identity))
             .ThenBy(identity => identity.RepeatCoordinates)
@@ -197,6 +299,8 @@ public sealed class DiscoveryOutputPreviewService(
             ? field.EffectiveName
             : $"{field.EffectiveName} {identity.RepeatCoordinates}";
     }
+
+    private readonly record struct ProjectionContext(string StructuralPath, long InstanceId);
 }
 
 public sealed record DiscoveryOutputPreviewHostResult(

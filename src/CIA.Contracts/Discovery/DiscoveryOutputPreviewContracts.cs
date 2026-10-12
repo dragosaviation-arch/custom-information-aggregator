@@ -72,10 +72,16 @@ public sealed record DiscoveryOutputPreviewRequest
 {
     [JsonConstructor]
     public DiscoveryOutputPreviewRequest(
+        OutputSetId outputSetId,
         DiscoveryOccurrenceLookup occurrence,
         DiscoveryOutputProjectionSpecification projection,
         int maximumRowsPerGroup = DiscoveryOutputPreviewLimits.DefaultMaximumRowsPerGroup)
     {
+        if (outputSetId.Value == Guid.Empty)
+        {
+            throw new ArgumentException("An output preview requires an Output Set identity.", nameof(outputSetId));
+        }
+
         ArgumentNullException.ThrowIfNull(occurrence);
         ArgumentNullException.ThrowIfNull(projection);
         if (occurrence.DetailedIdentities.Any(identity =>
@@ -91,10 +97,13 @@ public sealed record DiscoveryOutputPreviewRequest
             throw new ArgumentOutOfRangeException(nameof(maximumRowsPerGroup));
         }
 
+        OutputSetId = outputSetId;
         Occurrence = occurrence;
         Projection = projection;
         MaximumRowsPerGroup = maximumRowsPerGroup;
     }
+
+    public OutputSetId OutputSetId { get; }
 
     public DiscoveryOccurrenceLookup Occurrence { get; }
 
@@ -104,6 +113,7 @@ public sealed record DiscoveryOutputPreviewRequest
 }
 
 public sealed record DiscoveryOutputPreview(
+    OutputSetId OutputSetId,
     OperationId DiscoveryOperationId,
     DiscoveryInformationIdentity OccurrenceIdentity,
     int OccurrenceOrdinal,

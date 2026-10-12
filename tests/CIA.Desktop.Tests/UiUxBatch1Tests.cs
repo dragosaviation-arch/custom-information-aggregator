@@ -133,8 +133,8 @@ public sealed class UiUxBatch1Tests
                 StringComparison.Ordinal)));
         StringAssert.Contains(discovery, "Command=\"{Binding DataContext.ToggleBlacklistCommand");
         StringAssert.Contains(discovery, "Content=\"{Binding BlacklistActionText}\"");
-        StringAssert.Contains(discovery, "x:Name=\"PreviewRow\" Height=\"2*\"");
-        StringAssert.Contains(discovery, "x:Name=\"SettingsRow\" Height=\"3*\"");
+        StringAssert.Contains(discovery, "x:Name=\"PreviewRow\" Height=\"*\"");
+        StringAssert.Contains(discovery, "x:Name=\"SettingsRow\" Height=\"*\"");
         StringAssert.Contains(discovery, "Text=\"{Binding OccurrencePreviewText}\"");
         StringAssert.Contains(discovery, "Command=\"{Binding PreviousOccurrenceCommand}\"");
         StringAssert.Contains(discovery, "Command=\"{Binding NextOccurrenceCommand}\"");

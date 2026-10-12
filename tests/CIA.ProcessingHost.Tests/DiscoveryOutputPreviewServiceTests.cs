@@ -54,9 +54,57 @@ public sealed class DiscoveryOutputPreviewServiceTests
             $"{result.Failure?.Code}: {result.Failure?.Description} {workspace.PreviewLogger.Exception}");
         Assert.IsNotNull(result.Preview);
         Assert.IsGreaterThanOrEqualTo(3, result.Preview.Groups.Count);
-        CollectionAssert.AreEqual(
-            Describe(authoritative.Rows).ToArray(),
-            Describe(result.Preview.Groups.SelectMany(group => group.Rows)).ToArray());
+        var previewValues = result.Preview.Groups.SelectMany(group => group.Rows)
+            .SelectMany(row => row.Cells)
+            .SelectMany(cell => cell.Values)
+            .ToArray();
+        Assert.IsTrue(previewValues.Contains("B1"));
+        Assert.IsTrue(previewValues.Contains("5"));
+        Assert.IsTrue(previewValues.Contains("4"));
+        Assert.IsFalse(previewValues.Contains("B2"));
+        Assert.IsGreaterThan(
+            result.Preview.Groups.Sum(group => group.Rows.Count),
+            authoritative.Rows.Count);
+        Assert.IsNull(await workspace.Repository.ReadPublishedDatabaseGenerationAsync());
+    }
+
+    [TestMethod]
+    public async Task SelectedOccurrenceScopesActualValuesAndMissingCellsRemainTruthful()
+    {
+        using var workspace = new Workspace();
+        var source = workspace.Source("occurrences.xml", """
+            <root>
+              <record><id>A</id><title>Book A</title></record>
+              <record><id>B</id><title>Book B</title></record>
+              <record><id>C</id></record>
+            </root>
+            """);
+        var discovery = await workspace.DiscoverAsync(source);
+        var dataset = CreateDataset(discovery, source, RepeatedDataLayout.StructuralRows);
+        var selected = discovery.Information.Single(item => item.InformationType == "id");
+        var outputSetId = OutputSetId.CreateNew();
+
+        var first = await workspace.Preview.GetPreviewAsync(CreateRequest(
+            discovery, dataset, selected, 20, globalOrdinal: 1, outputSetId: outputSetId));
+        var second = await workspace.Preview.GetPreviewAsync(CreateRequest(
+            discovery, dataset, selected, 20, globalOrdinal: 2, outputSetId: outputSetId));
+        var missing = await workspace.Preview.GetPreviewAsync(CreateRequest(
+            discovery, dataset, selected, 20, globalOrdinal: 3, outputSetId: outputSetId));
+
+        Assert.IsTrue(first.Accepted);
+        Assert.IsTrue(second.Accepted);
+        Assert.IsTrue(missing.Accepted);
+        Assert.AreEqual(outputSetId, first.Preview!.OutputSetId);
+        CollectionAssert.Contains(Values(first), "Book A");
+        CollectionAssert.DoesNotContain(Values(first), "Book B");
+        CollectionAssert.Contains(Values(second), "Book B");
+        CollectionAssert.DoesNotContain(Values(second), "Book A");
+        var missingGroup = missing.Preview!.Groups.Single(group =>
+            group.Columns.Any(column => column.Header == "title"));
+        Assert.IsTrue(missingGroup.Columns.Any(column => column.Header == "title"));
+        Assert.IsFalse(missingGroup.Rows.SelectMany(row => row.Cells)
+            .SelectMany(cell => cell.Values).Any(value => value == "title"));
+        Assert.IsFalse(Values(missing).Any(value => value.StartsWith("Book ", StringComparison.Ordinal)));
         Assert.IsNull(await workspace.Repository.ReadPublishedDatabaseGenerationAsync());
     }
 
@@ -80,12 +128,12 @@ public sealed class DiscoveryOutputPreviewServiceTests
             discovery,
             dataset,
             selected,
-            maximumRows: 3));
+            maximumRows: 1));
 
         Assert.IsTrue(result.Accepted,
             $"{result.Failure?.Code}: {result.Failure?.Description} {workspace.PreviewLogger.Exception}");
         Assert.IsNotNull(result.Preview);
-        Assert.IsTrue(result.Preview.Groups.All(group => group.Rows.Count <= 3));
+        Assert.IsTrue(result.Preview.Groups.All(group => group.Rows.Count <= 1));
         Assert.IsTrue(result.Preview.Groups.Any(group => group.IsTruncated));
         foreach (var group in result.Preview.Groups)
         {
@@ -154,9 +202,11 @@ public sealed class DiscoveryOutputPreviewServiceTests
         DatabaseDatasetBuildSpecification dataset,
         DiscoveredInformation selected,
         int maximumRows,
-        int globalOrdinal = 1)
+        int globalOrdinal = 1,
+        OutputSetId? outputSetId = null)
     {
         return new DiscoveryOutputPreviewRequest(
+            outputSetId ?? OutputSetId.CreateNew(),
             new DiscoveryOccurrenceLookup(
                 discovery.Completion.Correlation.OperationId,
                 [selected.Identity],
@@ -170,6 +220,12 @@ public sealed class DiscoveryOutputPreviewServiceTests
                 dataset.Fields),
             maximumRows);
     }
+
+    private static string[] Values(DiscoveryOutputPreviewHostResult result) => result.Preview!.Groups
+        .SelectMany(group => group.Rows)
+        .SelectMany(row => row.Cells)
+        .SelectMany(cell => cell.Values)
+        .ToArray();
 
     private static DatabaseDatasetBuildSpecification CreateDataset(
         DiscoveryHostResult discovery,
