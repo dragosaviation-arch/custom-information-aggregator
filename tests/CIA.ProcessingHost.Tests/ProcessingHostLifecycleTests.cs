@@ -127,9 +127,11 @@ public sealed class ProcessingHostLifecycleTests
         var discovery = await fixture.Supervisor.RequestDiscoveryAsync(
             correlation,
             load.Sources);
+        var identifier = discovery.Information.Single(item =>
+            item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope);
         var lookup = new DiscoveryOccurrenceLookup(
             correlation.OperationId,
-            [discovery.Information.Single().Identity],
+            [identifier.Identity],
             GlobalOrdinal: 2,
             TotalOccurrenceCount: 2);
 
@@ -145,7 +147,7 @@ public sealed class ProcessingHostLifecycleTests
         var contributors = await fixture.Supervisor.RequestDiscoveryContributorsAsync(
             new DiscoveryContributorPageQuery(
                 correlation.OperationId,
-                [discovery.Information.Single().Identity],
+                [identifier.Identity],
                 StartIndex: 0,
                 PageSize: DiscoveryContributorPaging.DefaultPageSize,
                 ExpectedSourceCount: 1));

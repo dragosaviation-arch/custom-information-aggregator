@@ -9,7 +9,8 @@ public sealed class InterpretedSourceDocument
         string structureId,
         IEnumerable<InterpretedSourceValue> values,
         ArchiveSourceProvenance? archiveProvenance = null,
-        IEnumerable<SourceStructuralCardinality>? structuralCardinality = null)
+        IEnumerable<SourceStructuralCardinality>? structuralCardinality = null,
+        IEnumerable<InterpretedSourceElement>? elements = null)
     {
         if (originatingSourceId == default)
         {
@@ -23,6 +24,7 @@ public sealed class InterpretedSourceDocument
 
         var valueArray = values.ToArray();
         var cardinalityArray = structuralCardinality?.ToArray() ?? [];
+        var elementArray = elements?.ToArray() ?? [];
 
         if (valueArray.Any(value => value is null))
         {
@@ -38,11 +40,19 @@ public sealed class InterpretedSourceDocument
                 nameof(structuralCardinality));
         }
 
+        if (elementArray.Any(element => element is null))
+        {
+            throw new ArgumentException(
+                "Interpreted source elements cannot contain null items.",
+                nameof(elements));
+        }
+
         OriginatingSourceId = originatingSourceId;
         StructureId = structureId;
         Values = Array.AsReadOnly(valueArray);
         ArchiveProvenance = archiveProvenance;
         StructuralCardinality = Array.AsReadOnly(cardinalityArray);
+        Elements = Array.AsReadOnly(elementArray);
     }
 
     public SourceId OriginatingSourceId { get; }
@@ -54,6 +64,43 @@ public sealed class InterpretedSourceDocument
     public ArchiveSourceProvenance? ArchiveProvenance { get; }
 
     public IReadOnlyList<SourceStructuralCardinality> StructuralCardinality { get; }
+
+    public IReadOnlyList<InterpretedSourceElement> Elements { get; }
+}
+
+public sealed record InterpretedSourceElement
+{
+    public InterpretedSourceElement(
+        string informationType,
+        string structuralPath,
+        int occurrenceCount,
+        SourceElementRole role)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(informationType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(structuralPath);
+        if (occurrenceCount < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(occurrenceCount));
+        }
+
+        if (!Enum.IsDefined(role))
+        {
+            throw new ArgumentOutOfRangeException(nameof(role), role, null);
+        }
+
+        InformationType = informationType;
+        StructuralPath = structuralPath;
+        OccurrenceCount = occurrenceCount;
+        Role = role;
+    }
+
+    public string InformationType { get; }
+
+    public string StructuralPath { get; }
+
+    public int OccurrenceCount { get; }
+
+    public SourceElementRole Role { get; }
 }
 
 public sealed class InterpretedSourceValue

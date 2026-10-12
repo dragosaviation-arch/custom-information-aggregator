@@ -648,6 +648,15 @@ public static class IpcContractValidator
             }
 
             ValidateDiscoveryInformationIdentity(information.Identity);
+            if ((information.ElementRole is { } elementRole
+                    && !Enum.IsDefined(elementRole))
+                || (information.Identity.CandidateKind == SourceValueCandidateKind.ElementScope
+                    && information.ElementRole != SourceElementRole.Structural))
+            {
+                throw InvalidContract(
+                    "A discovered element role is inconsistent with its identity.");
+            }
+
             if (information.DetailedSourceCount < 1
                 || information.DetailedSourceCount > information.LogicalSourceCount
                 || information.RowFamilyId is not { } rowFamilyId

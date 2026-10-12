@@ -128,6 +128,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private string? _sourceInspectionFailure;
     private string _occurrencePreviewText =
         "Select a discovered tag to inspect its occurrence value.";
+    private string _occurrencePreviewContextText = "No structural context selected";
     private string _occurrenceOrdinalInput = string.Empty;
     private int _currentOccurrenceOrdinal;
     private int _occurrenceTotal;
@@ -422,6 +423,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _selectionImpact, value))
             {
                 OnPropertyChanged(nameof(HasSelectionImpact));
+                OnPropertyChanged(nameof(SelectionSummary));
+                OnPropertyChanged(nameof(SelectionFanoutSummary));
             }
         }
     }
@@ -852,9 +855,21 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public string SelectionSummary => string.Format(
         CultureInfo.CurrentCulture,
         "{0:N0} / {1:N0} selected",
-        _allInformation.SelectMany(information => information.Children)
-            .Count(information => information.IsSelected),
-        _allInformation.Sum(information => information.Children.Count));
+        _activeConfiguration.Current.Items.Count(item =>
+            item.Disposition == DiscoveryInformationDisposition.Selected
+            && item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope),
+        _activeConfiguration.Current.Items.Count(item =>
+            item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope));
+
+    public string SelectionFanoutSummary => string.Format(
+        CultureInfo.CurrentCulture,
+        "{0:N0} logical tags → {1:N0} detailed fields → {2:N0} output tables",
+        _allInformation.Count(information =>
+            !information.IsStructuralScope && information.HasAnySelectedChild),
+        _activeConfiguration.Current.Items.Count(item =>
+            item.Disposition == DiscoveryInformationDisposition.Selected
+            && item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope),
+        SelectionImpact.Groups.Count);
 
     public string ShowingSummary
     {
@@ -992,6 +1007,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 OnPropertyChanged(nameof(SelectedDatabaseTag));
                 OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
                 OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
+                OnPropertyChanged(nameof(OccurrencePreviewContextText));
                 _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
                 PrepareOccurrenceSelection(value);
                 _selectInformationCommand.Execute(value);
@@ -1014,7 +1030,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     }
 
     public bool CanEditDatabaseTagOverride =>
-        PreviewInformation is not null && CanChangeConfiguration();
+        PreviewInformation is not null
+        && !PreviewInformation.IsStructuralScope
+        && CanChangeConfiguration();
 
     public bool CanConfigureRepeatedDataLayout => CanChangeConfiguration();
 
@@ -1192,6 +1210,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             Interlocked.Increment(ref _outputPreviewRequestVersion);
             _outputPreviewRequestCancellation.Cancel();
         }
+    }
+
+    public string OccurrencePreviewContextText
+    {
+        get => _occurrencePreviewContextText;
+        private set => SetProperty(ref _occurrencePreviewContextText, value);
     }
 
     private bool CanRunDiscovery()
@@ -1463,8 +1487,17 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         if (information is null)
         {
             OccurrencePreviewText = "Select a discovered tag to inspect its occurrence value.";
+            OccurrencePreviewContextText = "No structural context selected";
             return;
         }
+
+        OccurrencePreviewContextText = information.DetailedIdentities.Count > 1
+            ? string.Format(
+                CultureInfo.CurrentCulture,
+                "{0} · {1:N0} detailed structural contexts",
+                information.ElementRoleText,
+                information.DetailedIdentities.Count)
+            : $"{information.ElementRoleText} · {information.StructuralIdentity}";
 
         if (!canLoadOccurrence)
         {
@@ -1582,12 +1615,19 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            OccurrencePreviewText = occurrence.Value;
+            OccurrencePreviewText = information.IsStructuralScope
+                ? "Structural container — no scalar value. Selecting it applies to its materializable descendant fields."
+                : occurrence.Value;
+            OccurrencePreviewContextText =
+                $"{information.ElementRoleText} · {occurrence.Identity.StructuralIdentity}";
             OccurrenceTotal = occurrence.TotalOccurrenceCount;
             CurrentOccurrenceOrdinal = occurrence.Ordinal;
             SetOccurrenceOrdinalInput(
                 occurrence.Ordinal.ToString(CultureInfo.InvariantCulture));
-            ScheduleOutputPreview();
+            if (!information.IsStructuralScope)
+            {
+                ScheduleOutputPreview();
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -2087,6 +2127,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(SelectedDatabaseTag));
         OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
         OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
+        OnPropertyChanged(nameof(OccurrencePreviewContextText));
         _clearDatabaseTagOverrideCommand.NotifyCanExecuteChanged();
         PrepareOccurrenceSelection(information);
         _selectInformationCommand.Execute(information);
@@ -2108,6 +2149,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         _previewInformation = information;
         OnPropertyChanged(nameof(PreviewInformation));
+        OnPropertyChanged(nameof(OccurrencePreviewContextText));
         SelectOutputSetForParent(information.SourceSetId);
         PrepareOccurrenceSelection(information);
         _selectInformationCommand.Execute(information);
@@ -2178,6 +2220,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool CanToggleSelection(DiscoveredInformationItemViewModel? information)
     {
         return information is not null
+            && information.SelectionTargetIdentities.Count > 0
             && !information.IsBlacklisted
             && CanChangeConfiguration();
     }
@@ -2556,7 +2599,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         ApplyConfigurationChange(
             () => _activeConfiguration.SetSelection(
-                information.DetailedIdentities,
+                information.SelectionTargetIdentities,
                 information.SelectionState != true));
     }
 
@@ -2569,7 +2612,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         ApplyConfigurationChange(
             () => _activeConfiguration.SetBlacklisted(
-                information.DetailedIdentities,
+                information.SelectionTargetIdentities,
                 !information.IsBlacklisted));
     }
 
@@ -2630,7 +2673,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             .Where(information => isSelected
                 ? !information.IsSelected && !information.IsBlacklisted
                 : information.IsSelected)
-            .SelectMany(information => information.DetailedIdentities)
+            .SelectMany(information => information.SelectionTargetIdentities)
+            .Distinct()
             .ToArray();
         if (targets.Length == 0)
         {
@@ -2797,6 +2841,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(CurrentPage));
         OnPropertyChanged(nameof(HasInformation));
         OnPropertyChanged(nameof(SelectionSummary));
+        OnPropertyChanged(nameof(SelectionFanoutSummary));
         OnPropertyChanged(nameof(ShowingSummary));
         OnPropertyChanged(nameof(PageSummary));
         OnPropertyChanged(nameof(ResultSummary));
@@ -3245,6 +3290,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 public sealed class DiscoveredInformationItemViewModel : ObservableObject
 {
     private DiscoveryInformationDisposition _disposition;
+    private int _selectedTargetCount;
+    private int _blacklistedTargetCount;
     private string? _databaseTagOverride;
     private string _sourceSetName;
     private bool _isExpanded;
@@ -3260,7 +3307,9 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
             disposition,
             databaseTagOverride,
             isLogicalParent: true,
-            children: [])
+            children: [],
+            selectionTargetIdentities: [information.Identity],
+            targetDispositions: [disposition])
     {
     }
 
@@ -3270,7 +3319,9 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         DiscoveryInformationDisposition disposition,
         string? databaseTagOverride,
         bool isLogicalParent,
-        IReadOnlyList<DiscoveredInformationItemViewModel> children)
+        IReadOnlyList<DiscoveredInformationItemViewModel> children,
+        IReadOnlyList<DiscoveryInformationIdentity> selectionTargetIdentities,
+        IReadOnlyList<DiscoveryInformationDisposition> targetDispositions)
     {
         ArgumentNullException.ThrowIfNull(information);
         if (information.Count == 0)
@@ -3288,6 +3339,7 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
 
         DetailedInformation = information;
         DetailedIdentities = information.Select(item => item.Identity).ToArray();
+        SelectionTargetIdentities = selectionTargetIdentities.Distinct().ToArray();
         Identity = information[0].Identity;
         RowFamilyId = information[0].RowFamilyId;
         IsLogicalParent = isLogicalParent;
@@ -3307,6 +3359,7 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
             : information[0].DetailedSourceCount;
         SampleValue = DiscoverySampleValueFormatter.Format(information[0].SampleValue);
         _disposition = disposition;
+        UpdateTargetCounts(targetDispositions);
     }
 
     public static IEnumerable<DiscoveredInformationItemViewModel> CreateLogicalItems(
@@ -3320,7 +3373,10 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(resolveDisposition);
         ArgumentNullException.ThrowIfNull(resolveDatabaseTagOverride);
 
-        return information
+        var detailedInformation = information.ToArray();
+        var targetsByIdentity = CreateSelectionTargets(detailedInformation);
+
+        return detailedInformation
             .GroupBy(item => DiscoveryLogicalIdentity.Create(item.Identity))
             .Select(group => group
                 .OrderBy(item => item.Identity.StructuralIdentity, StringComparer.Ordinal)
@@ -3330,21 +3386,37 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
             .Select(group =>
             {
                 var sourceSetName = resolveSourceSetName(group[0].SourceSetId);
-                var children = group.Select(item => new DiscoveredInformationItemViewModel(
-                    [item],
-                    sourceSetName,
-                    resolveDisposition(item.Identity),
-                    resolveDatabaseTagOverride(item.Identity),
-                    isLogicalParent: false,
-                    children: [])).ToArray();
+                var children = group.Select(item =>
+                {
+                    var targets = targetsByIdentity[item.Identity];
+                    var targetDispositions = targets.Select(resolveDisposition).ToArray();
+                    return new DiscoveredInformationItemViewModel(
+                        [item],
+                        sourceSetName,
+                        ResolveLogicalDisposition(targetDispositions),
+                        item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope
+                            ? null
+                            : resolveDatabaseTagOverride(item.Identity),
+                        isLogicalParent: false,
+                        children: [],
+                        targets,
+                        targetDispositions);
+                }).ToArray();
+                var parentTargets = children
+                    .SelectMany(child => child.SelectionTargetIdentities)
+                    .Distinct()
+                    .ToArray();
+                var parentTargetDispositions = parentTargets.Select(resolveDisposition).ToArray();
                 return new DiscoveredInformationItemViewModel(
                     group,
                     sourceSetName,
-                    ResolveLogicalDisposition(group.Select(item => resolveDisposition(item.Identity))),
+                    ResolveLogicalDisposition(parentTargetDispositions),
                     ResolveLogicalDatabaseTagOverride(
                         group.Select(item => resolveDatabaseTagOverride(item.Identity))),
                     isLogicalParent: true,
-                    children);
+                    children,
+                    parentTargets,
+                    parentTargetDispositions);
             });
     }
 
@@ -3354,11 +3426,20 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
 
     public IReadOnlyList<DiscoveryInformationIdentity> DetailedIdentities { get; }
 
+    public IReadOnlyList<DiscoveryInformationIdentity> SelectionTargetIdentities { get; }
+
     public IReadOnlyList<DiscoveredInformationItemViewModel> Children { get; }
 
     public bool IsLogicalParent { get; }
 
     public bool HasDetailedChildren => Children.Count > 0;
+
+    public string StructuralContextCountText => DetailedIdentities.Count == 1
+        ? "1 context"
+        : string.Format(
+            CultureInfo.CurrentCulture,
+            "{0:N0} contexts",
+            DetailedIdentities.Count);
 
     public RowFamilyId? RowFamilyId { get; }
 
@@ -3378,10 +3459,23 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
 
     public SourceValueCandidateKind CandidateKind => Identity.CandidateKind;
 
+    public bool IsStructuralScope => CandidateKind == SourceValueCandidateKind.ElementScope;
+
+    public SourceElementRole? ElementRole => ResolveElementRole(DetailedInformation);
+
+    public string ElementRoleText => ElementRole switch
+    {
+        SourceElementRole.Structural => "Structural container",
+        SourceElementRole.Mixed => "Mixed-content element",
+        SourceElementRole.ValueBearing => "Value-bearing element",
+        _ => CandidateKindText
+    };
+
     public string CandidateKindText => CandidateKind switch
     {
         SourceValueCandidateKind.Attribute => "Attribute",
         SourceValueCandidateKind.Structural => "Structural",
+        SourceValueCandidateKind.ElementScope => "Structural container",
         _ => "Element"
     };
 
@@ -3389,7 +3483,9 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
 
     public string InformationType => Identity.InformationType;
 
-    public string DatabaseTag => DatabaseTagOverride ?? InformationType;
+    public string DatabaseTag => IsStructuralScope
+        ? "Descendant fields"
+        : DatabaseTagOverride ?? InformationType;
 
     public string? DatabaseTagOverride => _databaseTagOverride;
 
@@ -3411,38 +3507,31 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
 
     public DiscoveryInformationDisposition Disposition => _disposition;
 
-    public bool IsSelected => Disposition == DiscoveryInformationDisposition.Selected;
+    public bool IsSelected => SelectionState == true;
 
-    public bool HasAnySelectedChild => IsLogicalParent && Children.Count > 0
-        ? Children.Any(child => child.IsSelected)
-        : IsSelected;
+    public bool HasAnySelectedChild => _selectedTargetCount > 0;
 
     public bool? SelectionState
     {
         get
         {
-            if (!IsLogicalParent)
-            {
-                return IsSelected;
-            }
-
-            if (Children.Count == 0)
-            {
-                return IsSelected;
-            }
-
-            var eligible = Children.Where(child => !child.IsBlacklisted).ToArray();
-            var selectedCount = eligible.Count(child => child.IsSelected);
-            if (selectedCount == 0)
+            if (SelectionTargetIdentities.Count == 0)
             {
                 return false;
             }
 
-            return selectedCount == eligible.Length ? true : null;
+            var eligibleCount = SelectionTargetIdentities.Count - _blacklistedTargetCount;
+            if (_selectedTargetCount == 0)
+            {
+                return false;
+            }
+
+            return _selectedTargetCount == eligibleCount ? true : null;
         }
     }
 
-    public bool IsBlacklisted => Disposition == DiscoveryInformationDisposition.Blacklisted;
+    public bool IsBlacklisted => SelectionTargetIdentities.Count > 0
+        && _blacklistedTargetCount == SelectionTargetIdentities.Count;
 
     public string DispositionText => SelectionState switch
     {
@@ -3502,8 +3591,10 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(databaseTagOverrides);
         if (!IsLogicalParent)
         {
-            ApplyDisposition(dispositions[Identity]);
-            ApplyDatabaseTagOverride(databaseTagOverrides.GetValueOrDefault(Identity));
+            ApplyTargetDispositions(dispositions);
+            ApplyDatabaseTagOverride(IsStructuralScope
+                ? null
+                : databaseTagOverrides.GetValueOrDefault(Identity));
             return;
         }
 
@@ -3512,8 +3603,7 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
             child.ApplyDetailedConfiguration(dispositions, databaseTagOverrides);
         }
 
-        ApplyDisposition(ResolveLogicalDisposition(
-            DetailedIdentities.Select(identity => dispositions[identity])));
+        ApplyTargetDispositions(dispositions);
         ApplyDatabaseTagOverride(ResolveLogicalDatabaseTagOverride(
             DetailedIdentities.Select(identity => databaseTagOverrides.GetValueOrDefault(identity))));
         OnPropertyChanged(nameof(HasAnySelectedChild));
@@ -3536,6 +3626,11 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         IEnumerable<DiscoveryInformationDisposition> dispositions)
     {
         var values = dispositions.Distinct().ToArray();
+        if (values.Length == 0)
+        {
+            return DiscoveryInformationDisposition.Neutral;
+        }
+
         return values.Length == 1
             ? values[0]
             : DiscoveryInformationDisposition.Neutral;
@@ -3545,6 +3640,108 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
     {
         var values = overrides.Distinct(StringComparer.Ordinal).ToArray();
         return values.Length == 1 ? values[0] : null;
+    }
+
+    private static SourceElementRole? ResolveElementRole(
+        IEnumerable<DiscoveredInformation> information)
+    {
+        var roles = information
+            .Select(item => item.ElementRole)
+            .Where(role => role is not null)
+            .Distinct()
+            .ToArray();
+        return roles.Length switch
+        {
+            0 => null,
+            1 => roles[0],
+            _ => SourceElementRole.Mixed
+        };
+    }
+
+    private void ApplyTargetDispositions(
+        IReadOnlyDictionary<DiscoveryInformationIdentity, DiscoveryInformationDisposition>
+            dispositions)
+    {
+        var values = SelectionTargetIdentities.Select(identity => dispositions[identity]).ToArray();
+        ApplyDisposition(ResolveLogicalDisposition(values));
+        UpdateTargetCounts(values);
+        OnPropertyChanged(nameof(IsSelected));
+        OnPropertyChanged(nameof(HasAnySelectedChild));
+        OnPropertyChanged(nameof(SelectionState));
+        OnPropertyChanged(nameof(IsBlacklisted));
+        OnPropertyChanged(nameof(DispositionText));
+        OnPropertyChanged(nameof(BlacklistActionText));
+    }
+
+    private void UpdateTargetCounts(
+        IEnumerable<DiscoveryInformationDisposition> dispositions)
+    {
+        var values = dispositions.ToArray();
+        _selectedTargetCount = values.Count(value =>
+            value == DiscoveryInformationDisposition.Selected);
+        _blacklistedTargetCount = values.Count(value =>
+            value == DiscoveryInformationDisposition.Blacklisted);
+    }
+
+    private static IReadOnlyDictionary<
+        DiscoveryInformationIdentity,
+        IReadOnlyList<DiscoveryInformationIdentity>> CreateSelectionTargets(
+        IReadOnlyList<DiscoveredInformation> information)
+    {
+        var scopeTargets = information
+            .Where(item => item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope)
+            .ToDictionary(
+                item => item.Identity,
+                _ => new List<DiscoveryInformationIdentity>());
+        var scopesByPath = scopeTargets.Keys
+            .GroupBy(identity => (identity.SourceSetId, identity.StructuralPath))
+            .ToDictionary(group => group.Key, group => group.ToArray());
+
+        foreach (var candidate in information.Where(item =>
+                     item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope))
+        {
+            foreach (var path in EnumerateStructuralPathPrefixes(candidate.StructuralPath))
+            {
+                if (!scopesByPath.TryGetValue((candidate.SourceSetId, path), out var scopes))
+                {
+                    continue;
+                }
+
+                foreach (var scope in scopes)
+                {
+                    scopeTargets[scope].Add(candidate.Identity);
+                }
+            }
+        }
+
+        return information.ToDictionary(
+            item => item.Identity,
+            item => (IReadOnlyList<DiscoveryInformationIdentity>)(
+                item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope
+                    ? scopeTargets[item.Identity].Distinct().ToArray()
+                    : [item.Identity]));
+    }
+
+    private static IEnumerable<string> EnumerateStructuralPathPrefixes(string structuralPath)
+    {
+        var namespaceDepth = 0;
+        for (var index = 1; index < structuralPath.Length; index++)
+        {
+            switch (structuralPath[index])
+            {
+                case '{':
+                    namespaceDepth++;
+                    break;
+                case '}' when namespaceDepth > 0:
+                    namespaceDepth--;
+                    break;
+                case '/' when namespaceDepth == 0:
+                    yield return structuralPath[..index];
+                    break;
+            }
+        }
+
+        yield return structuralPath;
     }
 
 }

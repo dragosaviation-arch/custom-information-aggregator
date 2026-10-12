@@ -154,7 +154,8 @@ public sealed class GenericXmlElementValueSourceAdapter
             originatingSourceId,
             StructureId,
             result.Values,
-            structuralCardinality: result.StructuralCardinality);
+            structuralCardinality: result.StructuralCardinality,
+            elements: result.Elements);
     }
 
     public ValueTask<SourceOccurrenceRead> ReadOccurrenceAsync(
@@ -259,7 +260,8 @@ internal static class XmlElementValueReader
             values
                 .OrderBy(value => value.Lineage?.TraversalOrder ?? long.MaxValue)
                 .ToArray(),
-            cardinality.CreateResult());
+            cardinality.CreateResult(),
+            cardinality.CreateElementResult(values));
     }
 
     public static async ValueTask<SourceOccurrenceRead> ReadOccurrenceAsync(
@@ -274,6 +276,42 @@ internal static class XmlElementValueReader
     {
         var occurrenceCount = 0;
         string? requestedValue = null;
+
+        if (candidateKind == SourceValueCandidateKind.ElementScope)
+        {
+            await ReadAsync(
+                originatingSourceId,
+                reader,
+                _ => ValueTask.CompletedTask,
+                elementPath =>
+                {
+                    var element = elementPath[^1];
+                    if (!string.Equals(
+                            element.QualifiedName,
+                            informationType,
+                            StringComparison.Ordinal)
+                        || !string.Equals(
+                            CreateStructuralPath(elementPath),
+                            structuralPath,
+                            StringComparison.Ordinal)
+                        || !string.Equals(
+                            structuralPath,
+                            structuralIdentity,
+                            StringComparison.Ordinal))
+                    {
+                        return;
+                    }
+
+                    occurrenceCount++;
+                    if (occurrenceCount == localOrdinal)
+                    {
+                        requestedValue = string.Empty;
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            return new SourceOccurrenceRead(requestedValue, occurrenceCount);
+        }
 
         await ReadAsync(
             originatingSourceId,
@@ -521,6 +559,12 @@ internal static class XmlElementValueReader
         return attributes;
     }
 
+    private static string CreateStructuralPath(
+        IReadOnlyList<SourceElementInstance> elementPath)
+    {
+        return string.Concat(elementPath.Select(element => $"/{element.ExpandedName}"));
+    }
+
     private static async ValueTask<CompletedValueElement?> CompleteElementAsync(
         ElementFrame frame,
         StructuralSlotDetector structuralSlots,
@@ -587,11 +631,14 @@ internal static class XmlElementValueReader
 
     internal sealed record XmlElementValueReadResult(
         IReadOnlyList<InterpretedSourceValue> Values,
-        IReadOnlyList<SourceStructuralCardinality> StructuralCardinality);
+        IReadOnlyList<SourceStructuralCardinality> StructuralCardinality,
+        IReadOnlyList<InterpretedSourceElement> Elements);
 
     private sealed class StreamingStructuralCardinalityCollector
     {
         private readonly Dictionary<string, long> _instanceCounts =
+            new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _informationTypes =
             new(StringComparer.Ordinal);
         private readonly Dictionary<CardinalityEdge, CardinalityEdgeCounter> _edges = [];
 
@@ -610,6 +657,7 @@ internal static class XmlElementValueReader
 
             _instanceCounts[currentPath] = checked(
                 _instanceCounts.GetValueOrDefault(currentPath) + 1);
+            _informationTypes.TryAdd(currentPath, elementPath[^1].QualifiedName);
             if (parentPath is not null)
             {
                 var edge = new CardinalityEdge(rootPath!, parentPath, currentPath);
@@ -637,6 +685,38 @@ internal static class XmlElementValueReader
                         edge.Value.MaximumChildrenPerParent,
                         _instanceCounts[edge.Key.ParentPath],
                         edge.Value.RepeatingParentCount);
+                })
+                .ToArray();
+        }
+
+        public IReadOnlyList<InterpretedSourceElement> CreateElementResult(
+            IReadOnlyList<InterpretedSourceValue> values)
+        {
+            var valuePaths = values
+                .Where(value => value.CandidateKind != SourceValueCandidateKind.Attribute)
+                .Select(value => value.Lineage?.StructuralPath)
+                .Where(path => path is not null)
+                .ToHashSet(StringComparer.Ordinal);
+            var parentPaths = _edges.Keys
+                .Select(edge => edge.ParentPath)
+                .ToHashSet(StringComparer.Ordinal);
+
+            return _instanceCounts
+                .OrderBy(element => element.Key, StringComparer.Ordinal)
+                .Select(element =>
+                {
+                    var hasValue = valuePaths.Contains(element.Key);
+                    var hasChildren = parentPaths.Contains(element.Key);
+                    var role = hasChildren && hasValue
+                        ? SourceElementRole.Mixed
+                        : hasValue
+                            ? SourceElementRole.ValueBearing
+                            : SourceElementRole.Structural;
+                    return new InterpretedSourceElement(
+                        _informationTypes[element.Key],
+                        element.Key,
+                        checked((int)element.Value),
+                        role);
                 })
                 .ToArray();
         }

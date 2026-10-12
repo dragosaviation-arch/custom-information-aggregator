@@ -4,6 +4,7 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Database;
 using CIA.Desktop.Discovery;
 using CIA.Desktop.Database;
 using CIA.Desktop.Hosting;
@@ -17,6 +18,44 @@ namespace CIA.Desktop.Tests;
 [TestClass]
 public sealed class DiscoveryWorkspaceViewModelTests
 {
+    [TestMethod]
+    public void ThreeExactValueIdentitiesInOneFamilyProduceThreeProjectedFields()
+    {
+        var sourceSetId = SourceSetId.CreateNew();
+        var sourceId = SourceId.CreateNew();
+        var family = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/root/record"),
+            parentRowFamilyId: null);
+        var information = new[] { "code", "name", "quantity" }
+            .Select(field => CreateDetailedInformation(
+                sourceSetId,
+                sourceId,
+                $"/root/record/{field}",
+                field,
+                SourceValueCandidateKind.Element,
+                $"/root/record/{field}") with
+            {
+                RowFamilyId = family.Id,
+                ElementRole = SourceElementRole.ValueBearing
+            })
+            .ToArray();
+        var configuration = new ActiveDiscoveryConfiguration();
+        configuration.Synchronize(information, new DiscoveryFamilyCatalog([family]));
+        configuration.SetSelection(information.Select(item => item.Identity), isSelected: true);
+
+        var mappings = DatabaseTagMapper.CreateFieldMappings(
+            sourceSetId,
+            configuration.Current.Items,
+            configuration.DatabaseTagOverridesByIdentity,
+            configuration.FamilyAssignments);
+
+        Assert.HasCount(3, mappings);
+        CollectionAssert.AreEquivalent(
+            new[] { "code", "name", "quantity" },
+            mappings.Select(mapping => mapping.EffectiveName).ToArray());
+        Assert.IsTrue(mappings.All(mapping => mapping.RowFamilyId == family.Id));
+    }
+
     [TestMethod]
     public void SelectionImpactKeepsRootRepeatedNestedAndSameNameFamiliesSeparate()
     {
@@ -941,28 +980,43 @@ public sealed class DiscoveryWorkspaceViewModelTests
                         "/root/a/toolname",
                         "toolname",
                         SourceValueCandidateKind.Element,
-                        "/root/a/toolname"),
+                        "/root/a/toolname",
+                        sampleValue: "Alpha tool"),
                     CreateDetailedInformation(
                         loadedSource,
                         "/root/b/toolname",
                         "toolname",
                         SourceValueCandidateKind.Element,
-                        "/root/b/toolname")
+                        "/root/b/toolname",
+                        sampleValue: "Beta tool")
                 ]);
         });
+        var databaseCoordinator = new DatabaseBuildCoordinator(
+            configuration,
+            sourceSet,
+            workflow,
+            new NoOpDatabaseClient(),
+            NullLogger<DatabaseBuildCoordinator>.Instance);
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
             configuration,
             sourceSet,
-            workflow);
+            workflow,
+            databaseCoordinator);
 
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
         await AwaitSelectedOccurrenceAsync(viewModel);
         var logicalField = viewModel.Information.Single();
 
+        Assert.AreEqual("Alpha tool", viewModel.OccurrencePreviewText);
+        StringAssert.Contains(viewModel.OccurrencePreviewContextText, "/root/a/toolname");
+
         viewModel.ToggleSelectionCommand.Execute(logicalField);
 
         Assert.AreEqual("2 / 2 selected", viewModel.SelectionSummary);
+        Assert.AreEqual(
+            "1 logical tags → 2 detailed fields → 2 output tables",
+            viewModel.SelectionFanoutSummary);
         Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
             configuration.Current.Items.Single(item => item.Identity == identity).Disposition
                 == DiscoveryInformationDisposition.Selected));
@@ -996,6 +1050,8 @@ public sealed class DiscoveryWorkspaceViewModelTests
         var secondChild = logicalField.Children[1];
         viewModel.SelectDetailedInformationCommand.Execute(firstChild);
         await AwaitSelectedOccurrenceAsync(viewModel);
+        Assert.AreEqual("Alpha tool", viewModel.OccurrencePreviewText);
+        StringAssert.Contains(viewModel.OccurrencePreviewContextText, "/root/a/toolname");
         viewModel.SelectedDatabaseTag = "Child Only";
 
         Assert.AreEqual(
@@ -1005,7 +1061,109 @@ public sealed class DiscoveryWorkspaceViewModelTests
             secondChild.Identity));
         Assert.AreEqual("Child Only", firstChild.DatabaseTag);
         Assert.AreEqual("toolname", secondChild.DatabaseTag);
+        viewModel.SelectDetailedInformationCommand.Execute(secondChild);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        Assert.AreEqual("Beta tool", viewModel.OccurrencePreviewText);
+        StringAssert.Contains(viewModel.OccurrencePreviewContextText, "/root/b/toolname");
         Assert.HasCount(2, configuration.Current.Items);
+    }
+
+    [TestMethod]
+    public async Task StructuralScopeSelectionUsesDescendantFieldsAndPreviewsContextNotScalar()
+    {
+        var source = CreateSource("structural-scope.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        source = sourceSet.CreateIncludedReadySnapshot().Single();
+        var familyId = new RowFamilyId(
+            source.SourceSetId,
+            RowFamilyKind.Root,
+            "/root/record");
+        var scope = CreateDetailedInformation(
+            source,
+            "/root/record",
+            "record",
+            SourceValueCandidateKind.ElementScope,
+            "/root/record",
+            occurrenceCount: 2,
+            sampleValue: "Structural container (no scalar value)") with
+        {
+            RowFamilyId = familyId,
+            ElementRole = SourceElementRole.Structural
+        };
+        var name = CreateDetailedInformation(
+            source,
+            "/root/record/name",
+            "name",
+            SourceValueCandidateKind.Element,
+            "/root/record/name",
+            occurrenceCount: 2,
+            sampleValue: "Alpha") with
+        {
+            RowFamilyId = familyId,
+            ElementRole = SourceElementRole.ValueBearing
+        };
+        var quantity = CreateDetailedInformation(
+            source,
+            "/root/record/quantity",
+            "quantity",
+            SourceValueCandidateKind.Element,
+            "/root/record/quantity",
+            occurrenceCount: 2,
+            sampleValue: "2") with
+        {
+            RowFamilyId = familyId,
+            ElementRole = SourceElementRole.ValueBearing
+        };
+        var configuration = new ActiveDiscoveryConfiguration();
+        var client = new StubDiscoveryClient((correlation, sources) =>
+            Accept(correlation, sources, [scope, name, quantity]));
+        var databaseCoordinator = new DatabaseBuildCoordinator(
+            configuration,
+            sourceSet,
+            workflow,
+            new NoOpDatabaseClient(),
+            NullLogger<DatabaseBuildCoordinator>.Instance);
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow,
+            databaseCoordinator);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var structuralScope = viewModel.Information.Single(item =>
+            item.CandidateKind == SourceValueCandidateKind.ElementScope);
+        viewModel.SelectedInformation = structuralScope;
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreEqual(
+            "Structural container — no scalar value. Selecting it applies to its materializable descendant fields.",
+            viewModel.OccurrencePreviewText);
+        StringAssert.Contains(viewModel.OccurrencePreviewContextText, "/root/record");
+        Assert.IsFalse(viewModel.CanEditDatabaseTagOverride);
+        Assert.AreEqual("Descendant fields", structuralScope.DatabaseTag);
+
+        viewModel.ToggleSelectionCommand.Execute(structuralScope);
+
+        Assert.IsTrue(structuralScope.SelectionState ?? false);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Selected,
+            configuration.Current.Items.Single(item => item.Identity == name.Identity).Disposition);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Selected,
+            configuration.Current.Items.Single(item => item.Identity == quantity.Identity).Disposition);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Neutral,
+            configuration.Current.Items.Single(item => item.Identity == scope.Identity).Disposition);
+        Assert.AreEqual("2 / 2 selected", viewModel.SelectionSummary);
+        StringAssert.Contains(viewModel.SelectionFanoutSummary, "2 detailed fields");
+
+        var specification = databaseCoordinator.CreateBuildSpecification();
+        Assert.HasCount(2, specification.Datasets.Single().Fields);
+        Assert.IsFalse(specification.Datasets.Single().Fields
+            .SelectMany(field => field.DetailedIdentities)
+            .Any(identity => identity.CandidateKind == SourceValueCandidateKind.ElementScope));
     }
 
     [TestMethod]

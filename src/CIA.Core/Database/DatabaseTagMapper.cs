@@ -58,7 +58,8 @@ public static class DatabaseTagMapper
 
         var selected = configurationItems
             .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected
-                && item.Identity.SourceSetId == sourceSetId)
+                && item.Identity.SourceSetId == sourceSetId
+                && item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope)
             .Select(item => new
             {
                 item.Identity,
@@ -104,7 +105,8 @@ public static class DatabaseTagMapper
         var legacyFamily = new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/legacy");
         return items
             .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected
-                && item.Identity.SourceSetId == sourceSetId)
+                && item.Identity.SourceSetId == sourceSetId
+                && item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope)
             .GroupBy(item => DatabaseLogicalFieldIdentity.Create(item.Identity))
             .OrderBy(group => group.Key.CandidateKind)
             .ThenBy(group => group.Key.CanonicalFieldIdentity, StringComparer.Ordinal)

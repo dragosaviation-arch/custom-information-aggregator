@@ -97,6 +97,8 @@ public readonly record struct DiscoveryLogicalIdentity(
         {
             SourceValueCandidateKind.Element => GetFinalStructuralSegment(
                 identity.StructuralPath),
+            SourceValueCandidateKind.ElementScope => GetFinalStructuralSegment(
+                identity.StructuralPath),
             SourceValueCandidateKind.Attribute => GetFinalStructuralSegment(
                 identity.StructuralIdentity),
             _ => identity.StructuralIdentity
@@ -141,6 +143,8 @@ public sealed record DiscoveredInformation(
     public int DetailedSourceCount { get; init; } = LogicalSourceCount;
 
     public RowFamilyId? RowFamilyId { get; init; }
+
+    public SourceElementRole? ElementRole { get; init; }
 
     public DiscoveredInformation(
         string informationType,

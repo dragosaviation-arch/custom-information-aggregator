@@ -301,7 +301,10 @@ public sealed class DiscoveryServiceTests
         var result = await service.RunAsync(correlation, [first, second]);
 
         Assert.IsTrue(result.Accepted);
-        Assert.HasCount(3, result.Information);
+        Assert.HasCount(3, result.Information.Where(item =>
+            item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope).ToArray());
+        Assert.HasCount(5, result.Information.Where(item =>
+            item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope).ToArray());
         var firstBuyer = result.Information.Single(item =>
             item.SourceSetId == firstSet && item.StructuralPath == "/root/buyer/name");
         var firstSeller = result.Information.Single(item =>
@@ -348,11 +351,15 @@ public sealed class DiscoveryServiceTests
             [first, second]);
 
         Assert.IsTrue(result.Accepted);
-        Assert.HasCount(2, result.Information);
+        var values = result.Information.Where(item =>
+            item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope).ToArray();
+        Assert.HasCount(2, values);
+        Assert.HasCount(2, result.Information.Where(item =>
+            item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope).ToArray());
         CollectionAssert.AreEqual(
             new[] { "/{urn:one}root", "/{urn:two}root" },
             result.FamilyCatalog!.Families.Select(family => family.Id.AnchorPath).ToArray());
-        Assert.AreNotEqual(result.Information[0].RowFamilyId, result.Information[1].RowFamilyId);
+        Assert.AreNotEqual(values[0].RowFamilyId, values[1].RowFamilyId);
     }
 
     [TestMethod]

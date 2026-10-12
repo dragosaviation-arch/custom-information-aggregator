@@ -157,6 +157,10 @@
                            FontWeight="Bold"
                            Foreground="{StaticResource CiaTextPrimaryBrush}"
                            Text="{Binding SelectionSummary}" />
+                <TextBlock Margin="8,0,0,0"
+                           VerticalAlignment="Center"
+                           Style="{StaticResource CiaSecondaryTextStyle}"
+                           Text="{Binding SelectionFanoutSummary}" />
             </WrapPanel>
 
             <Border Grid.Row="4"
@@ -330,11 +334,17 @@
                                                        Text="{Binding SourceSetName}"
                                                        TextTrimming="CharacterEllipsis"
                                                        ToolTip="{Binding SourceSetName}" />
-                                            <TextBlock Grid.Column="2"
-                                                       FontFamily="Consolas"
-                                                       FontWeight="SemiBold"
-                                                       Style="{StaticResource DiscoveryRowTextStyle}"
-                                                       Text="{Binding InformationType}" />
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal">
+                                                <TextBlock FontFamily="Consolas"
+                                                           FontWeight="SemiBold"
+                                                           Style="{StaticResource DiscoveryRowTextStyle}"
+                                                           Text="{Binding InformationType}" />
+                                                <TextBlock Margin="5,0,0,0"
+                                                           FontSize="9"
+                                                           Foreground="{StaticResource CiaTextMutedBrush}"
+                                                           Text="{Binding StructuralContextCountText}"
+                                                           VerticalAlignment="Center" />
+                                            </StackPanel>
                                             <TextBlock Grid.Column="3"
                                                        FontWeight="SemiBold"
                                                        Text="{Binding DatabaseTag}">
@@ -403,10 +413,11 @@
                                                                   AutomationProperties.Name="Select detailed discovered identity"
                                                                   Command="{Binding DataContext.ToggleSelectionCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                                   CommandParameter="{Binding}"
-                                                                  IsChecked="{Binding IsSelected, Mode=OneWay}" />
+                                                                  IsChecked="{Binding SelectionState, Mode=OneWay}"
+                                                                  IsThreeState="True" />
                                                         <TextBlock Grid.Column="1"
                                                                    Style="{StaticResource DiscoveryRowTextStyle}"
-                                                                   Text="{Binding CandidateKindText}" />
+                                                                   Text="{Binding ElementRoleText}" />
                                                         <Button Grid.Column="2"
                                                                 Height="24"
                                                                 Padding="3,0"
@@ -631,6 +642,7 @@
                         </Grid.Style>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="7" />
                             <RowDefinition Height="*" />
                             <RowDefinition Height="8" />
@@ -653,7 +665,14 @@
                                            Text="{Binding PreviewInformation.DispositionText, TargetNullValue=Neutral}" />
                             </Border>
                         </StackPanel>
-                        <Border Grid.Row="2"
+                        <TextBlock Grid.Row="1"
+                                   Margin="0,5,0,0"
+                                   FontFamily="Consolas"
+                                   Style="{StaticResource CiaSecondaryTextStyle}"
+                                   Text="{Binding OccurrencePreviewContextText}"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding OccurrencePreviewContextText}" />
+                        <Border Grid.Row="3"
                                 Padding="14,12"
                                 Background="#FFFCFCFE"
                                 BorderBrush="{StaticResource CiaBorderBrush}"
@@ -667,7 +686,7 @@
                                            TextWrapping="Wrap" />
                             </ScrollViewer>
                         </Border>
-                        <Grid Grid.Row="4">
+                        <Grid Grid.Row="5">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />

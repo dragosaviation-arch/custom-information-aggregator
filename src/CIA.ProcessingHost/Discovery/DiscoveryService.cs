@@ -62,6 +62,8 @@ public sealed class DiscoveryService
         var completedSourceCount = 0;
         var indexBatch = new List<DiscoveryIndexedSource>(DiscoveryIndexBatchSize);
         var discoveredIdentities = new Dictionary<DiscoveryInformationIdentity, int>();
+        var discoveredElementRoles =
+            new Dictionary<DiscoveryInformationIdentity, SourceElementRole>();
         var cardinality = new StructuralCardinalityAccumulator();
         await _repository.BeginDiscoveryIndexAsync(correlation, cancellationToken)
             .ConfigureAwait(false);
@@ -85,7 +87,8 @@ public sealed class DiscoveryService
                         CreateContributions(
                             interpretation.Source!,
                             source.SourceSetId,
-                            discoveredIdentities)));
+                            discoveredIdentities,
+                            discoveredElementRoles)));
                     usableSourceCount++;
                     if (indexBatch.Count == DiscoveryIndexBatchSize)
                     {
@@ -158,7 +161,8 @@ public sealed class DiscoveryService
                 .ConfigureAwait(false);
             information = information.Select(item => item with
             {
-                RowFamilyId = assignments[item.Identity]
+                RowFamilyId = assignments[item.Identity],
+                ElementRole = discoveredElementRoles.GetValueOrDefault(item.Identity)
             }).ToArray();
             var completion = OperationCompletion.FromCompletedItems(correlation, itemStatuses);
             return DiscoveryHostResult.Accept(
@@ -295,9 +299,14 @@ public sealed class DiscoveryService
     private static IReadOnlyCollection<DiscoveryIndexContribution> CreateContributions(
         InterpretedSourceDocument source,
         SourceSetId sourceSetId,
-        Dictionary<DiscoveryInformationIdentity, int> discoveredIdentities)
+        Dictionary<DiscoveryInformationIdentity, int> discoveredIdentities,
+        Dictionary<DiscoveryInformationIdentity, SourceElementRole> discoveredElementRoles)
     {
         var contributions = new Dictionary<DiscoveryInformationIdentity, SourceContribution>();
+        var elementRolesByPath = source.Elements.ToDictionary(
+            element => element.StructuralPath,
+            element => element.Role,
+            StringComparer.Ordinal);
         foreach (var value in source.Values)
         {
             var identity = new DiscoveryInformationIdentity(
@@ -310,11 +319,38 @@ public sealed class DiscoveryService
             {
                 contribution = new SourceContribution(
                     identity,
-                    DiscoverySampleValueFormatter.Format(value.Content));
+                    DiscoverySampleValueFormatter.Format(value.Content),
+                    value.CandidateKind != SourceValueCandidateKind.Attribute
+                        ? elementRolesByPath.GetValueOrDefault(
+                            identity.StructuralPath,
+                            SourceElementRole.ValueBearing)
+                        : null);
                 contributions.Add(identity, contribution);
             }
 
             contribution.OccurrenceCount++;
+        }
+
+        foreach (var element in source.Elements.Where(element =>
+                     element.Role == SourceElementRole.Structural))
+        {
+            var identity = new DiscoveryInformationIdentity(
+                sourceSetId,
+                element.StructuralPath,
+                element.InformationType,
+                SourceValueCandidateKind.ElementScope,
+                element.StructuralPath);
+            if (!contributions.TryGetValue(identity, out var contribution))
+            {
+                contribution = new SourceContribution(
+                    identity,
+                    "Structural container (no scalar value)",
+                    SourceElementRole.Structural);
+                contributions.Add(identity, contribution);
+            }
+
+            contribution.OccurrenceCount = checked(
+                contribution.OccurrenceCount + element.OccurrenceCount);
         }
 
         return contributions.Values.Select(contribution =>
@@ -328,6 +364,14 @@ public sealed class DiscoveryService
                 discoveredIdentities.Add(contribution.Identity, informationOrdinal);
             }
 
+            if (contribution.ElementRole is { } role)
+            {
+                discoveredElementRoles[contribution.Identity] = discoveredElementRoles
+                    .TryGetValue(contribution.Identity, out var current)
+                        ? MergeElementRoles(current, role)
+                        : role;
+            }
+
             return new DiscoveryIndexContribution(
                 informationOrdinal,
                 contribution.Identity,
@@ -337,12 +381,21 @@ public sealed class DiscoveryService
         }).ToArray();
     }
 
+    private static SourceElementRole MergeElementRoles(
+        SourceElementRole current,
+        SourceElementRole next)
+    {
+        return current == next ? current : SourceElementRole.Mixed;
+    }
+
     private sealed class SourceContribution(
         DiscoveryInformationIdentity identity,
-        string sampleValue)
+        string sampleValue,
+        SourceElementRole? elementRole)
     {
         public DiscoveryInformationIdentity Identity { get; } = identity;
         public string SampleValue { get; } = sampleValue;
+        public SourceElementRole? ElementRole { get; } = elementRole;
         public int OccurrenceCount { get; set; }
     }
 
