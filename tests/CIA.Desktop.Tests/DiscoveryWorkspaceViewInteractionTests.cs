@@ -235,11 +235,12 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
 
         var client = new RecordingDiscoveryClient(source.SourceId);
         var configuration = new ActiveDiscoveryConfiguration();
+        var databaseClient = new UnexpectedDatabaseClient();
         var databaseBuild = new DatabaseBuildCoordinator(
             configuration,
             sourceSet,
             workflow,
-            new UnexpectedDatabaseClient(),
+            databaseClient,
             NullLogger<DatabaseBuildCoordinator>.Instance);
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
@@ -358,6 +359,11 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             var interpretationSummary = (Border)view.FindName("OutputInterpretationSummary");
             var advancedOptions = (Expander)view.FindName("OutputAdvancedOptionsExpander");
             var decomposer = (Button)view.FindName("DecomposerButton");
+            var sharedActions = (WrapPanel)view.FindName("SharedDiscoveryActions");
+            var sharedDatabaseAction = (WrapPanel)view.FindName("SharedDatabaseAction");
+            var buildDatabase = (Button)view.FindName("BuildDatabaseButton");
+            var buildCommand = viewModel.BuildDatabaseCommand;
+            var initialCanBuild = buildCommand.CanExecute(null);
 
             Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
             Assert.IsTrue(inputPreview.IsVisible);
@@ -369,6 +375,17 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsNotNull(outputMode.Command);
             Assert.IsFalse(inputSettingsTabs.Items.Cast<TabItem>().Any(item =>
                 string.Equals(item.Header?.ToString(), "Layout", StringComparison.Ordinal)));
+            Assert.IsTrue(sharedActions.IsVisible);
+            Assert.IsTrue(sharedDatabaseAction.IsVisible);
+            Assert.IsTrue(buildDatabase.IsVisible);
+            Assert.AreSame(buildCommand, buildDatabase.Command);
+            Assert.AreEqual("Create Database", buildDatabase.Content);
+            Assert.IsTrue(initialCanBuild);
+            Assert.IsNull(FindVisualDescendant<Button>(
+                inputSettings,
+                button => ReferenceEquals(button.Command, buildCommand)),
+                "Input Settings must not retain a mode-specific Database action.");
+            Assert.AreEqual(0, databaseClient.BuildCallCount);
 
             outputMode.Command!.Execute(outputMode.CommandParameter);
             await Dispatcher.Yield(DispatcherPriority.DataBind);
@@ -383,6 +400,12 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsFalse(databaseTagField.Focus());
             Assert.IsTrue(outputGroupSelector.IsVisible);
             Assert.IsTrue(outputGroupSelector.Focusable);
+            Assert.IsTrue(buildDatabase.IsVisible);
+            Assert.AreSame(buildCommand, buildDatabase.Command);
+            Assert.AreEqual(initialCanBuild, buildCommand.CanExecute(null));
+            Assert.AreEqual(0, databaseClient.BuildCallCount);
+            Assert.IsNull(databaseBuild.CurrentGeneration,
+                "Output Preview must remain ephemeral until the shared action is invoked.");
             Assert.AreEqual(
                 outputGroupSelector,
                 FindVisualDescendant<ComboBox>(outputPreview, control => control.Focusable));
@@ -427,6 +450,10 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsTrue(inputSettings.IsVisible);
             Assert.IsFalse(outputPreview.IsVisible);
             Assert.IsFalse(outputSettings.IsVisible);
+            Assert.IsTrue(buildDatabase.IsVisible);
+            Assert.AreSame(buildCommand, buildDatabase.Command);
+            Assert.AreEqual(initialCanBuild, buildCommand.CanExecute(null));
+            Assert.AreEqual(0, databaseClient.BuildCallCount);
             Assert.AreEqual(RepeatedDataLayout.AllCombinations, selectedLayout.SelectedLayout);
             Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
             Assert.AreEqual(3, viewModel.OccurrenceTotal);
@@ -439,6 +466,8 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.AreEqual(0, Grid.GetRow((Border)view.FindName("SettingsPanel")));
             Assert.AreEqual(0, Grid.GetColumn((Border)view.FindName("PreviewPanel")));
             Assert.AreEqual(2, Grid.GetColumn((Border)view.FindName("SettingsPanel")));
+            Assert.IsTrue(buildDatabase.IsVisible);
+            Assert.AreSame(buildCommand, buildDatabase.Command);
         }
         finally
         {
@@ -614,11 +643,14 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
 
     private sealed class UnexpectedDatabaseClient : IDatabaseClient
     {
+        public int BuildCallCount { get; private set; }
+
         public Task<DatabaseClientResult> BuildAsync(
             OperationCorrelation correlation,
             DatabaseBuildSpecification specification,
             CancellationToken cancellationToken = default)
         {
+            BuildCallCount++;
             throw new AssertFailedException(
                 "The selection regression must not start Database generation.");
         }

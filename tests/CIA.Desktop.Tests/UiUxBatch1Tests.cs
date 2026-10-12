@@ -117,6 +117,20 @@ public sealed class UiUxBatch1Tests
         Assert.IsFalse(discovery.Contains("Advanced repeated data layout", StringComparison.Ordinal));
         Assert.IsFalse(discovery.Contains("Preserve relationships — Recommended", StringComparison.Ordinal));
         Assert.IsFalse(discovery.Contains("SelectedLayout, Mode=TwoWay", StringComparison.Ordinal));
+        var buildDatabaseButton = FindNamedElement(discovery, "BuildDatabaseButton");
+        var xamlName = XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml");
+        Assert.IsTrue(buildDatabaseButton.Ancestors().Any(element =>
+            string.Equals(
+                element.Attribute(xamlName)?.Value,
+                "SharedDiscoveryActions",
+                StringComparison.Ordinal)));
+        Assert.IsFalse(buildDatabaseButton.Ancestors().Any(element =>
+            element.Attribute(xamlName)?.Value is "InputSettingsContent" or "OutputSettingsContent"));
+        Assert.HasCount(1, discoveryDocument.Descendants().Where(element =>
+            string.Equals(
+                element.Attribute("Command")?.Value,
+                "{Binding BuildDatabaseCommand}",
+                StringComparison.Ordinal)));
         StringAssert.Contains(discovery, "Command=\"{Binding DataContext.ToggleBlacklistCommand");
         StringAssert.Contains(discovery, "Content=\"{Binding BlacklistActionText}\"");
         StringAssert.Contains(discovery, "x:Name=\"PreviewRow\" Height=\"2*\"");

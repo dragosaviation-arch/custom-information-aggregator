@@ -53,10 +53,19 @@ public sealed class DatabaseBuildCoordinatorTests
             context.Configuration,
             context.Workflow,
             coordinator);
+        using var discovery = new DiscoveryWorkspaceViewModel(
+            new UnexpectedDiscoveryClient(),
+            context.Configuration,
+            context.Sources,
+            context.Workflow,
+            coordinator);
+
+        Assert.AreEqual("Create Database", discovery.DatabaseBuildButtonText);
 
         var result = await coordinator.BuildAsync();
 
         Assert.IsTrue(result.Accepted);
+        Assert.AreEqual("Update Database", discovery.DatabaseBuildButtonText);
         Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Database);
         Assert.AreEqual(client.Correlation?.OperationId, coordinator.CurrentGeneration?.OperationId);
         Assert.HasCount(1, database.Columns);

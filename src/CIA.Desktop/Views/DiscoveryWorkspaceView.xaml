@@ -885,47 +885,71 @@
                             </Grid>
                         </Grid>
                     </Border>
-                    <WrapPanel x:Name="OccurrenceNavigator"
+                    <WrapPanel x:Name="SharedDiscoveryActions"
                                Grid.Row="2"
                                Margin="10,7"
                                HorizontalAlignment="Center"
                                VerticalAlignment="Center">
-                        <Button Margin="0,0,6,0"
-                                Command="{Binding PreviousOccurrenceCommand}"
-                                Style="{StaticResource CiaButtonStyle}"
-                                Content="&#x2039; Previous" />
-                        <TextBlock Margin="0,0,5,0"
-                                   VerticalAlignment="Center"
-                                   Style="{StaticResource CiaSecondaryTextStyle}"
-                                   Text="Occurrence" />
-                        <TextBox x:Name="OccurrenceOrdinalInput"
-                                 Width="56"
-                                 Height="29"
-                                 Padding="4,0"
-                                 AutomationProperties.Name="Discovery occurrence ordinal"
-                                 HorizontalContentAlignment="Center"
-                                 VerticalContentAlignment="Center"
-                                 KeyDown="OnOccurrenceOrdinalKeyDown"
-                                 LostFocus="OnOccurrenceOrdinalLostFocus"
-                                 Text="{Binding OccurrenceOrdinalInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
-                            <TextBox.Style>
-                                <Style TargetType="TextBox"
-                                       BasedOn="{StaticResource CiaTextInputStyle}">
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding CurrentOccurrenceOrdinal}" Value="0">
-                                            <Setter Property="IsEnabled" Value="False" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBox.Style>
-                        </TextBox>
-                        <TextBlock Margin="5,0,6,0"
-                                   VerticalAlignment="Center"
-                                   Style="{StaticResource CiaSecondaryTextStyle}"
-                                   Text="{Binding OccurrenceTotalText}" />
-                        <Button Command="{Binding NextOccurrenceCommand}"
-                                Style="{StaticResource CiaButtonStyle}"
-                                Content="Next &#x203A;" />
+                        <WrapPanel x:Name="OccurrenceNavigator"
+                                   Margin="0,0,10,0"
+                                   VerticalAlignment="Center">
+                            <Button Margin="0,0,6,0"
+                                    Command="{Binding PreviousOccurrenceCommand}"
+                                    Style="{StaticResource CiaButtonStyle}"
+                                    Content="&#x2039; Previous" />
+                            <TextBlock Margin="0,0,5,0"
+                                       VerticalAlignment="Center"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="Occurrence" />
+                            <TextBox x:Name="OccurrenceOrdinalInput"
+                                     Width="56"
+                                     Height="29"
+                                     Padding="4,0"
+                                     AutomationProperties.Name="Discovery occurrence ordinal"
+                                     HorizontalContentAlignment="Center"
+                                     VerticalContentAlignment="Center"
+                                     KeyDown="OnOccurrenceOrdinalKeyDown"
+                                     LostFocus="OnOccurrenceOrdinalLostFocus"
+                                     Text="{Binding OccurrenceOrdinalInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                <TextBox.Style>
+                                    <Style TargetType="TextBox"
+                                           BasedOn="{StaticResource CiaTextInputStyle}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding CurrentOccurrenceOrdinal}" Value="0">
+                                                <Setter Property="IsEnabled" Value="False" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBox.Style>
+                            </TextBox>
+                            <TextBlock Margin="5,0,6,0"
+                                       VerticalAlignment="Center"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="{Binding OccurrenceTotalText}" />
+                            <Button Command="{Binding NextOccurrenceCommand}"
+                                    Style="{StaticResource CiaButtonStyle}"
+                                    Content="Next &#x203A;" />
+                        </WrapPanel>
+                        <WrapPanel x:Name="SharedDatabaseAction"
+                                   VerticalAlignment="Center">
+                            <Border Margin="0,0,6,0" Style="{StaticResource CiaNeutralStateBadgeStyle}">
+                                <TextBlock VerticalAlignment="Center"
+                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                           Text="{Binding DatabaseStateText}" />
+                            </Border>
+                            <TextBlock Margin="0,0,6,0"
+                                       VerticalAlignment="Center"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="Build from the current selected Discovery mapping." />
+                            <Button x:Name="BuildDatabaseButton"
+                                    Command="{Binding BuildDatabaseCommand}"
+                                    MinHeight="32"
+                                    Padding="14,5"
+                                    FontWeight="SemiBold"
+                                    Style="{StaticResource CiaPrimaryButtonStyle}"
+                                    Content="{Binding DatabaseBuildButtonText}"
+                                    ToolTip="{Binding DatabaseBuildAvailabilityReason}" />
+                        </WrapPanel>
                     </WrapPanel>
                 </Grid>
             </Border>
@@ -947,10 +971,6 @@
                                 </Style.Triggers>
                             </Style>
                         </Grid.Style>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="*" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
                         <TabControl x:Name="InputSettingsTabs"
                                     Background="Transparent"
                                     BorderThickness="0">
@@ -1069,31 +1089,6 @@
                             </StackPanel>
                         </TabItem>
                         </TabControl>
-                        <Border Grid.Row="1"
-                                Padding="9,7"
-                                Background="#FFFCFCFE"
-                                BorderBrush="{StaticResource CiaBorderBrush}"
-                                BorderThickness="0,1,0,0">
-                            <WrapPanel VerticalAlignment="Center">
-                                <Border Margin="0,0,6,0" Style="{StaticResource CiaNeutralStateBadgeStyle}">
-                                    <TextBlock VerticalAlignment="Center"
-                                               Style="{StaticResource CiaSecondaryTextStyle}"
-                                               Text="{Binding DatabaseStateText}" />
-                                </Border>
-                                <TextBlock Margin="0,0,6,0"
-                                           VerticalAlignment="Center"
-                                           Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="Build from the current selected Discovery mapping." />
-                                <Button x:Name="BuildDatabaseButton"
-                                        Command="{Binding BuildDatabaseCommand}"
-                                        MinHeight="32"
-                                        Padding="14,5"
-                                        FontWeight="SemiBold"
-                                        Style="{StaticResource CiaPrimaryButtonStyle}"
-                                        Content="{Binding DatabaseBuildButtonText}"
-                                        ToolTip="{Binding DatabaseBuildAvailabilityReason}" />
-                            </WrapPanel>
-                        </Border>
                     </Grid>
                     <Grid x:Name="OutputSettingsContent"
                           AutomationProperties.Name="Output Discovery settings">
