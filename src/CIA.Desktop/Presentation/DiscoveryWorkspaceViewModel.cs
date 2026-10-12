@@ -37,6 +37,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private const double MaximumColumnWidth = 2000;
     private readonly IDiscoveryClient _discoveryClient;
     private readonly ActiveDiscoveryConfiguration _activeConfiguration;
+    private readonly ActiveDiscoveryOutputPlan _outputPlan;
     private readonly ActiveLoadedSourceSet _sourceSet;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly DatabaseBuildCoordinator? _databaseBuildCoordinator;
@@ -50,6 +51,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly ObservableCollection<SourceSetLayoutItemViewModel> _sourceSetLayouts = [];
     private readonly ReadOnlyObservableCollection<SourceSetLayoutItemViewModel>
         _readOnlySourceSetLayouts;
+    private readonly ObservableCollection<DiscoveryOutputSetItemViewModel> _outputSets = [];
+    private readonly ReadOnlyObservableCollection<DiscoveryOutputSetItemViewModel>
+        _readOnlyOutputSets;
     private readonly RelayCommand _previousPageCommand;
     private readonly RelayCommand _nextPageCommand;
     private readonly RelayCommand _showInputModeCommand;
@@ -136,10 +140,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         DiscoverySelectionImpactPresentation.Empty;
     private IReadOnlyList<DiscoveryOutputPreviewGroupPresentation> _outputPreviewGroups = [];
     private DiscoveryOutputPreviewGroupPresentation? _selectedOutputPreviewGroup;
+    private DiscoveryOutputSetItemViewModel? _selectedOutputSet;
     private bool _isOutputPreviewLoading;
     private string _outputPreviewStatusText =
         "Select output fields and an occurrence to preview the projected result.";
     private string _outputPreviewSourceText = string.Empty;
+    private string _outputPlanStatusText = "Select information to create the Baseline output plan.";
     private IReadOnlyList<InformationSelectionProfileItem> _informationSelectionProfiles = [];
     private InformationSelectionProfileItem? _selectedInformationSelectionProfile;
     private string _newProfileName = string.Empty;
@@ -172,7 +178,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         ReusableProfileSessionState? reusableProfileSessionState = null,
         MainWindowViewModel? shell = null,
         ApplicationSettingsService? settingsService = null,
-        GlobalOperationProgress? globalProgress = null)
+        GlobalOperationProgress? globalProgress = null,
+        ActiveDiscoveryOutputPlan? outputPlan = null)
     {
         ArgumentNullException.ThrowIfNull(discoveryClient);
         ArgumentNullException.ThrowIfNull(activeConfiguration);
@@ -181,6 +188,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         _discoveryClient = discoveryClient;
         _activeConfiguration = activeConfiguration;
+        _outputPlan = outputPlan ?? new ActiveDiscoveryOutputPlan();
         _sourceSet = sourceSet;
         _workflowCoordinator = workflowCoordinator;
         _databaseBuildCoordinator = databaseBuildCoordinator;
@@ -212,6 +220,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 _inspectedSources);
         _readOnlySourceSetLayouts = new ReadOnlyObservableCollection<SourceSetLayoutItemViewModel>(
             _sourceSetLayouts);
+        _readOnlyOutputSets = new ReadOnlyObservableCollection<DiscoveryOutputSetItemViewModel>(
+            _outputSets);
 
         RunDiscoveryCommand = new AsyncRelayCommand(RunDiscoveryAsync, CanRunDiscovery);
         BuildDatabaseCommand = new AsyncRelayCommand(
@@ -355,6 +365,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public ReadOnlyObservableCollection<SourceSetLayoutItemViewModel> SourceSetLayouts =>
         _readOnlySourceSetLayouts;
 
+    public ReadOnlyObservableCollection<DiscoveryOutputSetItemViewModel> OutputSets =>
+        _readOnlyOutputSets;
+
+    public DiscoveryOutputPlanSnapshot OutputPlan => _outputPlan.Current;
+
     public IReadOnlyList<RepeatedDataLayoutOption> RepeatedDataLayoutOptions { get; } =
     [
         new(RepeatedDataLayout.AlignRepeatedGroupsByPosition, "Align repeated groups by position"),
@@ -425,6 +440,18 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         set => SetProperty(ref _selectedOutputPreviewGroup, value);
     }
 
+    public DiscoveryOutputSetItemViewModel? SelectedOutputSet
+    {
+        get => _selectedOutputSet;
+        set
+        {
+            if (SetProperty(ref _selectedOutputSet, value))
+            {
+                ScheduleOutputPreview();
+            }
+        }
+    }
+
     public bool IsOutputPreviewLoading
     {
         get => _isOutputPreviewLoading;
@@ -441,6 +468,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     {
         get => _outputPreviewSourceText;
         private set => SetProperty(ref _outputPreviewSourceText, value);
+    }
+
+    public string OutputPlanStatusText
+    {
+        get => _outputPlanStatusText;
+        private set => SetProperty(ref _outputPlanStatusText, value);
     }
 
     public IAsyncRelayCommand RunDiscoveryCommand { get; }
@@ -947,6 +980,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             {
                 _previewInformation = value;
                 OnPropertyChanged(nameof(PreviewInformation));
+                SelectOutputSetForParent(value?.SourceSetId);
                 OnPropertyChanged(nameof(SelectedDatabaseTag));
                 OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
                 OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
@@ -1599,9 +1633,147 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     private void RefreshSelectionImpact()
     {
-        SelectionImpact = TryCreateCurrentBuildSpecification(out var specification)
-            ? DiscoverySelectionImpactBuilder.Create(specification)
-            : DiscoverySelectionImpactPresentation.Empty;
+        var readyParentIds = _sourceSet.CreateIncludedReadySnapshot()
+            .Select(source => source.SourceSetId)
+            .ToHashSet();
+        var parents = _sourceSet.SourceSets
+            .Where(parent => readyParentIds.Contains(parent.SourceSetId))
+            .Select(parent => parent.SourceSetId)
+            .ToArray();
+        if (TryCreateCurrentBuildSpecification(out var specification))
+        {
+            SelectionImpact = DiscoverySelectionImpactBuilder.Create(specification);
+            _outputPlan.Synchronize(
+                parents,
+                DiscoveryOutputPlanBuilder.Create(specification),
+                _sourceSet.SourceSets.Count);
+        }
+        else
+        {
+            SelectionImpact = DiscoverySelectionImpactPresentation.Empty;
+            _outputPlan.Synchronize(parents, [], _sourceSet.SourceSets.Count);
+        }
+
+        RefreshOutputSetPresentation();
+    }
+
+    private void RefreshOutputSetPresentation()
+    {
+        var selectedOutputSetId = SelectedOutputSet?.OutputSetId;
+        var impactByFamily = SelectionImpact.Groups.ToDictionary(group => group.RowFamilyId);
+        var items = _outputPlan.Current.OutputSets.Select(definition =>
+        {
+            var impact = definition.RowFamilyIds
+                .Select(familyId => impactByFamily.GetValueOrDefault(familyId))
+                .FirstOrDefault(candidate => candidate is not null)
+                ?? throw new InvalidOperationException(
+                    "Every proposed Output Set requires current selection-impact metadata.");
+            return new DiscoveryOutputSetItemViewModel(
+                definition,
+                ResolveSourceSetName(definition.ParentSourceSetId),
+                impact,
+                SetOutputSetEnabled,
+                RenameOutputSet);
+        }).ToArray();
+
+        _outputSets.Clear();
+        foreach (var item in items)
+        {
+            _outputSets.Add(item);
+        }
+
+        var selected = selectedOutputSetId is { } retainedId
+            ? items.FirstOrDefault(item => item.OutputSetId == retainedId)
+            : null;
+        selected ??= PreviewInformation is { } preview
+            ? items.FirstOrDefault(item => item.ParentSourceSetId == preview.SourceSetId)
+            : null;
+        selected ??= items.FirstOrDefault();
+        if (!ReferenceEquals(_selectedOutputSet, selected))
+        {
+            _selectedOutputSet = selected;
+            OnPropertyChanged(nameof(SelectedOutputSet));
+        }
+
+        OnPropertyChanged(nameof(OutputPlan));
+        OutputPlanStatusText = items.Length == 0
+            ? "Select information to create the Baseline output plan."
+            : string.Format(
+                CultureInfo.CurrentCulture,
+                "Baseline: {0:N0} of {1:N0} proposed Output Sets enabled.",
+                items.Count(item => item.IsEnabled),
+                items.Length);
+    }
+
+    private void SelectOutputSetForParent(SourceSetId? parentSourceSetId)
+    {
+        if (parentSourceSetId is null
+            || SelectedOutputSet?.ParentSourceSetId == parentSourceSetId)
+        {
+            return;
+        }
+
+        SelectedOutputSet = OutputSets.FirstOrDefault(item =>
+            item.ParentSourceSetId == parentSourceSetId);
+    }
+
+    private bool SetOutputSetEnabled(OutputSetId outputSetId, bool isEnabled)
+    {
+        var current = _outputPlan.Current.OutputSets.FirstOrDefault(set =>
+            set.OutputSetId == outputSetId);
+        if (current is null || current.IsEnabled == isEnabled || !CanChangeConfiguration())
+        {
+            return false;
+        }
+
+        var workflowResult = _workflowCoordinator.RecordDiscoveryConfigurationChanged();
+        if (!workflowResult.Accepted || !_outputPlan.SetEnabled(outputSetId, isEnabled))
+        {
+            return false;
+        }
+
+        OnPropertyChanged(nameof(OutputPlan));
+        OutputPlanStatusText = string.Format(
+            CultureInfo.CurrentCulture,
+            "Baseline: {0:N0} of {1:N0} proposed Output Sets enabled.",
+            _outputPlan.Current.OutputSets.Count(set => set.IsEnabled),
+            _outputPlan.Current.OutputSets.Count);
+        OnPropertyChanged(nameof(DatabaseStateText));
+        return true;
+    }
+
+    private bool RenameOutputSet(OutputSetId outputSetId, string name)
+    {
+        if (!CanChangeConfiguration())
+        {
+            return false;
+        }
+
+        if (!_outputPlan.CanRename(
+                outputSetId,
+                name,
+                _sourceSet.SourceSets.Select(sourceSet => sourceSet.Name),
+                out var normalizedName,
+                out var failureReason))
+        {
+            if (failureReason is not null)
+            {
+                OutputPlanStatusText = failureReason;
+            }
+
+            return false;
+        }
+
+        var workflowResult = _workflowCoordinator.RecordDiscoveryConfigurationChanged();
+        if (!workflowResult.Accepted || !_outputPlan.Rename(outputSetId, normalizedName))
+        {
+            return false;
+        }
+
+        OnPropertyChanged(nameof(OutputPlan));
+        OutputPlanStatusText = $"Set name updated to {normalizedName}.";
+        OnPropertyChanged(nameof(DatabaseStateText));
+        return true;
     }
 
     private bool TryCreateCurrentBuildSpecification(out DatabaseBuildSpecification specification)
@@ -1655,7 +1827,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         out DiscoveryOutputPreviewRequest request,
         out string unavailableReason)
     {
-        if (!HasSelectionImpact || !TryCreateCurrentBuildSpecification(out var specification))
+        var selectedOutputSet = SelectedOutputSet;
+        if (!HasSelectionImpact
+            || selectedOutputSet is null
+            || !TryCreateCurrentBuildSpecification(out var specification))
         {
             request = null!;
             unavailableReason = "Select at least one field to preview the projected output.";
@@ -1678,6 +1853,14 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return false;
         }
 
+        if (selectedOutputSet.ParentSourceSetId != information.SourceSetId)
+        {
+            request = null!;
+            unavailableReason =
+                "Select an occurrence from the parent Source Set to preview this Output Set.";
+            return false;
+        }
+
         var dataset = specification.Datasets.FirstOrDefault(candidate =>
             candidate.SourceSetId == information.SourceSetId);
         if (dataset is null)
@@ -1688,14 +1871,28 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return false;
         }
 
+        var selectedFamilies = selectedOutputSet.RowFamilyIds.ToHashSet();
+        var rowFamilies = dataset.RowFamilies
+            .Where(family => selectedFamilies.Contains(family.Id))
+            .ToArray();
+        var fields = dataset.Fields
+            .Where(field => selectedFamilies.Contains(field.RowFamilyId))
+            .ToArray();
+        if (rowFamilies.Length == 0 || fields.Length == 0)
+        {
+            request = null!;
+            unavailableReason = "The selected Output Set is no longer available.";
+            return false;
+        }
+
         request = new DiscoveryOutputPreviewRequest(
             lookup,
             new DiscoveryOutputProjectionSpecification(
                 dataset.SourceSetId,
                 dataset.DisplayName,
                 dataset.RepeatedDataLayout,
-                dataset.RowFamilies,
-                dataset.Fields));
+                rowFamilies,
+                fields));
         unavailableReason = string.Empty;
         return true;
     }
@@ -1873,6 +2070,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         _previewInformation = information;
         OnPropertyChanged(nameof(PreviewInformation));
+        SelectOutputSetForParent(information.SourceSetId);
         OnPropertyChanged(nameof(SelectedDatabaseTag));
         OnPropertyChanged(nameof(CanEditDatabaseTagOverride));
         OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
@@ -1897,6 +2095,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         _previewInformation = information;
         OnPropertyChanged(nameof(PreviewInformation));
+        SelectOutputSetForParent(information.SourceSetId);
         PrepareOccurrenceSelection(information);
         _selectInformationCommand.Execute(information);
     }
@@ -2751,6 +2950,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         RefreshPresentation();
+        RefreshSelectionImpact();
     }
 
     private void OnSourcePropertyChanged(object? sender, PropertyChangedEventArgs e)

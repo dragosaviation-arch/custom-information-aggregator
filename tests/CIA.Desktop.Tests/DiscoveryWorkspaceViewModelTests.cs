@@ -230,6 +230,120 @@ public sealed class DiscoveryWorkspaceViewModelTests
     }
 
     [TestMethod]
+    public async Task OutputPlanExistsBeforeOutputModeAndSelectedModelControlsPreviewWithoutAutoBuild()
+    {
+        var source = CreateSource("output-plan.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        source = sourceSet.CreateIncludedReadySnapshot().Single();
+        var root = new RowFamilyDefinition(
+            new RowFamilyId(source.SourceSetId, RowFamilyKind.Root, "/root"),
+            null);
+        var repeated = new RowFamilyDefinition(
+            new RowFamilyId(source.SourceSetId, RowFamilyKind.Repeated, "/root/book"),
+            root.Id);
+        var rootInformation = CreateDetailedInformation(
+            source.SourceSetId,
+            source.SourceId,
+            "/root/title",
+            "title",
+            SourceValueCandidateKind.Element,
+            "/root/title") with
+        {
+            RowFamilyId = root.Id
+        };
+        var repeatedInformation = CreateDetailedInformation(
+            source.SourceSetId,
+            source.SourceId,
+            "/root/book/name",
+            "name",
+            SourceValueCandidateKind.Element,
+            "/root/book/name") with
+        {
+            RowFamilyId = repeated.Id
+        };
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => new DiscoveryClientResult(
+                true,
+                [rootInformation, repeatedInformation],
+                [],
+                OperationCompletion.FromCompletedItems(
+                    correlation,
+                    sources.Select(item => OperationItemStatus.ProcessedSuccessfully(
+                        item.SourceId.ToString()))),
+                null,
+                null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog([root, repeated])
+            },
+            outputPreviewResultFactory: request => Task.FromResult(
+                CreateOutputPreviewResult(request, source.SourceId, "projected")));
+        var configuration = new ActiveDiscoveryConfiguration();
+        var databaseCoordinator = new DatabaseBuildCoordinator(
+            configuration,
+            sourceSet,
+            workflow,
+            new NoOpDatabaseClient(),
+            NullLogger<DatabaseBuildCoordinator>.Instance);
+        var outputPlan = new ActiveDiscoveryOutputPlan();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow,
+            databaseCoordinator,
+            outputPlan: outputPlan);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        foreach (var information in viewModel.Information)
+        {
+            viewModel.ToggleSelectionCommand.Execute(information);
+        }
+
+        Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
+        Assert.HasCount(2, viewModel.OutputSets);
+        Assert.IsTrue(viewModel.OutputSets.All(set => set.IsEnabled));
+        var baseline = outputPlan.Current;
+        var baselineIds = baseline.OutputSets.Select(set => set.OutputSetId).ToArray();
+        viewModel.ShowOutputModeCommand.Execute(null);
+        viewModel.ShowInputModeCommand.Execute(null);
+        CollectionAssert.AreEqual(
+            baselineIds,
+            outputPlan.Current.OutputSets.Select(set => set.OutputSetId).ToArray());
+
+        viewModel.ShowOutputModeCommand.Execute(null);
+        var repeatedSet = viewModel.OutputSets.Single(set =>
+            set.RowFamilyIds.Single() == repeated.Id);
+        viewModel.SelectedOutputSet = repeatedSet;
+        await WaitUntilAsync(() => client.OutputPreviewRequests.Any(request =>
+            request.Projection.RowFamilies.Count == 1
+            && request.Projection.RowFamilies[0].Id == repeated.Id));
+        Assert.IsTrue(client.OutputPreviewRequests[^1].Projection.Fields.All(field =>
+            field.RowFamilyId == repeated.Id));
+
+        var database = await workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
+        workflow.CompleteOperation(database.Operation!.OperationId, OperationOutcome.CompletedSuccessfully);
+        var extraction = await workflow.BeginOperationAsync(WorkflowOperationKind.Extraction);
+        workflow.CompleteOperation(extraction.Operation!.OperationId, OperationOutcome.CompletedSuccessfully);
+        var retainedId = repeatedSet.OutputSetId;
+        var retainedNumber = repeatedSet.SetNumber;
+
+        repeatedSet.IsEnabled = false;
+        repeatedSet.Name = "Book records";
+
+        Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Extraction);
+        var changed = outputPlan.Current.OutputSets.Single(set => set.OutputSetId == retainedId);
+        Assert.AreEqual(retainedNumber, changed.SetNumber);
+        Assert.AreEqual("Book records", changed.Name);
+        Assert.IsFalse(changed.IsEnabled);
+        Assert.AreEqual(1, client.CallCount);
+        Assert.IsNull(workflow.Current.ActiveOperation);
+    }
+
+    [TestMethod]
     public void DiscoveryGridSampleIsSingleLineAndBoundedDefensively()
     {
         var sourceId = SourceId.CreateNew();

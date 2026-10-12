@@ -400,6 +400,23 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsFalse(databaseTagField.Focus());
             Assert.IsTrue(outputGroupSelector.IsVisible);
             Assert.IsTrue(outputGroupSelector.Focusable);
+            view.UpdateLayout();
+            var outputSetToggle = FindVisualDescendant<CheckBox>(
+                outputSettings,
+                checkBox => string.Equals(
+                    AutomationProperties.GetName(checkBox),
+                    "Enable Output Set",
+                    StringComparison.Ordinal));
+            var outputSetName = FindVisualDescendant<TextBox>(
+                outputSettings,
+                textBox => string.Equals(
+                    AutomationProperties.GetName(textBox),
+                    "Output Set name",
+                    StringComparison.Ordinal));
+            Assert.IsNotNull(outputSetToggle);
+            Assert.IsNotNull(outputSetName);
+            Assert.IsTrue(outputSetToggle.IsChecked.GetValueOrDefault());
+            Assert.AreEqual(viewModel.OutputSets.Single().Name, outputSetName.Text);
             Assert.IsTrue(buildDatabase.IsVisible);
             Assert.AreSame(buildCommand, buildDatabase.Command);
             Assert.AreEqual(initialCanBuild, buildCommand.CanExecute(null));

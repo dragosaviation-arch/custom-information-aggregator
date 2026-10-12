@@ -2,6 +2,8 @@ using System.Globalization;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Hierarchy;
+using CIA.Contracts.Sources;
+using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace CIA.Desktop.Presentation;
 
@@ -93,6 +95,103 @@ public sealed record DiscoveryOutputPreviewCellPresentation(
     string Value,
     bool HasConflict,
     bool IsTruncated);
+
+public sealed class DiscoveryOutputSetItemViewModel : ObservableObject
+{
+    private readonly Func<OutputSetId, bool, bool> _setEnabled;
+    private readonly Func<OutputSetId, string, bool> _rename;
+    private bool _isEnabled;
+    private string _name;
+
+    public DiscoveryOutputSetItemViewModel(
+        DiscoveryOutputSetDefinition definition,
+        string parentSourceSetName,
+        DiscoverySelectionImpactGroupPresentation impact,
+        Func<OutputSetId, bool, bool> setEnabled,
+        Func<OutputSetId, string, bool> rename)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentException.ThrowIfNullOrWhiteSpace(parentSourceSetName);
+        ArgumentNullException.ThrowIfNull(impact);
+        ArgumentNullException.ThrowIfNull(setEnabled);
+        ArgumentNullException.ThrowIfNull(rename);
+        OutputSetId = definition.OutputSetId;
+        ParentSourceSetId = definition.ParentSourceSetId;
+        ModelKey = definition.ModelKey;
+        SetNumber = definition.SetNumber;
+        ModelOrder = definition.ModelOrder;
+        RowFamilyIds = definition.RowFamilyIds;
+        ParentSourceSetName = parentSourceSetName;
+        ModelName = impact.DisplayName;
+        RelationshipText = impact.RelationshipText;
+        StructuralContext = impact.StructuralContext;
+        ColumnsText = impact.ColumnsText;
+        _name = definition.Name;
+        _isEnabled = definition.IsEnabled;
+        _setEnabled = setEnabled;
+        _rename = rename;
+    }
+
+    public OutputSetId OutputSetId { get; }
+
+    public SourceSetId ParentSourceSetId { get; }
+
+    public DiscoveryOutputModelKey ModelKey { get; }
+
+    public int SetNumber { get; }
+
+    public string SetNumberText => $"Set {SetNumber}";
+
+    public int ModelOrder { get; }
+
+    public IReadOnlyList<RowFamilyId> RowFamilyIds { get; }
+
+    public string ParentSourceSetName { get; }
+
+    public string ModelName { get; }
+
+    public string RelationshipText { get; }
+
+    public string StructuralContext { get; }
+
+    public string ColumnsText { get; }
+
+    public string DisplayLabel => $"Set {SetNumber}: {Name}";
+
+    public string Name
+    {
+        get => _name;
+        set
+        {
+            if (string.Equals(_name, value, StringComparison.Ordinal)
+                || !_rename(OutputSetId, value))
+            {
+                OnPropertyChanged();
+                return;
+            }
+
+            _name = value.Trim();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DisplayLabel));
+        }
+    }
+
+    public bool IsEnabled
+    {
+        get => _isEnabled;
+        set
+        {
+            if (_isEnabled == value || !_setEnabled(OutputSetId, value))
+            {
+                OnPropertyChanged();
+                return;
+            }
+
+            _isEnabled = value;
+            OnPropertyChanged();
+        }
+    }
+}
 
 public static class DiscoverySelectionImpactBuilder
 {
