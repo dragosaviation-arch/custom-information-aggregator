@@ -162,7 +162,9 @@ public sealed class DiscoveryService
             information = information.Select(item => item with
             {
                 RowFamilyId = assignments[item.Identity],
-                ElementRole = discoveredElementRoles.GetValueOrDefault(item.Identity)
+                ElementRole = discoveredElementRoles.TryGetValue(item.Identity, out var role)
+                    ? role
+                    : null
             }).ToArray();
             var completion = OperationCompletion.FromCompletedItems(correlation, itemStatuses);
             return DiscoveryHostResult.Accept(
