@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<document>
+  <shared_name>Root name</shared_name>
+  <family_title>Root title</family_title>
+  <root_code>ROOT-001</root_code>
+  <family_a_records>
+    <family_a><shared_name>A name 1</shared_name></family_a>
+    <family_a><shared_name>A name 2</shared_name></family_a>
+  </family_a_records>
+  <family_b_records>
+    <family_b><shared_name>B name 1</shared_name></family_b>
+    <family_b><shared_name>B name 2</shared_name></family_b>
+  </family_b_records>
+  <nested_c>
+    <family_c_records>
+      <family_c>
+        <shared_name>C name 1</shared_name>
+        <family_title>C title 1</family_title>
+      </family_c>
+      <family_c>
+        <shared_name>C name 2</shared_name>
+        <family_title>C title 2</family_title>
+      </family_c>
+    </family_c_records>
+  </nested_c>
+  <nested_d>
+    <level>
+      <family_d_records>
+        <family_d><family_title>D title 1</family_title></family_d>
+        <family_d><family_title>D title 2</family_title></family_d>
+      </family_d_records>
+    </level>
+  </nested_d>
+</document>
