@@ -4,8 +4,12 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Runtime;
+using CIA.Core.Sources;
+using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Repository;
+using CIA.ProcessingHost.SourceInterpretation;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.ProcessingHost.Tests;
 
@@ -158,6 +162,25 @@ public sealed class StructuredInformationRepositoryTests
                 "ix_extraction_values_source"
             },
             indexes);
+
+        var databaseDatasetColumns = await ReadColumnNamesAsync(
+            connection,
+            "hierarchy_database_datasets");
+        CollectionAssert.Contains(databaseDatasetColumns, "source_set_id");
+        CollectionAssert.Contains(databaseDatasetColumns, "output_set_id");
+        CollectionAssert.Contains(databaseDatasetColumns, "parent_source_set_id");
+        var databaseFamilyColumns = await ReadColumnNamesAsync(
+            connection,
+            "hierarchy_database_families");
+        CollectionAssert.Contains(databaseFamilyColumns, "source_set_id");
+        CollectionAssert.Contains(databaseFamilyColumns, "family_kind");
+        CollectionAssert.Contains(databaseFamilyColumns, "family_anchor_path");
+        var extractionDatasetColumns = await ReadColumnNamesAsync(
+            connection,
+            "hierarchy_extraction_datasets");
+        CollectionAssert.Contains(extractionDatasetColumns, "source_set_id");
+        CollectionAssert.Contains(extractionDatasetColumns, "output_set_id");
+        CollectionAssert.Contains(extractionDatasetColumns, "parent_source_set_id");
     }
 
     [TestMethod]
@@ -493,13 +516,220 @@ public sealed class StructuredInformationRepositoryTests
         Assert.HasCount(1, retained);
         Assert.AreEqual("retained", retained[0].Value);
         await using var migratedConnection = await OpenConnectionAsync(migrated.DatabasePath);
-        Assert.AreEqual(7, await ScalarIntAsync(migratedConnection, "PRAGMA user_version;"));
+        Assert.AreEqual(8, await ScalarIntAsync(migratedConnection, "PRAGMA user_version;"));
         Assert.AreEqual(0, await ScalarIntAsync(
             migratedConnection,
             "SELECT COUNT(*) FROM hierarchy_database_families;"));
         Assert.AreEqual(0, await ScalarIntAsync(
             migratedConnection,
             "SELECT COUNT(*) FROM hierarchy_extraction_results;"));
+    }
+
+    [TestMethod]
+    public async Task VersionSevenMigrationInvalidatesPublicationsWithoutTraversingRetainedDerivedRows()
+    {
+        const int retainedValueCount = 4_096;
+        using var workspace = new RepositoryWorkspace();
+        var repository = workspace.CreateRepository();
+        await repository.InitializeAsync();
+        var hierarchyGenerationId = OperationId.CreateNew().ToString();
+        var flatGenerationId = OperationId.CreateNew().ToString();
+        var hierarchyExtractionId = OperationId.CreateNew().ToString();
+        var flatExtractionId = OperationId.CreateNew().ToString();
+        var sourceSetId = SourceSetId.CreateNew().ToString();
+        var sourceId = SourceId.CreateNew().ToString();
+
+        await using (var connection = await OpenConnectionAsync(repository.DatabasePath))
+        {
+            await ExecuteAsync(
+                connection,
+                $"""
+                ALTER TABLE hierarchy_database_datasets DROP COLUMN output_set_id;
+                ALTER TABLE hierarchy_database_datasets DROP COLUMN parent_source_set_id;
+                ALTER TABLE hierarchy_extraction_datasets DROP COLUMN output_set_id;
+                ALTER TABLE hierarchy_extraction_datasets DROP COLUMN parent_source_set_id;
+
+                INSERT INTO hierarchy_database_generations (
+                    generation_id, created_utc, generation_state)
+                VALUES ('{hierarchyGenerationId}', '{DateTimeOffset.UtcNow:O}', 2);
+                INSERT INTO hierarchy_database_datasets (
+                    generation_id, source_set_id, display_name, dataset_ordinal,
+                    repeated_data_layout)
+                VALUES ('{hierarchyGenerationId}', '{sourceSetId}', 'Retained Set', 1, 1);
+                INSERT INTO hierarchy_database_families (
+                    generation_id, source_set_id, family_kind, family_anchor_path,
+                    parent_family_kind, parent_family_anchor_path, family_ordinal,
+                    display_name)
+                VALUES ('{hierarchyGenerationId}', '{sourceSetId}', 1, '/root',
+                    NULL, NULL, 1, 'Root');
+                INSERT INTO hierarchy_database_sources (
+                    generation_id, source_set_id, source_id, source_ordinal,
+                    source_file_name, full_source_path, source_kind)
+                VALUES ('{hierarchyGenerationId}', '{sourceSetId}', '{sourceId}', 1,
+                    'retained.xml', 'C:/retained.xml', 1);
+                INSERT INTO hierarchy_database_columns (
+                    generation_id, source_set_id, family_kind, family_anchor_path,
+                    column_ordinal, field_key, effective_name, repeat_coordinates_json)
+                VALUES ('{hierarchyGenerationId}', '{sourceSetId}', 1, '/root',
+                    1, 'value', 'value', '[]');
+                INSERT INTO hierarchy_database_rows (
+                    generation_id, source_set_id, family_kind, family_anchor_path,
+                    row_ordinal, source_id, source_row_ordinal, anchor_instance_id,
+                    projection_ordinal, record_identity)
+                VALUES ('{hierarchyGenerationId}', '{sourceSetId}', 1, '/root',
+                    1, '{sourceId}', 1, 1, 1, 'retained-record');
+                INSERT INTO hierarchy_database_cells (
+                    generation_id, source_set_id, family_kind, family_anchor_path,
+                    row_ordinal, field_key, repeat_coordinates_json, has_conflict)
+                VALUES ('{hierarchyGenerationId}', '{sourceSetId}', 1, '/root',
+                    1, 'value', '[]', 0);
+                WITH RECURSIVE sequence(value_ordinal) AS (
+                    SELECT 1
+                    UNION ALL
+                    SELECT value_ordinal + 1 FROM sequence
+                    WHERE value_ordinal < {retainedValueCount}
+                )
+                INSERT INTO hierarchy_database_cell_values (
+                    generation_id, source_set_id, family_kind, family_anchor_path,
+                    row_ordinal, field_key, repeat_coordinates_json, value_ordinal,
+                    value, information_type, structural_path, candidate_kind,
+                    structural_identity, source_id, lineage_json)
+                SELECT '{hierarchyGenerationId}', '{sourceSetId}', 1, '/root',
+                    1, 'value', '[]', value_ordinal, 'retained-' || value_ordinal,
+                    'value', '/root/value', 1, 'element:/root/value', '{sourceId}', '[]'
+                FROM sequence;
+                INSERT INTO hierarchy_database_publication (singleton_id, generation_id)
+                VALUES (1, '{hierarchyGenerationId}');
+
+                INSERT INTO hierarchy_extraction_results (
+                    extraction_id, database_generation_id, database_generation_json, created_utc)
+                VALUES ('{hierarchyExtractionId}', '{hierarchyGenerationId}', 'retained',
+                    '{DateTimeOffset.UtcNow:O}');
+                INSERT INTO hierarchy_extraction_datasets (
+                    extraction_id, source_set_id, display_name, dataset_ordinal,
+                    repeated_data_layout, row_count, value_count)
+                VALUES ('{hierarchyExtractionId}', '{sourceSetId}', 'Retained Set',
+                    1, 1, 1, {retainedValueCount});
+                INSERT INTO hierarchy_extraction_publication (singleton_id, extraction_id)
+                VALUES (1, '{hierarchyExtractionId}');
+
+                INSERT INTO database_generations (
+                    generation_id, operation_id, created_utc, generation_state)
+                VALUES ('{flatGenerationId}', '{flatGenerationId}',
+                    '{DateTimeOffset.UtcNow:O}', 2);
+                INSERT INTO database_publication (singleton_id, generation_id)
+                VALUES (1, '{flatGenerationId}');
+                INSERT INTO extraction_results (
+                    extraction_id, database_generation_id, created_utc)
+                VALUES ('{flatExtractionId}', '{flatGenerationId}', '{DateTimeOffset.UtcNow:O}');
+                INSERT INTO extraction_publication (singleton_id, extraction_id)
+                VALUES (1, '{flatExtractionId}');
+
+                CREATE TRIGGER reject_hierarchy_database_generation_delete
+                BEFORE DELETE ON hierarchy_database_generations
+                BEGIN
+                    SELECT RAISE(FAIL, 'Database rows must remain retained');
+                END;
+                CREATE TRIGGER reject_hierarchy_database_value_delete
+                BEFORE DELETE ON hierarchy_database_cell_values
+                BEGIN
+                    SELECT RAISE(FAIL, 'Database values must not be traversed for deletion');
+                END;
+                CREATE TRIGGER reject_hierarchy_database_value_update
+                BEFORE UPDATE ON hierarchy_database_cell_values
+                BEGIN
+                    SELECT RAISE(FAIL, 'Database values must not be traversed for update');
+                END;
+                CREATE TRIGGER reject_hierarchy_extraction_delete
+                BEFORE DELETE ON hierarchy_extraction_results
+                BEGIN
+                    SELECT RAISE(FAIL, 'Extraction rows must remain retained');
+                END;
+                CREATE TRIGGER reject_flat_database_delete
+                BEFORE DELETE ON database_generations
+                BEGIN
+                    SELECT RAISE(FAIL, 'Legacy Database rows must remain retained');
+                END;
+                CREATE TRIGGER reject_flat_extraction_delete
+                BEFORE DELETE ON extraction_results
+                BEGIN
+                    SELECT RAISE(FAIL, 'Legacy Extraction rows must remain retained');
+                END;
+                PRAGMA user_version = 7;
+                """);
+        }
+
+        var sourcePath = Path.Combine(workspace.Root, "discovery.xml");
+        await File.WriteAllTextAsync(sourcePath, "<root><value>ready</value></root>");
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            SourceSetId.CreateNew(),
+            sourcePath,
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
+        ISourceAdapter[] adapters = [];
+        var migrated = workspace.CreateRepository();
+        var discovery = new DiscoveryService(
+            new SourceInterpreter(adapters, NullLogger<SourceInterpreter>.Instance),
+            new SourceOccurrenceReader(adapters, NullLogger<SourceOccurrenceReader>.Instance),
+            migrated);
+        var progressEvents = new List<DiscoveryProgressSnapshot>();
+
+        var result = await discovery.RunAsync(
+            OperationCorrelation.CreateNew(),
+            [source],
+            new InlineProgress<DiscoveryProgressSnapshot>(progressEvents.Add));
+
+        Assert.IsTrue(result.Accepted);
+        Assert.HasCount(1, progressEvents);
+        await using (var migratedConnection = await OpenConnectionAsync(migrated.DatabasePath))
+        {
+            Assert.AreEqual(8, await ScalarIntAsync(migratedConnection, "PRAGMA user_version;"));
+            Assert.AreEqual(0, await ScalarIntAsync(
+                migratedConnection,
+                "SELECT COUNT(*) FROM hierarchy_database_publication;"));
+            Assert.AreEqual(0, await ScalarIntAsync(
+                migratedConnection,
+                "SELECT COUNT(*) FROM hierarchy_extraction_publication;"));
+            Assert.AreEqual(0, await ScalarIntAsync(
+                migratedConnection,
+                "SELECT COUNT(*) FROM database_publication;"));
+            Assert.AreEqual(0, await ScalarIntAsync(
+                migratedConnection,
+                "SELECT COUNT(*) FROM extraction_publication;"));
+            Assert.AreEqual(1, await ScalarIntAsync(
+                migratedConnection,
+                "SELECT COUNT(*) FROM hierarchy_database_generations;"));
+            Assert.AreEqual(retainedValueCount, await ScalarIntAsync(
+                migratedConnection,
+                "SELECT COUNT(*) FROM hierarchy_database_cell_values;"));
+            Assert.AreEqual(1, await ScalarIntAsync(
+                migratedConnection,
+                "SELECT COUNT(*) FROM hierarchy_extraction_results;"));
+            Assert.AreEqual(1, await ScalarIntAsync(
+                migratedConnection,
+                "SELECT COUNT(*) FROM database_generations;"));
+            Assert.AreEqual(1, await ScalarIntAsync(
+                migratedConnection,
+                "SELECT COUNT(*) FROM extraction_results;"));
+            Assert.AreEqual(1, await ScalarIntAsync(
+                migratedConnection,
+                "SELECT COUNT(*) FROM hierarchy_database_datasets " +
+                "WHERE output_set_id IS NULL AND parent_source_set_id IS NULL;"));
+            Assert.AreEqual(1, await ScalarIntAsync(
+                migratedConnection,
+                "SELECT COUNT(*) FROM hierarchy_extraction_datasets " +
+                "WHERE output_set_id IS NULL AND parent_source_set_id IS NULL;"));
+        }
+
+        var reopened = workspace.CreateRepository();
+        await reopened.InitializeAsync();
+        await using var reopenedConnection = await OpenConnectionAsync(reopened.DatabasePath);
+        Assert.AreEqual(8, await ScalarIntAsync(reopenedConnection, "PRAGMA user_version;"));
+        Assert.AreEqual(retainedValueCount, await ScalarIntAsync(
+            reopenedConnection,
+            "SELECT COUNT(*) FROM hierarchy_database_cell_values;"));
     }
 
     [TestMethod]
@@ -594,6 +824,22 @@ public sealed class StructuredInformationRepositoryTests
         while (await reader.ReadAsync())
         {
             names.Add(reader.GetString(0));
+        }
+
+        return names.ToArray();
+    }
+
+    private static async Task<string[]> ReadColumnNamesAsync(
+        SqliteConnection connection,
+        string tableName)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName});";
+        var names = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            names.Add(reader.GetString(1));
         }
 
         return names.ToArray();
@@ -696,5 +942,10 @@ public sealed class StructuredInformationRepositoryTests
 
             Directory.Delete(resolvedTarget, recursive: true);
         }
+    }
+
+    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
     }
 }

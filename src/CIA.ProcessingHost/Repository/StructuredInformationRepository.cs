@@ -7,7 +7,7 @@ namespace CIA.ProcessingHost.Repository;
 
 public sealed partial class StructuredInformationRepository
 {
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
     public const string DatabaseFileName = "cia.sqlite3";
 
     private const string OccurrencesTableName = "indexed_occurrences";
@@ -271,6 +271,7 @@ public sealed partial class StructuredInformationRepository
                 4 => await ApplyVersionFiveAsync(connection, cancellationToken).ConfigureAwait(false),
                 5 => await ApplyVersionSixAsync(connection, cancellationToken).ConfigureAwait(false),
                 6 => await ApplyVersionSevenAsync(connection, cancellationToken).ConfigureAwait(false),
+                7 => await ApplyVersionEightAsync(connection, cancellationToken).ConfigureAwait(false),
                 _ => throw new StructuredInformationRepositoryException(
                     $"No repository migration is available from schema version {version}.")
             };
@@ -1253,6 +1254,62 @@ public sealed partial class StructuredInformationRepository
                     "The hierarchy-aware Database schema is incomplete or invalid.", exception);
             }
         }
+
+        await using var datasetCommand = connection.CreateCommand();
+        datasetCommand.CommandText = """
+            SELECT source_set_id, output_set_id, parent_source_set_id
+            FROM hierarchy_database_datasets
+            LIMIT 0;
+            """;
+        try
+        {
+            await using var reader = await datasetCommand
+                .ExecuteReaderAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (SqliteException exception)
+        {
+            throw new StructuredInformationRepositoryException(
+                "The hierarchy-aware Database schema is incomplete or invalid.", exception);
+        }
+    }
+
+    private static async Task<int> ApplyVersionEightAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                -- Schema 7 derived publications do not carry Output Set identity. Invalidate only
+                -- the authoritative publication pointers so retained rows remain untouched.
+                DELETE FROM hierarchy_extraction_publication;
+                DELETE FROM extraction_publication;
+                DELETE FROM hierarchy_database_publication;
+                DELETE FROM database_publication;
+
+                -- Nullable metadata reserves the distinct Output Set / parent Source Set identities
+                -- without fabricating them for the existing Source Set-based materialization path.
+                ALTER TABLE hierarchy_database_datasets ADD COLUMN output_set_id TEXT;
+                ALTER TABLE hierarchy_database_datasets ADD COLUMN parent_source_set_id TEXT;
+                ALTER TABLE hierarchy_extraction_datasets ADD COLUMN output_set_id TEXT;
+                ALTER TABLE hierarchy_extraction_datasets ADD COLUMN parent_source_set_id TEXT;
+
+                PRAGMA user_version = 8;
+                """;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return 8;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
     }
 
     private static async Task ValidateDatabaseGenerationSchemaAsync(
@@ -1363,6 +1420,27 @@ public sealed partial class StructuredInformationRepository
             try
             {
                 await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (SqliteException exception)
+            {
+                throw new StructuredInformationRepositoryException(
+                    "The hierarchy-aware Extraction Result schema is incomplete or invalid.",
+                    exception);
+            }
+        }
+
+        await using (var datasetCommand = connection.CreateCommand())
+        {
+            datasetCommand.CommandText = """
+                SELECT source_set_id, output_set_id, parent_source_set_id
+                FROM hierarchy_extraction_datasets
+                LIMIT 0;
+                """;
+            try
+            {
+                await using var reader = await datasetCommand
+                    .ExecuteReaderAsync(cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (SqliteException exception)
             {
