@@ -1,6 +1,7 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -16,6 +17,7 @@ using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
+using CIA.ProcessingHost.Extraction;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceInterpretation;
@@ -60,6 +62,7 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
     [TestCategory("Spr213RecoveryR0")]
     [TestCategory("Spr213RecoverySliceB")]
     [TestCategory("Spr213RecoveryC1")]
+    [TestCategory("Spr213RecoverySliceD")]
     [TestCategory("AlphaRegressionGate")]
     public async Task GoldenStructuralSelectionBuildsFiveCoherentOutputSetsAndRealPreview()
     {
@@ -273,6 +276,71 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
                                 StringComparison.Ordinal))));
             }
 
+            var extraction = await workspace.Extraction.ExtractAsync(
+                OperationCorrelation.CreateNew(),
+                firstGeneration);
+            Assert.IsTrue(extraction.Accepted, extraction.Failure?.Description);
+            Assert.HasCount(5, extraction.PublishedResult!.Datasets);
+            CollectionAssert.AreEqual(
+                firstGeneration.Datasets.Select(dataset => dataset.OutputSetId).ToArray(),
+                extraction.PublishedResult.Datasets.Select(dataset => dataset.OutputSetId).ToArray());
+            foreach (var extractedDataset in extraction.PublishedResult.Datasets)
+            {
+                var databaseDataset = firstGeneration.Datasets.Single(dataset =>
+                    dataset.OutputSetId == extractedDataset.OutputSetId);
+                Assert.AreEqual(databaseDataset.ParentSourceSetId, extractedDataset.ParentSourceSetId);
+                Assert.AreEqual(databaseDataset.DisplayName, extractedDataset.DisplayName);
+                CollectionAssert.AreEqual(
+                    databaseDataset.Columns.Select(column => column.EffectiveName).ToArray(),
+                    extractedDataset.Columns.Select(column => column.EffectiveName).ToArray());
+
+                var family = extractedDataset.RowFamilies.Single();
+                var review = await workspace.Repository.ReadPublishedDatabasePageAsync(
+                    new DatabaseReviewQuery(
+                        firstGeneration.OperationId,
+                        extractedDataset.OutputSetId!.Value,
+                        extractedDataset.ParentSourceSetId,
+                        family.Id,
+                        1,
+                        DatabaseReviewLimits.MaximumRowsPerPage,
+                        null,
+                        DatabaseRowInclusionFilter.Included));
+                var extractedRows = await ReadExtractionRowsAsync(
+                    workspace.Repository,
+                    extraction.PublishedResult.OperationId,
+                    extractedDataset.OutputSetId.Value,
+                    family.Id);
+                Assert.HasCount(review!.TotalRowCount, extractedRows);
+                CollectionAssert.AreEqual(
+                    review.Rows.Select(row => row.Ordinal).ToArray(),
+                    extractedRows.Select(row => row.DatabaseRowOrdinal).ToArray());
+                CollectionAssert.AreEqual(
+                    review.Rows.Select(row => row.RecordIdentity).ToArray(),
+                    extractedRows.Select(row => row.RecordIdentity).ToArray());
+                CollectionAssert.AreEqual(
+                    review.Rows.SelectMany(ReviewValues).ToArray(),
+                    extractedRows.SelectMany(ExtractionValues).ToArray());
+                Assert.IsTrue(extractedRows.All(row =>
+                    row.Source.SourceSetId == extractedDataset.ParentSourceSetId
+                    && row.Cells.All(cell => cell.ColumnIdentity.RowFamilyId == family.Id)
+                    && row.Cells.SelectMany(cell => cell.Values).All(value =>
+                        value.DetailedIdentity.SourceSetId == extractedDataset.ParentSourceSetId
+                        && value.OriginatingRowFamilyId is not null)));
+            }
+
+            using (var cancelled = new CancellationTokenSource())
+            {
+                cancelled.Cancel();
+                var cancelledReplacement = await workspace.Extraction.ExtractAsync(
+                    OperationCorrelation.CreateNew(),
+                    firstGeneration,
+                    cancelled.Token);
+                Assert.IsFalse(cancelledReplacement.Accepted);
+                Assert.AreEqual(
+                    extraction.PublishedResult.OperationId,
+                    (await workspace.Repository.ReadPublishedExtractionResultAsync())!.OperationId);
+            }
+
             var firstDataset = firstGeneration.Datasets[0];
             var firstFamily = firstDataset.RowFamilies.Single();
             Assert.AreEqual(
@@ -339,12 +407,33 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
                 "Renamed approved output",
                 replacementGeneration.Datasets.Single(dataset =>
                     dataset.OutputSetId == renamed.OutputSetId).DisplayName);
+
+            var staleAttempt = await workspace.Extraction.ExtractAsync(
+                OperationCorrelation.CreateNew(),
+                firstGeneration);
+            Assert.IsFalse(staleAttempt.Accepted);
+            Assert.AreEqual(
+                extraction.PublishedResult.OperationId,
+                (await workspace.Repository.ReadPublishedExtractionResultAsync())!.OperationId);
+
+            var replacementExtraction = await workspace.Extraction.ExtractAsync(
+                OperationCorrelation.CreateNew(),
+                replacementGeneration);
+            Assert.IsTrue(replacementExtraction.Accepted, replacementExtraction.Failure?.Description);
+            Assert.HasCount(4, replacementExtraction.PublishedResult!.Datasets);
+            Assert.IsFalse(replacementExtraction.PublishedResult.Datasets.Any(dataset =>
+                dataset.OutputSetId == disabled.OutputSetId));
+            Assert.AreEqual(
+                "Renamed approved output",
+                replacementExtraction.PublishedResult.Datasets.Single(dataset =>
+                    dataset.OutputSetId == renamed.OutputSetId).DisplayName);
         }
     }
 
     [TestMethod]
     [TestCategory("Spr213RecoverySliceB")]
     [TestCategory("Spr213RecoveryC1")]
+    [TestCategory("Spr213RecoverySliceD")]
     public async Task ApprovedOutputSetsKeepDifferentParentSourceSetsIsolated()
     {
         using var workspace = new Workspace();
@@ -396,6 +485,25 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
             Assert.IsTrue(review.Rows.SelectMany(row => row.Cells)
                 .SelectMany(cell => cell.Values)
                 .All(value => value.DetailedIdentity.SourceSetId == dataset.ParentSourceSetId));
+        }
+
+        var extraction = await workspace.Extraction.ExtractAsync(
+            OperationCorrelation.CreateNew(),
+            result.PublishedGeneration);
+        Assert.IsTrue(extraction.Accepted, extraction.Failure?.Description);
+        Assert.HasCount(2, extraction.PublishedResult!.Datasets);
+        foreach (var dataset in extraction.PublishedResult.Datasets)
+        {
+            var family = dataset.RowFamilies.Single();
+            var rows = await ReadExtractionRowsAsync(
+                workspace.Repository,
+                extraction.PublishedResult.OperationId,
+                dataset.OutputSetId!.Value,
+                family.Id);
+            Assert.IsTrue(rows.All(row =>
+                row.Source.SourceSetId == dataset.ParentSourceSetId
+                && row.Cells.SelectMany(cell => cell.Values).All(value =>
+                    value.DetailedIdentity.SourceSetId == dataset.ParentSourceSetId)));
         }
     }
 
@@ -463,6 +571,30 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
         return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
 
+    private static async Task<IReadOnlyList<ExtractionResultRow>> ReadExtractionRowsAsync(
+        StructuredInformationRepository repository,
+        OperationId extractionId,
+        OutputSetId outputSetId,
+        RowFamilyId rowFamilyId)
+    {
+        var rows = new List<ExtractionResultRow>();
+        await foreach (var row in repository.StreamPublishedExtractionRowsAsync(
+            extractionId,
+            outputSetId,
+            rowFamilyId))
+        {
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
+    private static IEnumerable<string> ReviewValues(DatabaseReviewRow row) =>
+        row.Cells.SelectMany(cell => cell.Values).Select(value => value.Value);
+
+    private static IEnumerable<string> ExtractionValues(ExtractionResultRow row) =>
+        row.Cells.SelectMany(cell => cell.Values).Select(value => value.Value);
+
     private static string[] PreviewValues(DiscoveryWorkspaceViewModel viewModel) =>
         viewModel.SelectedOutputPreviewGroup?.Rows
             .SelectMany(row => row.Cells)
@@ -514,12 +646,17 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
                 Interpreter,
                 new DatabaseSourceProjectionService(new HierarchyFlatteningEngine()),
                 NullLogger<DiscoveryOutputPreviewService>.Instance);
+            var cancellation = new CooperativeOperationCancellation(new NullHistory());
             Database = new DatabaseGenerationService(
                 Repository,
                 Interpreter,
                 new HierarchyFlatteningEngine(),
-                new CooperativeOperationCancellation(new NullHistory()),
+                cancellation,
                 NullLogger<DatabaseGenerationService>.Instance);
+            Extraction = new DatabaseExtractionService(
+                Repository,
+                cancellation,
+                NullLogger<DatabaseExtractionService>.Instance);
         }
 
         public StructuredInformationRepository Repository { get; }
@@ -531,6 +668,8 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
         public DiscoveryOutputPreviewService Preview { get; }
 
         public DatabaseGenerationService Database { get; }
+
+        public DatabaseExtractionService Extraction { get; }
 
         public string Root => _root;
 

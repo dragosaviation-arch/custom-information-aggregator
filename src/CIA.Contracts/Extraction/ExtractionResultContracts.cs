@@ -27,13 +27,19 @@ public sealed record ExtractionResultSummary
         ArgumentNullException.ThrowIfNull(databaseGeneration);
         ArgumentNullException.ThrowIfNull(datasets);
         var datasetArray = datasets.ToArray();
+        var outputSetBacked = databaseGeneration.Datasets.All(dataset => dataset.OutputSetId is not null);
         if (!databaseGeneration.IsHierarchyAware
             || datasetArray.Length != databaseGeneration.Datasets.Count
             || datasetArray.Any(dataset => dataset is null)
             || !datasetArray.Select(dataset => dataset.Ordinal)
                 .SequenceEqual(Enumerable.Range(1, datasetArray.Length))
-            || datasetArray.Select(dataset => dataset.SourceSetId).Distinct().Count()
-                != datasetArray.Length)
+            || (outputSetBacked
+                ? datasetArray.Any(dataset => dataset.OutputSetId is null)
+                    || datasetArray.Select(dataset => dataset.OutputSetId).Distinct().Count()
+                        != datasetArray.Length
+                : datasetArray.Any(dataset => dataset.OutputSetId is not null)
+                    || datasetArray.Select(dataset => dataset.SourceSetId).Distinct().Count()
+                        != datasetArray.Length))
         {
             throw new ArgumentException(
                 "An Extraction Result requires every hierarchy-aware Database dataset.",
@@ -42,9 +48,13 @@ public sealed record ExtractionResultSummary
 
         foreach (var dataset in datasetArray)
         {
-            var basis = databaseGeneration.Datasets.SingleOrDefault(candidate =>
-                candidate.SourceSetId == dataset.SourceSetId);
+            var basis = outputSetBacked
+                ? databaseGeneration.Datasets.SingleOrDefault(candidate =>
+                    candidate.OutputSetId == dataset.OutputSetId)
+                : databaseGeneration.Datasets.SingleOrDefault(candidate =>
+                    candidate.SourceSetId == dataset.SourceSetId);
             if (basis is null
+                || dataset.ParentSourceSetId != basis.ParentSourceSetId
                 || dataset.Ordinal != basis.Ordinal
                 || !string.Equals(dataset.DisplayName, basis.DisplayName, StringComparison.Ordinal)
                 || dataset.RepeatedDataLayout != basis.RepeatedDataLayout
@@ -105,6 +115,29 @@ public sealed record ExtractionResultSummary
 public sealed record ExtractionDatasetSummary
 {
     public ExtractionDatasetSummary(
+        OutputSetId outputSetId,
+        SourceSetId parentSourceSetId,
+        string displayName,
+        int ordinal,
+        RepeatedDataLayout repeatedDataLayout,
+        int rowCount,
+        int valueCount,
+        IReadOnlyList<DatabaseColumnDefinition> columns,
+        IReadOnlyList<ExtractionRowFamilySummary> rowFamilies)
+        : this(
+            parentSourceSetId,
+            displayName,
+            ordinal,
+            repeatedDataLayout,
+            rowCount,
+            valueCount,
+            columns,
+            rowFamilies,
+            outputSetId)
+    {
+    }
+
+    public ExtractionDatasetSummary(
         SourceSetId sourceSetId,
         string displayName,
         int ordinal,
@@ -133,13 +166,21 @@ public sealed record ExtractionDatasetSummary
         int rowCount,
         int valueCount,
         IReadOnlyList<DatabaseColumnDefinition> columns,
-        IReadOnlyList<ExtractionRowFamilySummary> rowFamilies)
+        IReadOnlyList<ExtractionRowFamilySummary> rowFamilies,
+        OutputSetId? outputSetId = null)
     {
         if (!SourceSetId.IsValid(sourceSetId.Value))
         {
             throw new ArgumentException(
                 "An Extraction dataset requires a Source Set ID.",
                 nameof(sourceSetId));
+        }
+
+        if (outputSetId is { } id && id.Value == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "An Extraction Output Set requires an identity.",
+                nameof(outputSetId));
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -173,6 +214,7 @@ public sealed record ExtractionDatasetSummary
         }
 
         SourceSetId = sourceSetId;
+        OutputSetId = outputSetId;
         DisplayName = displayName;
         Ordinal = ordinal;
         RepeatedDataLayout = repeatedDataLayout;
@@ -183,6 +225,11 @@ public sealed record ExtractionDatasetSummary
     }
 
     public SourceSetId SourceSetId { get; }
+
+    public OutputSetId? OutputSetId { get; }
+
+    [JsonIgnore]
+    public SourceSetId ParentSourceSetId => SourceSetId;
 
     public string DisplayName { get; }
 

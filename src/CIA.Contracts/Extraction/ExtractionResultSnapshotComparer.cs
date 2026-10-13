@@ -24,7 +24,8 @@ public static class ExtractionResultSnapshotComparer
         }
 
         return left.Datasets.Zip(right.Datasets).All(pair =>
-            pair.First.SourceSetId == pair.Second.SourceSetId
+            pair.First.OutputSetId == pair.Second.OutputSetId
+            && pair.First.ParentSourceSetId == pair.Second.ParentSourceSetId
             && string.Equals(pair.First.DisplayName, pair.Second.DisplayName, StringComparison.Ordinal)
             && pair.First.Ordinal == pair.Second.Ordinal
             && pair.First.RepeatedDataLayout == pair.Second.RepeatedDataLayout

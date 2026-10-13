@@ -73,20 +73,42 @@ public sealed partial class StructuredInformationRepository
                         extractionCorrelation,
                         cancellationToken)
                     .ConfigureAwait(false);
-                await CopyHierarchyExtractionSnapshotAsync(
-                        connection,
-                        transaction,
-                        extractionId,
-                        generationId,
-                        cancellationToken)
-                    .ConfigureAwait(false);
-                await ValidateHierarchyExtractionCandidateAsync(
-                        connection,
-                        transaction,
-                        extractionId,
-                        databaseGeneration,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                var outputSetBacked = databaseGeneration.Datasets.All(
+                    dataset => dataset.OutputSetId is not null);
+                if (outputSetBacked)
+                {
+                    await CopyOutputSetExtractionSnapshotAsync(
+                            connection,
+                            transaction,
+                            extractionId,
+                            generationId,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    await ValidateOutputSetExtractionCandidateAsync(
+                            connection,
+                            transaction,
+                            extractionId,
+                            databaseGeneration,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                else
+                {
+                    await CopyHierarchyExtractionSnapshotAsync(
+                            connection,
+                            transaction,
+                            extractionId,
+                            generationId,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    await ValidateHierarchyExtractionCandidateAsync(
+                            connection,
+                            transaction,
+                            extractionId,
+                            databaseGeneration,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                }
 
                 var result = await ReadHierarchyExtractionSummaryAsync(
                         connection,
@@ -194,17 +216,41 @@ public sealed partial class StructuredInformationRepository
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var summary = await ReadPublishedExtractionResultAsync(cancellationToken).ConfigureAwait(false);
-        var dataset = summary?.Datasets.SingleOrDefault(item => item.SourceSetId == sourceSetId);
         if (summary?.OperationId != extractionId)
         {
             throw new StructuredInformationRepositoryException(
                 "The requested Extraction Result is no longer the active published result.");
         }
 
+        var matchingDatasets = summary.Datasets
+            .Where(item => item.ParentSourceSetId == sourceSetId)
+            .ToArray();
+        if (matchingDatasets.Length != 1)
+        {
+            throw new StructuredInformationRepositoryException(
+                "An OutputSet-backed Extraction row read requires an explicit OutputSetId.");
+        }
+
+        var dataset = matchingDatasets[0];
+
         if (dataset is null || dataset.RowFamilies.Count != 1)
         {
             throw new StructuredInformationRepositoryException(
                 "Family-aware Extraction rows require an explicit Row Family identity.");
+        }
+
+        if (dataset.OutputSetId is { } outputSetId)
+        {
+            await foreach (var row in StreamPublishedExtractionRowsAsync(
+                extractionId,
+                outputSetId,
+                dataset.RowFamilies[0].Id,
+                cancellationToken).ConfigureAwait(false))
+            {
+                yield return row;
+            }
+
+            yield break;
         }
 
         await foreach (var row in StreamPublishedExtractionRowsAsync(
@@ -227,6 +273,30 @@ public sealed partial class StructuredInformationRepository
         {
             throw new ArgumentException(
                 "An Extraction Result row read requires valid extraction and Source Set identities.");
+        }
+
+        var summary = await ReadPublishedExtractionResultAsync(cancellationToken).ConfigureAwait(false);
+        if (summary?.OperationId != extractionId)
+        {
+            throw new StructuredInformationRepositoryException(
+                "The requested Extraction Result is no longer the active published result.");
+        }
+
+        var matchingOutputSets = summary.Datasets.Where(dataset =>
+            dataset.OutputSetId is not null
+            && dataset.RowFamilies.Any(family => family.Id == rowFamilyId)).ToArray();
+        if (matchingOutputSets.Length == 1)
+        {
+            await foreach (var row in StreamPublishedExtractionRowsAsync(
+                extractionId,
+                matchingOutputSets[0].OutputSetId!.Value,
+                rowFamilyId,
+                cancellationToken).ConfigureAwait(false))
+            {
+                yield return row;
+            }
+
+            yield break;
         }
 
         await InitializeAsync(cancellationToken).ConfigureAwait(false);
@@ -693,6 +763,16 @@ public sealed partial class StructuredInformationRepository
         var databaseGeneration = JsonSerializer.Deserialize<DatabaseGenerationSummary>(generationJson)
             ?? throw new StructuredInformationRepositoryException(
                 "The Extraction Result Database basis is invalid.");
+        if (databaseGeneration.Datasets.All(dataset => dataset.OutputSetId is not null))
+        {
+            return await ReadOutputSetExtractionSummaryAsync(
+                connection,
+                transaction,
+                extractionId,
+                databaseGeneration,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         var datasets = new List<ExtractionDatasetSummary>();
         await using var datasetCommand = connection.CreateCommand();
         datasetCommand.Transaction = transaction;

@@ -84,6 +84,8 @@ public sealed partial class StructuredInformationRepository
 
             await EnsureOutputSetDatabaseSchemaAsync(connection, cancellationToken)
                 .ConfigureAwait(false);
+            await EnsureOutputSetExtractionSchemaAsync(connection, cancellationToken)
+                .ConfigureAwait(false);
             await ValidateCurrentSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             Volatile.Write(ref _isInitialized, 1);
         }
