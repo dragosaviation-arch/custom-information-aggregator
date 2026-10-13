@@ -432,7 +432,8 @@ public static class IpcContractValidator
             throw InvalidContract("A Database build command requires Source Set datasets.");
         }
 
-        var sourceIds = new HashSet<SourceId>();
+        var sourceOwners = new Dictionary<SourceId, SourceSetId>();
+        var parentBoundaries = new Dictionary<SourceSetId, SourceId[]>();
         foreach (var dataset in command.Specification.Datasets)
         {
             if (dataset is null || dataset.Fields.Count == 0 || dataset.Sources.Count == 0
@@ -446,6 +447,7 @@ public static class IpcContractValidator
             {
                 throw InvalidContract("Database fields must reference a typed Row Family in their dataset.");
             }
+            var datasetSourceIds = new HashSet<SourceId>();
             foreach (var source in dataset.Sources)
             {
                 ValidateLoadedSource(source);
@@ -453,12 +455,24 @@ public static class IpcContractValidator
                     || source.Status != LoadedSourceStatus.Ready
                     || source.Kind != LoadedSourceKind.XmlFile
                     || source.SourceSetId != dataset.SourceSetId
-                    || !sourceIds.Add(source.SourceId))
+                    || !datasetSourceIds.Add(source.SourceId)
+                    || (sourceOwners.TryGetValue(source.SourceId, out var owner)
+                        && owner != dataset.SourceSetId))
                 {
                     throw InvalidContract(
-                        "Database build sources must be unique, included, ready XML sources in their dataset.");
+                        "Database build sources must be parent-isolated, included, ready XML sources.");
                 }
+                sourceOwners[source.SourceId] = dataset.SourceSetId;
             }
+
+            var boundary = dataset.Sources.Select(source => source.SourceId).ToArray();
+            if (parentBoundaries.TryGetValue(dataset.SourceSetId, out var captured)
+                && !boundary.SequenceEqual(captured))
+            {
+                throw InvalidContract(
+                    "Sibling Database Output Sets must share one captured parent source boundary.");
+            }
+            parentBoundaries[dataset.SourceSetId] = boundary;
         }
     }
 

@@ -82,6 +82,8 @@ public sealed partial class StructuredInformationRepository
                     $"The repository schema version {version} is not supported.");
             }
 
+            await EnsureOutputSetDatabaseSchemaAsync(connection, cancellationToken)
+                .ConfigureAwait(false);
             await ValidateCurrentSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             Volatile.Write(ref _isInitialized, 1);
         }
@@ -1238,7 +1240,11 @@ public sealed partial class StructuredInformationRepository
             "hierarchy_database_sources", "hierarchy_database_mappings",
             "hierarchy_database_columns", "hierarchy_database_rows",
             "hierarchy_database_cells", "hierarchy_database_cell_values",
-            "hierarchy_database_publication"
+            "hierarchy_database_publication",
+            "hierarchy_output_set_datasets", "hierarchy_output_set_families",
+            "hierarchy_output_set_sources", "hierarchy_output_set_mappings",
+            "hierarchy_output_set_columns", "hierarchy_output_set_rows",
+            "hierarchy_output_set_cells", "hierarchy_output_set_cell_values"
         ];
         foreach (var table in tables)
         {
@@ -1304,6 +1310,194 @@ public sealed partial class StructuredInformationRepository
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return 8;
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task EnsureOutputSetDatabaseSchemaAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                CREATE TABLE IF NOT EXISTS hierarchy_output_set_datasets (
+                    generation_id TEXT NOT NULL,
+                    output_set_id TEXT NOT NULL CHECK (length(output_set_id) = 36),
+                    parent_source_set_id TEXT NOT NULL CHECK (length(parent_source_set_id) = 36),
+                    display_name TEXT NOT NULL CHECK (length(display_name) > 0),
+                    dataset_ordinal INTEGER NOT NULL CHECK (dataset_ordinal >= 1),
+                    repeated_data_layout INTEGER NOT NULL,
+                    PRIMARY KEY (generation_id, output_set_id),
+                    UNIQUE (generation_id, dataset_ordinal),
+                    FOREIGN KEY (generation_id)
+                        REFERENCES hierarchy_database_generations (generation_id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS hierarchy_output_set_families (
+                    generation_id TEXT NOT NULL,
+                    output_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL CHECK (length(family_anchor_path) > 0),
+                    parent_family_kind INTEGER,
+                    parent_family_anchor_path TEXT,
+                    family_ordinal INTEGER NOT NULL CHECK (family_ordinal >= 1),
+                    display_name TEXT NOT NULL CHECK (length(display_name) > 0),
+                    PRIMARY KEY (generation_id, output_set_id, family_kind, family_anchor_path),
+                    UNIQUE (generation_id, output_set_id, family_ordinal),
+                    FOREIGN KEY (generation_id, output_set_id)
+                        REFERENCES hierarchy_output_set_datasets (generation_id, output_set_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS hierarchy_output_set_sources (
+                    generation_id TEXT NOT NULL,
+                    output_set_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL CHECK (length(source_id) = 36),
+                    source_ordinal INTEGER NOT NULL CHECK (source_ordinal >= 1),
+                    source_file_name TEXT NOT NULL,
+                    full_source_path TEXT NOT NULL,
+                    source_kind INTEGER NOT NULL,
+                    archive_path TEXT,
+                    archive_member_path TEXT,
+                    file_modified_utc TEXT,
+                    PRIMARY KEY (generation_id, output_set_id, source_id),
+                    UNIQUE (generation_id, output_set_id, source_ordinal),
+                    FOREIGN KEY (generation_id, output_set_id)
+                        REFERENCES hierarchy_output_set_datasets (generation_id, output_set_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS hierarchy_output_set_mappings (
+                    generation_id TEXT NOT NULL,
+                    output_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    mapping_ordinal INTEGER NOT NULL CHECK (mapping_ordinal >= 1),
+                    field_key TEXT NOT NULL,
+                    effective_name TEXT NOT NULL,
+                    is_explicit_override INTEGER NOT NULL CHECK (is_explicit_override IN (0, 1)),
+                    detailed_identities_json TEXT NOT NULL,
+                    PRIMARY KEY (
+                        generation_id, output_set_id, family_kind,
+                        family_anchor_path, mapping_ordinal),
+                    FOREIGN KEY (generation_id, output_set_id, family_kind, family_anchor_path)
+                        REFERENCES hierarchy_output_set_families (
+                            generation_id, output_set_id, family_kind, family_anchor_path)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS hierarchy_output_set_columns (
+                    generation_id TEXT NOT NULL,
+                    output_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    column_ordinal INTEGER NOT NULL CHECK (column_ordinal >= 1),
+                    field_key TEXT NOT NULL,
+                    effective_name TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    PRIMARY KEY (
+                        generation_id, output_set_id, family_kind,
+                        family_anchor_path, field_key, repeat_coordinates_json),
+                    UNIQUE (
+                        generation_id, output_set_id, family_kind,
+                        family_anchor_path, column_ordinal),
+                    FOREIGN KEY (generation_id, output_set_id, family_kind, family_anchor_path)
+                        REFERENCES hierarchy_output_set_families (
+                            generation_id, output_set_id, family_kind, family_anchor_path)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS hierarchy_output_set_rows (
+                    generation_id TEXT NOT NULL,
+                    output_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL CHECK (row_ordinal >= 1),
+                    source_id TEXT NOT NULL,
+                    source_row_ordinal INTEGER NOT NULL CHECK (source_row_ordinal >= 1),
+                    anchor_instance_id INTEGER NOT NULL CHECK (anchor_instance_id >= 1),
+                    projection_ordinal INTEGER NOT NULL CHECK (projection_ordinal >= 1),
+                    record_identity TEXT NOT NULL,
+                    is_included INTEGER NOT NULL DEFAULT 1 CHECK (is_included IN (0, 1)),
+                    PRIMARY KEY (
+                        generation_id, output_set_id, family_kind,
+                        family_anchor_path, row_ordinal),
+                    FOREIGN KEY (generation_id, output_set_id, source_id)
+                        REFERENCES hierarchy_output_set_sources (
+                            generation_id, output_set_id, source_id) ON DELETE CASCADE,
+                    FOREIGN KEY (generation_id, output_set_id, family_kind, family_anchor_path)
+                        REFERENCES hierarchy_output_set_families (
+                            generation_id, output_set_id, family_kind, family_anchor_path)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS hierarchy_output_set_cells (
+                    generation_id TEXT NOT NULL,
+                    output_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL,
+                    field_key TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    has_conflict INTEGER NOT NULL CHECK (has_conflict IN (0, 1)),
+                    PRIMARY KEY (
+                        generation_id, output_set_id, family_kind, family_anchor_path,
+                        row_ordinal, field_key, repeat_coordinates_json),
+                    FOREIGN KEY (
+                        generation_id, output_set_id, family_kind,
+                        family_anchor_path, row_ordinal)
+                        REFERENCES hierarchy_output_set_rows (
+                            generation_id, output_set_id, family_kind,
+                            family_anchor_path, row_ordinal) ON DELETE CASCADE,
+                    FOREIGN KEY (
+                        generation_id, output_set_id, family_kind,
+                        family_anchor_path, field_key, repeat_coordinates_json)
+                        REFERENCES hierarchy_output_set_columns (
+                            generation_id, output_set_id, family_kind,
+                            family_anchor_path, field_key, repeat_coordinates_json)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS hierarchy_output_set_cell_values (
+                    generation_id TEXT NOT NULL,
+                    output_set_id TEXT NOT NULL,
+                    family_kind INTEGER NOT NULL,
+                    family_anchor_path TEXT NOT NULL,
+                    row_ordinal INTEGER NOT NULL,
+                    field_key TEXT NOT NULL,
+                    repeat_coordinates_json TEXT NOT NULL,
+                    value_ordinal INTEGER NOT NULL CHECK (value_ordinal >= 1),
+                    value TEXT NOT NULL,
+                    information_type TEXT NOT NULL,
+                    structural_path TEXT NOT NULL,
+                    candidate_kind INTEGER NOT NULL,
+                    structural_identity TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    lineage_json TEXT NOT NULL,
+                    PRIMARY KEY (
+                        generation_id, output_set_id, family_kind, family_anchor_path,
+                        row_ordinal, field_key, repeat_coordinates_json, value_ordinal),
+                    FOREIGN KEY (
+                        generation_id, output_set_id, family_kind, family_anchor_path,
+                        row_ordinal, field_key, repeat_coordinates_json)
+                        REFERENCES hierarchy_output_set_cells (
+                            generation_id, output_set_id, family_kind, family_anchor_path,
+                            row_ordinal, field_key, repeat_coordinates_json)
+                        ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS ix_output_set_database_rows_review
+                    ON hierarchy_output_set_rows (
+                        generation_id, output_set_id, family_kind,
+                        family_anchor_path, is_included, row_ordinal);
+                CREATE INDEX IF NOT EXISTS ix_output_set_database_values_search
+                    ON hierarchy_output_set_cell_values (
+                        generation_id, output_set_id, family_kind,
+                        family_anchor_path, value);
+                """;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch
         {

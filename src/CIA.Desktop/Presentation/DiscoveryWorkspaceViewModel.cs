@@ -1836,7 +1836,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 return false;
             }
 
-            specification = _databaseBuildCoordinator.CreateBuildSpecification();
+            specification = _databaseBuildCoordinator.CreateDiscoveryProjectionSpecification();
             return specification.Datasets.Count > 0;
         }
         catch (ArgumentException)

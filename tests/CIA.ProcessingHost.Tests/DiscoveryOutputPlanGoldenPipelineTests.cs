@@ -4,6 +4,7 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Database;
 using CIA.Core.Diagnostics;
 using CIA.Core.Hierarchy;
 using CIA.Core.Runtime;
@@ -15,6 +16,7 @@ using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
+using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceInterpretation;
 using Microsoft.Data.Sqlite;
@@ -56,6 +58,7 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
 
     [TestMethod]
     [TestCategory("Spr213RecoveryR0")]
+    [TestCategory("Spr213RecoverySliceB")]
     [TestCategory("AlphaRegressionGate")]
     public async Task GoldenStructuralSelectionBuildsFiveCoherentOutputSetsAndRealPreview()
     {
@@ -88,7 +91,7 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
             .AddSingleton(sourceSet)
             .AddSingleton<IApplicationWorkflowCoordinator>(workflow)
             .AddSingleton<IDiscoveryClient>(client)
-            .AddSingleton<IDatabaseClient>(new RejectingDatabaseClient())
+            .AddSingleton<IDatabaseClient>(new InProcessDatabaseClient(workspace.Database))
             .AddSingleton<ILogger<DatabaseBuildCoordinator>>(
                 NullLogger<DatabaseBuildCoordinator>.Instance)
             .AddSingleton<DatabaseBuildCoordinator>()
@@ -110,6 +113,9 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
             {
                 viewModel.ToggleSelectionCommand.Execute(logical);
             }
+            await WaitUntilAsync(() =>
+                viewModel.SelectionImpact.SelectedLogicalFieldCount == 3
+                && viewModel.OutputSets.Count == 5);
 
             var selectedDetailed = configuration.Current.Items
                 .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected
@@ -204,7 +210,158 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
                 .OrderBy(identity => identity.StructuralPath, StringComparer.Ordinal)
                 .ToArray();
             CollectionAssert.AreEqual(selectedDetailed, repeatedIdentities);
+
+            var approvedPlan = outputPlan.Current;
+            var firstBuild = await databaseCoordinator.BuildAsync();
+            Assert.IsTrue(firstBuild.Accepted, firstBuild.Rejection?.Reason);
+            var firstGeneration = databaseCoordinator.CurrentGeneration!;
+            Assert.HasCount(5, firstGeneration.Datasets);
+            CollectionAssert.AreEqual(
+                approvedPlan.OutputSets.Select(set => set.OutputSetId).ToArray(),
+                firstGeneration.Datasets.Select(dataset => dataset.OutputSetId!.Value).ToArray());
+            Assert.IsTrue(firstGeneration.Datasets.All(dataset =>
+                dataset.ParentSourceSetId == source.SourceSetId
+                && dataset.RowFamilies.Count == 1));
+            foreach (var dataset in firstGeneration.Datasets)
+            {
+                var expectedSet = approvedPlan.OutputSets.Single(set =>
+                    set.OutputSetId == dataset.OutputSetId);
+                var expectedFields = ExpectedProjection[expectedSet.RowFamilyIds.Single().AnchorPath];
+                CollectionAssert.AreEquivalent(
+                    expectedFields,
+                    dataset.Mappings.Select(mapping => mapping.EffectiveName).ToArray());
+                Assert.IsTrue(dataset.Mappings.SelectMany(mapping => mapping.DetailedIdentities)
+                    .All(identity => identity.StructuralPath == expectedSet.RowFamilyIds.Single().AnchorPath
+                        || identity.StructuralPath.StartsWith(
+                            expectedSet.RowFamilyIds.Single().AnchorPath + "/",
+                            StringComparison.Ordinal)));
+            }
+
+            Assert.AreEqual(
+                0,
+                await CountRowsAsync(
+                    workspace.Repository.DatabasePath,
+                    "hierarchy_database_datasets",
+                    firstGeneration.OperationId));
+            Assert.AreEqual(
+                5,
+                await CountRowsAsync(
+                    workspace.Repository.DatabasePath,
+                    "hierarchy_output_set_datasets",
+                    firstGeneration.OperationId));
+
+            var renamed = approvedPlan.OutputSets[0];
+            var disabled = approvedPlan.OutputSets[1];
+            Assert.IsTrue(outputPlan.Rename(renamed.OutputSetId, "Renamed approved output"));
+            Assert.IsTrue(outputPlan.SetEnabled(disabled.OutputSetId, false));
+            var replacement = await databaseCoordinator.BuildAsync();
+            Assert.IsTrue(replacement.Accepted, replacement.Rejection?.Reason);
+            var replacementGeneration = databaseCoordinator.CurrentGeneration!;
+            Assert.HasCount(4, replacementGeneration.Datasets);
+            Assert.IsFalse(replacementGeneration.Datasets.Any(dataset =>
+                dataset.OutputSetId == disabled.OutputSetId));
+            Assert.AreEqual(
+                "Renamed approved output",
+                replacementGeneration.Datasets.Single(dataset =>
+                    dataset.OutputSetId == renamed.OutputSetId).DisplayName);
         }
+    }
+
+    [TestMethod]
+    [TestCategory("Spr213RecoverySliceB")]
+    public async Task ApprovedOutputSetsKeepDifferentParentSourceSetsIsolated()
+    {
+        using var workspace = new Workspace();
+        var firstSet = SourceSetId.CreateNew();
+        var secondSet = SourceSetId.CreateNew();
+        var firstSource = CreateSource(workspace.Root, firstSet, "first.xml", "<root><item><value>A</value></item></root>");
+        var secondSource = CreateSource(workspace.Root, secondSet, "second.xml", "<root><item><value>B</value></item></root>");
+        var firstDataset = await CreateOutputSetDatasetAsync(
+            workspace, firstSet, firstSource, "First output", 1);
+        var secondDataset = await CreateOutputSetDatasetAsync(
+            workspace, secondSet, secondSource, "Second output", 2);
+
+        var result = await workspace.Database.BuildAsync(
+            OperationCorrelation.CreateNew(),
+            new DatabaseBuildSpecification([firstDataset, secondDataset]));
+
+        Assert.IsTrue(result.Accepted, result.Failure?.Description);
+        Assert.HasCount(2, result.PublishedGeneration!.Datasets);
+        Assert.AreEqual(firstSet, result.PublishedGeneration.Datasets[0].ParentSourceSetId);
+        Assert.AreEqual(secondSet, result.PublishedGeneration.Datasets[1].ParentSourceSetId);
+        Assert.AreNotEqual(
+            result.PublishedGeneration.Datasets[0].OutputSetId,
+            result.PublishedGeneration.Datasets[1].OutputSetId);
+        Assert.IsTrue(result.PublishedGeneration.Datasets[0].Mappings
+            .SelectMany(mapping => mapping.DetailedIdentities)
+            .All(identity => identity.SourceSetId == firstSet));
+        Assert.IsTrue(result.PublishedGeneration.Datasets[1].Mappings
+            .SelectMany(mapping => mapping.DetailedIdentities)
+            .All(identity => identity.SourceSetId == secondSet));
+    }
+
+    private static LoadedSourceContract CreateSource(
+        string root,
+        SourceSetId sourceSetId,
+        string name,
+        string content)
+    {
+        var path = Path.Combine(root, sourceSetId.ToString(), name);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+        return new LoadedSourceContract(
+            SourceId.CreateNew(), sourceSetId, path, true,
+            LoadedSourceStatus.Ready, LoadedSourceKind.XmlFile);
+    }
+
+    private static async Task<DatabaseDatasetBuildSpecification> CreateOutputSetDatasetAsync(
+        Workspace workspace,
+        SourceSetId sourceSetId,
+        LoadedSourceContract source,
+        string name,
+        int ordinal)
+    {
+        var interpretation = await workspace.Interpreter.InterpretAsync(source);
+        Assert.AreEqual(SourceInterpretationStatus.Usable, interpretation.Status);
+        var identities = interpretation.Source!.Values
+            .Where(value => value.Lineage is not null
+                && value.InformationType == "value")
+            .Select(value => HierarchySourceOccurrence
+                .FromInterpretedValue(sourceSetId, value).Identity)
+            .Distinct()
+            .ToArray();
+        var family = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, "/root/item"),
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/root"));
+        var mappings = DatabaseTagMapper.CreateFieldMappings(
+            sourceSetId,
+            identities.Select(identity => new DiscoveryConfigurationItem(
+                identity,
+                DiscoveryInformationDisposition.Selected)),
+            new Dictionary<DiscoveryInformationIdentity, string>(),
+            identities.ToDictionary(identity => identity, _ => family.Id));
+        return new DatabaseDatasetBuildSpecification(
+            OutputSetId.CreateNew(),
+            sourceSetId,
+            name,
+            ordinal,
+            RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+            [source],
+            [family],
+            mappings);
+    }
+
+    private static async Task<int> CountRowsAsync(
+        string databasePath,
+        string table,
+        OperationId generationId)
+    {
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM {table} WHERE generation_id = $generationId;";
+        command.Parameters.AddWithValue("$generationId", generationId.ToString());
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
     }
 
     private static string[] PreviewValues(DiscoveryWorkspaceViewModel viewModel) =>
@@ -258,6 +415,12 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
                 Interpreter,
                 new DatabaseSourceProjectionService(new HierarchyFlatteningEngine()),
                 NullLogger<DiscoveryOutputPreviewService>.Instance);
+            Database = new DatabaseGenerationService(
+                Repository,
+                Interpreter,
+                new HierarchyFlatteningEngine(),
+                new CooperativeOperationCancellation(new NullHistory()),
+                NullLogger<DatabaseGenerationService>.Instance);
         }
 
         public StructuredInformationRepository Repository { get; }
@@ -267,6 +430,10 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
         public DiscoveryService Discovery { get; }
 
         public DiscoveryOutputPreviewService Preview { get; }
+
+        public DatabaseGenerationService Database { get; }
+
+        public string Root => _root;
 
         public void Dispose()
         {
@@ -361,13 +528,21 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
                     FailureDescription: null));
     }
 
-    private sealed class RejectingDatabaseClient : IDatabaseClient
+    private sealed class InProcessDatabaseClient(DatabaseGenerationService database) : IDatabaseClient
     {
-        public Task<DatabaseClientResult> BuildAsync(
+        public async Task<DatabaseClientResult> BuildAsync(
             OperationCorrelation correlation,
             DatabaseBuildSpecification specification,
-            CancellationToken cancellationToken = default) => throw new InvalidOperationException(
-                "The R0 regression must not publish a Database.");
+            CancellationToken cancellationToken = default)
+        {
+            var result = await database.BuildAsync(correlation, specification, cancellationToken);
+            return new DatabaseClientResult(
+                result.Accepted,
+                result.Completion,
+                result.PublishedGeneration,
+                result.Failure?.Code,
+                result.Failure?.Description);
+        }
     }
 
     private sealed class ReadyProcessingHostSupervisor : IProcessingHostSupervisor

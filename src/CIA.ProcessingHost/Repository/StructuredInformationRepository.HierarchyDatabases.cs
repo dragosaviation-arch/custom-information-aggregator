@@ -41,6 +41,18 @@ public sealed partial class StructuredInformationRepository
 
                 foreach (var dataset in specification.Datasets)
                 {
+                    if (dataset.OutputSetId is { } outputSetId)
+                    {
+                        await InsertOutputSetDatasetAsync(
+                            connection,
+                            transaction,
+                            generationId,
+                            outputSetId,
+                            dataset,
+                            cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+
                     await ExecuteAsync(connection, transaction, """
                         INSERT INTO hierarchy_database_datasets (
                             generation_id, source_set_id, display_name, dataset_ordinal, repeated_data_layout)
@@ -334,6 +346,12 @@ public sealed partial class StructuredInformationRepository
                     || summary.Datasets.Zip(candidate.Specification.Datasets).Any(pair =>
                         pair.First.RowCount < 1
                         || pair.First.ValueCount < 1
+                        || pair.First.OutputSetId != pair.Second.OutputSetId
+                        || pair.First.ParentSourceSetId != pair.Second.ParentSourceSetId
+                        || !string.Equals(
+                            pair.First.DisplayName,
+                            pair.Second.DisplayName,
+                            StringComparison.Ordinal)
                         || pair.First.RowFamilies.Count != pair.Second.RowFamilies.Count
                         || !pair.First.RowFamilies.Select(family => family.Id)
                             .SequenceEqual(pair.Second.RowFamilies.Select(family => family.Id))))
@@ -655,6 +673,16 @@ public sealed partial class StructuredInformationRepository
         OperationId generationId,
         CancellationToken cancellationToken)
     {
+        var outputSetSummary = await ReadOutputSetSummaryAsync(
+            connection,
+            transaction,
+            generationId,
+            cancellationToken).ConfigureAwait(false);
+        if (outputSetSummary is not null)
+        {
+            return outputSetSummary;
+        }
+
         var datasets = new List<DatabaseDatasetSummary>();
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;

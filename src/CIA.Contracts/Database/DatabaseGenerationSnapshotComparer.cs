@@ -22,7 +22,8 @@ public static class DatabaseGenerationSnapshotComparer
 
         return expected.Datasets.Count == actual.Datasets.Count
             && expected.Datasets.Zip(actual.Datasets).All(pair =>
-                pair.First.SourceSetId == pair.Second.SourceSetId
+                pair.First.OutputSetId == pair.Second.OutputSetId
+                && pair.First.SourceSetId == pair.Second.SourceSetId
                 && string.Equals(pair.First.DisplayName, pair.Second.DisplayName, StringComparison.Ordinal)
                 && pair.First.Ordinal == pair.Second.Ordinal
                 && pair.First.RepeatedDataLayout == pair.Second.RepeatedDataLayout

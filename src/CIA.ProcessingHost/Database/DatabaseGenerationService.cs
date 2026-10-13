@@ -43,7 +43,16 @@ public sealed class DatabaseGenerationService(
     {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(specification);
-        var sources = specification.Datasets.SelectMany(dataset => dataset.Sources).ToArray();
+        var parentDatasets = specification.Datasets
+            .GroupBy(dataset => dataset.ParentSourceSetId)
+            .Select(group => new
+            {
+                ParentSourceSetId = group.Key,
+                Datasets = group.OrderBy(dataset => dataset.Ordinal).ToArray(),
+                Sources = group.First().Sources
+            })
+            .ToArray();
+        var sources = parentDatasets.SelectMany(parent => parent.Sources).ToArray();
         var plans = sources.Select(source => new ProcessingItemPlan(source.SourceId.ToString()))
             .Append(new ProcessingItemPlan(PublicationItemId)).ToArray();
         var operation = operationCancellation.BeginOperation(
@@ -61,9 +70,9 @@ public sealed class DatabaseGenerationService(
             candidate = await repository.CreateDatabaseCandidateAsync(
                 correlation, specification, cancellationToken).ConfigureAwait(false);
 
-            foreach (var dataset in specification.Datasets)
+            foreach (var parent in parentDatasets)
             {
-                foreach (var source in dataset.Sources)
+                foreach (var source in parent.Sources)
                 {
                     if (!operation.TryStartItem(source.SourceId.ToString(), out var execution))
                     {
@@ -90,17 +99,32 @@ public sealed class DatabaseGenerationService(
                                 continue;
                             }
 
-                            var projection = await sourceProjection.ProjectAsync(
-                                dataset,
-                                source,
-                                interpretation.Source,
-                                cancellationToken: sourceCancellation.Token).ConfigureAwait(false);
-                            await repository.WriteHierarchyDatabaseCandidateSourceAsync(
-                                candidate,
-                                dataset.SourceSetId,
-                                source.SourceId,
-                                projection.Rows,
-                                sourceCancellation.Token).ConfigureAwait(false);
+                            foreach (var dataset in parent.Datasets)
+                            {
+                                var projection = await sourceProjection.ProjectAsync(
+                                    dataset,
+                                    source,
+                                    interpretation.Source,
+                                    cancellationToken: sourceCancellation.Token).ConfigureAwait(false);
+                                if (dataset.OutputSetId is { } outputSetId)
+                                {
+                                    await repository.WriteOutputSetDatabaseCandidateSourceAsync(
+                                        candidate,
+                                        outputSetId,
+                                        source.SourceId,
+                                        projection.Rows,
+                                        sourceCancellation.Token).ConfigureAwait(false);
+                                }
+                                else
+                                {
+                                    await repository.WriteHierarchyDatabaseCandidateSourceAsync(
+                                        candidate,
+                                        dataset.ParentSourceSetId,
+                                        source.SourceId,
+                                        projection.Rows,
+                                        sourceCancellation.Token).ConfigureAwait(false);
+                                }
+                            }
                             execution.CommitCompletedResult();
                             sourceWorkCompleted = true;
                         }

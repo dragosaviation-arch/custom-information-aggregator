@@ -169,6 +169,11 @@ public sealed class StructuredInformationRepositoryTests
         CollectionAssert.Contains(databaseDatasetColumns, "source_set_id");
         CollectionAssert.Contains(databaseDatasetColumns, "output_set_id");
         CollectionAssert.Contains(databaseDatasetColumns, "parent_source_set_id");
+        var outputSetDatasetColumns = await ReadColumnNamesAsync(
+            connection,
+            "hierarchy_output_set_datasets");
+        CollectionAssert.Contains(outputSetDatasetColumns, "output_set_id");
+        CollectionAssert.Contains(outputSetDatasetColumns, "parent_source_set_id");
         var databaseFamilyColumns = await ReadColumnNamesAsync(
             connection,
             "hierarchy_database_families");

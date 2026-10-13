@@ -13,7 +13,8 @@ public sealed class DatabaseBuildCoordinator(
     ActiveLoadedSourceSet sourceSet,
     IApplicationWorkflowCoordinator workflowCoordinator,
     IDatabaseClient databaseClient,
-    ILogger<DatabaseBuildCoordinator> logger)
+    ILogger<DatabaseBuildCoordinator> logger,
+    ActiveDiscoveryOutputPlan? outputPlan = null)
 {
     private readonly object _stateGate = new();
     private DatabaseGenerationSummary? _currentGeneration;
@@ -178,6 +179,23 @@ public sealed class DatabaseBuildCoordinator(
     }
 
     public DatabaseBuildSpecification CreateBuildSpecification()
+    {
+        var projection = CreateDiscoveryProjectionSpecification();
+        return outputPlan is null
+            ? projection
+            : DatabaseBuildSpecificationFactory.CreateApprovedOutputSets(
+                discoveryConfiguration.Current,
+                discoveryConfiguration.DatabaseTagOverridesByIdentity,
+                sourceSet.CreateIncludedReadySnapshot(),
+                sourceSet.SourceSets.ToDictionary(
+                    definition => definition.SourceSetId,
+                    definition => definition.Name),
+                discoveryConfiguration.FamilyCatalog!,
+                discoveryConfiguration.FamilyAssignments,
+                outputPlan.Current);
+    }
+
+    public DatabaseBuildSpecification CreateDiscoveryProjectionSpecification()
     {
         var familyCatalog = discoveryConfiguration.FamilyCatalog
             ?? throw new ArgumentException(

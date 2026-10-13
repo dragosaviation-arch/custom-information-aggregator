@@ -223,6 +223,7 @@ public sealed class NamedPipeIpcTests
     public async Task DatabaseBuildCommandRoundTripPreservesRepeatedFamilyParents()
     {
         var sourceSetId = SourceSetId.CreateNew();
+        var outputSetId = OutputSetId.CreateNew();
         var source = new LoadedSourceContract(
             SourceId.CreateNew(),
             sourceSetId,
@@ -269,6 +270,7 @@ public sealed class NamedPipeIpcTests
             new DatabaseBuildSpecification(
             [
                 new DatabaseDatasetBuildSpecification(
+                    outputSetId,
                     sourceSetId,
                     "Set 1",
                     1,
@@ -285,6 +287,8 @@ public sealed class NamedPipeIpcTests
             await LengthPrefixedJsonMessageFramer.ReadAsync(stream));
 
         var dataset = roundTripped.Specification.Datasets.Single();
+        Assert.AreEqual(outputSetId, dataset.OutputSetId);
+        Assert.AreEqual(sourceSetId, dataset.ParentSourceSetId);
         var roundTrippedFamilies = dataset.RowFamilies.ToDictionary(family => family.Id);
         Assert.HasCount(families.Length, roundTrippedFamilies);
         Assert.IsNull(roundTrippedFamilies[root.Id].ParentRowFamilyId);

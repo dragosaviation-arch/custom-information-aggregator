@@ -49,10 +49,19 @@ public sealed record DatabaseGenerationSummary
         ArgumentNullException.ThrowIfNull(mapping);
         ArgumentNullException.ThrowIfNull(datasets);
         var datasetArray = datasets.ToArray();
+        var outputSetBacked = datasetArray.Length > 0
+            && datasetArray.All(dataset => dataset?.OutputSetId is not null);
+        var legacySourceSetBacked = datasetArray.Length > 0
+            && datasetArray.All(dataset => dataset?.OutputSetId is null);
         var validHierarchy = isHierarchyAware
             && datasetArray.Length > 0
             && datasetArray.All(dataset => dataset is not null)
-            && datasetArray.Select(dataset => dataset.SourceSetId).Distinct().Count() == datasetArray.Length
+            && (outputSetBacked
+                ? datasetArray.Select(dataset => dataset.OutputSetId).Distinct().Count()
+                    == datasetArray.Length
+                : legacySourceSetBacked
+                    && datasetArray.Select(dataset => dataset.SourceSetId).Distinct().Count()
+                        == datasetArray.Length)
             && datasetArray.Select(dataset => dataset.Ordinal)
                 .SequenceEqual(Enumerable.Range(1, datasetArray.Length))
             && valueCount == datasetArray.Sum(dataset => dataset.ValueCount)
@@ -99,6 +108,31 @@ public sealed record DatabaseGenerationSummary
 public sealed record DatabaseDatasetSummary
 {
     public DatabaseDatasetSummary(
+        OutputSetId outputSetId,
+        SourceSetId parentSourceSetId,
+        string displayName,
+        int ordinal,
+        RepeatedDataLayout repeatedDataLayout,
+        int rowCount,
+        int valueCount,
+        IReadOnlyList<DatabaseColumnDefinition> columns,
+        IReadOnlyList<DatabaseFieldMapping> mappings,
+        IReadOnlyList<DatabaseRowFamilySummary> rowFamilies)
+        : this(
+            parentSourceSetId,
+            displayName,
+            ordinal,
+            repeatedDataLayout,
+            rowCount,
+            valueCount,
+            columns,
+            mappings,
+            rowFamilies,
+            outputSetId)
+    {
+    }
+
+    public DatabaseDatasetSummary(
         SourceSetId sourceSetId,
         string displayName,
         int ordinal,
@@ -116,7 +150,8 @@ public sealed record DatabaseDatasetSummary
             valueCount,
             columns,
             mappings,
-            [CreateLegacyFamily(sourceSetId, rowCount, valueCount, columns, mappings)])
+            [CreateLegacyFamily(sourceSetId, rowCount, valueCount, columns, mappings)],
+            outputSetId: null)
     {
     }
 
@@ -130,11 +165,17 @@ public sealed record DatabaseDatasetSummary
         int valueCount,
         IReadOnlyList<DatabaseColumnDefinition> columns,
         IReadOnlyList<DatabaseFieldMapping> mappings,
-        IReadOnlyList<DatabaseRowFamilySummary>? rowFamilies)
+        IReadOnlyList<DatabaseRowFamilySummary>? rowFamilies,
+        OutputSetId? outputSetId = null)
     {
         if (!SourceSetId.IsValid(sourceSetId.Value))
         {
             throw new ArgumentException("A Database dataset requires a Source Set ID.", nameof(sourceSetId));
+        }
+
+        if (outputSetId is { } id && id.Value == Guid.Empty)
+        {
+            throw new ArgumentException("A Database Output Set requires an identity.", nameof(outputSetId));
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -179,6 +220,7 @@ public sealed record DatabaseDatasetSummary
         }
 
         SourceSetId = sourceSetId;
+        OutputSetId = outputSetId;
         DisplayName = displayName;
         Ordinal = ordinal;
         RepeatedDataLayout = repeatedDataLayout;
@@ -190,6 +232,11 @@ public sealed record DatabaseDatasetSummary
     }
 
     public SourceSetId SourceSetId { get; }
+
+    public OutputSetId? OutputSetId { get; }
+
+    [JsonIgnore]
+    public SourceSetId ParentSourceSetId => SourceSetId;
 
     public string DisplayName { get; }
 

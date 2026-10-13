@@ -119,6 +119,27 @@ public sealed record DatabaseFieldMapping
 public sealed record DatabaseDatasetBuildSpecification
 {
     public DatabaseDatasetBuildSpecification(
+        OutputSetId outputSetId,
+        SourceSetId parentSourceSetId,
+        string displayName,
+        int ordinal,
+        RepeatedDataLayout repeatedDataLayout,
+        IReadOnlyList<LoadedSourceContract> sources,
+        IReadOnlyList<RowFamilyDefinition> rowFamilies,
+        IReadOnlyList<DatabaseFieldMapping> fields)
+        : this(
+            parentSourceSetId,
+            displayName,
+            ordinal,
+            repeatedDataLayout,
+            sources,
+            rowFamilies,
+            fields,
+            outputSetId)
+    {
+    }
+
+    public DatabaseDatasetBuildSpecification(
         SourceSetId sourceSetId,
         string displayName,
         int ordinal,
@@ -134,7 +155,8 @@ public sealed record DatabaseDatasetBuildSpecification
             fields.Select(field => new RowFamilyDefinition(field.RowFamilyId, null))
                 .DistinctBy(family => family.Id)
                 .ToArray(),
-            fields)
+            fields,
+            outputSetId: null)
     {
     }
 
@@ -146,11 +168,17 @@ public sealed record DatabaseDatasetBuildSpecification
         RepeatedDataLayout repeatedDataLayout,
         IReadOnlyList<LoadedSourceContract> sources,
         IReadOnlyList<RowFamilyDefinition> rowFamilies,
-        IReadOnlyList<DatabaseFieldMapping> fields)
+        IReadOnlyList<DatabaseFieldMapping> fields,
+        OutputSetId? outputSetId = null)
     {
         if (!SourceSetId.IsValid(sourceSetId.Value))
         {
             throw new ArgumentException("A Database dataset requires a Source Set ID.", nameof(sourceSetId));
+        }
+
+        if (outputSetId is { Value: var value } && value == Guid.Empty)
+        {
+            throw new ArgumentException("A Database Output Set requires an identity.", nameof(outputSetId));
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -206,6 +234,7 @@ public sealed record DatabaseDatasetBuildSpecification
         }
 
         SourceSetId = sourceSetId;
+        OutputSetId = outputSetId;
         DisplayName = displayName.Trim();
         Ordinal = ordinal;
         RepeatedDataLayout = repeatedDataLayout;
@@ -215,6 +244,11 @@ public sealed record DatabaseDatasetBuildSpecification
     }
 
     public SourceSetId SourceSetId { get; }
+
+    public OutputSetId? OutputSetId { get; }
+
+    [JsonIgnore]
+    public SourceSetId ParentSourceSetId => SourceSetId;
 
     public string DisplayName { get; }
 
@@ -236,15 +270,25 @@ public sealed record DatabaseBuildSpecification
     {
         ArgumentNullException.ThrowIfNull(datasets);
         var datasetArray = datasets.ToArray();
+        var outputSetBacked = datasetArray.Length > 0
+            && datasetArray.All(dataset => dataset?.OutputSetId is not null);
+        var legacySourceSetBacked = datasetArray.Length > 0
+            && datasetArray.All(dataset => dataset?.OutputSetId is null);
         if (datasetArray.Length == 0
             || datasetArray.Any(dataset => dataset is null)
-            || datasetArray.Select(dataset => dataset.SourceSetId).Distinct().Count()
-                != datasetArray.Length
+            || (!outputSetBacked && !legacySourceSetBacked)
+            || (outputSetBacked
+                ? datasetArray.Select(dataset => dataset.OutputSetId).Distinct().Count()
+                    != datasetArray.Length
+                : datasetArray.Select(dataset => dataset.SourceSetId).Distinct().Count()
+                    != datasetArray.Length)
             || !datasetArray.Select(dataset => dataset.Ordinal)
-                .SequenceEqual(Enumerable.Range(1, datasetArray.Length)))
+                .SequenceEqual(Enumerable.Range(1, datasetArray.Length))
+            || datasetArray.GroupBy(dataset => dataset.SourceSetId).Any(group =>
+                group.Skip(1).Any(dataset => !dataset.Sources.SequenceEqual(group.First().Sources))))
         {
             throw new ArgumentException(
-                "A Database build requires uniquely ordered Source Set datasets.",
+                "A Database build requires uniquely ordered datasets with one source boundary per parent Source Set.",
                 nameof(datasets));
         }
 
