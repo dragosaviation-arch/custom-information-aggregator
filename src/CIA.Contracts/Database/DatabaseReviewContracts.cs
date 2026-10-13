@@ -52,7 +52,8 @@ public sealed record DatabaseReviewQuery
         int startRowOrdinal,
         int rowCount,
         string? searchText,
-        DatabaseRowInclusionFilter inclusionFilter)
+        DatabaseRowInclusionFilter inclusionFilter,
+        OutputSetId? outputSetId = null)
     {
         if (!OperationId.IsValid(generationId.Value))
         {
@@ -62,6 +63,13 @@ public sealed record DatabaseReviewQuery
         if (!SourceSetId.IsValid(sourceSetId.Value))
         {
             throw new ArgumentException("A Database review query requires a Source Set ID.", nameof(sourceSetId));
+        }
+
+        if (outputSetId is { } id && id.Value == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "A Database review Output Set requires an identity.",
+                nameof(outputSetId));
         }
 
         if (startRowOrdinal < 1
@@ -82,6 +90,7 @@ public sealed record DatabaseReviewQuery
 
         GenerationId = generationId;
         SourceSetId = sourceSetId;
+        OutputSetId = outputSetId;
         StartRowOrdinal = startRowOrdinal;
         RowCount = rowCount;
         SearchText = string.IsNullOrWhiteSpace(searchText) ? null : searchText.Trim();
@@ -114,9 +123,39 @@ public sealed record DatabaseReviewQuery
         RowFamilyId = rowFamilyId;
     }
 
+    public DatabaseReviewQuery(
+        OperationId generationId,
+        OutputSetId outputSetId,
+        SourceSetId parentSourceSetId,
+        RowFamilyId rowFamilyId,
+        int startRowOrdinal,
+        int rowCount,
+        string? searchText,
+        DatabaseRowInclusionFilter inclusionFilter)
+        : this(
+            generationId,
+            parentSourceSetId,
+            startRowOrdinal,
+            rowCount,
+            searchText,
+            inclusionFilter,
+            outputSetId)
+    {
+        if (rowFamilyId.SourceSetId != parentSourceSetId)
+        {
+            throw new ArgumentException(
+                "A Database review Row Family must belong to the parent Source Set.",
+                nameof(rowFamilyId));
+        }
+
+        RowFamilyId = rowFamilyId;
+    }
+
     public OperationId GenerationId { get; }
 
     public SourceSetId SourceSetId { get; }
+
+    public OutputSetId? OutputSetId { get; }
 
     public RowFamilyId? RowFamilyId { get; init; }
 
@@ -648,5 +687,7 @@ public sealed record DatabaseRowInclusionChange(
     IReadOnlyList<int> RowOrdinals,
     bool IsIncluded)
 {
+    public OutputSetId? OutputSetId { get; init; }
+
     public RowFamilyId? RowFamilyId { get; init; }
 }

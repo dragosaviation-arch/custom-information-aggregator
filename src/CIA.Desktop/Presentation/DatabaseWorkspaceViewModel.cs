@@ -1815,12 +1815,13 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
              pageStart += DatabaseReviewLimits.MaximumRowsPerPage)
         {
             await LoadReviewChunkAsync(
-                    generationId,
-                    dataset.Summary.SourceSetId,
-                    family.Summary.Id,
-                    pageStart,
-                    cancellation,
-                    isInitial: false)
+                generationId,
+                dataset.Summary.OutputSetId,
+                dataset.Summary.SourceSetId,
+                family.Summary.Id,
+                pageStart,
+                cancellation,
+                isInitial: false)
                 .ConfigureAwait(false);
         }
     }
@@ -1856,6 +1857,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
         await LoadReviewChunkAsync(
                 generationId,
+                dataset.Summary.OutputSetId,
                 dataset.Summary.SourceSetId,
                 family.Summary.Id,
                 startRowOrdinal: 1,
@@ -1866,6 +1868,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private async Task LoadReviewChunkAsync(
         OperationId generationId,
+        OutputSetId? outputSetId,
         SourceSetId sourceSetId,
         RowFamilyId rowFamilyId,
         int startRowOrdinal,
@@ -1890,15 +1893,26 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             await _reviewLoadGate.WaitAsync(cancellation.Token).ConfigureAwait(false);
             try
             {
+                var query = outputSetId is { } id
+                    ? new DatabaseReviewQuery(
+                        generationId,
+                        id,
+                        sourceSetId,
+                        rowFamilyId,
+                        startRowOrdinal,
+                        DatabaseReviewLimits.MaximumRowsPerPage,
+                        SearchText,
+                        RowInclusionFilter)
+                    : new DatabaseReviewQuery(
+                        generationId,
+                        sourceSetId,
+                        rowFamilyId,
+                        startRowOrdinal,
+                        DatabaseReviewLimits.MaximumRowsPerPage,
+                        SearchText,
+                        RowInclusionFilter);
                 var result = await _databaseReviewClient.ReadPageAsync(
-                        new DatabaseReviewQuery(
-                            generationId,
-                            sourceSetId,
-                            rowFamilyId,
-                            startRowOrdinal,
-                            DatabaseReviewLimits.MaximumRowsPerPage,
-                            SearchText,
-                            RowInclusionFilter),
+                        query,
                         cancellation.Token)
                     .ConfigureAwait(false);
                 if (cancellation.IsCancellationRequested)
@@ -1909,6 +1923,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 DispatchToUi(() =>
                 {
                     var contextIsCurrent = _publishedGenerationId == generationId
+                        && SelectedDataset?.Summary.OutputSetId == outputSetId
                         && SelectedDataset?.Summary.SourceSetId == sourceSetId
                         && SelectedRowFamily?.Summary.Id == rowFamilyId
                         && ReferenceEquals(_reviewCancellation, cancellation);
@@ -1920,6 +1935,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     if (!result.Accepted
                         || result.Page is null
                         || result.Page.GenerationId != generationId
+                        || result.Page.Dataset.OutputSetId != outputSetId
                         || result.Page.Dataset.SourceSetId != sourceSetId
                         || result.Page.RowFamily?.Id != rowFamilyId
                         || (!isInitial
@@ -1970,6 +1986,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             DispatchToUi(() =>
             {
                 var contextIsCurrent = _publishedGenerationId == generationId
+                    && SelectedDataset?.Summary.OutputSetId == outputSetId
                     && SelectedDataset?.Summary.SourceSetId == sourceSetId
                     && SelectedRowFamily?.Summary.Id == rowFamilyId
                     && ReferenceEquals(_reviewCancellation, cancellation);
@@ -2227,6 +2244,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 generationId, SelectedDataset.Summary.SourceSetId,
                 rowsToChange.Select(row => row.Ordinal).ToArray(), included)
             {
+                OutputSetId = SelectedDataset.Summary.OutputSetId,
                 RowFamilyId = SelectedRowFamily.Summary.Id
             }).ConfigureAwait(false);
         if (result.Accepted && result.ChangedRowCount > 0)
@@ -2240,6 +2258,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 {
                     await LoadReviewChunkAsync(
                             generationId,
+                            SelectedDataset.Summary.OutputSetId,
                             SelectedDataset.Summary.SourceSetId,
                             SelectedRowFamily.Summary.Id,
                             pageStart,

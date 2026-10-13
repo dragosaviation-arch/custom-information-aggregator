@@ -584,6 +584,271 @@ public sealed partial class StructuredInformationRepository
         return result;
     }
 
+    private static async Task<DatabaseReviewPage> ReadOutputSetDatabasePageAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        DatabaseReviewQuery query,
+        OutputSetId outputSetId,
+        DatabaseDatasetSummary dataset,
+        DatabaseRowFamilySummary rowFamily,
+        CancellationToken cancellationToken)
+    {
+        var inclusionPredicate = query.InclusionFilter switch
+        {
+            DatabaseRowInclusionFilter.Included => " AND rows.is_included = 1",
+            DatabaseRowInclusionFilter.Excluded => " AND rows.is_included = 0",
+            _ => string.Empty
+        };
+        var searchPredicate = query.SearchText is null ? string.Empty : """
+             AND (
+                datasets.display_name LIKE $search ESCAPE '\'
+                OR sources.source_id LIKE $search ESCAPE '\'
+                OR sources.source_file_name LIKE $search ESCAPE '\'
+                OR sources.full_source_path LIKE $search ESCAPE '\'
+                OR ($sourceKind >= 0 AND sources.source_kind = $sourceKind)
+                OR COALESCE(sources.archive_path, '') LIKE $search ESCAPE '\'
+                OR COALESCE(sources.archive_member_path, '') LIKE $search ESCAPE '\'
+                OR COALESCE(sources.file_modified_utc, '') LIKE $search ESCAPE '\'
+                OR rows.record_identity LIKE $search ESCAPE '\'
+                OR EXISTS (
+                    SELECT 1 FROM hierarchy_output_set_cell_values AS search_values
+                    WHERE search_values.generation_id = rows.generation_id
+                      AND search_values.output_set_id = rows.output_set_id
+                      AND search_values.family_kind = rows.family_kind
+                      AND search_values.family_anchor_path = rows.family_anchor_path
+                      AND search_values.row_ordinal = rows.row_ordinal
+                      AND (
+                        search_values.value LIKE $search ESCAPE '\'
+                        OR search_values.information_type LIKE $search ESCAPE '\'
+                        OR search_values.structural_path LIKE $search ESCAPE '\'
+                        OR ($candidateKind >= 0 AND search_values.candidate_kind = $candidateKind)
+                        OR search_values.structural_identity LIKE $search ESCAPE '\'
+                        OR search_values.lineage_json LIKE $search ESCAPE '\')))
+            """;
+        var where = "WHERE rows.generation_id = $generationId AND rows.output_set_id = $outputSetId"
+            + " AND rows.family_kind = $familyKind AND rows.family_anchor_path = $familyAnchorPath"
+            + inclusionPredicate + searchPredicate;
+
+        await using var countCommand = connection.CreateCommand();
+        countCommand.Transaction = transaction;
+        countCommand.CommandText = $"""
+            SELECT COUNT(*) FROM hierarchy_output_set_rows AS rows
+            JOIN hierarchy_output_set_sources AS sources
+              ON sources.generation_id = rows.generation_id
+             AND sources.output_set_id = rows.output_set_id
+             AND sources.source_id = rows.source_id
+            JOIN hierarchy_output_set_datasets AS datasets
+              ON datasets.generation_id = rows.generation_id
+             AND datasets.output_set_id = rows.output_set_id
+            {where};
+            """;
+        ConfigureOutputSetReviewQuery(countCommand, query, outputSetId, rowFamily.Id);
+        var totalRows = Convert.ToInt32(
+            await countCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+            CultureInfo.InvariantCulture);
+
+        var rows = new List<DatabaseReviewRow>();
+        await using var rowCommand = connection.CreateCommand();
+        rowCommand.Transaction = transaction;
+        rowCommand.CommandText = $"""
+            SELECT rows.row_ordinal, rows.is_included, rows.record_identity,
+                   sources.source_id, sources.source_file_name, sources.full_source_path,
+                   sources.source_kind, sources.archive_path, sources.archive_member_path,
+                   sources.file_modified_utc, rows.anchor_instance_id, rows.projection_ordinal
+            FROM hierarchy_output_set_rows AS rows
+            JOIN hierarchy_output_set_sources AS sources
+              ON sources.generation_id = rows.generation_id
+             AND sources.output_set_id = rows.output_set_id
+             AND sources.source_id = rows.source_id
+            JOIN hierarchy_output_set_datasets AS datasets
+              ON datasets.generation_id = rows.generation_id
+             AND datasets.output_set_id = rows.output_set_id
+            {where}
+            ORDER BY rows.row_ordinal
+            LIMIT $limit OFFSET $offset;
+            """;
+        ConfigureOutputSetReviewQuery(rowCommand, query, outputSetId, rowFamily.Id);
+        rowCommand.Parameters.AddWithValue("$limit", query.RowCount);
+        rowCommand.Parameters.AddWithValue("$offset", query.StartRowOrdinal - 1);
+        await using (var reader = await rowCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var sourceId = SourceId.From(Guid.Parse(reader.GetString(3)));
+                var metadata = new DatabaseSourceMetadata(
+                    dataset.ParentSourceSetId,
+                    dataset.DisplayName,
+                    sourceId,
+                    reader.GetString(4),
+                    reader.GetString(5),
+                    (LoadedSourceKind)reader.GetInt32(6),
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    reader.IsDBNull(8) ? null : reader.GetString(8),
+                    reader.IsDBNull(9) ? null : DateTimeOffset.Parse(
+                        reader.GetString(9),
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.RoundtripKind));
+                var semanticIdentity = new DatabaseRecordIdentity(
+                    rowFamily.Id,
+                    sourceId,
+                    reader.GetInt64(10),
+                    reader.GetInt32(11));
+                if (!string.Equals(reader.GetString(2), semanticIdentity.ToString(), StringComparison.Ordinal))
+                {
+                    throw new StructuredInformationRepositoryException(
+                        "A stored Output Set record identity is inconsistent with its typed components.");
+                }
+
+                rows.Add(new DatabaseReviewRow(
+                    reader.GetInt32(0),
+                    reader.GetInt32(1) != 0,
+                    semanticIdentity,
+                    metadata,
+                    []));
+            }
+        }
+
+        for (var index = 0; index < rows.Count; index++)
+        {
+            var row = rows[index];
+            rows[index] = new DatabaseReviewRow(
+                row.Ordinal,
+                row.IsIncluded,
+                row.SemanticIdentity!,
+                row.Source,
+                await ReadOutputSetCellsAsync(
+                    connection,
+                    transaction,
+                    query.GenerationId,
+                    outputSetId,
+                    dataset,
+                    rowFamily,
+                    row.Ordinal,
+                    row.Source.SourceId,
+                    cancellationToken).ConfigureAwait(false));
+        }
+
+        return new DatabaseReviewPage(
+            query.GenerationId,
+            dataset,
+            rowFamily,
+            query.StartRowOrdinal,
+            query.RowCount,
+            totalRows,
+            rows);
+    }
+
+    private static async Task<IReadOnlyList<DatabaseReviewCell>> ReadOutputSetCellsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        OperationId generationId,
+        OutputSetId outputSetId,
+        DatabaseDatasetSummary dataset,
+        DatabaseRowFamilySummary rowFamily,
+        int rowOrdinal,
+        SourceId sourceId,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<DatabaseReviewCell>();
+        foreach (var column in rowFamily.Columns)
+        {
+            var coordinates = JsonSerializer.Serialize(column.Identity.RepeatCoordinates.Coordinates);
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                SELECT cell.has_conflict, values_table.value, values_table.information_type,
+                       values_table.structural_path, values_table.candidate_kind,
+                       values_table.structural_identity, values_table.lineage_json
+                FROM hierarchy_output_set_cells AS cell
+                JOIN hierarchy_output_set_cell_values AS values_table
+                 ON values_table.generation_id = cell.generation_id
+                 AND values_table.output_set_id = cell.output_set_id
+                 AND values_table.family_kind = cell.family_kind
+                 AND values_table.family_anchor_path = cell.family_anchor_path
+                 AND values_table.row_ordinal = cell.row_ordinal
+                 AND values_table.field_key = cell.field_key
+                 AND values_table.repeat_coordinates_json = cell.repeat_coordinates_json
+                WHERE cell.generation_id = $generationId AND cell.output_set_id = $outputSetId
+                  AND cell.family_kind = $familyKind AND cell.family_anchor_path = $familyAnchorPath
+                  AND cell.row_ordinal = $rowOrdinal AND cell.field_key = $fieldKey
+                  AND cell.repeat_coordinates_json = $coordinates
+                ORDER BY values_table.value_ordinal;
+                """;
+            command.Parameters.AddWithValue("$generationId", generationId.ToString());
+            command.Parameters.AddWithValue("$outputSetId", outputSetId.ToString());
+            command.Parameters.AddWithValue("$familyKind", (int)rowFamily.Id.Kind);
+            command.Parameters.AddWithValue("$familyAnchorPath", rowFamily.Id.AnchorPath);
+            command.Parameters.AddWithValue("$rowOrdinal", rowOrdinal);
+            command.Parameters.AddWithValue("$fieldKey", column.Identity.FieldKey);
+            command.Parameters.AddWithValue("$coordinates", coordinates);
+            var values = new List<DatabaseReviewValue>();
+            var conflict = false;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                conflict = reader.GetInt32(0) != 0;
+                var identity = new DiscoveryInformationIdentity(
+                    dataset.ParentSourceSetId,
+                    reader.GetString(3),
+                    reader.GetString(2),
+                    (SourceValueCandidateKind)reader.GetInt32(4),
+                    reader.GetString(5));
+                var lineage = JsonSerializer.Deserialize<DatabaseLineageEvidence>(reader.GetString(6))
+                    ?? throw new StructuredInformationRepositoryException(
+                        "Stored Output Set Database lineage is invalid.");
+                values.Add(new DatabaseReviewValue(
+                    reader.GetString(1),
+                    identity,
+                    sourceId,
+                    lineage,
+                    column.Identity.RepeatCoordinates));
+            }
+
+            if (values.Count > 0)
+            {
+                result.Add(new DatabaseReviewCell(column.Identity, conflict, values));
+            }
+        }
+
+        return result;
+    }
+
+    private static void ConfigureOutputSetReviewQuery(
+        SqliteCommand command,
+        DatabaseReviewQuery query,
+        OutputSetId outputSetId,
+        RowFamilyId rowFamilyId)
+    {
+        command.Parameters.AddWithValue("$generationId", query.GenerationId.ToString());
+        command.Parameters.AddWithValue("$outputSetId", outputSetId.ToString());
+        command.Parameters.AddWithValue("$familyKind", (int)rowFamilyId.Kind);
+        command.Parameters.AddWithValue("$familyAnchorPath", rowFamilyId.AnchorPath);
+        if (query.SearchText is null)
+        {
+            return;
+        }
+
+        var escaped = query.SearchText.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
+        command.Parameters.AddWithValue("$search", $"%{escaped}%");
+        command.Parameters.AddWithValue(
+            "$sourceKind",
+            Enum.TryParse<LoadedSourceKind>(query.SearchText, ignoreCase: true, out var sourceKind)
+                && Enum.IsDefined(sourceKind)
+                ? (int)sourceKind
+                : -1);
+        command.Parameters.AddWithValue(
+            "$candidateKind",
+            Enum.TryParse<SourceValueCandidateKind>(
+                query.SearchText,
+                ignoreCase: true,
+                out var candidateKind)
+                && Enum.IsDefined(candidateKind)
+                ? (int)candidateKind
+                : -1);
+    }
+
     private static async Task<int> CountOutputSetFamilyAsync(
         SqliteConnection connection,
         SqliteTransaction? transaction,

@@ -485,6 +485,10 @@ public static class IpcContractValidator
         }
         ValidateOperationId(command.Query.GenerationId, "Database review requests");
         ValidateDatabaseReviewRange(command.Query.StartRowOrdinal, command.Query.RowCount);
+        if (command.Query.OutputSetId is { } outputSetId && outputSetId.Value == Guid.Empty)
+        {
+            throw InvalidContract("A Database review Output Set requires an identity.");
+        }
         if (command.Query.RowFamilyId is not { } familyId
             || familyId.SourceSetId != command.Query.SourceSetId)
         {
@@ -501,6 +505,10 @@ public static class IpcContractValidator
             throw InvalidContract("A Database row inclusion request requires unique positive row ordinals.");
         }
         ValidateOperationId(change.GenerationId, "Database row inclusion requests");
+        if (change.OutputSetId is { } outputSetId && outputSetId.Value == Guid.Empty)
+        {
+            throw InvalidContract("A Database row inclusion Output Set requires an identity.");
+        }
         if (change.RowFamilyId is not { } familyId
             || familyId.SourceSetId != change.SourceSetId)
         {

@@ -424,6 +424,34 @@ public sealed partial class StructuredInformationRepository
         var summary = await ReadHierarchySummaryAsync(
             connection, transaction, query.GenerationId, cancellationToken).ConfigureAwait(false)
             ?? throw new StructuredInformationRepositoryException("The published Database summary is unavailable.");
+        if (query.OutputSetId is { } outputSetId)
+        {
+            var outputSetDataset = summary.Datasets.SingleOrDefault(item =>
+                item.OutputSetId == outputSetId
+                && item.ParentSourceSetId == query.SourceSetId)
+                ?? throw new StructuredInformationRepositoryException(
+                    "The requested Output Set dataset is unavailable.");
+            var outputSetFamily = query.RowFamilyId is { } requestedOutputSetFamily
+                ? outputSetDataset.RowFamilies.SingleOrDefault(
+                    family => family.Id == requestedOutputSetFamily)
+                    ?? throw new StructuredInformationRepositoryException(
+                        "The requested Output Set Row Family is unavailable.")
+                : outputSetDataset.RowFamilies.Count == 1
+                    ? outputSetDataset.RowFamilies[0]
+                    : throw new StructuredInformationRepositoryException(
+                        "A Row Family is required to review this Output Set dataset.");
+            var outputSetPage = await ReadOutputSetDatabasePageAsync(
+                connection,
+                transaction,
+                query,
+                outputSetId,
+                outputSetDataset,
+                outputSetFamily,
+                cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return outputSetPage;
+        }
+
         var dataset = summary.Datasets.SingleOrDefault(item => item.SourceSetId == query.SourceSetId)
             ?? throw new StructuredInformationRepositoryException("The requested Source Set dataset is unavailable.");
         var rowFamily = query.RowFamilyId is { } requestedFamily
@@ -579,6 +607,26 @@ public sealed partial class StructuredInformationRepository
                 throw new StructuredInformationRepositoryException("The requested Database generation is not published.");
             }
             var rowFamilyId = change.RowFamilyId;
+            if (change.OutputSetId is { } outputSetId)
+            {
+                var summary = await ReadHierarchySummaryAsync(
+                    connection,
+                    transaction,
+                    change.GenerationId,
+                    cancellationToken).ConfigureAwait(false);
+                var dataset = summary?.Datasets.SingleOrDefault(candidate =>
+                    candidate.OutputSetId == outputSetId
+                    && candidate.ParentSourceSetId == change.SourceSetId)
+                    ?? throw new ArgumentException(
+                        "The Database row inclusion Output Set is unavailable.",
+                        nameof(change));
+                rowFamilyId = rowFamilyId is { } requestedFamily
+                    && dataset.RowFamilies.Any(family => family.Id == requestedFamily)
+                    ? requestedFamily
+                    : throw new ArgumentException(
+                        "A Database row inclusion change requires an Output Set Row Family.",
+                        nameof(change));
+            }
             if (rowFamilyId is null)
             {
                 var summary = await ReadHierarchySummaryAsync(
@@ -598,15 +646,29 @@ public sealed partial class StructuredInformationRepository
             {
                 await using var command = connection.CreateCommand();
                 command.Transaction = transaction;
-                command.CommandText = """
-                    UPDATE hierarchy_database_rows SET is_included = $included
-                    WHERE generation_id = $generationId AND source_set_id = $sourceSetId
-                      AND family_kind = $familyKind AND family_anchor_path = $familyAnchorPath
-                      AND row_ordinal = $ordinal AND is_included <> $included;
-                    """;
+                command.CommandText = change.OutputSetId is { }
+                    ? """
+                        UPDATE hierarchy_output_set_rows SET is_included = $included
+                        WHERE generation_id = $generationId AND output_set_id = $outputSetId
+                          AND family_kind = $familyKind AND family_anchor_path = $familyAnchorPath
+                          AND row_ordinal = $ordinal AND is_included <> $included;
+                        """
+                    : """
+                        UPDATE hierarchy_database_rows SET is_included = $included
+                        WHERE generation_id = $generationId AND source_set_id = $sourceSetId
+                          AND family_kind = $familyKind AND family_anchor_path = $familyAnchorPath
+                          AND row_ordinal = $ordinal AND is_included <> $included;
+                        """;
                 command.Parameters.AddWithValue("$included", change.IsIncluded ? 1 : 0);
                 command.Parameters.AddWithValue("$generationId", change.GenerationId.ToString());
-                command.Parameters.AddWithValue("$sourceSetId", change.SourceSetId.ToString());
+                if (change.OutputSetId is { } includedOutputSetId)
+                {
+                    command.Parameters.AddWithValue("$outputSetId", includedOutputSetId.ToString());
+                }
+                else
+                {
+                    command.Parameters.AddWithValue("$sourceSetId", change.SourceSetId.ToString());
+                }
                 command.Parameters.AddWithValue("$familyKind", (int)rowFamilyId.Value.Kind);
                 command.Parameters.AddWithValue("$familyAnchorPath", rowFamilyId.Value.AnchorPath);
                 command.Parameters.AddWithValue("$ordinal", ordinal);

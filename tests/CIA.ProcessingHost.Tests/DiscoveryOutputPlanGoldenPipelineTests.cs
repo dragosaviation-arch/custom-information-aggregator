@@ -59,6 +59,7 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
     [TestMethod]
     [TestCategory("Spr213RecoveryR0")]
     [TestCategory("Spr213RecoverySliceB")]
+    [TestCategory("Spr213RecoveryC1")]
     [TestCategory("AlphaRegressionGate")]
     public async Task GoldenStructuralSelectionBuildsFiveCoherentOutputSetsAndRealPreview()
     {
@@ -235,7 +236,81 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
                         || identity.StructuralPath.StartsWith(
                             expectedSet.RowFamilyIds.Single().AnchorPath + "/",
                             StringComparison.Ordinal)));
+
+                var family = dataset.RowFamilies.Single();
+                var review = await workspace.Repository.ReadPublishedDatabasePageAsync(
+                    new DatabaseReviewQuery(
+                        firstGeneration.OperationId,
+                        dataset.OutputSetId!.Value,
+                        dataset.ParentSourceSetId,
+                        family.Id,
+                        1,
+                        DatabaseReviewLimits.MaximumRowsPerPage,
+                        null,
+                        DatabaseRowInclusionFilter.All));
+                Assert.IsNotNull(review);
+                Assert.AreEqual(dataset.OutputSetId, review.Dataset.OutputSetId);
+                Assert.AreEqual(dataset.ParentSourceSetId, review.Dataset.ParentSourceSetId);
+                Assert.AreEqual(expectedSet.Name, review.Dataset.DisplayName);
+                Assert.AreEqual(family.RowCount, review.TotalRowCount);
+                Assert.AreEqual(family.Id, review.RowFamily?.Id);
+                CollectionAssert.AreEquivalent(
+                    expectedFields,
+                    review.Columns.Select(column => column.EffectiveName).ToArray());
+                Assert.IsTrue(review.Rows.SelectMany(row => row.Cells).All(cell =>
+                    cell.ColumnIdentity.RowFamilyId == family.Id
+                    && family.Mappings.Any(mapping =>
+                        string.Equals(
+                            mapping.FieldKey,
+                            cell.ColumnIdentity.FieldKey,
+                            StringComparison.Ordinal))));
+                Assert.IsTrue(review.Rows.SelectMany(row => row.Cells)
+                    .SelectMany(cell => cell.Values)
+                    .All(value => value.DetailedIdentity.SourceSetId == dataset.ParentSourceSetId
+                        && (value.DetailedIdentity.StructuralPath == family.AnchorPath
+                            || value.DetailedIdentity.StructuralPath.StartsWith(
+                                family.AnchorPath + "/",
+                                StringComparison.Ordinal))));
             }
+
+            var firstDataset = firstGeneration.Datasets[0];
+            var firstFamily = firstDataset.RowFamilies.Single();
+            Assert.AreEqual(
+                1,
+                await workspace.Repository.SetPublishedDatabaseRowsIncludedAsync(
+                    new DatabaseRowInclusionChange(
+                        firstGeneration.OperationId,
+                        firstDataset.ParentSourceSetId,
+                        [1],
+                        false)
+                    {
+                        OutputSetId = firstDataset.OutputSetId,
+                        RowFamilyId = firstFamily.Id
+                    }));
+            var excludedPage = await workspace.Repository.ReadPublishedDatabasePageAsync(
+                new DatabaseReviewQuery(
+                    firstGeneration.OperationId,
+                    firstDataset.OutputSetId!.Value,
+                    firstDataset.ParentSourceSetId,
+                    firstFamily.Id,
+                    1,
+                    DatabaseReviewLimits.MaximumRowsPerPage,
+                    null,
+                    DatabaseRowInclusionFilter.Excluded));
+            Assert.HasCount(1, excludedPage!.Rows);
+            Assert.AreEqual(firstDataset.OutputSetId, excludedPage.Dataset.OutputSetId);
+            Assert.AreEqual(
+                1,
+                await workspace.Repository.SetPublishedDatabaseRowsIncludedAsync(
+                    new DatabaseRowInclusionChange(
+                        firstGeneration.OperationId,
+                        firstDataset.ParentSourceSetId,
+                        [1],
+                        true)
+                    {
+                        OutputSetId = firstDataset.OutputSetId,
+                        RowFamilyId = firstFamily.Id
+                    }));
 
             Assert.AreEqual(
                 0,
@@ -269,6 +344,7 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
 
     [TestMethod]
     [TestCategory("Spr213RecoverySliceB")]
+    [TestCategory("Spr213RecoveryC1")]
     public async Task ApprovedOutputSetsKeepDifferentParentSourceSetsIsolated()
     {
         using var workspace = new Workspace();
@@ -298,6 +374,29 @@ public sealed class DiscoveryOutputPlanGoldenPipelineTests
         Assert.IsTrue(result.PublishedGeneration.Datasets[1].Mappings
             .SelectMany(mapping => mapping.DetailedIdentities)
             .All(identity => identity.SourceSetId == secondSet));
+
+        foreach (var dataset in result.PublishedGeneration.Datasets)
+        {
+            var family = dataset.RowFamilies.Single();
+            var review = await workspace.Repository.ReadPublishedDatabasePageAsync(
+                new DatabaseReviewQuery(
+                    result.PublishedGeneration.OperationId,
+                    dataset.OutputSetId!.Value,
+                    dataset.ParentSourceSetId,
+                    family.Id,
+                    1,
+                    DatabaseReviewLimits.MaximumRowsPerPage,
+                    null,
+                    DatabaseRowInclusionFilter.All));
+            Assert.IsNotNull(review);
+            Assert.AreEqual(dataset.OutputSetId, review.Dataset.OutputSetId);
+            Assert.AreEqual(dataset.ParentSourceSetId, review.Dataset.ParentSourceSetId);
+            Assert.IsTrue(review.Rows.All(row =>
+                row.Source.SourceSetId == dataset.ParentSourceSetId));
+            Assert.IsTrue(review.Rows.SelectMany(row => row.Cells)
+                .SelectMany(cell => cell.Values)
+                .All(value => value.DetailedIdentity.SourceSetId == dataset.ParentSourceSetId));
+        }
     }
 
     private static LoadedSourceContract CreateSource(

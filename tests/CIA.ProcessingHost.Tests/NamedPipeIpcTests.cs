@@ -220,6 +220,7 @@ public sealed class NamedPipeIpcTests
     }
 
     [TestMethod]
+    [TestCategory("Spr213RecoveryC1")]
     public async Task DatabaseBuildCommandRoundTripPreservesRepeatedFamilyParents()
     {
         var sourceSetId = SourceSetId.CreateNew();
@@ -279,11 +280,26 @@ public sealed class NamedPipeIpcTests
                     families,
                     fields)
             ]));
+        var reviewCommand = new GetDatabaseReviewPageCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            new DatabaseReviewQuery(
+                command.Correlation.OperationId,
+                outputSetId,
+                sourceSetId,
+                authors.Id,
+                1,
+                DatabaseReviewLimits.MaximumRowsPerPage,
+                null,
+                DatabaseRowInclusionFilter.All));
         await using var stream = new MemoryStream();
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, reviewCommand);
         stream.Position = 0;
         var roundTripped = Assert.IsInstanceOfType<BuildDatabaseCommand>(
+            await LengthPrefixedJsonMessageFramer.ReadAsync(stream));
+        var roundTrippedReview = Assert.IsInstanceOfType<GetDatabaseReviewPageCommand>(
             await LengthPrefixedJsonMessageFramer.ReadAsync(stream));
 
         var dataset = roundTripped.Specification.Datasets.Single();
@@ -301,6 +317,9 @@ public sealed class NamedPipeIpcTests
         CollectionAssert.AreEqual(
             fields.Select(FieldSignature).ToArray(),
             dataset.Fields.Select(FieldSignature).ToArray());
+        Assert.AreEqual(outputSetId, roundTrippedReview.Query.OutputSetId);
+        Assert.AreEqual(sourceSetId, roundTrippedReview.Query.SourceSetId);
+        Assert.AreEqual(authors.Id, roundTrippedReview.Query.RowFamilyId);
 
         static string FieldSignature(DatabaseFieldMapping field) =>
             $"{field.RowFamilyId}|{field.EffectiveName}|{field.IsExplicitOverride}|" +
