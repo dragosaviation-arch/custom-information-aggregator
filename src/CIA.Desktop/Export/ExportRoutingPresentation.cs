@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using CIA.Contracts.Database;
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Export;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Sources;
@@ -50,12 +51,12 @@ public sealed class ExportRoutingConfigurationPresentation
 
         var defaultWorkbook = _workbooks.OrderBy(workbook => workbook.Order).FirstOrDefault()
             ?? AddWorkbook(CreateUniqueWorkbookFileName());
-        var currentRowFamilyIds = generation.Datasets
-            .SelectMany(dataset => dataset.RowFamilies)
-            .Select(family => family.Id)
+        var currentDatasetKeys = generation.Datasets
+            .SelectMany(dataset => dataset.RowFamilies.Select(family =>
+                CreateDatasetKey(dataset.OutputSetId, family.Id)))
             .ToHashSet();
         foreach (var removed in _sourceSets
-                     .Where(set => !currentRowFamilyIds.Contains(set.RowFamilyId))
+                     .Where(set => !currentDatasetKeys.Contains(CreateDatasetKey(set)))
                      .ToArray())
         {
             removed.Changed -= OnSourceSetChanged;
@@ -65,7 +66,7 @@ public sealed class ExportRoutingConfigurationPresentation
         foreach (var dataset in generation.Datasets.OrderBy(dataset => dataset.Ordinal))
         {
             var inheritedWorkbook = _sourceSets
-                .Where(candidate => candidate.SourceSetId == dataset.SourceSetId)
+                .Where(candidate => candidate.ParentSourceSetId == dataset.ParentSourceSetId)
                 .OrderBy(candidate => candidate.FamilyOrder)
                 .Select(candidate => candidate.WorkbookDefinitionId)
                 .FirstOrDefault();
@@ -77,7 +78,8 @@ public sealed class ExportRoutingConfigurationPresentation
             foreach (var family in dataset.RowFamilies.OrderBy(family => family.Ordinal))
             {
                 var set = _sourceSets.SingleOrDefault(candidate =>
-                    candidate.RowFamilyId == family.Id);
+                    CreateDatasetKey(candidate)
+                        == CreateDatasetKey(dataset.OutputSetId, family.Id));
                 if (set is null)
                 {
                     set = new ExportSourceSetPresentation(
@@ -141,7 +143,9 @@ public sealed class ExportRoutingConfigurationPresentation
         {
             foreach (var family in dataset.RowFamilies.OrderBy(family => family.Ordinal))
             {
-                var saved = configuration.SourceSets.Single(set => set.RowFamilyId == family.Id);
+                var saved = configuration.SourceSets.Single(set =>
+                    CreateDatasetKey(set.OutputSetId, set.RowFamilyId)
+                        == CreateDatasetKey(dataset.OutputSetId, family.Id));
                 var worksheet = worksheets[saved.WorksheetDefinitionId!.Value];
                 var set = new ExportSourceSetPresentation(
                     dataset,
@@ -166,6 +170,13 @@ public sealed class ExportRoutingConfigurationPresentation
         return workbook;
     }
 
+    public ExportWorkbookPresentation CreateWorkbookFor(OutputSetId outputSetId)
+    {
+        var workbook = AddWorkbook(CreateUniqueWorkbookFileName());
+        AssignWorkbook(outputSetId, workbook.WorkbookDefinitionId);
+        return workbook;
+    }
+
     public ExportWorkbookPresentation CreateWorkbook(string fileName)
     {
         ArgumentNullException.ThrowIfNull(fileName);
@@ -178,7 +189,20 @@ public sealed class ExportRoutingConfigurationPresentation
         RowFamilyId rowFamilyId,
         WorkbookDefinitionId workbookDefinitionId)
     {
-        var set = GetSet(rowFamilyId);
+        AssignWorkbook(GetSet(rowFamilyId), workbookDefinitionId);
+    }
+
+    public void AssignWorkbook(
+        OutputSetId outputSetId,
+        WorkbookDefinitionId workbookDefinitionId)
+    {
+        AssignWorkbook(GetSet(outputSetId), workbookDefinitionId);
+    }
+
+    private void AssignWorkbook(
+        ExportSourceSetPresentation set,
+        WorkbookDefinitionId workbookDefinitionId)
+    {
         if (!_workbooks.Any(workbook => workbook.WorkbookDefinitionId == workbookDefinitionId)
             || set.WorkbookDefinitionId == workbookDefinitionId)
         {
@@ -210,7 +234,16 @@ public sealed class ExportRoutingConfigurationPresentation
 
     public bool MoveWorksheet(RowFamilyId rowFamilyId, int offset)
     {
-        var set = GetSet(rowFamilyId);
+        return MoveWorksheet(GetSet(rowFamilyId), offset);
+    }
+
+    public bool MoveWorksheet(OutputSetId outputSetId, int offset)
+    {
+        return MoveWorksheet(GetSet(outputSetId), offset);
+    }
+
+    private bool MoveWorksheet(ExportSourceSetPresentation set, int offset)
+    {
         var ordered = _sourceSets
             .Where(candidate => candidate.WorkbookDefinitionId == set.WorkbookDefinitionId)
             .OrderBy(candidate => candidate.WorksheetOrder)
@@ -233,6 +266,9 @@ public sealed class ExportRoutingConfigurationPresentation
     public ExportSourceSetPresentation GetSet(RowFamilyId rowFamilyId) =>
         _sourceSets.Single(set => set.RowFamilyId == rowFamilyId);
 
+    public ExportSourceSetPresentation GetSet(OutputSetId outputSetId) =>
+        _sourceSets.Single(set => set.OutputSetId == outputSetId);
+
     public ExportConfigurationSnapshot Capture() => new(
         _workbooks.OrderBy(workbook => workbook.Order)
             .Select(workbook => new WorkbookDefinition(
@@ -248,7 +284,8 @@ public sealed class ExportRoutingConfigurationPresentation
                         set.SourceSetId,
                         set.RowFamilyId,
                         set.WorksheetName,
-                        set.WorksheetOrder))
+                        set.WorksheetOrder,
+                        set.OutputSetId))
                     .ToArray()))
             .ToArray(),
         _sourceSets.OrderBy(set => set.DatasetOrder).ThenBy(set => set.FamilyOrder)
@@ -362,6 +399,11 @@ public sealed class ExportRoutingConfigurationPresentation
     {
         ArgumentNullException.ThrowIfNull(dataset);
         ArgumentNullException.ThrowIfNull(family);
+        if (dataset.OutputSetId is not null)
+        {
+            return dataset.DisplayName;
+        }
+
         if (family.Kind == RowFamilyKind.Root)
         {
             return $"{dataset.DisplayName} - Root";
@@ -412,6 +454,18 @@ public sealed class ExportRoutingConfigurationPresentation
 
         return segments.ToArray();
     }
+
+    private static ExportDatasetKey CreateDatasetKey(ExportSourceSetPresentation set) =>
+        CreateDatasetKey(set.OutputSetId, set.RowFamilyId);
+
+    private static ExportDatasetKey CreateDatasetKey(
+        OutputSetId? outputSetId,
+        RowFamilyId rowFamilyId) =>
+        new(outputSetId, outputSetId is null ? rowFamilyId : null);
+
+    private readonly record struct ExportDatasetKey(
+        OutputSetId? OutputSetId,
+        RowFamilyId? LegacyRowFamilyId);
 }
 
 public sealed class ExportWorkbookPresentation : ObservableObject
@@ -465,7 +519,8 @@ public sealed class ExportSourceSetPresentation
         string worksheetName,
         int worksheetOrder)
     {
-        SourceSetId = dataset.SourceSetId;
+        SourceSetId = dataset.ParentSourceSetId;
+        OutputSetId = dataset.OutputSetId;
         RowFamilyId = family.Id;
         WorksheetDefinitionId = worksheetDefinitionId;
         _displayName = dataset.DisplayName;
@@ -491,6 +546,10 @@ public sealed class ExportSourceSetPresentation
     public event EventHandler? Changed;
 
     public SourceSetId SourceSetId { get; }
+
+    public SourceSetId ParentSourceSetId => SourceSetId;
+
+    public OutputSetId? OutputSetId { get; }
 
     public RowFamilyId RowFamilyId { get; }
 
@@ -634,7 +693,8 @@ public sealed class ExportSourceSetPresentation
 
     internal void ApplyConfiguration(SourceSetExportConfiguration configuration)
     {
-        if (configuration.RowFamilyId != RowFamilyId)
+        if (configuration.OutputSetId != OutputSetId
+            || configuration.RowFamilyId != RowFamilyId)
         {
             throw new ArgumentException(
                 "Saved export configuration targets a different Row Family.",
@@ -681,7 +741,7 @@ public sealed class ExportSourceSetPresentation
         DatabaseDatasetSummary dataset,
         DatabaseRowFamilySummary family)
     {
-        if (family.Id != RowFamilyId)
+        if (dataset.OutputSetId != OutputSetId || family.Id != RowFamilyId)
         {
             throw new ArgumentException("The Row Family identity cannot change.", nameof(family));
         }
@@ -739,7 +799,8 @@ public sealed class ExportSourceSetPresentation
         IsEnabled,
         WorksheetDefinitionId,
         _fields.Select(field => field.Capture()).ToArray(),
-        _metadataFields.Select(field => field.Capture()).ToArray());
+        _metadataFields.Select(field => field.Capture()).ToArray(),
+        OutputSetId);
 
     private void AddMetadata(ExportMetadataFieldPresentation field)
     {

@@ -295,11 +295,18 @@ public sealed class WorkbookExportCoordinator(
             && pair.First.Worksheets.Count == pair.Second.Worksheets.Count
             && pair.First.Worksheets.Zip(pair.Second.Worksheets).All(worksheetPair =>
             {
-                var family = extractionResult.Datasets
-                    .SelectMany(dataset => dataset.RowFamilies)
-                    .Single(family => family.Id == worksheetPair.First.Worksheet.RowFamilyId);
+                var dataset = worksheetPair.First.Worksheet.OutputSetId is { } outputSetId
+                    ? extractionResult.Datasets.Single(candidate =>
+                        candidate.OutputSetId == outputSetId)
+                    : extractionResult.Datasets.Single(candidate =>
+                        candidate.RowFamilies.Any(family =>
+                            family.Id == worksheetPair.First.Worksheet.RowFamilyId));
+                var family = dataset.RowFamilies.Single(family =>
+                    family.Id == worksheetPair.First.Worksheet.RowFamilyId);
                 return worksheetPair.First.Worksheet.WorksheetDefinitionId
                         == worksheetPair.Second.WorksheetDefinitionId
+                    && worksheetPair.First.Worksheet.OutputSetId
+                        == worksheetPair.Second.OutputSetId
                     && worksheetPair.First.Worksheet.SourceSetId
                         == worksheetPair.Second.SourceSetId
                     && worksheetPair.First.Worksheet.RowFamilyId
@@ -311,7 +318,9 @@ public sealed class WorkbookExportCoordinator(
                     && worksheetPair.First.Worksheet.Order == worksheetPair.Second.Order
                     && worksheetPair.Second.RowCount == family.RowCount
                     && worksheetPair.Second.ColumnCount
-                        == configuration.CreateIncludedOutputColumns(family.Id).Count;
+                        == (worksheetPair.First.Worksheet.OutputSetId is { } id
+                            ? configuration.CreateIncludedOutputColumns(id).Count
+                            : configuration.CreateIncludedOutputColumns(family.Id).Count);
             }));
     }
 }

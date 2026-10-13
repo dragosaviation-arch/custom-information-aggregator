@@ -10,6 +10,7 @@ using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
+using CIA.Desktop.Export;
 using CIA.ProcessingHost.Export;
 using CIA.ProcessingHost.Hosting;
 using CIA.ProcessingHost.Operations;
@@ -24,6 +25,120 @@ namespace CIA.ProcessingHost.Tests;
 [TestClass]
 public sealed class ExcelWorkbookExportServiceTests
 {
+    [TestMethod]
+    [TestCategory("Spr214E1")]
+    public async Task OutputSetBackedExtractionExportsOneIsolatedWorksheetPerEnabledSet()
+    {
+        using var workspace = new ExportWorkspace();
+        var firstParent = SourceSetId.CreateNew();
+        var secondParent = SourceSetId.CreateNew();
+        var fixtures = new[]
+        {
+            DatasetFixture.CreateOutputSet(
+                firstParent,
+                "Set 1 — Root",
+                1,
+                "/root",
+                twoColumns: true),
+            DatasetFixture.CreateOutputSet(firstParent, "Set 1 — Family A", 2, "/root/a"),
+            DatasetFixture.CreateOutputSet(firstParent, "Set 1 — Family B", 3, "/root/b"),
+            DatasetFixture.CreateOutputSet(firstParent, "Set 1 — Family C", 4, "/root/c"),
+            DatasetFixture.CreateOutputSet(secondParent, "Set 2 — Family D", 5, "/root/d")
+        };
+        fixtures[0].AddRow(fixtures[0].Cell("root"), fixtures[0].CellForColumn(1, "root-other"));
+        fixtures[1].AddRow(fixtures[1].Cell("a"));
+        fixtures[2].AddRow(fixtures[2].Cell("b"));
+        fixtures[3].AddRow(fixtures[3].Cell("c"));
+        fixtures[4].AddRow(fixtures[4].Cell("d"));
+        var database = CreateDatabase(fixtures);
+        var extraction = CreateExtraction(database, fixtures);
+        var routing = new ExportRoutingConfigurationPresentation();
+        routing.Synchronize(database);
+        var configuration = routing.Capture();
+        workspace.Source.Set(extraction, fixtures);
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            configuration,
+            CreatePublicationPlan(configuration, extraction, workspace.Root));
+
+        Assert.IsTrue(result.Accepted, result.Failure?.Description);
+        Assert.IsNotNull(result.Batch);
+        Assert.HasCount(1, result.Batch.Workbooks);
+        Assert.HasCount(5, result.Batch.Workbooks[0].Worksheets);
+        CollectionAssert.AreEqual(
+            fixtures.Select(fixture => fixture.OutputSetId).ToArray(),
+            result.Batch.Workbooks[0].Worksheets.Select(sheet => sheet.OutputSetId).ToArray());
+        CollectionAssert.AreEqual(
+            fixtures.Select(fixture => fixture.OutputSetId).ToArray(),
+            workspace.Source.StreamedOutputSets.ToArray());
+        CollectionAssert.AreEqual(
+            fixtures.Select(fixture => fixture.DisplayName).ToArray(),
+            result.Batch.Workbooks[0].Worksheets.Select(sheet => sheet.Name).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { firstParent, firstParent, firstParent, firstParent, secondParent },
+            result.Batch.Workbooks[0].Worksheets
+                .Select(sheet => sheet.ParentSourceSetId).ToArray());
+
+        var workbookPath = result.Batch.Workbooks[0].FinalPath;
+        using var workbook = SpreadsheetDocument.Open(workbookPath, isEditable: false);
+        CollectionAssert.AreEqual(
+            fixtures.Select(fixture => fixture.DisplayName).ToArray(),
+            SheetNames(workbook).ToArray());
+        var expectedValues = new[] { "root", "a", "b", "c", "d" };
+        for (var index = 0; index < fixtures.Length; index++)
+        {
+            var cells = ReadCells(workbook, fixtures[index].DisplayName);
+            Assert.AreEqual(expectedValues[index], cells["A2"]);
+            Assert.IsFalse(cells.Values.Any(value => expectedValues
+                .Where((_, candidateIndex) => candidateIndex != index)
+                .Contains(value, StringComparer.Ordinal)));
+        }
+
+        Assert.AreEqual("root-other", ReadCells(workbook, fixtures[0].DisplayName)["B2"]);
+        Assert.IsTrue(fixtures.Skip(1).All(fixture =>
+            !ReadCells(workbook, fixture.DisplayName).ContainsKey("B1")));
+    }
+
+    [TestMethod]
+    [TestCategory("Spr214E1")]
+    public async Task DisabledOutputSetProducesNoWorksheetOrWorkbookArtifact()
+    {
+        using var workspace = new ExportWorkspace();
+        var parent = SourceSetId.CreateNew();
+        var enabled = DatasetFixture.CreateOutputSet(parent, "Set 1 — Enabled", 1, "/root/enabled");
+        var disabled = DatasetFixture.CreateOutputSet(parent, "Set 1 — Disabled", 2, "/root/disabled");
+        enabled.AddRow(enabled.Cell("enabled"));
+        disabled.AddRow(disabled.Cell("disabled"));
+        var database = CreateDatabase(enabled, disabled);
+        var extraction = CreateExtraction(database, enabled, disabled);
+        var routing = new ExportRoutingConfigurationPresentation();
+        routing.Synchronize(database);
+        routing.GetSet(disabled.OutputSetId!.Value).IsEnabled = false;
+        var configuration = routing.Capture();
+        workspace.Source.Set(extraction, enabled, disabled);
+
+        var result = await workspace.Service.ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction,
+            configuration,
+            CreatePublicationPlan(configuration, extraction, workspace.Root));
+
+        Assert.IsTrue(result.Accepted, result.Failure?.Description);
+        Assert.IsNotNull(result.Batch);
+        Assert.HasCount(1, result.Batch.Workbooks);
+        Assert.HasCount(1, result.Batch.Workbooks[0].Worksheets);
+        Assert.AreEqual(enabled.OutputSetId, result.Batch.Workbooks[0].Worksheets[0].OutputSetId);
+        CollectionAssert.AreEqual(
+            new OutputSetId?[] { enabled.OutputSetId },
+            workspace.Source.StreamedOutputSets.ToArray());
+        using var workbook = SpreadsheetDocument.Open(
+            result.Batch.Workbooks[0].FinalPath,
+            isEditable: false);
+        CollectionAssert.AreEqual(new[] { enabled.DisplayName }, SheetNames(workbook).ToArray());
+    }
+
     [TestMethod]
     public async Task FamilyAwareExtractionStreamsItsRowFamilyAndPublishesWorkbook()
     {
@@ -576,7 +691,11 @@ public sealed class ExcelWorkbookExportServiceTests
     public async Task BatchContractsRoundTripThroughTypedIpc()
     {
         using var workspace = new ExportWorkspace();
-        var dataset = DatasetFixture.Create("Set", 1);
+        var dataset = DatasetFixture.CreateOutputSet(
+            SourceSetId.CreateNew(),
+            "Set 1 — Root",
+            1,
+            "/root");
         dataset.AddRow(dataset.Cell("value"));
         var extraction = CreateExtraction(dataset);
         var configuration = CreateSeparateWorkbookConfiguration(dataset);
@@ -594,9 +713,16 @@ public sealed class ExcelWorkbookExportServiceTests
         var roundTrip = await LengthPrefixedJsonMessageFramer.ReadAsync(stream);
 
         Assert.IsInstanceOfType<RunWorkbookExportCommand>(roundTrip);
+        var roundTripCommand = (RunWorkbookExportCommand)roundTrip;
         Assert.AreEqual(
             workspace.Root,
-            ((RunWorkbookExportCommand)roundTrip).PublicationPlan.OutputDirectory);
+            roundTripCommand.PublicationPlan.OutputDirectory);
+        Assert.AreEqual(
+            dataset.OutputSetId,
+            roundTripCommand.Configuration.SourceSets.Single().OutputSetId);
+        Assert.AreEqual(
+            dataset.OutputSetId,
+            roundTripCommand.Configuration.Workbooks.Single().Worksheets.Single().OutputSetId);
         var correlation = command.Correlation;
         var workbook = configuration.Workbooks.Single();
         var worksheet = workbook.Worksheets.Single();
@@ -618,20 +744,25 @@ public sealed class ExcelWorkbookExportServiceTests
                     workbook.Order,
                     [new WorkbookExportWorksheetSummary(
                         worksheet.WorksheetDefinitionId,
+                        worksheet.OutputSetId!.Value,
                         worksheet.SourceSetId,
                         worksheet.RowFamilyId,
                         worksheet.Name,
                         worksheet.Order,
                         dataset.Rows.Count,
                         configuration.CreateIncludedOutputColumns(
-                            worksheet.RowFamilyId).Count)])]),
+                            worksheet.OutputSetId.Value).Count)])]),
             null);
         await using var responseStream = new MemoryStream();
         await LengthPrefixedJsonMessageFramer.WriteAsync(responseStream, response);
         responseStream.Position = 0;
         var responseRoundTrip = await LengthPrefixedJsonMessageFramer.ReadAsync(responseStream);
         Assert.IsInstanceOfType<RunWorkbookExportResponse>(responseRoundTrip);
-        Assert.HasCount(1, ((RunWorkbookExportResponse)responseRoundTrip).Batch!.Workbooks);
+        var roundTripResponse = (RunWorkbookExportResponse)responseRoundTrip;
+        Assert.HasCount(1, roundTripResponse.Batch!.Workbooks);
+        Assert.AreEqual(
+            dataset.OutputSetId,
+            roundTripResponse.Batch.Workbooks.Single().Worksheets.Single().OutputSetId);
         using var host = ProcessingHostApplicationHost.Create(
             [$"--{ApplicationLogPaths.DirectoryConfigurationKey}={workspace.Root}"]);
         Assert.IsNotNull(host.Services.GetRequiredService<ExcelWorkbookExportService>());
@@ -682,9 +813,19 @@ public sealed class ExcelWorkbookExportServiceTests
 
     private static ExtractionResultSummary CreateExtraction(params DatasetFixture[] fixtures)
     {
-        var database = new DatabaseGenerationSummary(
+        var database = CreateDatabase(fixtures);
+        return CreateExtraction(database, fixtures);
+    }
+
+    private static DatabaseGenerationSummary CreateDatabase(params DatasetFixture[] fixtures) =>
+        new(
             OperationId.CreateNew(),
             fixtures.Select(fixture => fixture.DatabaseSummary()).ToArray());
+
+    private static ExtractionResultSummary CreateExtraction(
+        DatabaseGenerationSummary database,
+        params DatasetFixture[] fixtures)
+    {
         return new ExtractionResultSummary(
             OperationId.CreateNew(),
             database,
@@ -771,13 +912,22 @@ public sealed class ExcelWorkbookExportServiceTests
                 workbookId,
                 $"{fixtures[index].DisplayName}.xlsx",
                 index + 1,
-                [new WorksheetDefinition(
-                    worksheetId,
-                    workbookId,
-                    fixtures[index].SourceSetId,
-                    fixtures[index].RowFamilyId,
-                    fixtures[index].DisplayName,
-                    1)]));
+                [fixtures[index].OutputSetId is { } outputSetId
+                    ? new WorksheetDefinition(
+                        worksheetId,
+                        workbookId,
+                        outputSetId,
+                        fixtures[index].SourceSetId,
+                        fixtures[index].RowFamilyId,
+                        fixtures[index].DisplayName,
+                        1)
+                    : new WorksheetDefinition(
+                        worksheetId,
+                        workbookId,
+                        fixtures[index].SourceSetId,
+                        fixtures[index].RowFamilyId,
+                        fixtures[index].DisplayName,
+                        1)]));
             sourceSets.Add(SourceConfiguration(fixtures[index], worksheetId));
         }
 
@@ -790,26 +940,48 @@ public sealed class ExcelWorkbookExportServiceTests
         bool includeSourceId = false,
         bool includeMetadata = false,
         bool enabled = true) =>
-        new(
-            fixture.SourceSetId,
-            fixture.RowFamilyId,
-            enabled,
-            worksheetId,
-            fixture.Columns.Select((column, index) => new ExportFieldConfiguration(
+        fixture.OutputSetId is { } outputSetId
+            ? new SourceSetExportConfiguration(
+                outputSetId,
+                fixture.SourceSetId,
+                fixture.RowFamilyId,
+                enabled,
+                worksheetId,
+                fixture.Columns.Select((column, index) => new ExportFieldConfiguration(
+                    column.Identity,
+                    true,
+                    index == 0 ? "Shared" : column.EffectiveName,
+                    includeSourceId && index == 0)).ToArray(),
+                includeMetadata
+                    ? [new ExportMetadataFieldConfiguration(
+                           DatabaseMetadataField.SourceFile,
+                           true,
+                           "Source File"),
+                       new ExportMetadataFieldConfiguration(
+                           DatabaseMetadataField.RecordHierarchy,
+                           true,
+                           "Record Hierarchy")]
+                    : [])
+            : new SourceSetExportConfiguration(
+                fixture.SourceSetId,
+                fixture.RowFamilyId,
+                enabled,
+                worksheetId,
+                fixture.Columns.Select((column, index) => new ExportFieldConfiguration(
                 column.Identity,
                 true,
                 index == 0 ? "Shared" : column.EffectiveName,
                 includeSourceId && index == 0)).ToArray(),
-            includeMetadata
-                ? [new ExportMetadataFieldConfiguration(
-                       DatabaseMetadataField.SourceFile,
-                       true,
-                       "Source File"),
-                   new ExportMetadataFieldConfiguration(
-                       DatabaseMetadataField.RecordHierarchy,
-                       true,
-                       "Record Hierarchy")]
-                : []);
+                includeMetadata
+                    ? [new ExportMetadataFieldConfiguration(
+                           DatabaseMetadataField.SourceFile,
+                           true,
+                           "Source File"),
+                       new ExportMetadataFieldConfiguration(
+                           DatabaseMetadataField.RecordHierarchy,
+                           true,
+                           "Record Hierarchy")]
+                    : []);
 
     private static IReadOnlyList<string> SheetNames(SpreadsheetDocument document)
     {
@@ -883,10 +1055,11 @@ public sealed class ExcelWorkbookExportServiceTests
 
     private sealed class FakeExtractionExportRowSource : IExtractionExportRowSource
     {
-        private readonly Dictionary<RowFamilyId, IReadOnlyList<ExtractionResultRow>> _rows = [];
+        private readonly Dictionary<ExportDatasetKey, IReadOnlyList<ExtractionResultRow>> _rows = [];
 
         internal ExtractionResultSummary? Result { get; private set; }
         internal List<SourceSetId> StreamedSourceSets { get; } = [];
+        internal List<OutputSetId?> StreamedOutputSets { get; } = [];
         internal Action? BeforeYield { get; set; }
         internal Action<int>? BeforePublishedResultRead { get; set; }
         internal int PublishedResultReadCount { get; private set; }
@@ -897,16 +1070,21 @@ public sealed class ExcelWorkbookExportServiceTests
             foreach (var fixture in fixtures)
             {
                 var familyId = result.Datasets.Single(dataset =>
-                    dataset.SourceSetId == fixture.SourceSetId).RowFamilies.Single().Id;
-                _rows[familyId] = fixture.Rows;
+                    fixture.OutputSetId is { } outputSetId
+                        ? dataset.OutputSetId == outputSetId
+                        : dataset.OutputSetId is null
+                            && dataset.SourceSetId == fixture.SourceSetId).RowFamilies.Single().Id;
+                _rows[new ExportDatasetKey(fixture.OutputSetId, familyId)] = fixture.Rows;
             }
         }
 
         internal void SetRows(
             SourceSetId sourceSetId,
             IReadOnlyList<ExtractionResultRow> rows) =>
-            _rows[Result!.Datasets.Single(dataset => dataset.SourceSetId == sourceSetId)
-                .RowFamilies.Single().Id] = rows;
+            _rows[new ExportDatasetKey(
+                null,
+                Result!.Datasets.Single(dataset => dataset.OutputSetId is null
+                    && dataset.SourceSetId == sourceSetId).RowFamilies.Single().Id)] = rows;
 
         internal void ChangePublishedResult(ExtractionResultSummary result) => Result = result;
 
@@ -920,11 +1098,13 @@ public sealed class ExcelWorkbookExportServiceTests
 
         public async IAsyncEnumerable<ExtractionResultRow> StreamRowsAsync(
             OperationId extractionResultId,
+            OutputSetId? outputSetId,
             RowFamilyId rowFamilyId,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             StreamedSourceSets.Add(rowFamilyId.SourceSetId);
-            foreach (var row in _rows[rowFamilyId])
+            StreamedOutputSets.Add(outputSetId);
+            foreach (var row in _rows[new ExportDatasetKey(outputSetId, rowFamilyId)])
             {
                 BeforeYield?.Invoke();
                 cancellationToken.ThrowIfCancellationRequested();
@@ -932,28 +1112,38 @@ public sealed class ExcelWorkbookExportServiceTests
                 yield return row;
             }
         }
+
+        private readonly record struct ExportDatasetKey(
+            OutputSetId? OutputSetId,
+            RowFamilyId RowFamilyId);
     }
 
     private sealed class DatasetFixture
     {
         private readonly IReadOnlyList<DatabaseFieldMapping> _mappings;
+        private readonly RowFamilyId? _parentRowFamilyId;
         private SourceId? _pendingSourceId;
 
         private DatasetFixture(
             SourceSetId sourceSetId,
+            OutputSetId? outputSetId,
             string displayName,
             int ordinal,
             IReadOnlyList<DatabaseColumnDefinition> columns,
-            IReadOnlyList<DatabaseFieldMapping> mappings)
+            IReadOnlyList<DatabaseFieldMapping> mappings,
+            RowFamilyId? parentRowFamilyId = null)
         {
             SourceSetId = sourceSetId;
+            OutputSetId = outputSetId;
             DisplayName = displayName;
             Ordinal = ordinal;
             Columns = columns;
             _mappings = mappings;
+            _parentRowFamilyId = parentRowFamilyId;
         }
 
         internal SourceSetId SourceSetId { get; }
+        internal OutputSetId? OutputSetId { get; }
         internal RowFamilyId RowFamilyId => Columns[0].Identity.RowFamilyId;
         internal string DisplayName { get; }
         internal int Ordinal { get; }
@@ -994,7 +1184,55 @@ public sealed class ExcelWorkbookExportServiceTests
                     repeatCoordinates ?? DatabaseRepeatCoordinatePath.Empty),
                 mapping.EffectiveName,
                 index + 1)).ToArray();
-            return new DatasetFixture(sourceSetId, displayName, ordinal, columns, mappings);
+            return new DatasetFixture(sourceSetId, null, displayName, ordinal, columns, mappings);
+        }
+
+        internal static DatasetFixture CreateOutputSet(
+            SourceSetId parentSourceSetId,
+            string displayName,
+            int ordinal,
+            string anchorPath,
+            bool twoColumns = false)
+        {
+            var rowFamilyId = new RowFamilyId(
+                parentSourceSetId,
+                string.Equals(anchorPath, "/root", StringComparison.Ordinal)
+                    ? RowFamilyKind.Root
+                    : RowFamilyKind.Repeated,
+                anchorPath);
+            RowFamilyId? parentRowFamilyId = rowFamilyId.Kind == RowFamilyKind.Repeated
+                ? new RowFamilyId(parentSourceSetId, RowFamilyKind.Root, "/root")
+                : null;
+            var names = twoColumns ? new[] { "tag", "other" } : ["tag"];
+            var mappings = names.Select(name =>
+            {
+                var identity = new DiscoveryInformationIdentity(
+                    parentSourceSetId,
+                    $"{anchorPath}/{name}",
+                    name,
+                    SourceValueCandidateKind.Element,
+                    $"{anchorPath}/{name}");
+                return new DatabaseFieldMapping(
+                    rowFamilyId,
+                    name == "tag" ? "Shared" : "Other",
+                    false,
+                    [identity]);
+            }).ToArray();
+            var columns = mappings.Select((mapping, index) => new DatabaseColumnDefinition(
+                new DatabaseColumnIdentity(
+                    rowFamilyId,
+                    mapping.FieldKey,
+                    DatabaseRepeatCoordinatePath.Empty),
+                mapping.EffectiveName,
+                index + 1)).ToArray();
+            return new DatasetFixture(
+                parentSourceSetId,
+                CIA.Contracts.Discovery.OutputSetId.CreateNew(),
+                displayName,
+                ordinal,
+                columns,
+                mappings,
+                parentRowFamilyId);
         }
 
         internal ExtractionResultCell Cell(params string[] values) =>
@@ -1065,7 +1303,7 @@ public sealed class ExcelWorkbookExportServiceTests
 
             var family = new DatabaseRowFamilySummary(
                 Columns[0].Identity.RowFamilyId,
-                parentRowFamilyId: null,
+                _parentRowFamilyId,
                 ordinal: 1,
                 displayName: "Root",
                 Rows.Count,
@@ -1073,16 +1311,28 @@ public sealed class ExcelWorkbookExportServiceTests
                 valueCount,
                 Columns,
                 _mappings);
-            return new DatabaseDatasetSummary(
-                SourceSetId,
-                DisplayName,
-                Ordinal,
-                RepeatedDataLayout.StructuralRows,
-                Rows.Count,
-                valueCount,
-                Columns,
-                _mappings,
-                [family]);
+            return OutputSetId is { } outputSetId
+                ? new DatabaseDatasetSummary(
+                    outputSetId,
+                    SourceSetId,
+                    DisplayName,
+                    Ordinal,
+                    RepeatedDataLayout.StructuralRows,
+                    Rows.Count,
+                    valueCount,
+                    Columns,
+                    _mappings,
+                    [family])
+                : new DatabaseDatasetSummary(
+                    SourceSetId,
+                    DisplayName,
+                    Ordinal,
+                    RepeatedDataLayout.StructuralRows,
+                    Rows.Count,
+                    valueCount,
+                    Columns,
+                    _mappings,
+                    [family]);
         }
 
         internal ExtractionDatasetSummary ExtractionSummary()
@@ -1106,7 +1356,7 @@ public sealed class ExcelWorkbookExportServiceTests
 
             var family = new ExtractionRowFamilySummary(
                 Columns[0].Identity.RowFamilyId,
-                parentRowFamilyId: null,
+                _parentRowFamilyId,
                 ordinal: 1,
                 displayName: "Root",
                 databaseRowCount: Rows.Count,
@@ -1114,15 +1364,26 @@ public sealed class ExcelWorkbookExportServiceTests
                 excludedRowCount: 0,
                 valueCount,
                 Columns);
-            return new ExtractionDatasetSummary(
-                SourceSetId,
-                DisplayName,
-                Ordinal,
-                RepeatedDataLayout.StructuralRows,
-                Rows.Count,
-                valueCount,
-                Columns,
-                [family]);
+            return OutputSetId is { } outputSetId
+                ? new ExtractionDatasetSummary(
+                    outputSetId,
+                    SourceSetId,
+                    DisplayName,
+                    Ordinal,
+                    RepeatedDataLayout.StructuralRows,
+                    Rows.Count,
+                    valueCount,
+                    Columns,
+                    [family])
+                : new ExtractionDatasetSummary(
+                    SourceSetId,
+                    DisplayName,
+                    Ordinal,
+                    RepeatedDataLayout.StructuralRows,
+                    Rows.Count,
+                    valueCount,
+                    Columns,
+                    [family]);
         }
 
         private static DatabaseLineageEvidence CreateLineage(

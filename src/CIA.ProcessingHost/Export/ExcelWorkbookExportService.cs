@@ -1,4 +1,5 @@
 using CIA.Contracts.Database;
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Export;
 using CIA.Contracts.Extraction;
 using CIA.Contracts.Ipc;
@@ -121,8 +122,9 @@ public sealed class ExcelWorkbookExportService
                     var worksheetCounters = runnableWorkbook.Worksheets.Select(worksheet =>
                         new WorksheetWriteCounter(
                             worksheet,
-                            extractionResult.Datasets.SelectMany(dataset => dataset.RowFamilies)
-                                .Single(family =>
+                            FindExtractionDataset(
+                                extractionResult,
+                                worksheet.Worksheet).RowFamilies.Single(family =>
                                     family.Id == worksheet.Worksheet.RowFamilyId).RowCount))
                         .ToArray();
                     allWorksheetCounters.AddRange(worksheetCounters);
@@ -131,8 +133,10 @@ public sealed class ExcelWorkbookExportService
                         (writer, token) => WriteWorksheetAsync(
                             writer,
                             extractionResult.OperationId,
-                            configuration.CreateIncludedOutputColumns(
-                                counter.Definition.Worksheet.RowFamilyId),
+                            counter.Definition.Worksheet.OutputSetId is { } outputSetId
+                                ? configuration.CreateIncludedOutputColumns(outputSetId)
+                                : configuration.CreateIncludedOutputColumns(
+                                    counter.Definition.Worksheet.RowFamilyId),
                             counter,
                             token))).ToArray();
 
@@ -153,7 +157,8 @@ public sealed class ExcelWorkbookExportService
                                 counter.Definition.Worksheet.Name,
                                 counter.Definition.Worksheet.Order,
                                 counter.RowCount,
-                                counter.ColumnCount)).ToArray()));
+                                counter.ColumnCount,
+                                counter.Definition.Worksheet.OutputSetId)).ToArray()));
                 }
 
                 ValidateWorksheetRowCounts(allWorksheetCounters);
@@ -241,6 +246,7 @@ public sealed class ExcelWorkbookExportService
         var rowIndex = 1;
         await foreach (var row in _rowSource.StreamRowsAsync(
                            extractionResultId,
+                           counter.Definition.Worksheet.OutputSetId,
                            counter.Definition.Worksheet.RowFamilyId,
                            cancellationToken).ConfigureAwait(false))
         {
@@ -400,6 +406,14 @@ public sealed class ExcelWorkbookExportService
         ExtractionResultSummary? actual) =>
         ExtractionResultSnapshotComparer.AreEquivalent(expected, actual);
 
+    private static ExtractionDatasetSummary FindExtractionDataset(
+        ExtractionResultSummary extractionResult,
+        WorksheetDefinition worksheet) =>
+        worksheet.OutputSetId is { } outputSetId
+            ? extractionResult.Datasets.Single(dataset => dataset.OutputSetId == outputSetId)
+            : extractionResult.Datasets.Single(dataset =>
+                dataset.RowFamilies.Any(family => family.Id == worksheet.RowFamilyId));
+
     private sealed class WorksheetWriteCounter(
         RunnableWorksheetDefinition definition,
         int expectedRowCount)
@@ -418,6 +432,7 @@ internal interface IExtractionExportRowSource
 
     IAsyncEnumerable<ExtractionResultRow> StreamRowsAsync(
         OperationId extractionResultId,
+        OutputSetId? outputSetId,
         RowFamilyId rowFamilyId,
         CancellationToken cancellationToken = default);
 }
@@ -431,12 +446,19 @@ internal sealed class RepositoryExtractionExportRowSource(
 
     public IAsyncEnumerable<ExtractionResultRow> StreamRowsAsync(
         OperationId extractionResultId,
+        OutputSetId? outputSetId,
         RowFamilyId rowFamilyId,
         CancellationToken cancellationToken = default) =>
-        repository.StreamPublishedExtractionRowsAsync(
-            extractionResultId,
-            rowFamilyId,
-            cancellationToken);
+        outputSetId is { } id
+            ? repository.StreamPublishedExtractionRowsAsync(
+                extractionResultId,
+                id,
+                rowFamilyId,
+                cancellationToken)
+            : repository.StreamPublishedExtractionRowsAsync(
+                extractionResultId,
+                rowFamilyId,
+                cancellationToken);
 }
 
 public sealed record WorkbookExportHostResult(

@@ -433,9 +433,11 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         $"{ExportColumns.Count + ExportMetadataFields.Count} included";
 
     public string WorkbookExportFieldCountText =>
-        SelectedRowFamily is null
+        SelectedExportSet is not { } set
             ? "0 selected"
-            : $"{CaptureExportConfiguration().CreateIncludedOutputColumns(SelectedRowFamily.Summary.Id).Count} selected";
+            : $"{(set.OutputSetId is { } outputSetId
+                ? CaptureExportConfiguration().CreateIncludedOutputColumns(outputSetId).Count
+                : CaptureExportConfiguration().CreateIncludedOutputColumns(set.RowFamilyId).Count)} selected";
 
     public bool IsSelectedSetExportEnabled
     {
@@ -466,7 +468,14 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            _exportRouting.AssignWorkbook(set.RowFamilyId, value.WorkbookDefinitionId);
+            if (set.OutputSetId is { } outputSetId)
+            {
+                _exportRouting.AssignWorkbook(outputSetId, value.WorkbookDefinitionId);
+            }
+            else
+            {
+                _exportRouting.AssignWorkbook(set.RowFamilyId, value.WorkbookDefinitionId);
+            }
             NotifyExportRoutingPropertiesChanged();
         }
     }
@@ -698,8 +707,10 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private ExportSourceSetPresentation? SelectedExportSet => SelectedRowFamily is null
         ? null
-        : _exportRouting.SourceSets.SingleOrDefault(set =>
-            set.RowFamilyId == SelectedRowFamily.Summary.Id);
+        : SelectedDataset?.Summary.OutputSetId is { } outputSetId
+            ? _exportRouting.SourceSets.SingleOrDefault(set => set.OutputSetId == outputSetId)
+            : _exportRouting.SourceSets.SingleOrDefault(set =>
+                set.RowFamilyId == SelectedRowFamily.Summary.Id);
 
     private ExportConfigurationValidationResult CurrentExportValidation =>
         _publishedGeneration is { IsHierarchyAware: true } generation
@@ -787,7 +798,14 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     {
         if (SelectedExportSet is { } set)
         {
-            _exportRouting.CreateWorkbookFor(set.RowFamilyId);
+            if (set.OutputSetId is { } outputSetId)
+            {
+                _exportRouting.CreateWorkbookFor(outputSetId);
+            }
+            else
+            {
+                _exportRouting.CreateWorkbookFor(set.RowFamilyId);
+            }
         }
     }
 
@@ -810,7 +828,14 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     {
         if (SelectedExportSet is { } set)
         {
-            _exportRouting.MoveWorksheet(set.RowFamilyId, offset);
+            if (set.OutputSetId is { } outputSetId)
+            {
+                _exportRouting.MoveWorksheet(outputSetId, offset);
+            }
+            else
+            {
+                _exportRouting.MoveWorksheet(set.RowFamilyId, offset);
+            }
         }
     }
 
@@ -1307,8 +1332,11 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private void ApplyExportRowFamily(DatabaseRowFamilySummary family)
     {
-        var set = _exportRouting.SourceSets.SingleOrDefault(candidate =>
-            candidate.RowFamilyId == family.Id);
+        var set = SelectedDataset?.Summary.OutputSetId is { } outputSetId
+            ? _exportRouting.SourceSets.SingleOrDefault(candidate =>
+                candidate.OutputSetId == outputSetId)
+            : _exportRouting.SourceSets.SingleOrDefault(candidate =>
+                candidate.RowFamilyId == family.Id);
         if (set is not null)
         {
             _synchronizingDatabaseColumnState = true;
