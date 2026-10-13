@@ -328,7 +328,7 @@ public sealed class WorkingStatePackageService
         }
 
         WorkingStateContractValidator.Validate(manifest.Snapshot);
-        if (manifest.PackageSchemaVersion == WorkingStatePackageFormat.CurrentSchemaVersion)
+        if (manifest.PackageSchemaVersion > WorkingStatePackageFormat.MinimumSupportedSchemaVersion)
         {
             WorkingStateDatabaseCoherenceValidator.Validate(manifest.Snapshot);
         }

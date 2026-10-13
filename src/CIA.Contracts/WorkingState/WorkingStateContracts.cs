@@ -11,7 +11,7 @@ namespace CIA.Contracts.WorkingState;
 public static class WorkingStatePackageFormat
 {
     public const int MinimumSupportedSchemaVersion = 1;
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
     public const string ManifestEntryName = "manifest.json";
     public const string DatabaseEntryName = "database.sqlite3";
     public const long MaximumManifestLength = 4 * 1024 * 1024;
@@ -104,7 +104,8 @@ public sealed record WorkingStateSnapshot
         SourceSetId? activeSourceSetId,
         IReadOnlyList<LoadedSourceContract> sources,
         DiscoveryConfigurationSnapshot discoveryConfiguration,
-        IReadOnlyList<WorkingStateDatabaseTagOverride> databaseTagOverrides)
+        IReadOnlyList<WorkingStateDatabaseTagOverride> databaseTagOverrides,
+        DiscoveryOutputPlanSnapshot? discoveryOutputPlan = null)
         : this(
             packageId,
             savedAtUtc,
@@ -115,7 +116,8 @@ public sealed record WorkingStateSnapshot
             activeSourceSetId,
             sources,
             discoveryConfiguration,
-            databaseTagOverrides)
+            databaseTagOverrides,
+            discoveryOutputPlan)
     {
     }
 
@@ -130,7 +132,8 @@ public sealed record WorkingStateSnapshot
         SourceSetId? activeSourceSetId,
         IReadOnlyList<LoadedSourceContract> sources,
         DiscoveryConfigurationSnapshot discoveryConfiguration,
-        IReadOnlyList<WorkingStateDatabaseTagOverride> databaseTagOverrides)
+        IReadOnlyList<WorkingStateDatabaseTagOverride> databaseTagOverrides,
+        DiscoveryOutputPlanSnapshot? discoveryOutputPlan = null)
     {
         if (packageId == Guid.Empty || packageId.Version != 7)
         {
@@ -158,6 +161,7 @@ public sealed record WorkingStateSnapshot
             .Select(CloneSource)
             .ToArray());
         DiscoveryConfiguration = discoveryConfiguration;
+        DiscoveryOutputPlan = discoveryOutputPlan;
         DatabaseTagOverrides = new ReadOnlyCollection<WorkingStateDatabaseTagOverride>(
             databaseTagOverrides.ToArray());
 
@@ -195,6 +199,8 @@ public sealed record WorkingStateSnapshot
     public IReadOnlyList<LoadedSourceContract> Sources { get; }
 
     public DiscoveryConfigurationSnapshot DiscoveryConfiguration { get; }
+
+    public DiscoveryOutputPlanSnapshot? DiscoveryOutputPlan { get; }
 
     public IReadOnlyList<WorkingStateDatabaseTagOverride> DatabaseTagOverrides { get; }
 }
@@ -288,6 +294,51 @@ public static class WorkingStateContractValidator
                 .Distinct().Count() != snapshot.DatabaseTagOverrides.Count)
         {
             throw new ArgumentException("The saved Discovery configuration relationships are invalid.");
+        }
+
+        if (snapshot.DiscoveryOutputPlan is { } outputPlan)
+        {
+            var outputParentIds = outputPlan.ParentPlans
+                .Select(plan => plan.ParentSourceSetId)
+                .ToArray();
+            var expectedParentOrder = sourceSets
+                .Where(sourceSet => outputParentIds.Contains(sourceSet.SourceSetId))
+                .Select(sourceSet => sourceSet.SourceSetId)
+                .ToArray();
+            if (!outputParentIds.SequenceEqual(expectedParentOrder)
+                || outputParentIds.Any(parentId => !snapshot.Sources.Any(source =>
+                    source.SourceSetId == parentId
+                    && source.IsIncluded
+                    && source.Status == LoadedSourceStatus.Ready)))
+            {
+                throw new ArgumentException(
+                    "The saved Output Plan must follow its ready parent Source Set order.");
+            }
+
+            if (snapshot.DatabaseGeneration is { } outputDatabase
+                && outputDatabase.Datasets.Any(dataset => dataset.OutputSetId is not null))
+            {
+                var enabledSets = outputPlan.OutputSets
+                    .Where(outputSet => outputSet.IsEnabled)
+                    .OrderBy(outputSet => outputSet.SetNumber)
+                    .ToArray();
+                var datasets = outputDatabase.Datasets.OrderBy(dataset => dataset.Ordinal).ToArray();
+                if (datasets.Any(dataset => dataset.OutputSetId is null)
+                    || enabledSets.Length != datasets.Length
+                    || enabledSets.Zip(datasets).Any(pair =>
+                        pair.First.OutputSetId != pair.Second.OutputSetId
+                        || pair.First.ParentSourceSetId != pair.Second.ParentSourceSetId
+                        || !string.Equals(
+                            pair.First.Name,
+                            pair.Second.DisplayName,
+                            StringComparison.Ordinal)
+                        || !pair.First.RowFamilyIds.SequenceEqual(
+                            pair.Second.RowFamilies.Select(family => family.Id))))
+                {
+                    throw new ArgumentException(
+                        "The saved Output Plan does not match the published Database datasets.");
+                }
+            }
         }
 
         if (snapshot.DatabaseGeneration is { IsHierarchyAware: false })

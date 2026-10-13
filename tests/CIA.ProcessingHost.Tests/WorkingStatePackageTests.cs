@@ -149,7 +149,12 @@ public sealed class WorkingStatePackageTests
             packagePath,
             snapshot);
         Assert.IsTrue(saved.Accepted, saved.Failure?.Description);
-        Assert.AreEqual(2, saved.Manifest?.PackageSchemaVersion);
+        Assert.AreEqual(WorkingStatePackageFormat.CurrentSchemaVersion, saved.Manifest?.PackageSchemaVersion);
+        ReplaceEntry(packagePath, WorkingStatePackageFormat.ManifestEntryName, bytes =>
+            Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(bytes).Replace(
+                $"\"packageSchemaVersion\": {WorkingStatePackageFormat.CurrentSchemaVersion}",
+                "\"packageSchemaVersion\": 2",
+                StringComparison.Ordinal)));
         foreach (var source in snapshot.Sources)
         {
             File.Delete(source.Path);
@@ -163,6 +168,7 @@ public sealed class WorkingStatePackageTests
         var extraction = await restored.Repository.ReadPublishedExtractionResultAsync();
 
         Assert.IsTrue(result.Accepted, result.Failure?.Description);
+        Assert.AreEqual(2, result.Manifest?.PackageSchemaVersion);
         Assert.IsTrue(DatabaseGenerationSnapshotComparer.AreEquivalent(
             state.Generation,
             database));
@@ -208,6 +214,89 @@ public sealed class WorkingStatePackageTests
         Assert.AreEqual(
             restoredConfiguration.SourceSets.Count(set => set.IsEnabled),
             exported.Batch!.Workbooks.SelectMany(workbook => workbook.Worksheets).Count());
+        Assert.IsEmpty(Directory.GetFiles(exportDirectory, "*.incomplete"));
+    }
+
+    [TestMethod]
+    [TestCategory("Spr214E2")]
+    public async Task VersionThreeRoundTripsOutputSetPlanRoutingAndExportWithoutIdentityChanges()
+    {
+        using var workspace = new Workspace();
+        var state = await workspace.CreateOutputSetPublishedStateAsync();
+        var packagePath = Path.Combine(workspace.Root, "output-set-v3.cia");
+
+        WorkingStateDatabaseCoherenceValidator.Validate(state.Snapshot);
+        var saved = await workspace.PackageService.SaveAsync(
+            OperationCorrelation.CreateNew(),
+            packagePath,
+            state.Snapshot);
+
+        Assert.IsTrue(saved.Accepted, saved.Failure?.Description);
+        Assert.AreEqual(3, saved.Manifest?.PackageSchemaVersion);
+        foreach (var source in state.Snapshot.Sources)
+        {
+            File.Delete(source.Path);
+        }
+
+        using var restored = workspace.CreateFreshRepositoryContext();
+        var result = await restored.PackageService.RestoreAsync(
+            OperationCorrelation.CreateNew(),
+            packagePath);
+        var database = await restored.Repository.ReadPublishedHierarchyDatabaseGenerationAsync();
+        var extraction = await restored.Repository.ReadPublishedExtractionResultAsync();
+
+        Assert.IsTrue(result.Accepted, result.Failure?.Description);
+        Assert.IsTrue(DatabaseGenerationSnapshotComparer.AreEquivalent(state.Generation, database));
+        Assert.IsTrue(ExtractionResultSnapshotComparer.AreEquivalent(
+            state.Snapshot.ExtractionResult,
+            extraction));
+        var expectedPlan = state.Snapshot.DiscoveryOutputPlan!;
+        var restoredPlan = result.Manifest!.Snapshot.DiscoveryOutputPlan!;
+        CollectionAssert.AreEqual(
+            expectedPlan.OutputSets.Select(outputSet => outputSet.OutputSetId).ToArray(),
+            restoredPlan.OutputSets.Select(outputSet => outputSet.OutputSetId).ToArray());
+        CollectionAssert.AreEqual(
+            expectedPlan.OutputSets.Select(outputSet => outputSet.ParentSourceSetId).ToArray(),
+            restoredPlan.OutputSets.Select(outputSet => outputSet.ParentSourceSetId).ToArray());
+        CollectionAssert.AreEqual(
+            expectedPlan.OutputSets.Select(outputSet => outputSet.Name).ToArray(),
+            restoredPlan.OutputSets.Select(outputSet => outputSet.Name).ToArray());
+        CollectionAssert.AreEqual(
+            expectedPlan.OutputSets.Select(outputSet => outputSet.IsEnabled).ToArray(),
+            restoredPlan.OutputSets.Select(outputSet => outputSet.IsEnabled).ToArray());
+        Assert.AreEqual(
+            JsonSerializer.Serialize(state.Snapshot.ExportConfiguration),
+            JsonSerializer.Serialize(result.Manifest.Snapshot.ExportConfiguration));
+
+        var exportDirectory = Path.Combine(workspace.Root, "restored-output-set-export");
+        Directory.CreateDirectory(exportDirectory);
+        var restoredConfiguration = result.Manifest.Snapshot.ExportConfiguration!;
+        var exported = await restored.CreateExportService().ExportAsync(
+            OperationCorrelation.CreateNew(),
+            extraction!,
+            restoredConfiguration,
+            CreatePublicationPlan(restoredConfiguration, extraction!, exportDirectory));
+
+        Assert.IsTrue(exported.Accepted, exported.Failure?.Description);
+        var enabledOutputSets = restoredConfiguration.SourceSets
+            .Where(set => set.IsEnabled)
+            .Select(set => set.OutputSetId)
+            .ToHashSet();
+        var expectedWorksheets = restoredConfiguration.Workbooks
+            .OrderBy(workbook => workbook.Order)
+            .SelectMany(workbook => workbook.Worksheets
+                .Where(worksheet => enabledOutputSets.Contains(worksheet.OutputSetId))
+                .OrderBy(worksheet => worksheet.Order))
+            .Select(worksheet => (worksheet.OutputSetId, worksheet.Name))
+            .ToArray();
+        var actualWorksheets = exported.Batch!.Workbooks
+            .OrderBy(workbook => workbook.Order)
+            .SelectMany(workbook => workbook.Worksheets.OrderBy(worksheet => worksheet.Order))
+            .Select(worksheet => (worksheet.OutputSetId, worksheet.Name))
+            .ToArray();
+        CollectionAssert.AreEqual(expectedWorksheets, actualWorksheets);
+        Assert.IsFalse(actualWorksheets.Any(worksheet => worksheet.OutputSetId
+            == expectedPlan.OutputSets.Single(outputSet => !outputSet.IsEnabled).OutputSetId));
         Assert.IsEmpty(Directory.GetFiles(exportDirectory, "*.incomplete"));
     }
 
@@ -276,7 +365,7 @@ public sealed class WorkingStatePackageTests
         File.Copy(versionTwoPath, versionOnePath);
         ReplaceEntry(versionOnePath, WorkingStatePackageFormat.ManifestEntryName, bytes =>
             Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(bytes).Replace(
-                "\"packageSchemaVersion\": 2",
+                $"\"packageSchemaVersion\": {WorkingStatePackageFormat.CurrentSchemaVersion}",
                 "\"packageSchemaVersion\": 1",
                 StringComparison.Ordinal)));
         var originalBytes = await File.ReadAllBytesAsync(versionOnePath);
@@ -356,7 +445,7 @@ public sealed class WorkingStatePackageTests
                 restoredSnapshot.DiscoveryConfiguration,
                 restoredSnapshot.DatabaseTagOverrides));
         Assert.IsTrue(resaved.Accepted, resaved.Failure?.Description);
-        Assert.AreEqual(2, resaved.Manifest?.PackageSchemaVersion);
+        Assert.AreEqual(WorkingStatePackageFormat.CurrentSchemaVersion, resaved.Manifest?.PackageSchemaVersion);
         Assert.IsNotNull(resaved.Manifest?.Snapshot.DatabaseGeneration);
         Assert.IsNotNull(resaved.Manifest?.Snapshot.ExtractionResult);
         Assert.IsNotNull(resaved.Manifest?.Snapshot.ExportConfiguration);
@@ -1032,6 +1121,158 @@ public sealed class WorkingStatePackageTests
                 [new WorkingStateDatabaseTagOverride(overridden, "BookCode")]);
             return new PublishedState(built.PublishedGeneration!, snapshot);
         }
+
+        public async Task<PublishedState> CreateOutputSetPublishedStateAsync()
+        {
+            var firstSet = SourceSetId.CreateNew();
+            var secondSet = SourceSetId.CreateNew();
+            var first = CreateSource(
+                firstSet,
+                "output-first.xml",
+                "<root><header>A</header><record><code>B</code></record></root>");
+            var second = CreateSource(
+                secondSet,
+                "output-second.xml",
+                "<catalog><name>C</name></catalog>");
+            var firstIdentities = await ReadIdentitiesAsync(firstSet, first);
+            var secondIdentities = await ReadIdentitiesAsync(secondSet, second);
+            var header = firstIdentities.Single(identity =>
+                identity.CandidateKind == SourceValueCandidateKind.Element
+                && identity.InformationType == "header");
+            var code = firstIdentities.Single(identity =>
+                identity.CandidateKind == SourceValueCandidateKind.Element
+                && identity.InformationType == "code");
+            var name = secondIdentities.Single(identity =>
+                identity.CandidateKind == SourceValueCandidateKind.Element
+                && identity.InformationType == "name");
+            var firstRoot = new RowFamilyDefinition(
+                new RowFamilyId(firstSet, RowFamilyKind.Root, "/root"),
+                parentRowFamilyId: null);
+            var firstRepeated = new RowFamilyDefinition(
+                new RowFamilyId(firstSet, RowFamilyKind.Repeated, "/root/record"),
+                firstRoot.Id);
+            var secondRoot = new RowFamilyDefinition(
+                new RowFamilyId(secondSet, RowFamilyKind.Root, "/catalog"),
+                parentRowFamilyId: null);
+            var assignments = new Dictionary<DiscoveryInformationIdentity, RowFamilyId>
+            {
+                [header] = firstRoot.Id,
+                [code] = firstRepeated.Id,
+                [name] = secondRoot.Id
+            };
+            var items = new[] { header, code, name }.Select(identity =>
+                new DiscoveryConfigurationItem(
+                    identity,
+                    DiscoveryInformationDisposition.Selected)).ToArray();
+            var firstRootId = OutputSetId.CreateNew();
+            var firstRepeatedId = OutputSetId.CreateNew();
+            var disabledId = OutputSetId.CreateNew();
+            var secondRootId = OutputSetId.CreateNew();
+            var outputPlan = new DiscoveryOutputPlanSnapshot(
+            [
+                new DiscoveryParentOutputPlan(
+                    firstSet,
+                    [
+                        CreateOutputSet(firstRootId, firstSet, firstRoot.Id, "Renamed Root", 1, 1, true),
+                        CreateOutputSet(firstRepeatedId, firstSet, firstRepeated.Id, "Renamed Records", 2, 2, true),
+                        CreateOutputSet(disabledId, firstSet, firstRoot.Id, "Disabled Model", 3, 3, false)
+                    ]),
+                new DiscoveryParentOutputPlan(
+                    secondSet,
+                    [CreateOutputSet(secondRootId, secondSet, secondRoot.Id, "Second Root", 4, 1, true)])
+            ]);
+            var specification = new DatabaseBuildSpecification(
+            [
+                CreateOutputDataset(firstRootId, firstSet, "Renamed Root", 1, first, firstRoot, header, assignments),
+                CreateOutputDataset(firstRepeatedId, firstSet, "Renamed Records", 2, first, firstRepeated, code, assignments),
+                CreateOutputDataset(secondRootId, secondSet, "Second Root", 3, second, secondRoot, name, assignments)
+            ]);
+            var built = await DatabaseService.BuildAsync(
+                OperationCorrelation.CreateNew(),
+                specification);
+            Assert.IsTrue(built.Accepted, built.Failure?.Description);
+            var extraction = await Repository.ExtractPublishedDatabaseAsync(
+                OperationCorrelation.CreateNew(),
+                built.PublishedGeneration!);
+            var routing = new ExportRoutingConfigurationPresentation();
+            routing.Synchronize(built.PublishedGeneration!);
+            routing.GetSet(firstRootId).WorksheetName = "Custom Root";
+            routing.GetSet(firstRepeatedId).WorksheetName = "Custom Records";
+            routing.GetSet(secondRootId).WorksheetName = "Custom Second";
+            routing.GetSet(secondRootId).IsEnabled = false;
+            var recordsWorkbook = routing.CreateWorkbookFor(firstRepeatedId);
+            recordsWorkbook.FileName = "Custom Records.xlsx";
+            var exportConfiguration = routing.Capture();
+            var discovery = new DiscoveryConfigurationSnapshot(
+                items,
+                [
+                    new SourceSetDiscoveryConfiguration(
+                        firstSet,
+                        RepeatedDataLayout.AlignRepeatedGroupsByPosition),
+                    new SourceSetDiscoveryConfiguration(
+                        secondSet,
+                        RepeatedDataLayout.AlignRepeatedGroupsByPosition)
+                ]);
+            var snapshot = new WorkingStateSnapshot(
+                Guid.CreateVersion7(),
+                DateTimeOffset.UtcNow,
+                built.PublishedGeneration,
+                extraction,
+                exportConfiguration,
+                [
+                    new WorkingStateSourceSet(firstSet, "First parent", 1),
+                    new WorkingStateSourceSet(secondSet, "Second parent", 2)
+                ],
+                secondSet,
+                [first, second],
+                discovery,
+                databaseTagOverrides: [],
+                outputPlan);
+            return new PublishedState(built.PublishedGeneration!, snapshot);
+        }
+
+        private static DiscoveryOutputSetDefinition CreateOutputSet(
+            OutputSetId outputSetId,
+            SourceSetId parentSourceSetId,
+            RowFamilyId rowFamilyId,
+            string name,
+            int setNumber,
+            int modelOrder,
+            bool isEnabled) =>
+            new(
+                outputSetId,
+                parentSourceSetId,
+                new DiscoveryOutputModelKey($"model-{modelOrder}"),
+                name,
+                setNumber,
+                modelOrder,
+                isEnabled,
+                [rowFamilyId]);
+
+        private static DatabaseDatasetBuildSpecification CreateOutputDataset(
+            OutputSetId outputSetId,
+            SourceSetId parentSourceSetId,
+            string displayName,
+            int ordinal,
+            LoadedSourceContract source,
+            RowFamilyDefinition family,
+            DiscoveryInformationIdentity identity,
+            IReadOnlyDictionary<DiscoveryInformationIdentity, RowFamilyId> assignments) =>
+            new(
+                outputSetId,
+                parentSourceSetId,
+                displayName,
+                ordinal,
+                RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+                [source],
+                [family],
+                DatabaseTagMapper.CreateFieldMappings(
+                    parentSourceSetId,
+                    [new DiscoveryConfigurationItem(
+                        identity,
+                        DiscoveryInformationDisposition.Selected)],
+                    new Dictionary<DiscoveryInformationIdentity, string>(),
+                    assignments));
 
         public async Task<PublishedState> CreatePublishedStateAsync()
         {

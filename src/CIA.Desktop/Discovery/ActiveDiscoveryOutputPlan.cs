@@ -37,6 +37,29 @@ public sealed class ActiveDiscoveryOutputPlan
         }
     }
 
+    public void Restore(DiscoveryOutputPlanSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        lock (_stateGate)
+        {
+            _parentSourceSetOrder = snapshot.ParentPlans
+                .Select(plan => plan.ParentSourceSetId)
+                .ToArray();
+            _outputSets = snapshot.OutputSets
+                .OrderBy(outputSet => outputSet.SetNumber)
+                .ToArray();
+        }
+    }
+
+    public void Reset()
+    {
+        lock (_stateGate)
+        {
+            _parentSourceSetOrder = [];
+            _outputSets = [];
+        }
+    }
+
     public void Synchronize(
         IEnumerable<DiscoveryOutputModelProposal> proposals,
         int highestExistingSetNumber)
