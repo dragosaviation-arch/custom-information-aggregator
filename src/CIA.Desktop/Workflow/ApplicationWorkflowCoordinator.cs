@@ -126,6 +126,15 @@ public sealed class ApplicationWorkflowCoordinator :
     public WorkflowCommandResult RecordWorkingStateRestored(
         bool hasValidSourceSelection,
         bool hasPublishedDatabase)
+        => RecordWorkingStateRestored(
+            hasValidSourceSelection,
+            hasPublishedDatabase,
+            hasPublishedExtraction: false);
+
+    public WorkflowCommandResult RecordWorkingStateRestored(
+        bool hasValidSourceSelection,
+        bool hasPublishedDatabase,
+        bool hasPublishedExtraction)
     {
         WorkflowStateSnapshot changedState;
         lock (_stateGate)
@@ -144,7 +153,9 @@ public sealed class ApplicationWorkflowCoordinator :
                 Database = hasPublishedDatabase
                     ? WorkflowArtifactStatus.Current
                     : WorkflowArtifactStatus.Unavailable,
-                Extraction = WorkflowArtifactStatus.Unavailable
+                Extraction = hasPublishedExtraction
+                    ? WorkflowArtifactStatus.Current
+                    : WorkflowArtifactStatus.Unavailable
             };
             changedState = _current;
         }

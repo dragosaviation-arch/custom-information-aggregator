@@ -51,6 +51,9 @@ public static class IpcContractValidator
             case GetDiscoveryOccurrenceCommand command:
                 ValidateGetDiscoveryOccurrenceCommand(command);
                 break;
+            case GetDiscoveryOutputPreviewCommand command:
+                ValidateGetDiscoveryOutputPreviewCommand(command);
+                break;
             case GetDiscoveryContributorsCommand command:
                 ValidateGetDiscoveryContributorsCommand(command);
                 break;
@@ -94,6 +97,9 @@ public static class IpcContractValidator
                 break;
             case GetDiscoveryOccurrenceResponse response:
                 ValidateGetDiscoveryOccurrenceResponse(response);
+                break;
+            case GetDiscoveryOutputPreviewResponse response:
+                ValidateGetDiscoveryOutputPreviewResponse(response);
                 break;
             case GetDiscoveryContributorsResponse response:
                 ValidateGetDiscoveryContributorsResponse(response);
@@ -426,13 +432,22 @@ public static class IpcContractValidator
             throw InvalidContract("A Database build command requires Source Set datasets.");
         }
 
-        var sourceIds = new HashSet<SourceId>();
+        var sourceOwners = new Dictionary<SourceId, SourceSetId>();
+        var parentBoundaries = new Dictionary<SourceSetId, SourceId[]>();
         foreach (var dataset in command.Specification.Datasets)
         {
-            if (dataset is null || dataset.Fields.Count == 0 || dataset.Sources.Count == 0)
+            if (dataset is null || dataset.Fields.Count == 0 || dataset.Sources.Count == 0
+                || dataset.RowFamilies.Count == 0)
             {
                 throw InvalidContract("A Database dataset requires fields and sources.");
             }
+            var familyIds = dataset.RowFamilies.Select(family => family.Id).ToHashSet();
+            if (dataset.RowFamilies.Any(family => family.Id.SourceSetId != dataset.SourceSetId)
+                || dataset.Fields.Any(field => !familyIds.Contains(field.RowFamilyId)))
+            {
+                throw InvalidContract("Database fields must reference a typed Row Family in their dataset.");
+            }
+            var datasetSourceIds = new HashSet<SourceId>();
             foreach (var source in dataset.Sources)
             {
                 ValidateLoadedSource(source);
@@ -440,12 +455,24 @@ public static class IpcContractValidator
                     || source.Status != LoadedSourceStatus.Ready
                     || source.Kind != LoadedSourceKind.XmlFile
                     || source.SourceSetId != dataset.SourceSetId
-                    || !sourceIds.Add(source.SourceId))
+                    || !datasetSourceIds.Add(source.SourceId)
+                    || (sourceOwners.TryGetValue(source.SourceId, out var owner)
+                        && owner != dataset.SourceSetId))
                 {
                     throw InvalidContract(
-                        "Database build sources must be unique, included, ready XML sources in their dataset.");
+                        "Database build sources must be parent-isolated, included, ready XML sources.");
                 }
+                sourceOwners[source.SourceId] = dataset.SourceSetId;
             }
+
+            var boundary = dataset.Sources.Select(source => source.SourceId).ToArray();
+            if (parentBoundaries.TryGetValue(dataset.SourceSetId, out var captured)
+                && !boundary.SequenceEqual(captured))
+            {
+                throw InvalidContract(
+                    "Sibling Database Output Sets must share one captured parent source boundary.");
+            }
+            parentBoundaries[dataset.SourceSetId] = boundary;
         }
     }
 
@@ -458,6 +485,15 @@ public static class IpcContractValidator
         }
         ValidateOperationId(command.Query.GenerationId, "Database review requests");
         ValidateDatabaseReviewRange(command.Query.StartRowOrdinal, command.Query.RowCount);
+        if (command.Query.OutputSetId is { } outputSetId && outputSetId.Value == Guid.Empty)
+        {
+            throw InvalidContract("A Database review Output Set requires an identity.");
+        }
+        if (command.Query.RowFamilyId is not { } familyId
+            || familyId.SourceSetId != command.Query.SourceSetId)
+        {
+            throw InvalidContract("A Database review request requires a Row Family in its Source Set.");
+        }
     }
 
     private static void ValidateDatabaseRowInclusionChange(DatabaseRowInclusionChange? change)
@@ -469,6 +505,15 @@ public static class IpcContractValidator
             throw InvalidContract("A Database row inclusion request requires unique positive row ordinals.");
         }
         ValidateOperationId(change.GenerationId, "Database row inclusion requests");
+        if (change.OutputSetId is { } outputSetId && outputSetId.Value == Guid.Empty)
+        {
+            throw InvalidContract("A Database row inclusion Output Set requires an identity.");
+        }
+        if (change.RowFamilyId is not { } familyId
+            || familyId.SourceSetId != change.SourceSetId)
+        {
+            throw InvalidContract("A Database row inclusion request requires a Row Family in its Source Set.");
+        }
     }
 
     private static void ValidateRunExtractionCommand(RunExtractionCommand command)
@@ -576,6 +621,7 @@ public static class IpcContractValidator
         if (response.Acceptance == CommandAcceptance.Accepted)
         {
             if (response.Failure is not null
+                || response.FamilyCatalog is null
                 || response.Completion.Outcome is not (
                     OperationOutcome.CompletedSuccessfully
                     or OperationOutcome.CompletedWithIssues))
@@ -584,10 +630,13 @@ public static class IpcContractValidator
                     "An accepted Discovery response requires a completed outcome and no failure.");
             }
 
+            ValidateDiscoveryFamilyCatalog(response.FamilyCatalog);
+            ValidateDiscoveryFamilyAssignments(response.Information, response.FamilyCatalog);
             return;
         }
 
         if (response.Information.Count != 0
+            || response.FamilyCatalog is not null
             || response.Failure is null
             || response.Completion.Outcome is not (
                 OperationOutcome.Failed
@@ -621,11 +670,75 @@ public static class IpcContractValidator
             }
 
             ValidateDiscoveryInformationIdentity(information.Identity);
+            if ((information.ElementRole is { } elementRole
+                    && !Enum.IsDefined(elementRole))
+                || (information.Identity.CandidateKind == SourceValueCandidateKind.ElementScope
+                    && information.ElementRole != SourceElementRole.Structural))
+            {
+                throw InvalidContract(
+                    "A discovered element role is inconsistent with its identity.");
+            }
+
+            if (information.DetailedSourceCount < 1
+                || information.DetailedSourceCount > information.LogicalSourceCount
+                || information.RowFamilyId is not { } rowFamilyId
+                || rowFamilyId.SourceSetId != information.SourceSetId)
+            {
+                throw InvalidContract(
+                    "Discovered information requires a matching Row Family assignment and source counts.");
+            }
+
             if (!informationIdentities.Add(information.Identity))
             {
                 throw InvalidContract("Discovered information identities must be unique.");
             }
 
+        }
+    }
+
+    private static void ValidateGetDiscoveryOutputPreviewCommand(
+        GetDiscoveryOutputPreviewCommand command)
+    {
+        if (command.Request is null)
+        {
+            throw InvalidContract("A Discovery output preview request is required.");
+        }
+
+        ValidateGetDiscoveryOccurrenceCommand(new GetDiscoveryOccurrenceCommand(
+            command.MessageId,
+            command.TimestampUtc,
+            command.Request.Occurrence));
+        if (command.Request.MaximumRowsPerGroup is < 1
+            or > DiscoveryOutputPreviewLimits.MaximumRowsPerGroup
+            || command.Request.Projection.RowFamilies.Count is < 1
+                or > DiscoveryOutputPreviewLimits.MaximumGroups
+            || command.Request.Projection.Fields.Count == 0)
+        {
+            throw InvalidContract("A Discovery output preview request exceeds its bounded limits.");
+        }
+    }
+
+    private static void ValidateDiscoveryFamilyCatalog(DiscoveryFamilyCatalog catalog)
+    {
+        var ids = catalog.Families.Select(family => family.Id).ToHashSet();
+        if (ids.Count != catalog.Families.Count
+            || catalog.Families.Any(family => family.ParentRowFamilyId is { } parent
+                && !ids.Contains(parent)))
+        {
+            throw InvalidContract("A Discovery family catalog is inconsistent.");
+        }
+    }
+
+    private static void ValidateDiscoveryFamilyAssignments(
+        IReadOnlyList<DiscoveredInformation> information,
+        DiscoveryFamilyCatalog catalog)
+    {
+        var ids = catalog.Families.Select(family => family.Id).ToHashSet();
+        if (information.Any(item => item.RowFamilyId is not { } familyId
+                || !ids.Contains(familyId)))
+        {
+            throw InvalidContract(
+                "A discovered information item references an unknown Row Family.");
         }
     }
 
@@ -660,6 +773,55 @@ public static class IpcContractValidator
         }
 
         ValidateFailure(response.Failure);
+    }
+
+    private static void ValidateGetDiscoveryOutputPreviewResponse(
+        GetDiscoveryOutputPreviewResponse response)
+    {
+        ValidateVersionSevenId(response.CommandMessageId, nameof(response.CommandMessageId));
+        ValidateOperationId(response.DiscoveryOperationId, "Discovery output preview responses");
+        if (!Enum.IsDefined(response.Acceptance))
+        {
+            throw InvalidContract(
+                "The Discovery output preview response has an unsupported acceptance value.");
+        }
+
+        if (response.Acceptance == CommandAcceptance.Rejected)
+        {
+            if (response.Preview is not null || response.Failure is null)
+            {
+                throw InvalidContract(
+                    "A rejected Discovery output preview requires controlled failure information.");
+            }
+
+            ValidateFailure(response.Failure);
+            return;
+        }
+
+        var preview = response.Preview;
+        if (preview is null
+            || response.Failure is not null
+            || preview.DiscoveryOperationId != response.DiscoveryOperationId
+            || preview.OccurrenceOrdinal < 1
+            || !SourceId.IsValid(preview.SourceId.Value)
+            || string.IsNullOrWhiteSpace(preview.SourceName)
+            || preview.Groups.Count > DiscoveryOutputPreviewLimits.MaximumGroups)
+        {
+            throw InvalidContract("An accepted Discovery output preview is invalid.");
+        }
+
+        foreach (var group in preview.Groups)
+        {
+            if (group.Columns.Count > DiscoveryOutputPreviewLimits.MaximumColumnsPerGroup
+                || group.Rows.Count > DiscoveryOutputPreviewLimits.MaximumRowsPerGroup
+                || group.Columns.Any(column => column.Identity.RowFamilyId != group.RowFamilyId)
+                || group.Rows.Any(row => row.RecordIdentity.RowFamilyId != group.RowFamilyId
+                    || row.Cells.Any(cell => cell.ColumnIdentity.RowFamilyId != group.RowFamilyId
+                        || cell.Values.Count > DiscoveryOutputPreviewLimits.MaximumValuesPerCell)))
+            {
+                throw InvalidContract("A Discovery output preview group exceeds its bounded contract.");
+            }
+        }
     }
 
     private static void ValidateGetDiscoveryContributorsResponse(

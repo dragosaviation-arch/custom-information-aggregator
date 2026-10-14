@@ -4,6 +4,7 @@ using System.IO.Compression;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Extraction;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -126,9 +127,11 @@ public sealed class ProcessingHostLifecycleTests
         var discovery = await fixture.Supervisor.RequestDiscoveryAsync(
             correlation,
             load.Sources);
+        var identifier = discovery.Information.Single(item =>
+            item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope);
         var lookup = new DiscoveryOccurrenceLookup(
             correlation.OperationId,
-            [discovery.Information.Single().Identity],
+            [identifier.Identity],
             GlobalOrdinal: 2,
             TotalOccurrenceCount: 2);
 
@@ -144,7 +147,7 @@ public sealed class ProcessingHostLifecycleTests
         var contributors = await fixture.Supervisor.RequestDiscoveryContributorsAsync(
             new DiscoveryContributorPageQuery(
                 correlation.OperationId,
-                [discovery.Information.Single().Identity],
+                [identifier.Identity],
                 StartIndex: 0,
                 PageSize: DiscoveryContributorPaging.DefaultPageSize,
                 ExpectedSourceCount: 1));
@@ -415,6 +418,111 @@ public sealed class ProcessingHostLifecycleTests
             timeout.Token);
         await host.StopAsync(timeout.Token);
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+    }
+
+    [TestMethod]
+    public async Task RealProcessingHostAcceptsDatabaseBuildWithNestedRepeatedFamilyParents()
+    {
+        await using var fixture = new SupervisorFixture();
+        var sourcePath = Path.Combine(fixture.WorkDirectory, "nested-families.xml");
+        await File.WriteAllTextAsync(sourcePath, """
+            <book>
+              <title>Root Book</title>
+              <authors><author><name>Root Author</name></author></authors>
+              <similar_books>
+                <book>
+                  <title>Similar Book</title>
+                  <authors><author><name>Similar Author</name></author></authors>
+                </book>
+              </similar_books>
+            </book>
+            """);
+        await fixture.Supervisor.EnsureAvailableAsync();
+        var sourceSetId = SourceSetId.CreateNew();
+        var load = await fixture.Supervisor.RequestSourceLoadAsync(
+            SourceSelectionKind.XmlFile,
+            sourcePath,
+            SourceLoadSettings.Default,
+            sourceSetId,
+            progress: null);
+        var source = load.Sources.Single();
+        var interpretation = await new SourceInterpreter(
+                [],
+                new GenericXmlElementValueSourceAdapter(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<SourceInterpreter>.Instance)
+            .InterpretAsync(source);
+        Assert.IsNotNull(interpretation.Source);
+        var selectedPaths = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "/book/title",
+            "/book/authors/author/name",
+            "/book/similar_books/book/title",
+            "/book/similar_books/book/authors/author/name"
+        };
+        var identities = interpretation.Source.Values
+            .Where(value => value.Lineage is not null
+                && selectedPaths.Contains(value.Lineage.StructuralPath))
+            .Select(value => HierarchySourceOccurrence.FromInterpretedValue(
+                sourceSetId,
+                value).Identity)
+            .Distinct()
+            .ToArray();
+        Assert.HasCount(selectedPaths.Count, identities);
+        var root = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/book"),
+            parentRowFamilyId: null);
+        var authors = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, "/book/authors/author"),
+            root.Id);
+        var similarBooks = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, "/book/similar_books/book"),
+            root.Id);
+        var similarAuthors = new RowFamilyDefinition(
+            new RowFamilyId(
+                sourceSetId,
+                RowFamilyKind.Repeated,
+                "/book/similar_books/book/authors/author"),
+            similarBooks.Id);
+        RowFamilyDefinition[] families = [root, authors, similarBooks, similarAuthors];
+        var assignments = identities.ToDictionary(
+            identity => identity,
+            identity => families
+                .Where(family => identity.StructuralPath == family.Id.AnchorPath
+                    || identity.StructuralPath.StartsWith(
+                        family.Id.AnchorPath + "/",
+                        StringComparison.Ordinal))
+                .OrderByDescending(family => family.Id.AnchorPath.Length)
+                .First().Id);
+        var fields = DatabaseTagMapper.CreateFieldMappings(
+            sourceSetId,
+            identities.Select(identity => new DiscoveryConfigurationItem(
+                identity,
+                DiscoveryInformationDisposition.Selected)),
+            new Dictionary<DiscoveryInformationIdentity, string>(),
+            assignments);
+        var specification = new DatabaseBuildSpecification(
+        [
+            new DatabaseDatasetBuildSpecification(
+                sourceSetId,
+                "Nested families",
+                1,
+                RepeatedDataLayout.StructuralRows,
+                [source],
+                families,
+                fields)
+        ]);
+
+        var response = await fixture.Supervisor.RequestDatabaseBuildAsync(
+            OperationCorrelation.CreateNew(),
+            specification);
+
+        Assert.AreEqual(CommandAcceptance.Accepted, response.Acceptance);
+        Assert.AreEqual(
+            OperationOutcome.CompletedSuccessfully,
+            response.Completion.Outcome);
+        Assert.IsNull(response.Failure);
+        Assert.IsNotNull(response.PublishedGeneration);
+        Assert.HasCount(families.Length, response.PublishedGeneration.Datasets.Single().RowFamilies);
     }
 
     [TestMethod]

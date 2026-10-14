@@ -52,7 +52,10 @@ public sealed class ProductionXmlSourceAdapterTests
         Assert.IsTrue(result.Accepted);
         Assert.AreEqual(OperationOutcome.CompletedSuccessfully, result.Completion.Outcome);
         Assert.IsEmpty(result.Issues);
-        Assert.HasCount(2, result.Information);
+        Assert.HasCount(2, result.Information.Where(item =>
+            item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope).ToArray());
+        Assert.HasCount(1, result.Information.Where(item =>
+            item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope).ToArray());
 
         var identifier = result.Information.Single(item => item.InformationType == "identifier");
         Assert.AreEqual("MiXeD-Case-01", identifier.SampleValue);
@@ -83,7 +86,8 @@ public sealed class ProductionXmlSourceAdapterTests
         var service = host.Services.GetRequiredService<DiscoveryService>();
         var correlation = OperationCorrelation.CreateNew();
         var discovery = await service.RunAsync(correlation, [source]);
-        var identifier = discovery.Information.Single();
+        var identifier = discovery.Information.Single(item =>
+            item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope);
 
         var occurrence = await service.GetOccurrenceAsync(new DiscoveryOccurrenceLookup(
             correlation.OperationId,
@@ -121,9 +125,12 @@ public sealed class ProductionXmlSourceAdapterTests
             interpretation.Source?.StructureId);
         Assert.AreEqual(source.SourceId, interpretation.Source?.OriginatingSourceId);
         Assert.IsTrue(discovery.Accepted);
-        Assert.HasCount(1, discovery.Information);
-        Assert.AreEqual("content", discovery.Information[0].SampleValue);
-        Assert.AreEqual(1, discovery.Information[0].LogicalSourceCount);
+        var value = discovery.Information.Single(item =>
+            item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope);
+        Assert.HasCount(1, discovery.Information.Where(item =>
+            item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope).ToArray());
+        Assert.AreEqual("content", value.SampleValue);
+        Assert.AreEqual(1, value.LogicalSourceCount);
     }
 
     [TestMethod]
@@ -143,10 +150,13 @@ public sealed class ProductionXmlSourceAdapterTests
         var result = await service.RunAsync(OperationCorrelation.CreateNew(), [source]);
 
         Assert.IsTrue(result.Accepted);
-        Assert.HasCount(1, result.Information);
-        Assert.AreEqual("stockCode", result.Information[0].InformationType);
-        Assert.AreEqual("STOCK-01", result.Information[0].SampleValue);
-        Assert.AreEqual(1, result.Information[0].LogicalSourceCount);
+        var stockCode = result.Information.Single(item =>
+            item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope);
+        Assert.HasCount(1, result.Information.Where(item =>
+            item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope).ToArray());
+        Assert.AreEqual("stockCode", stockCode.InformationType);
+        Assert.AreEqual("STOCK-01", stockCode.SampleValue);
+        Assert.AreEqual(1, stockCode.LogicalSourceCount);
     }
 
     [TestMethod]

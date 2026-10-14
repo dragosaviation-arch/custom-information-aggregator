@@ -1,9 +1,9 @@
 using CIA.Contracts.Database;
+using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
-using CIA.Core.Database;
-using CIA.Core.Hierarchy;
 using CIA.ProcessingHost.Operations;
 using CIA.ProcessingHost.Repository;
 using CIA.ProcessingHost.SourceInterpretation;
@@ -14,11 +14,26 @@ namespace CIA.ProcessingHost.Database;
 public sealed class DatabaseGenerationService(
     StructuredInformationRepository repository,
     ISourceInterpreter sourceInterpreter,
-    IHierarchyFlatteningEngine hierarchyFlattening,
+    DatabaseSourceProjectionService sourceProjection,
     CooperativeOperationCancellation operationCancellation,
     ILogger<DatabaseGenerationService> logger)
 {
     private const string PublicationItemId = "database-publication";
+
+    public DatabaseGenerationService(
+        StructuredInformationRepository repository,
+        ISourceInterpreter sourceInterpreter,
+        CIA.Core.Hierarchy.IHierarchyFlatteningEngine hierarchyFlattening,
+        CooperativeOperationCancellation operationCancellation,
+        ILogger<DatabaseGenerationService> logger)
+        : this(
+            repository,
+            sourceInterpreter,
+            new DatabaseSourceProjectionService(hierarchyFlattening),
+            operationCancellation,
+            logger)
+    {
+    }
 
     public async Task<DatabaseGenerationHostResult> BuildAsync(
         OperationCorrelation correlation,
@@ -28,7 +43,16 @@ public sealed class DatabaseGenerationService(
     {
         ArgumentNullException.ThrowIfNull(correlation);
         ArgumentNullException.ThrowIfNull(specification);
-        var sources = specification.Datasets.SelectMany(dataset => dataset.Sources).ToArray();
+        var parentDatasets = specification.Datasets
+            .GroupBy(dataset => dataset.ParentSourceSetId)
+            .Select(group => new
+            {
+                ParentSourceSetId = group.Key,
+                Datasets = group.OrderBy(dataset => dataset.Ordinal).ToArray(),
+                Sources = group.First().Sources
+            })
+            .ToArray();
+        var sources = parentDatasets.SelectMany(parent => parent.Sources).ToArray();
         var plans = sources.Select(source => new ProcessingItemPlan(source.SourceId.ToString()))
             .Append(new ProcessingItemPlan(PublicationItemId)).ToArray();
         var operation = operationCancellation.BeginOperation(
@@ -46,10 +70,9 @@ public sealed class DatabaseGenerationService(
             candidate = await repository.CreateDatabaseCandidateAsync(
                 correlation, specification, cancellationToken).ConfigureAwait(false);
 
-            foreach (var dataset in specification.Datasets)
+            foreach (var parent in parentDatasets)
             {
-                var selectedIdentities = dataset.Fields.SelectMany(field => field.DetailedIdentities).ToArray();
-                foreach (var source in dataset.Sources)
+                foreach (var source in parent.Sources)
                 {
                     if (!operation.TryStartItem(source.SourceId.ToString(), out var execution))
                     {
@@ -76,24 +99,32 @@ public sealed class DatabaseGenerationService(
                                 continue;
                             }
 
-                            var input = HierarchySourceInput.FromInterpretedSource(
-                                dataset.SourceSetId, interpretation.Source, selectedIdentities);
-                            var flattened = await hierarchyFlattening.FlattenAsync(
-                                new HierarchyFlatteningRequest(
-                                    dataset.SourceSetId, dataset.RepeatedDataLayout, [input]),
-                                sourceCancellation.Token).ConfigureAwait(false);
-                            if (flattened.Rows.Any(row => row.SourceId != source.SourceId))
+                            foreach (var dataset in parent.Datasets)
                             {
-                                throw new InvalidOperationException(
-                                    "Hierarchy flattening returned rows outside the source boundary.");
+                                var projection = await sourceProjection.ProjectAsync(
+                                    dataset,
+                                    source,
+                                    interpretation.Source,
+                                    cancellationToken: sourceCancellation.Token).ConfigureAwait(false);
+                                if (dataset.OutputSetId is { } outputSetId)
+                                {
+                                    await repository.WriteOutputSetDatabaseCandidateSourceAsync(
+                                        candidate,
+                                        outputSetId,
+                                        source.SourceId,
+                                        projection.Rows,
+                                        sourceCancellation.Token).ConfigureAwait(false);
+                                }
+                                else
+                                {
+                                    await repository.WriteHierarchyDatabaseCandidateSourceAsync(
+                                        candidate,
+                                        dataset.ParentSourceSetId,
+                                        source.SourceId,
+                                        projection.Rows,
+                                        sourceCancellation.Token).ConfigureAwait(false);
+                                }
                             }
-
-                            var metadata = CreateSourceMetadata(dataset, source);
-                            var rows = flattened.Rows.Select(row => CreateDatabaseRow(
-                                dataset, source, metadata, row)).ToArray();
-                            await repository.WriteHierarchyDatabaseCandidateSourceAsync(
-                                candidate, dataset.SourceSetId, source.SourceId, rows,
-                                sourceCancellation.Token).ConfigureAwait(false);
                             execution.CommitCompletedResult();
                             sourceWorkCompleted = true;
                         }
@@ -241,65 +272,6 @@ public sealed class DatabaseGenerationService(
         {
             // Progress observers cannot alter the Database-build outcome.
         }
-    }
-
-    private static DatabaseReviewRow CreateDatabaseRow(
-        DatabaseDatasetBuildSpecification dataset,
-        LoadedSourceContract source,
-        DatabaseSourceMetadata metadata,
-        FlattenedHierarchyRow row)
-    {
-        var mapped = row.Cells.Select(cell => new
-        {
-            Cell = cell,
-            Mapping = DatabaseTagMapper.FindMapping(dataset.Fields, cell.DetailedIdentity),
-            Coordinates = new DatabaseRepeatCoordinatePath(cell.ColumnIdentity.RepeatCoordinates.Coordinates)
-        })
-            .GroupBy(item => new DatabaseColumnIdentity(
-                dataset.SourceSetId, item.Mapping.FieldKey, item.Coordinates));
-        var cells = mapped.Select(group =>
-        {
-            var values = group.Select(item => new DatabaseReviewValue(
-                item.Cell.Value,
-                item.Cell.DetailedIdentity,
-                item.Cell.SourceId,
-                new DatabaseLineageEvidence(
-                    item.Cell.Lineage.StructuralPath,
-                    item.Cell.Lineage.NodeInstanceId,
-                    item.Cell.Lineage.ParentInstanceId,
-                    item.Cell.Lineage.AncestorInstanceIds,
-                    item.Cell.Lineage.TraversalOrder,
-                    item.Cell.Lineage.ElementPath.Select(element => new DatabaseSourceElementEvidence(
-                        element.LocalName, element.NamespaceUri, element.QualifiedName,
-                        element.InstanceId, element.SiblingPosition)).ToArray()),
-                group.Key.RepeatCoordinates)).ToArray();
-            var conflict = values.Select(value => value.Value)
-                .Distinct(StringComparer.Ordinal).Skip(1).Any();
-            return new DatabaseReviewCell(group.Key, conflict, values);
-        }).ToArray();
-        return new DatabaseReviewRow(
-            row.Ordinal, true, $"{source.SourceId}:{row.Ordinal}", metadata, cells);
-    }
-
-    private static DatabaseSourceMetadata CreateSourceMetadata(
-        DatabaseDatasetBuildSpecification dataset,
-        LoadedSourceContract source)
-    {
-        var fullPath = Path.GetFullPath(source.Path);
-        DateTimeOffset? modifiedUtc = null;
-        try
-        {
-            modifiedUtc = new DateTimeOffset(File.GetLastWriteTimeUtc(fullPath), TimeSpan.Zero);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            modifiedUtc = null;
-        }
-        return new DatabaseSourceMetadata(
-            dataset.SourceSetId, dataset.DisplayName, source.SourceId,
-            Path.GetFileName(fullPath), fullPath, source.Kind,
-            source.ArchiveProvenance?.OriginalArchivePath,
-            source.ArchiveProvenance?.ArchiveMemberPath, modifiedUtc);
     }
 
     private static void FailRemaining(

@@ -19,6 +19,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RefreshSourceCommand), "refreshSourceCommand")]
 [JsonDerivedType(typeof(RunDiscoveryCommand), "runDiscoveryCommand")]
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceCommand), "getDiscoveryOccurrenceCommand")]
+[JsonDerivedType(typeof(GetDiscoveryOutputPreviewCommand), "getDiscoveryOutputPreviewCommand")]
 [JsonDerivedType(typeof(GetDiscoveryContributorsCommand), "getDiscoveryContributorsCommand")]
 [JsonDerivedType(typeof(BuildDatabaseCommand), "buildDatabaseCommand")]
 [JsonDerivedType(typeof(RunExtractionCommand), "runExtractionCommand")]
@@ -33,6 +34,7 @@ namespace CIA.Contracts.Ipc;
 [JsonDerivedType(typeof(RefreshSourceResponse), "refreshSourceResponse")]
 [JsonDerivedType(typeof(RunDiscoveryResponse), "runDiscoveryResponse")]
 [JsonDerivedType(typeof(GetDiscoveryOccurrenceResponse), "getDiscoveryOccurrenceResponse")]
+[JsonDerivedType(typeof(GetDiscoveryOutputPreviewResponse), "getDiscoveryOutputPreviewResponse")]
 [JsonDerivedType(typeof(GetDiscoveryContributorsResponse), "getDiscoveryContributorsResponse")]
 [JsonDerivedType(typeof(BuildDatabaseResponse), "buildDatabaseResponse")]
 [JsonDerivedType(typeof(RunExtractionResponse), "runExtractionResponse")]
@@ -122,6 +124,12 @@ public sealed record GetDiscoveryOccurrenceCommand(
     Guid MessageId,
     DateTimeOffset TimestampUtc,
     DiscoveryOccurrenceLookup Lookup)
+    : IpcCommand(MessageId, TimestampUtc);
+
+public sealed record GetDiscoveryOutputPreviewCommand(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    DiscoveryOutputPreviewRequest Request)
     : IpcCommand(MessageId, TimestampUtc);
 
 public sealed record GetDiscoveryContributorsCommand(
@@ -236,7 +244,10 @@ public sealed record RunDiscoveryResponse(
     IReadOnlyList<DiscoveredInformation> Information,
     IReadOnlyList<DiscoverySourceIssue> Issues,
     IpcFailure? Failure)
-    : IpcResponse(MessageId, TimestampUtc);
+    : IpcResponse(MessageId, TimestampUtc)
+{
+    public DiscoveryFamilyCatalog? FamilyCatalog { get; init; }
+}
 
 public sealed record GetDiscoveryOccurrenceResponse(
     Guid MessageId,
@@ -245,6 +256,16 @@ public sealed record GetDiscoveryOccurrenceResponse(
     OperationId DiscoveryOperationId,
     CommandAcceptance Acceptance,
     DiscoveredOccurrence? Occurrence,
+    IpcFailure? Failure)
+    : IpcResponse(MessageId, TimestampUtc);
+
+public sealed record GetDiscoveryOutputPreviewResponse(
+    Guid MessageId,
+    DateTimeOffset TimestampUtc,
+    Guid CommandMessageId,
+    OperationId DiscoveryOperationId,
+    CommandAcceptance Acceptance,
+    DiscoveryOutputPreview? Preview,
     IpcFailure? Failure)
     : IpcResponse(MessageId, TimestampUtc);
 

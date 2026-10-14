@@ -1,6 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
+using CIA.Contracts.Database;
+using CIA.Contracts.Discovery;
 using CIA.Contracts.Operations;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Sources;
 
 namespace CIA.Contracts.Export;
@@ -102,7 +105,27 @@ public sealed record WorkbookPublicationPlan
 
 public sealed record WorkbookExportWorksheetSummary
 {
-    [JsonConstructor]
+    public WorkbookExportWorksheetSummary(
+        WorksheetDefinitionId worksheetDefinitionId,
+        OutputSetId outputSetId,
+        SourceSetId parentSourceSetId,
+        RowFamilyId rowFamilyId,
+        string name,
+        int order,
+        int rowCount,
+        int columnCount)
+        : this(
+            worksheetDefinitionId,
+            parentSourceSetId,
+            rowFamilyId,
+            name,
+            order,
+            rowCount,
+            columnCount,
+            outputSetId)
+    {
+    }
+
     public WorkbookExportWorksheetSummary(
         WorksheetDefinitionId worksheetDefinitionId,
         SourceSetId sourceSetId,
@@ -110,12 +133,47 @@ public sealed record WorkbookExportWorksheetSummary
         int order,
         int rowCount,
         int columnCount)
+        : this(
+            worksheetDefinitionId,
+            sourceSetId,
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/legacy"),
+            name,
+            order,
+            rowCount,
+            columnCount)
+    {
+    }
+
+    [JsonConstructor]
+    public WorkbookExportWorksheetSummary(
+        WorksheetDefinitionId worksheetDefinitionId,
+        SourceSetId sourceSetId,
+        RowFamilyId rowFamilyId,
+        string name,
+        int order,
+        int rowCount,
+        int columnCount,
+        OutputSetId? outputSetId = null)
     {
         if (!WorksheetDefinitionId.IsValid(worksheetDefinitionId.Value)
             || !SourceSetId.IsValid(sourceSetId.Value))
         {
             throw new ArgumentException(
                 "An exported worksheet requires stable worksheet and Source Set identities.");
+        }
+
+        if (rowFamilyId.SourceSetId != sourceSetId)
+        {
+            throw new ArgumentException(
+                "An exported worksheet Row Family must belong to its Source Set.",
+                nameof(rowFamilyId));
+        }
+
+        if (outputSetId is { } id && id.Value == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "An exported Output Set worksheet requires an identity.",
+                nameof(outputSetId));
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -129,6 +187,8 @@ public sealed record WorkbookExportWorksheetSummary
 
         WorksheetDefinitionId = worksheetDefinitionId;
         SourceSetId = sourceSetId;
+        OutputSetId = outputSetId;
+        RowFamilyId = rowFamilyId;
         Name = name;
         Order = order;
         RowCount = rowCount;
@@ -137,6 +197,10 @@ public sealed record WorkbookExportWorksheetSummary
 
     public WorksheetDefinitionId WorksheetDefinitionId { get; }
     public SourceSetId SourceSetId { get; }
+    public OutputSetId? OutputSetId { get; }
+    [JsonIgnore]
+    public SourceSetId ParentSourceSetId => SourceSetId;
+    public RowFamilyId RowFamilyId { get; }
     public string Name { get; }
     public int Order { get; }
     public int RowCount { get; }

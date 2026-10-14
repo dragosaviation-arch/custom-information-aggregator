@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<book>
+  <title>Root Book</title>
+  <similar_books>
+    <book>
+      <title>Similar A</title>
+      <authors>
+        <author><name>Author A1</name></author>
+        <author><name>Author A2</name></author>
+      </authors>
+    </book>
+    <book>
+      <title>Similar B</title>
+      <authors>
+        <author><name>Author B1</name></author>
+      </authors>
+    </book>
+  </similar_books>
+</book>

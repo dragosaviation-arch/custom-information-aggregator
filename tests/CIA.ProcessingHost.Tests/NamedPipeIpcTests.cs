@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -157,6 +158,7 @@ public sealed class NamedPipeIpcTests
             new DatabaseReviewQuery(
                 correlation.OperationId,
                 sourceSetId,
+                datasetSummary.RowFamilies.Single().Id,
                 startRowOrdinal: 1,
                 rowCount: DatabaseReviewLimits.MaximumRowsPerPage,
                 searchText: null,
@@ -210,8 +212,118 @@ public sealed class NamedPipeIpcTests
         Assert.IsTrue(responseResult.PublishedGeneration?.IsHierarchyAware);
         Assert.AreEqual(correlation.OperationId, reviewCommandResult.GenerationId);
         Assert.AreEqual(sourceSetId, reviewCommandResult.Query.SourceSetId);
+        Assert.AreEqual(
+            datasetSummary.RowFamilies.Single().Id,
+            reviewCommandResult.Query.RowFamilyId);
         Assert.AreEqual(DatabaseReviewLimits.MaximumRowsPerPage, reviewCommandResult.RowCount);
         Assert.AreEqual(sourceSetId, reviewResponseResult.Page?.Dataset.SourceSetId);
+    }
+
+    [TestMethod]
+    [TestCategory("Spr213RecoveryC1")]
+    public async Task DatabaseBuildCommandRoundTripPreservesRepeatedFamilyParents()
+    {
+        var sourceSetId = SourceSetId.CreateNew();
+        var outputSetId = OutputSetId.CreateNew();
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            sourceSetId,
+            Path.GetFullPath("hierarchy-source.xml"),
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
+        var root = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/book"),
+            parentRowFamilyId: null);
+        var authors = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, "/book/authors/author"),
+            root.Id);
+        var similarBooks = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, "/book/similar_books/book"),
+            root.Id);
+        var similarAuthors = new RowFamilyDefinition(
+            new RowFamilyId(
+                sourceSetId,
+                RowFamilyKind.Repeated,
+                "/book/similar_books/book/authors/author"),
+            similarBooks.Id);
+        RowFamilyDefinition[] families = [root, authors, similarBooks, similarAuthors];
+        var fields = families.Select((family, index) =>
+        {
+            var informationType = $"field-{index + 1}";
+            var path = $"{family.Id.AnchorPath}/{informationType}";
+            var identity = new DiscoveryInformationIdentity(
+                sourceSetId,
+                path,
+                informationType,
+                SourceValueCandidateKind.Element,
+                path);
+            return new DatabaseFieldMapping(
+                family.Id,
+                $"Field {index + 1}",
+                isExplicitOverride: false,
+                [identity]);
+        }).ToArray();
+        var command = new BuildDatabaseCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            OperationCorrelation.CreateNew(),
+            new DatabaseBuildSpecification(
+            [
+                new DatabaseDatasetBuildSpecification(
+                    outputSetId,
+                    sourceSetId,
+                    "Set 1",
+                    1,
+                    RepeatedDataLayout.StructuralRows,
+                    [source],
+                    families,
+                    fields)
+            ]));
+        var reviewCommand = new GetDatabaseReviewPageCommand(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            new DatabaseReviewQuery(
+                command.Correlation.OperationId,
+                outputSetId,
+                sourceSetId,
+                authors.Id,
+                1,
+                DatabaseReviewLimits.MaximumRowsPerPage,
+                null,
+                DatabaseRowInclusionFilter.All));
+        await using var stream = new MemoryStream();
+
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, command);
+        await LengthPrefixedJsonMessageFramer.WriteAsync(stream, reviewCommand);
+        stream.Position = 0;
+        var roundTripped = Assert.IsInstanceOfType<BuildDatabaseCommand>(
+            await LengthPrefixedJsonMessageFramer.ReadAsync(stream));
+        var roundTrippedReview = Assert.IsInstanceOfType<GetDatabaseReviewPageCommand>(
+            await LengthPrefixedJsonMessageFramer.ReadAsync(stream));
+
+        var dataset = roundTripped.Specification.Datasets.Single();
+        Assert.AreEqual(outputSetId, dataset.OutputSetId);
+        Assert.AreEqual(sourceSetId, dataset.ParentSourceSetId);
+        var roundTrippedFamilies = dataset.RowFamilies.ToDictionary(family => family.Id);
+        Assert.HasCount(families.Length, roundTrippedFamilies);
+        Assert.IsNull(roundTrippedFamilies[root.Id].ParentRowFamilyId);
+        Assert.AreEqual(root.Id, roundTrippedFamilies[authors.Id].ParentRowFamilyId);
+        Assert.AreEqual(root.Id, roundTrippedFamilies[similarBooks.Id].ParentRowFamilyId);
+        Assert.AreEqual(similarBooks.Id, roundTrippedFamilies[similarAuthors.Id].ParentRowFamilyId);
+        CollectionAssert.AreEqual(
+            families.Select(family => family.Id).ToArray(),
+            dataset.RowFamilies.Select(family => family.Id).ToArray());
+        CollectionAssert.AreEqual(
+            fields.Select(FieldSignature).ToArray(),
+            dataset.Fields.Select(FieldSignature).ToArray());
+        Assert.AreEqual(outputSetId, roundTrippedReview.Query.OutputSetId);
+        Assert.AreEqual(sourceSetId, roundTrippedReview.Query.SourceSetId);
+        Assert.AreEqual(authors.Id, roundTrippedReview.Query.RowFamilyId);
+
+        static string FieldSignature(DatabaseFieldMapping field) =>
+            $"{field.RowFamilyId}|{field.EffectiveName}|{field.IsExplicitOverride}|" +
+            string.Join('|', field.DetailedIdentities);
     }
 
     [TestMethod]
@@ -658,6 +770,8 @@ public sealed class NamedPipeIpcTests
             correlation,
             sourceIds.Select(sourceId => OperationItemStatus.ProcessedSuccessfully(
                 sourceId.ToString())));
+        var sourceSetId = SourceSetId.CreateNew();
+        var familyId = new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/TagRoot");
         var response = new RunDiscoveryResponse(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
@@ -666,13 +780,24 @@ public sealed class NamedPipeIpcTests
             completion,
             Enumerable.Range(0, observedInformationTypeCount)
                 .Select(index => new DiscoveredInformation(
-                    $"Tag{index:D2}",
+                    new DiscoveryInformationIdentity(
+                        sourceSetId,
+                        $"/TagRoot/Tag{index:D2}",
+                        $"Tag{index:D2}"),
                     observedSourceCount,
                     observedSourceCount,
-                    "sample"))
+                    "sample")
+                {
+                    DetailedSourceCount = observedSourceCount,
+                    RowFamilyId = familyId
+                })
                 .ToArray(),
             [],
-            Failure: null);
+            Failure: null)
+        {
+            FamilyCatalog = new DiscoveryFamilyCatalog(
+                [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+        };
         await using var stream = new MemoryStream();
 
         await LengthPrefixedJsonMessageFramer.WriteAsync(stream, response);
@@ -917,6 +1042,7 @@ public sealed class NamedPipeIpcTests
         var sourceIds = Enumerable.Range(0, sourceCount)
             .Select(_ => SourceId.CreateNew())
             .ToArray();
+        var familyId = new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/book");
         var information = Enumerable.Range(0, detailedInformationIdentityCount)
             .Select(index => new DiscoveredInformation(
                 new DiscoveryInformationIdentity(
@@ -925,7 +1051,11 @@ public sealed class NamedPipeIpcTests
                     $"tag-{index % logicalInformationTypeCount:D2}"),
                 sourceCount,
                 sourceCount,
-                "sample"))
+                "sample")
+            {
+                DetailedSourceCount = sourceCount,
+                RowFamilyId = familyId
+            })
             .ToArray();
         var response = new RunDiscoveryResponse(
             Guid.CreateVersion7(),
@@ -938,7 +1068,11 @@ public sealed class NamedPipeIpcTests
                     sourceId.ToString()))),
             information,
             [],
-            Failure: null);
+            Failure: null)
+        {
+            FamilyCatalog = new DiscoveryFamilyCatalog(
+                [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+        };
         return new DiscoveryScaleFixture(response, information);
     }
 

@@ -74,6 +74,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<ISourcePathPicker, WindowsSourcePathPicker>();
         builder.Services.AddSingleton<IDiscoveryClient, ProcessingHostDiscoveryClient>();
         builder.Services.AddSingleton<ActiveDiscoveryConfiguration>();
+        builder.Services.AddSingleton<ActiveDiscoveryOutputPlan>();
         builder.Services.AddSingleton<ProfileStorePublicationGate>();
         builder.Services.AddSingleton<ProfileArtifactStore>();
         builder.Services.AddSingleton<DefaultBlacklistProfileDesignationStore>();
@@ -99,6 +100,7 @@ public static class DesktopApplicationHost
         builder.Services.AddSingleton<IWorkbookExportClient, ProcessingHostWorkbookExportClient>();
         builder.Services.AddSingleton<WorkbookExportCoordinator>();
         builder.Services.AddSingleton<IWorkingStateClient, ProcessingHostWorkingStateClient>();
+        builder.Services.AddSingleton<ExportRoutingConfigurationPresentation>();
         builder.Services.AddSingleton<WorkingStateCoordinator>();
         builder.Services.AddSingleton<IWorkingStateCoordinator>(
             services => services.GetRequiredService<WorkingStateCoordinator>());

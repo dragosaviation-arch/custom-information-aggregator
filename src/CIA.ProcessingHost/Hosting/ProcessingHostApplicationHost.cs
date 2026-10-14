@@ -58,10 +58,12 @@ public static class ProcessingHostApplicationHost
         builder.Services.AddSingleton<DiscoveryService>();
         builder.Services.AddSingleton<StructuredInformationRepository>();
         builder.Services.AddSingleton<IHierarchyFlatteningEngine, HierarchyFlatteningEngine>();
+        builder.Services.AddSingleton<DatabaseSourceProjectionService>();
+        builder.Services.AddSingleton<DiscoveryOutputPreviewService>();
         builder.Services.AddSingleton(serviceProvider => new DatabaseGenerationService(
             serviceProvider.GetRequiredService<StructuredInformationRepository>(),
             serviceProvider.GetRequiredService<ISourceInterpreter>(),
-            serviceProvider.GetRequiredService<IHierarchyFlatteningEngine>(),
+            serviceProvider.GetRequiredService<DatabaseSourceProjectionService>(),
             serviceProvider.GetRequiredService<CooperativeOperationCancellation>(),
             serviceProvider.GetRequiredService<ILogger<DatabaseGenerationService>>()));
         builder.Services.AddSingleton<DatabaseReviewService>();

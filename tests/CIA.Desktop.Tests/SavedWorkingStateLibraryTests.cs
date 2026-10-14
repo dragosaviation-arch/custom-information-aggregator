@@ -554,7 +554,7 @@ public sealed class SavedWorkingStateLibraryTests
     }
 
     [TestMethod]
-    public void SettingsViewExposesManagedSavedStateWorkflowWithoutSpr95Actions()
+    public void SettingsViewQuarantinesManagedSavedStateWorkflowAndSpr95Actions()
     {
         var root = FindRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(
@@ -564,12 +564,13 @@ public sealed class SavedWorkingStateLibraryTests
             "Views",
             "SettingsWorkspaceView.xaml"));
 
-        StringAssert.Contains(xaml, "SavedStateNameInput");
-        StringAssert.Contains(xaml, "SavedStatesList");
-        StringAssert.Contains(xaml, "SaveStateCommand");
-        StringAssert.Contains(xaml, "RestoreStateCommand");
-        StringAssert.Contains(xaml, "DeleteStateCommand");
-        StringAssert.Contains(xaml, "DeleteSavedStateConfirmation");
+        Assert.IsFalse(xaml.Contains("SavedStateNameInput", StringComparison.Ordinal));
+        Assert.IsFalse(xaml.Contains("SavedStatesList", StringComparison.Ordinal));
+        Assert.IsFalse(xaml.Contains("SaveStateCommand", StringComparison.Ordinal));
+        Assert.IsFalse(xaml.Contains("RestoreStateCommand", StringComparison.Ordinal));
+        Assert.IsFalse(xaml.Contains("DeleteStateCommand", StringComparison.Ordinal));
+        Assert.IsFalse(xaml.Contains("RefreshSavedStatesCommand", StringComparison.Ordinal));
+        Assert.IsFalse(xaml.Contains("DeleteSavedStateConfirmation", StringComparison.Ordinal));
         Assert.IsFalse(xaml.Contains("Content=\"Relink", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(xaml.Contains("RelinkCommand", StringComparison.OrdinalIgnoreCase));
         Assert.IsFalse(xaml.Contains("Browse for replacement", StringComparison.OrdinalIgnoreCase));

@@ -1,6 +1,8 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Extraction;
+using CIA.Contracts.Export;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Contracts.WorkingState;
@@ -9,6 +11,8 @@ using CIA.Core.Diagnostics;
 using CIA.Core.Runtime;
 using CIA.Desktop.Database;
 using CIA.Desktop.Discovery;
+using CIA.Desktop.Extraction;
+using CIA.Desktop.Export;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
@@ -186,7 +190,7 @@ public sealed class WorkingStateCoordinatorTests
             case "layout":
                 Assert.IsTrue(prepared.Context.Configuration.SetRepeatedDataLayout(
                     prepared.Identity.SourceSetId,
-                    RepeatedDataLayout.StructuralRows));
+                    RepeatedDataLayout.AllCombinations));
                 break;
             default:
                 Assert.Fail($"Unsupported test change {changeKind}.");
@@ -212,10 +216,22 @@ public sealed class WorkingStateCoordinatorTests
             "missing.xml");
         var identity = new DiscoveryInformationIdentity(restoredSet, "/records/code", "code");
         var generation = CreateGeneration(restoredSet, identity);
+        var extraction = new ExtractionResultSummary(
+            OperationId.CreateNew(),
+            generation,
+            generation.Datasets.Select(dataset => new ExtractionDatasetSummary(
+                dataset.SourceSetId,
+                dataset.DisplayName,
+                dataset.Ordinal,
+                dataset.RepeatedDataLayout,
+                dataset.RowCount,
+                dataset.ValueCount,
+                dataset.Columns)).ToArray());
         var snapshot = new WorkingStateSnapshot(
             Guid.CreateVersion7(),
             DateTimeOffset.UtcNow,
             generation,
+            extraction,
             [new WorkingStateSourceSet(restoredSet, "Restored set", 1)],
             restoredSet,
             [new LoadedSourceContract(
@@ -250,9 +266,10 @@ public sealed class WorkingStateCoordinatorTests
             RepeatedDataLayout.StructuralRows,
             context.Configuration.RepeatedDataLayouts[restoredSet]);
         Assert.AreSame(generation, context.Database.CurrentGeneration);
+        Assert.AreSame(extraction, context.Extraction.CurrentResult);
         Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Discovery);
         Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Database);
-        Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Extraction);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
         Assert.IsFalse(context.Workflow.Current.HasValidSourceSelection);
     }
 
@@ -349,6 +366,41 @@ public sealed class WorkingStateCoordinatorTests
         Assert.IsFalse(context.Sources.Items.Single().IsIncluded);
     }
 
+    [TestMethod]
+    public async Task VersionTwoSnapshotRestoresFamilyExportRouteAndEnablement()
+    {
+        var prepared = await CreateCurrentDatabaseContextAsync();
+        var context = prepared.Context;
+        var generation = context.Database.CurrentGeneration!;
+        context.ExportRouting.Synchronize(generation);
+        var family = context.ExportRouting.SourceSets.Single();
+        family.IsEnabled = false;
+        family.Fields.Single().ExcelHeader = "Saved Header";
+        var workbook = context.ExportRouting.CreateWorkbookFor(family.RowFamilyId);
+        var snapshot = context.Coordinator.CaptureSnapshot();
+
+        Assert.IsNotNull(snapshot.ExportConfiguration);
+        var saved = snapshot.ExportConfiguration.SourceSets.Single();
+        Assert.AreEqual(family.RowFamilyId, saved.RowFamilyId);
+        Assert.IsFalse(saved.IsEnabled);
+        Assert.AreEqual("Saved Header", saved.Fields.Single().ExcelHeader);
+
+        context.ExportRouting.Synchronize(generation);
+        family.IsEnabled = true;
+        family.Fields.Single().ExcelHeader = "Changed";
+        context.Client.RestoreManifest = CreateManifest(snapshot);
+        var restored = await context.Coordinator.RestoreAsync("C:\\saved\\state.cia");
+
+        Assert.IsTrue(restored.Accepted);
+        var restoredFamily = context.ExportRouting.GetSet(family.RowFamilyId);
+        Assert.IsFalse(restoredFamily.IsEnabled);
+        Assert.AreEqual("Saved Header", restoredFamily.Fields.Single().ExcelHeader);
+        Assert.AreEqual(workbook.WorkbookDefinitionId, restoredFamily.WorkbookDefinitionId);
+        Assert.AreEqual(
+            saved.WorksheetDefinitionId,
+            restoredFamily.WorksheetDefinitionId);
+    }
+
     private static TestContext CreateContext()
     {
         var sources = new ActiveLoadedSourceSet();
@@ -363,14 +415,30 @@ public sealed class WorkingStateCoordinatorTests
             new UnusedDatabaseClient(),
             NullLogger<DatabaseBuildCoordinator>.Instance);
         var client = new StubWorkingStateClient();
+        var extraction = new ExtractionCoordinator(
+            database,
+            workflow,
+            new UnusedExtractionClient(),
+            NullLogger<ExtractionCoordinator>.Instance);
+        var exportRouting = new ExportRoutingConfigurationPresentation();
         var coordinator = new WorkingStateCoordinator(
             sources,
             configuration,
             database,
             workflow,
             client,
-            NullLogger<WorkingStateCoordinator>.Instance);
-        return new TestContext(sources, configuration, workflow, database, client, coordinator);
+            NullLogger<WorkingStateCoordinator>.Instance,
+            extraction,
+            exportRouting);
+        return new TestContext(
+            sources,
+            configuration,
+            workflow,
+            database,
+            extraction,
+            exportRouting,
+            client,
+            coordinator);
     }
 
     private static async Task<PreparedContext> CreateCurrentDatabaseContextAsync()
@@ -467,8 +535,19 @@ public sealed class WorkingStateCoordinatorTests
         ActiveDiscoveryConfiguration Configuration,
         ApplicationWorkflowCoordinator Workflow,
         DatabaseBuildCoordinator Database,
+        ExtractionCoordinator Extraction,
+        ExportRoutingConfigurationPresentation ExportRouting,
         StubWorkingStateClient Client,
         WorkingStateCoordinator Coordinator);
+
+    private sealed class UnusedExtractionClient : IExtractionClient
+    {
+        public Task<ExtractionClientResult> ExtractAsync(
+            OperationCorrelation correlation,
+            DatabaseGenerationSummary databaseGeneration,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Extraction should not run in working-state tests.");
+    }
 
     private sealed record PreparedContext(
         TestContext Context,

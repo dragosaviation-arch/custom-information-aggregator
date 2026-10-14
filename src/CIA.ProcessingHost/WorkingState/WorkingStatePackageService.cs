@@ -113,6 +113,7 @@ public sealed class WorkingStatePackageService
                 var actualGeneration = await _repository.CreateWorkingStateSnapshotAsync(
                         databasePath,
                         snapshot.DatabaseGeneration,
+                        snapshot.ExtractionResult,
                         linkedCancellation.Token)
                     .ConfigureAwait(false);
                 if (!GenerationsAgree(snapshot.DatabaseGeneration, actualGeneration))
@@ -228,6 +229,7 @@ public sealed class WorkingStatePackageService
                         validated.DatabasePath,
                         validated.Manifest.RepositorySchemaVersion,
                         validated.Manifest.Snapshot.DatabaseGeneration,
+                        validated.Manifest.Snapshot.ExtractionResult,
                         validated.Manifest.Snapshot.Sources,
                         operation.TryEnterNonCancellableCommitBoundary,
                         linkedCancellation.Token)
@@ -326,7 +328,10 @@ public sealed class WorkingStatePackageService
         }
 
         WorkingStateContractValidator.Validate(manifest.Snapshot);
-        WorkingStateDatabaseCoherenceValidator.Validate(manifest.Snapshot);
+        if (manifest.PackageSchemaVersion == WorkingStatePackageFormat.CurrentSchemaVersion)
+        {
+            WorkingStateDatabaseCoherenceValidator.Validate(manifest.Snapshot);
+        }
         var databasePath = Path.Combine(
             temporaryDirectory,
             Guid.CreateVersion7().ToString("N") + ".sqlite3");
@@ -351,10 +356,34 @@ public sealed class WorkingStatePackageService
             throw new InvalidDataException("The working-state SQLite snapshot digest does not match its manifest.");
         }
 
+        if (manifest.PackageSchemaVersion == WorkingStatePackageFormat.MinimumSupportedSchemaVersion)
+        {
+            await _repository.PrepareVersionOneWorkingStateSnapshotAsync(
+                    databasePath,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            var migratedSnapshot = new WorkingStateSnapshot(
+                manifest.Snapshot.PackageId,
+                manifest.Snapshot.SavedAtUtc,
+                databaseGeneration: null,
+                extractionResult: null,
+                manifest.Snapshot.SourceSets,
+                manifest.Snapshot.ActiveSourceSetId,
+                manifest.Snapshot.Sources,
+                manifest.Snapshot.DiscoveryConfiguration,
+                manifest.Snapshot.DatabaseTagOverrides);
+            manifest = new WorkingStateManifest(
+                WorkingStatePackageFormat.MinimumSupportedSchemaVersion,
+                StructuredInformationRepository.CurrentSchemaVersion,
+                await ComputeSha256Async(databasePath, cancellationToken).ConfigureAwait(false),
+                migratedSnapshot);
+        }
+
         await _repository.ValidateWorkingStateSnapshotAsync(
                 databasePath,
                 manifest.RepositorySchemaVersion,
                 manifest.Snapshot.DatabaseGeneration,
+                manifest.Snapshot.ExtractionResult,
                 manifest.Snapshot.Sources,
                 cancellationToken)
             .ConfigureAwait(false);

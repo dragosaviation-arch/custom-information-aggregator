@@ -56,12 +56,13 @@ public sealed class ExtractionCoordinator(
             return workflowReadiness;
         }
 
-        return databaseBuildCoordinator.CurrentGeneration is { IsHierarchyAware: true }
+        return databaseBuildCoordinator.CurrentGeneration is
+        { IsHierarchyAware: true }
             ? WorkflowOperationReadiness.Ready()
             : WorkflowOperationReadiness.Unavailable(
                 workflowPrerequisitesSatisfied: true,
                 WorkflowRejectionCode.OperationFailed,
-                "Extraction requires the active hierarchy-aware published Database to be current.");
+                "Extraction requires a hierarchy-aware published Database generation.");
     }
 
     public async Task<WorkflowCommandResult> ExtractAsync(
@@ -143,6 +144,20 @@ public sealed class ExtractionCoordinator(
             return WorkflowCommandResult.Reject(
                 WorkflowRejectionCode.OperationFailed,
                 "Extraction failed unexpectedly.");
+        }
+    }
+
+    public void AdoptRestoredResult(ExtractionResultSummary? result)
+    {
+        lock (_stateGate)
+        {
+            _currentResult = result;
+            _currentCompletion = null;
+        }
+
+        if (result is not null)
+        {
+            PublishedResultChanged?.Invoke(this, result);
         }
     }
 }

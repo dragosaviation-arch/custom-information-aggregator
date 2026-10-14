@@ -1,4 +1,5 @@
 using CIA.Contracts.Operations;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Sources;
 using System.Text.Json.Serialization;
 
@@ -96,6 +97,8 @@ public readonly record struct DiscoveryLogicalIdentity(
         {
             SourceValueCandidateKind.Element => GetFinalStructuralSegment(
                 identity.StructuralPath),
+            SourceValueCandidateKind.ElementScope => GetFinalStructuralSegment(
+                identity.StructuralPath),
             SourceValueCandidateKind.Attribute => GetFinalStructuralSegment(
                 identity.StructuralIdentity),
             _ => identity.StructuralIdentity
@@ -137,6 +140,12 @@ public sealed record DiscoveredInformation(
     int LogicalSourceCount,
     string SampleValue)
 {
+    public int DetailedSourceCount { get; init; } = LogicalSourceCount;
+
+    public RowFamilyId? RowFamilyId { get; init; }
+
+    public SourceElementRole? ElementRole { get; init; }
+
     public DiscoveredInformation(
         string informationType,
         int totalOccurrenceCount,
@@ -191,6 +200,36 @@ public sealed record DiscoveredInformation(
 
     [JsonIgnore]
     public string InformationType => Identity.InformationType;
+}
+
+public sealed record DiscoveryFamilyCatalog
+{
+    [JsonConstructor]
+    public DiscoveryFamilyCatalog(IReadOnlyList<RowFamilyDefinition> families)
+    {
+        ArgumentNullException.ThrowIfNull(families);
+        var familyArray = families.ToArray();
+        if (familyArray.Any(family => family is null)
+            || familyArray.Select(family => family.Id).Distinct().Count() != familyArray.Length)
+        {
+            throw new ArgumentException(
+                "A Discovery family catalog requires unique Row Family definitions.",
+                nameof(families));
+        }
+
+        var familyIds = familyArray.Select(family => family.Id).ToHashSet();
+        if (familyArray.Any(family => family.ParentRowFamilyId is { } parent
+                && !familyIds.Contains(parent)))
+        {
+            throw new ArgumentException(
+                "Every Discovery Row Family parent must be present in the catalog.",
+                nameof(families));
+        }
+
+        Families = Array.AsReadOnly(familyArray);
+    }
+
+    public IReadOnlyList<RowFamilyDefinition> Families { get; }
 }
 
 [method: JsonConstructor]

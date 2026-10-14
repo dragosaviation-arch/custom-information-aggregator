@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using Microsoft.Data.Sqlite;
@@ -40,6 +41,18 @@ public sealed partial class StructuredInformationRepository
 
                 foreach (var dataset in specification.Datasets)
                 {
+                    if (dataset.OutputSetId is { } outputSetId)
+                    {
+                        await InsertOutputSetDatasetAsync(
+                            connection,
+                            transaction,
+                            generationId,
+                            outputSetId,
+                            dataset,
+                            cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+
                     await ExecuteAsync(connection, transaction, """
                         INSERT INTO hierarchy_database_datasets (
                             generation_id, source_set_id, display_name, dataset_ordinal, repeated_data_layout)
@@ -50,6 +63,28 @@ public sealed partial class StructuredInformationRepository
                         ("$displayName", dataset.DisplayName),
                         ("$ordinal", dataset.Ordinal),
                         ("$layout", (int)dataset.RepeatedDataLayout)).ConfigureAwait(false);
+
+                    for (var familyIndex = 0; familyIndex < dataset.RowFamilies.Count; familyIndex++)
+                    {
+                        var family = dataset.RowFamilies[familyIndex];
+                        await ExecuteAsync(connection, transaction, """
+                            INSERT INTO hierarchy_database_families (
+                                generation_id, source_set_id, family_kind, family_anchor_path,
+                                parent_family_kind, parent_family_anchor_path, family_ordinal, display_name)
+                            VALUES ($generationId, $sourceSetId, $kind, $anchorPath,
+                                $parentKind, $parentAnchorPath, $ordinal, $displayName);
+                            """, cancellationToken,
+                            ("$generationId", generationId),
+                            ("$sourceSetId", dataset.SourceSetId.ToString()),
+                            ("$kind", (int)family.Id.Kind),
+                            ("$anchorPath", family.Id.AnchorPath),
+                            ("$parentKind", family.ParentRowFamilyId is { } parent ? (int)parent.Kind : null),
+                            ("$parentAnchorPath", family.ParentRowFamilyId?.AnchorPath),
+                            ("$ordinal", familyIndex + 1),
+                            ("$displayName", family.Id.Kind == RowFamilyKind.Root
+                                ? "Root"
+                                : family.Id.AnchorPath)).ConfigureAwait(false);
+                    }
 
                     for (var sourceIndex = 0; sourceIndex < dataset.Sources.Count; sourceIndex++)
                     {
@@ -87,29 +122,34 @@ public sealed partial class StructuredInformationRepository
                             .ConfigureAwait(false);
                     }
 
-                    for (var fieldIndex = 0; fieldIndex < dataset.Fields.Count; fieldIndex++)
+                    foreach (var family in dataset.RowFamilies)
                     {
-                        var field = dataset.Fields[fieldIndex];
-                        await ExecuteAsync(connection, transaction, """
-                            INSERT INTO hierarchy_database_mappings (
-                                generation_id, source_set_id, mapping_ordinal, mapping_key, field_key,
-                                candidate_kind, canonical_field_identity, effective_name,
-                                is_explicit_override, detailed_identities_json)
-                            VALUES (
-                                $generationId, $sourceSetId, $ordinal, $mappingKey, $fieldKey,
-                                $kind, $canonical, $effectiveName, $isOverride, $details);
-                            """, cancellationToken,
-                            ("$generationId", generationId),
-                            ("$sourceSetId", dataset.SourceSetId.ToString()),
-                            ("$ordinal", fieldIndex + 1),
-                            ("$mappingKey", $"{(int)field.LogicalIdentity.CandidateKind}:{field.LogicalIdentity.CanonicalFieldIdentity}"),
-                            ("$fieldKey", field.FieldKey),
-                            ("$kind", (int)field.LogicalIdentity.CandidateKind),
-                            ("$canonical", field.LogicalIdentity.CanonicalFieldIdentity),
-                            ("$effectiveName", field.EffectiveName),
-                            ("$isOverride", field.IsExplicitOverride ? 1 : 0),
-                            ("$details", JsonSerializer.Serialize(field.DetailedIdentities)))
-                            .ConfigureAwait(false);
+                        var familyFields = dataset.Fields
+                            .Where(field => field.RowFamilyId == family.Id)
+                            .ToArray();
+                        for (var fieldIndex = 0; fieldIndex < familyFields.Length; fieldIndex++)
+                        {
+                            var field = familyFields[fieldIndex];
+                            await ExecuteAsync(connection, transaction, """
+                                INSERT INTO hierarchy_database_mappings (
+                                    generation_id, source_set_id, family_kind, family_anchor_path,
+                                    mapping_ordinal, field_key, effective_name,
+                                    is_explicit_override, detailed_identities_json)
+                                VALUES (
+                                    $generationId, $sourceSetId, $familyKind, $familyAnchorPath,
+                                    $ordinal, $fieldKey, $effectiveName, $isOverride, $details);
+                                """, cancellationToken,
+                                ("$generationId", generationId),
+                                ("$sourceSetId", dataset.SourceSetId.ToString()),
+                                ("$familyKind", (int)family.Id.Kind),
+                                ("$familyAnchorPath", family.Id.AnchorPath),
+                                ("$ordinal", fieldIndex + 1),
+                                ("$fieldKey", field.FieldKey),
+                                ("$effectiveName", field.EffectiveName),
+                                ("$isOverride", field.IsExplicitOverride ? 1 : 0),
+                                ("$details", JsonSerializer.Serialize(field.DetailedIdentities)))
+                                .ConfigureAwait(false);
+                        }
                     }
                 }
 
@@ -145,7 +185,12 @@ public sealed partial class StructuredInformationRepository
             ?? throw new ArgumentException("The candidate does not contain the Source Set.", nameof(sourceSetId));
         if (!dataset.Sources.Any(source => source.SourceId == sourceId)
             || sourceRows.Any(row => row.Source.SourceId != sourceId
-                || row.Source.SourceSetId != sourceSetId))
+                || row.Source.SourceSetId != sourceSetId
+                || row.SemanticIdentity is null
+                || row.SemanticIdentity.RowFamilyId.SourceSetId != sourceSetId
+                || !dataset.RowFamilies.Any(family => family.Id == row.SemanticIdentity.RowFamilyId)
+                || row.Cells.Any(cell =>
+                    cell.ColumnIdentity.RowFamilyId != row.SemanticIdentity.RowFamilyId)))
         {
             throw new ArgumentException("Database rows crossed their captured source boundary.", nameof(sourceRows));
         }
@@ -161,27 +206,41 @@ public sealed partial class StructuredInformationRepository
             try
             {
                 var generationId = candidate.Correlation.OperationId.ToString();
-                var nextRowOrdinal = await ScalarIntAsync(connection, transaction, """
-                    SELECT COALESCE(MAX(row_ordinal), 0) + 1
-                    FROM hierarchy_database_rows
-                    WHERE generation_id = $generationId AND source_set_id = $sourceSetId;
-                    """, cancellationToken,
-                    ("$generationId", generationId), ("$sourceSetId", sourceSetId.ToString()))
-                    .ConfigureAwait(false);
-
-                foreach (var sourceRow in sourceRows.OrderBy(row => row.Ordinal))
+                var nextRowOrdinals = new Dictionary<RowFamilyId, int>();
+                foreach (var sourceRow in sourceRows
+                             .OrderBy(row => row.SemanticIdentity!.RowFamilyId)
+                             .ThenBy(row => row.Ordinal))
                 {
-                    var rowOrdinal = nextRowOrdinal++;
+                    var identity = sourceRow.SemanticIdentity!;
+                    if (!nextRowOrdinals.TryGetValue(identity.RowFamilyId, out var rowOrdinal))
+                    {
+                        rowOrdinal = await ScalarIntAsync(connection, transaction, """
+                            SELECT COALESCE(MAX(row_ordinal), 0) + 1
+                            FROM hierarchy_database_rows
+                            WHERE generation_id = $generationId AND source_set_id = $sourceSetId
+                              AND family_kind = $familyKind AND family_anchor_path = $familyAnchorPath;
+                            """, cancellationToken,
+                            ("$generationId", generationId), ("$sourceSetId", sourceSetId.ToString()),
+                            ("$familyKind", (int)identity.RowFamilyId.Kind),
+                            ("$familyAnchorPath", identity.RowFamilyId.AnchorPath)).ConfigureAwait(false);
+                    }
+                    nextRowOrdinals[identity.RowFamilyId] = rowOrdinal + 1;
                     await ExecuteAsync(connection, transaction, """
                         INSERT INTO hierarchy_database_rows (
-                            generation_id, source_set_id, row_ordinal, source_id,
-                            source_row_ordinal, record_identity, is_included)
-                        VALUES ($generationId, $sourceSetId, $rowOrdinal, $sourceId,
-                            $sourceRowOrdinal, $recordIdentity, 1);
+                            generation_id, source_set_id, family_kind, family_anchor_path,
+                            row_ordinal, source_id, source_row_ordinal, anchor_instance_id,
+                            projection_ordinal, record_identity, is_included)
+                        VALUES ($generationId, $sourceSetId, $familyKind, $familyAnchorPath,
+                            $rowOrdinal, $sourceId, $sourceRowOrdinal, $anchorInstanceId,
+                            $projectionOrdinal, $recordIdentity, 1);
                         """, cancellationToken,
                         ("$generationId", generationId), ("$sourceSetId", sourceSetId.ToString()),
+                        ("$familyKind", (int)identity.RowFamilyId.Kind),
+                        ("$familyAnchorPath", identity.RowFamilyId.AnchorPath),
                         ("$rowOrdinal", rowOrdinal), ("$sourceId", sourceId.ToString()),
                         ("$sourceRowOrdinal", sourceRow.Ordinal),
+                        ("$anchorInstanceId", identity.AnchorInstanceId),
+                        ("$projectionOrdinal", identity.ProjectionOrdinal),
                         ("$recordIdentity", sourceRow.RecordIdentity)).ConfigureAwait(false);
 
                     foreach (var cell in sourceRow.Cells)
@@ -199,12 +258,16 @@ public sealed partial class StructuredInformationRepository
                             .ConfigureAwait(false);
                         await ExecuteAsync(connection, transaction, """
                             INSERT INTO hierarchy_database_cells (
-                                generation_id, source_set_id, row_ordinal, field_key,
+                                generation_id, source_set_id, family_kind, family_anchor_path,
+                                row_ordinal, field_key,
                                 repeat_coordinates_json, has_conflict)
-                            VALUES ($generationId, $sourceSetId, $rowOrdinal, $fieldKey,
+                            VALUES ($generationId, $sourceSetId, $familyKind, $familyAnchorPath,
+                                $rowOrdinal, $fieldKey,
                                 $coordinates, $hasConflict);
                             """, cancellationToken,
                             ("$generationId", generationId), ("$sourceSetId", sourceSetId.ToString()),
+                            ("$familyKind", (int)identity.RowFamilyId.Kind),
+                            ("$familyAnchorPath", identity.RowFamilyId.AnchorPath),
                             ("$rowOrdinal", rowOrdinal), ("$fieldKey", cell.ColumnIdentity.FieldKey),
                             ("$coordinates", coordinatesJson), ("$hasConflict", cell.HasConflict ? 1 : 0))
                             .ConfigureAwait(false);
@@ -214,14 +277,18 @@ public sealed partial class StructuredInformationRepository
                             var value = cell.Values[valueIndex];
                             await ExecuteAsync(connection, transaction, """
                                 INSERT INTO hierarchy_database_cell_values (
-                                    generation_id, source_set_id, row_ordinal, field_key,
+                                    generation_id, source_set_id, family_kind, family_anchor_path,
+                                    row_ordinal, field_key,
                                     repeat_coordinates_json, value_ordinal, value, information_type,
                                     structural_path, candidate_kind, structural_identity, source_id, lineage_json)
-                                VALUES ($generationId, $sourceSetId, $rowOrdinal, $fieldKey,
+                                VALUES ($generationId, $sourceSetId, $familyKind, $familyAnchorPath,
+                                    $rowOrdinal, $fieldKey,
                                     $coordinates, $valueOrdinal, $value, $informationType,
                                     $structuralPath, $kind, $structuralIdentity, $sourceId, $lineage);
                                 """, cancellationToken,
                                 ("$generationId", generationId), ("$sourceSetId", sourceSetId.ToString()),
+                                ("$familyKind", (int)identity.RowFamilyId.Kind),
+                                ("$familyAnchorPath", identity.RowFamilyId.AnchorPath),
                                 ("$rowOrdinal", rowOrdinal), ("$fieldKey", cell.ColumnIdentity.FieldKey),
                                 ("$coordinates", coordinatesJson), ("$valueOrdinal", valueIndex + 1),
                                 ("$value", value.Value), ("$informationType", value.DetailedIdentity.InformationType),
@@ -276,7 +343,18 @@ public sealed partial class StructuredInformationRepository
                     .ConfigureAwait(false)
                     ?? throw new StructuredInformationRepositoryException("The Database candidate is unavailable.");
                 if (summary.Datasets.Count != candidate.Specification.Datasets.Count
-                    || summary.Datasets.Any(dataset => dataset.RowCount < 1 || dataset.ValueCount < 1))
+                    || summary.Datasets.Zip(candidate.Specification.Datasets).Any(pair =>
+                        pair.First.RowCount < 1
+                        || pair.First.ValueCount < 1
+                        || pair.First.OutputSetId != pair.Second.OutputSetId
+                        || pair.First.ParentSourceSetId != pair.Second.ParentSourceSetId
+                        || !string.Equals(
+                            pair.First.DisplayName,
+                            pair.Second.DisplayName,
+                            StringComparison.Ordinal)
+                        || pair.First.RowFamilies.Count != pair.Second.RowFamilies.Count
+                        || !pair.First.RowFamilies.Select(family => family.Id)
+                            .SequenceEqual(pair.Second.RowFamilies.Select(family => family.Id))))
                 {
                     throw new StructuredInformationRepositoryException(
                         "Every Source Set dataset must contain complete hierarchy-aware rows before publication.");
@@ -346,8 +424,43 @@ public sealed partial class StructuredInformationRepository
         var summary = await ReadHierarchySummaryAsync(
             connection, transaction, query.GenerationId, cancellationToken).ConfigureAwait(false)
             ?? throw new StructuredInformationRepositoryException("The published Database summary is unavailable.");
+        if (query.OutputSetId is { } outputSetId)
+        {
+            var outputSetDataset = summary.Datasets.SingleOrDefault(item =>
+                item.OutputSetId == outputSetId
+                && item.ParentSourceSetId == query.SourceSetId)
+                ?? throw new StructuredInformationRepositoryException(
+                    "The requested Output Set dataset is unavailable.");
+            var outputSetFamily = query.RowFamilyId is { } requestedOutputSetFamily
+                ? outputSetDataset.RowFamilies.SingleOrDefault(
+                    family => family.Id == requestedOutputSetFamily)
+                    ?? throw new StructuredInformationRepositoryException(
+                        "The requested Output Set Row Family is unavailable.")
+                : outputSetDataset.RowFamilies.Count == 1
+                    ? outputSetDataset.RowFamilies[0]
+                    : throw new StructuredInformationRepositoryException(
+                        "A Row Family is required to review this Output Set dataset.");
+            var outputSetPage = await ReadOutputSetDatabasePageAsync(
+                connection,
+                transaction,
+                query,
+                outputSetId,
+                outputSetDataset,
+                outputSetFamily,
+                cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return outputSetPage;
+        }
+
         var dataset = summary.Datasets.SingleOrDefault(item => item.SourceSetId == query.SourceSetId)
             ?? throw new StructuredInformationRepositoryException("The requested Source Set dataset is unavailable.");
+        var rowFamily = query.RowFamilyId is { } requestedFamily
+            ? dataset.RowFamilies.SingleOrDefault(family => family.Id == requestedFamily)
+                ?? throw new StructuredInformationRepositoryException("The requested Row Family is unavailable.")
+            : dataset.RowFamilies.Count == 1
+                ? dataset.RowFamilies[0]
+                : throw new StructuredInformationRepositoryException(
+                    "A Row Family is required to review this Database dataset.");
 
         var predicate = query.InclusionFilter switch
         {
@@ -370,6 +483,8 @@ public sealed partial class StructuredInformationRepository
                     SELECT 1 FROM hierarchy_database_cell_values AS search_values
                     WHERE search_values.generation_id = rows.generation_id
                       AND search_values.source_set_id = rows.source_set_id
+                      AND search_values.family_kind = rows.family_kind
+                      AND search_values.family_anchor_path = rows.family_anchor_path
                       AND search_values.row_ordinal = rows.row_ordinal
                       AND (
                         search_values.value LIKE $search ESCAPE '\'
@@ -380,6 +495,7 @@ public sealed partial class StructuredInformationRepository
                         OR search_values.lineage_json LIKE $search ESCAPE '\')))
             """;
         var where = "WHERE rows.generation_id = $generationId AND rows.source_set_id = $sourceSetId"
+            + " AND rows.family_kind = $familyKind AND rows.family_anchor_path = $familyAnchorPath"
             + predicate + searchPredicate;
         await using var countCommand = connection.CreateCommand();
         countCommand.Transaction = transaction;
@@ -394,7 +510,7 @@ public sealed partial class StructuredInformationRepository
              AND datasets.source_set_id = rows.source_set_id
             {where};
             """;
-        ConfigureReviewQuery(countCommand, query);
+        ConfigureReviewQuery(countCommand, query, rowFamily.Id);
         var totalRows = Convert.ToInt32(
             await countCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
             CultureInfo.InvariantCulture);
@@ -406,7 +522,7 @@ public sealed partial class StructuredInformationRepository
             SELECT rows.row_ordinal, rows.is_included, rows.record_identity,
                    sources.source_id, sources.source_file_name, sources.full_source_path,
                    sources.source_kind, sources.archive_path, sources.archive_member_path,
-                   sources.file_modified_utc
+                   sources.file_modified_utc, rows.anchor_instance_id, rows.projection_ordinal
             FROM hierarchy_database_rows AS rows
             JOIN hierarchy_database_sources AS sources
               ON sources.generation_id = rows.generation_id
@@ -419,7 +535,7 @@ public sealed partial class StructuredInformationRepository
             ORDER BY rows.row_ordinal
             LIMIT $limit OFFSET $offset;
             """;
-        ConfigureReviewQuery(rowCommand, query);
+        ConfigureReviewQuery(rowCommand, query, rowFamily.Id);
         rowCommand.Parameters.AddWithValue("$limit", query.RowCount);
         rowCommand.Parameters.AddWithValue("$offset", query.StartRowOrdinal - 1);
         await using (var reader = await rowCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
@@ -435,8 +551,18 @@ public sealed partial class StructuredInformationRepository
                     reader.IsDBNull(8) ? null : reader.GetString(8),
                     reader.IsDBNull(9) ? null : DateTimeOffset.Parse(
                         reader.GetString(9), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind));
+                var semanticIdentity = new DatabaseRecordIdentity(
+                    rowFamily.Id,
+                    sourceId,
+                    reader.GetInt64(10),
+                    reader.GetInt32(11));
+                if (!string.Equals(reader.GetString(2), semanticIdentity.ToString(), StringComparison.Ordinal))
+                {
+                    throw new StructuredInformationRepositoryException(
+                        "A stored Database record identity is inconsistent with its typed components.");
+                }
                 rows.Add(new DatabaseReviewRow(
-                    reader.GetInt32(0), reader.GetInt32(1) != 0, reader.GetString(2), metadata, []));
+                    reader.GetInt32(0), reader.GetInt32(1) != 0, semanticIdentity, metadata, []));
             }
         }
 
@@ -446,17 +572,18 @@ public sealed partial class StructuredInformationRepository
             rows[index] = new DatabaseReviewRow(
                 row.Ordinal,
                 row.IsIncluded,
-                row.RecordIdentity,
+                row.SemanticIdentity!,
                 row.Source,
                 await ReadHierarchyCellsAsync(
-                    connection, transaction, query.GenerationId, dataset,
+                    connection, transaction, query.GenerationId, dataset, rowFamily,
                     row.Ordinal, row.Source.SourceId, cancellationToken)
                     .ConfigureAwait(false));
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new DatabaseReviewPage(
-            query.GenerationId, dataset, query.StartRowOrdinal, query.RowCount, totalRows, rows);
+            query.GenerationId, dataset, rowFamily,
+            query.StartRowOrdinal, query.RowCount, totalRows, rows);
     }
 
     public async Task<int> SetPublishedDatabaseRowsIncludedAsync(
@@ -479,19 +606,71 @@ public sealed partial class StructuredInformationRepository
                 await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
                 throw new StructuredInformationRepositoryException("The requested Database generation is not published.");
             }
+            var rowFamilyId = change.RowFamilyId;
+            if (change.OutputSetId is { } outputSetId)
+            {
+                var summary = await ReadHierarchySummaryAsync(
+                    connection,
+                    transaction,
+                    change.GenerationId,
+                    cancellationToken).ConfigureAwait(false);
+                var dataset = summary?.Datasets.SingleOrDefault(candidate =>
+                    candidate.OutputSetId == outputSetId
+                    && candidate.ParentSourceSetId == change.SourceSetId)
+                    ?? throw new ArgumentException(
+                        "The Database row inclusion Output Set is unavailable.",
+                        nameof(change));
+                rowFamilyId = rowFamilyId is { } requestedFamily
+                    && dataset.RowFamilies.Any(family => family.Id == requestedFamily)
+                    ? requestedFamily
+                    : throw new ArgumentException(
+                        "A Database row inclusion change requires an Output Set Row Family.",
+                        nameof(change));
+            }
+            if (rowFamilyId is null)
+            {
+                var summary = await ReadHierarchySummaryAsync(
+                    connection,
+                    transaction,
+                    change.GenerationId,
+                    cancellationToken).ConfigureAwait(false);
+                rowFamilyId = summary?.Datasets
+                    .SingleOrDefault(dataset => dataset.SourceSetId == change.SourceSetId)?
+                    .RowFamilies.SingleOrDefault()?.Id
+                    ?? throw new ArgumentException(
+                        "A Database row inclusion change requires a Row Family.",
+                        nameof(change));
+            }
             var changed = 0;
             foreach (var ordinal in change.RowOrdinals.Distinct())
             {
                 await using var command = connection.CreateCommand();
                 command.Transaction = transaction;
-                command.CommandText = """
-                    UPDATE hierarchy_database_rows SET is_included = $included
-                    WHERE generation_id = $generationId AND source_set_id = $sourceSetId
-                      AND row_ordinal = $ordinal AND is_included <> $included;
-                    """;
+                command.CommandText = change.OutputSetId is { }
+                    ? """
+                        UPDATE hierarchy_output_set_rows SET is_included = $included
+                        WHERE generation_id = $generationId AND output_set_id = $outputSetId
+                          AND family_kind = $familyKind AND family_anchor_path = $familyAnchorPath
+                          AND row_ordinal = $ordinal AND is_included <> $included;
+                        """
+                    : """
+                        UPDATE hierarchy_database_rows SET is_included = $included
+                        WHERE generation_id = $generationId AND source_set_id = $sourceSetId
+                          AND family_kind = $familyKind AND family_anchor_path = $familyAnchorPath
+                          AND row_ordinal = $ordinal AND is_included <> $included;
+                        """;
                 command.Parameters.AddWithValue("$included", change.IsIncluded ? 1 : 0);
                 command.Parameters.AddWithValue("$generationId", change.GenerationId.ToString());
-                command.Parameters.AddWithValue("$sourceSetId", change.SourceSetId.ToString());
+                if (change.OutputSetId is { } includedOutputSetId)
+                {
+                    command.Parameters.AddWithValue("$outputSetId", includedOutputSetId.ToString());
+                }
+                else
+                {
+                    command.Parameters.AddWithValue("$sourceSetId", change.SourceSetId.ToString());
+                }
+                command.Parameters.AddWithValue("$familyKind", (int)rowFamilyId.Value.Kind);
+                command.Parameters.AddWithValue("$familyAnchorPath", rowFamilyId.Value.AnchorPath);
                 command.Parameters.AddWithValue("$ordinal", ordinal);
                 changed += await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
@@ -528,15 +707,24 @@ public sealed partial class StructuredInformationRepository
             ?? throw new StructuredInformationRepositoryException("A flattened cell is outside its mapped schema.");
         var nextOrdinal = await ScalarIntAsync(connection, transaction, """
             SELECT COALESCE(MAX(column_ordinal), 0) + 1 FROM hierarchy_database_columns
-            WHERE generation_id = $generationId AND source_set_id = $sourceSetId;
-            """, cancellationToken, ("$generationId", generationId), ("$sourceSetId", sourceSetId.ToString()))
+            WHERE generation_id = $generationId AND source_set_id = $sourceSetId
+              AND family_kind = $familyKind AND family_anchor_path = $familyAnchorPath;
+            """, cancellationToken,
+            ("$generationId", generationId),
+            ("$sourceSetId", sourceSetId.ToString()),
+            ("$familyKind", (int)identity.RowFamilyId.Kind),
+            ("$familyAnchorPath", identity.RowFamilyId.AnchorPath))
             .ConfigureAwait(false);
         await ExecuteAsync(connection, transaction, """
             INSERT OR IGNORE INTO hierarchy_database_columns (
-                generation_id, source_set_id, column_ordinal, field_key, effective_name, repeat_coordinates_json)
-            VALUES ($generationId, $sourceSetId, $ordinal, $fieldKey, $name, $coordinates);
+                generation_id, source_set_id, family_kind, family_anchor_path,
+                column_ordinal, field_key, effective_name, repeat_coordinates_json)
+            VALUES ($generationId, $sourceSetId, $familyKind, $familyAnchorPath,
+                $ordinal, $fieldKey, $name, $coordinates);
             """, cancellationToken,
             ("$generationId", generationId), ("$sourceSetId", sourceSetId.ToString()),
+            ("$familyKind", (int)identity.RowFamilyId.Kind),
+            ("$familyAnchorPath", identity.RowFamilyId.AnchorPath),
             ("$ordinal", nextOrdinal), ("$fieldKey", identity.FieldKey),
             ("$name", effectiveName), ("$coordinates", coordinatesJson)).ConfigureAwait(false);
     }
@@ -547,6 +735,16 @@ public sealed partial class StructuredInformationRepository
         OperationId generationId,
         CancellationToken cancellationToken)
     {
+        var outputSetSummary = await ReadOutputSetSummaryAsync(
+            connection,
+            transaction,
+            generationId,
+            cancellationToken).ConfigureAwait(false);
+        if (outputSetSummary is not null)
+        {
+            return outputSetSummary;
+        }
+
         var datasets = new List<DatabaseDatasetSummary>();
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
@@ -572,46 +770,129 @@ public sealed partial class StructuredInformationRepository
         foreach (var dataset in basic)
         {
             var mappings = await ReadHierarchyMappingsAsync(
+                connection, transaction, generationId, dataset.Id, rowFamilyId: null, cancellationToken)
+                .ConfigureAwait(false);
+            var familyDefinitions = await ReadHierarchyFamilyDefinitionsAsync(
                 connection, transaction, generationId, dataset.Id, cancellationToken).ConfigureAwait(false);
-            var columns = await ReadHierarchyColumnsAsync(
-                connection, transaction, generationId, dataset.Id, cancellationToken).ConfigureAwait(false);
-            var rowCount = await CountAsync(connection, transaction,
-                "hierarchy_database_rows", generationId, dataset.Id, cancellationToken).ConfigureAwait(false);
-            var valueCount = await CountAsync(connection, transaction,
-                "hierarchy_database_cell_values", generationId, dataset.Id, cancellationToken).ConfigureAwait(false);
-            if (rowCount > 0 && valueCount > 0 && columns.Count > 0)
+            var families = new List<DatabaseRowFamilySummary>();
+            foreach (var definition in familyDefinitions)
             {
+                var columns = await ReadHierarchyColumnsAsync(
+                    connection, transaction, generationId, dataset.Id, definition.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                var familyMappings = mappings
+                    .Where(mapping => mapping.RowFamilyId == definition.Id)
+                    .ToArray();
+                var rowCount = await CountFamilyAsync(
+                    connection, transaction, "hierarchy_database_rows", generationId,
+                    definition.Id, cancellationToken).ConfigureAwait(false);
+                var includedRowCount = await CountFamilyAsync(
+                    connection, transaction, "hierarchy_database_rows", generationId,
+                    definition.Id, cancellationToken, " AND is_included = 1").ConfigureAwait(false);
+                var valueCount = await CountFamilyAsync(
+                    connection, transaction, "hierarchy_database_cell_values", generationId,
+                    definition.Id, cancellationToken).ConfigureAwait(false);
+                if (rowCount > 0 && valueCount > 0 && columns.Count > 0)
+                {
+                    families.Add(new DatabaseRowFamilySummary(
+                        definition.Id,
+                        definition.ParentRowFamilyId,
+                        families.Count + 1,
+                        definition.DisplayName,
+                        rowCount,
+                        includedRowCount,
+                        valueCount,
+                        columns,
+                        familyMappings));
+                }
+            }
+
+            if (families.Count > 0)
+            {
+                var columns = families.SelectMany(family => family.Columns)
+                    .Select((column, index) => new DatabaseColumnDefinition(
+                        column.Identity,
+                        column.EffectiveName,
+                        index + 1))
+                    .ToArray();
                 datasets.Add(new DatabaseDatasetSummary(
                     dataset.Id, dataset.Name, dataset.Ordinal, dataset.Layout,
-                    rowCount, valueCount, columns, mappings));
+                    families.Sum(family => family.RowCount),
+                    families.Sum(family => family.ValueCount),
+                    columns,
+                    mappings,
+                    families));
             }
         }
         return datasets.Count == 0 ? null : new DatabaseGenerationSummary(generationId, datasets);
     }
 
-    private static async Task<IReadOnlyList<DatabaseFieldMapping>> ReadHierarchyMappingsAsync(
-        SqliteConnection connection, SqliteTransaction? transaction, OperationId generationId,
-        SourceSetId sourceSetId, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<StoredRowFamily>> ReadHierarchyFamilyDefinitionsAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        OperationId generationId,
+        SourceSetId sourceSetId,
+        CancellationToken cancellationToken)
     {
-        var result = new List<DatabaseFieldMapping>();
+        var result = new List<StoredRowFamily>();
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            SELECT candidate_kind, canonical_field_identity, effective_name,
-                   is_explicit_override, detailed_identities_json
-            FROM hierarchy_database_mappings
+            SELECT family_kind, family_anchor_path, parent_family_kind,
+                   parent_family_anchor_path, display_name
+            FROM hierarchy_database_families
             WHERE generation_id = $generationId AND source_set_id = $sourceSetId
-            ORDER BY mapping_ordinal;
+            ORDER BY family_ordinal;
             """;
         command.Parameters.AddWithValue("$generationId", generationId.ToString());
         command.Parameters.AddWithValue("$sourceSetId", sourceSetId.ToString());
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
+            var id = new RowFamilyId(
+                sourceSetId,
+                (RowFamilyKind)reader.GetInt32(0),
+                reader.GetString(1));
+            RowFamilyId? parent = reader.IsDBNull(2)
+                ? null
+                : new RowFamilyId(
+                    sourceSetId,
+                    (RowFamilyKind)reader.GetInt32(2),
+                    reader.GetString(3));
+            result.Add(new StoredRowFamily(
+                new RowFamilyDefinition(id, parent),
+                reader.GetString(4)));
+        }
+
+        return result;
+    }
+
+    private static async Task<IReadOnlyList<DatabaseFieldMapping>> ReadHierarchyMappingsAsync(
+        SqliteConnection connection, SqliteTransaction? transaction, OperationId generationId,
+        SourceSetId sourceSetId, RowFamilyId? rowFamilyId, CancellationToken cancellationToken)
+    {
+        var result = new List<DatabaseFieldMapping>();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT family_kind, family_anchor_path, effective_name,
+                   is_explicit_override, detailed_identities_json
+            FROM hierarchy_database_mappings
+            WHERE generation_id = $generationId AND source_set_id = $sourceSetId
+              AND ($familyKind IS NULL OR (family_kind = $familyKind AND family_anchor_path = $familyAnchorPath))
+            ORDER BY family_kind, family_anchor_path, mapping_ordinal;
+            """;
+        command.Parameters.AddWithValue("$generationId", generationId.ToString());
+        command.Parameters.AddWithValue("$sourceSetId", sourceSetId.ToString());
+        command.Parameters.AddWithValue("$familyKind", rowFamilyId is { } family ? (int)family.Kind : DBNull.Value);
+        command.Parameters.AddWithValue("$familyAnchorPath", rowFamilyId?.AnchorPath ?? (object)DBNull.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
             var details = JsonSerializer.Deserialize<DiscoveryInformationIdentity[]>(reader.GetString(4))
                 ?? throw new StructuredInformationRepositoryException("Stored Database mapping identities are invalid.");
             result.Add(new DatabaseFieldMapping(
-                new DatabaseLogicalFieldIdentity(sourceSetId, (SourceValueCandidateKind)reader.GetInt32(0), reader.GetString(1)),
+                new RowFamilyId(sourceSetId, (RowFamilyKind)reader.GetInt32(0), reader.GetString(1)),
                 reader.GetString(2), reader.GetInt32(3) != 0, details));
         }
         return result;
@@ -619,7 +900,7 @@ public sealed partial class StructuredInformationRepository
 
     private static async Task<IReadOnlyList<DatabaseColumnDefinition>> ReadHierarchyColumnsAsync(
         SqliteConnection connection, SqliteTransaction? transaction, OperationId generationId,
-        SourceSetId sourceSetId, CancellationToken cancellationToken)
+        SourceSetId sourceSetId, RowFamilyId rowFamilyId, CancellationToken cancellationToken)
     {
         var result = new List<DatabaseColumnDefinition>();
         await using var command = connection.CreateCommand();
@@ -628,16 +909,19 @@ public sealed partial class StructuredInformationRepository
             SELECT field_key, effective_name, repeat_coordinates_json, column_ordinal
             FROM hierarchy_database_columns
             WHERE generation_id = $generationId AND source_set_id = $sourceSetId
+              AND family_kind = $familyKind AND family_anchor_path = $familyAnchorPath
             ORDER BY column_ordinal;
             """;
         command.Parameters.AddWithValue("$generationId", generationId.ToString());
         command.Parameters.AddWithValue("$sourceSetId", sourceSetId.ToString());
+        command.Parameters.AddWithValue("$familyKind", (int)rowFamilyId.Kind);
+        command.Parameters.AddWithValue("$familyAnchorPath", rowFamilyId.AnchorPath);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var coords = JsonSerializer.Deserialize<int[]>(reader.GetString(2)) ?? [];
             result.Add(new DatabaseColumnDefinition(
-                new DatabaseColumnIdentity(sourceSetId, reader.GetString(0), new DatabaseRepeatCoordinatePath(coords)),
+                new DatabaseColumnIdentity(rowFamilyId, reader.GetString(0), new DatabaseRepeatCoordinatePath(coords)),
                 reader.GetString(1), reader.GetInt32(3)));
         }
         return result;
@@ -645,11 +929,12 @@ public sealed partial class StructuredInformationRepository
 
     private static async Task<IReadOnlyList<DatabaseReviewCell>> ReadHierarchyCellsAsync(
         SqliteConnection connection, SqliteTransaction transaction, OperationId generationId,
-        DatabaseDatasetSummary dataset, int rowOrdinal, SourceId sourceId,
+        DatabaseDatasetSummary dataset, DatabaseRowFamilySummary rowFamily,
+        int rowOrdinal, SourceId sourceId,
         CancellationToken cancellationToken)
     {
         var result = new List<DatabaseReviewCell>();
-        foreach (var column in dataset.Columns)
+        foreach (var column in rowFamily.Columns)
         {
             var coordinates = JsonSerializer.Serialize(column.Identity.RepeatCoordinates.Coordinates);
             await using var command = connection.CreateCommand();
@@ -660,18 +945,23 @@ public sealed partial class StructuredInformationRepository
                        values_table.structural_identity, values_table.lineage_json
                 FROM hierarchy_database_cells AS cell
                 JOIN hierarchy_database_cell_values AS values_table
-                  ON values_table.generation_id = cell.generation_id
+                 ON values_table.generation_id = cell.generation_id
                  AND values_table.source_set_id = cell.source_set_id
+                 AND values_table.family_kind = cell.family_kind
+                 AND values_table.family_anchor_path = cell.family_anchor_path
                  AND values_table.row_ordinal = cell.row_ordinal
                  AND values_table.field_key = cell.field_key
                  AND values_table.repeat_coordinates_json = cell.repeat_coordinates_json
                 WHERE cell.generation_id = $generationId AND cell.source_set_id = $sourceSetId
+                  AND cell.family_kind = $familyKind AND cell.family_anchor_path = $familyAnchorPath
                   AND cell.row_ordinal = $rowOrdinal AND cell.field_key = $fieldKey
                   AND cell.repeat_coordinates_json = $coordinates
                 ORDER BY values_table.value_ordinal;
                 """;
             command.Parameters.AddWithValue("$generationId", generationId.ToString());
             command.Parameters.AddWithValue("$sourceSetId", dataset.SourceSetId.ToString());
+            command.Parameters.AddWithValue("$familyKind", (int)rowFamily.Id.Kind);
+            command.Parameters.AddWithValue("$familyAnchorPath", rowFamily.Id.AnchorPath);
             command.Parameters.AddWithValue("$rowOrdinal", rowOrdinal);
             command.Parameters.AddWithValue("$fieldKey", column.Identity.FieldKey);
             command.Parameters.AddWithValue("$coordinates", coordinates);
@@ -697,10 +987,15 @@ public sealed partial class StructuredInformationRepository
         return result;
     }
 
-    private static void ConfigureReviewQuery(SqliteCommand command, DatabaseReviewQuery query)
+    private static void ConfigureReviewQuery(
+        SqliteCommand command,
+        DatabaseReviewQuery query,
+        RowFamilyId rowFamilyId)
     {
         command.Parameters.AddWithValue("$generationId", query.GenerationId.ToString());
         command.Parameters.AddWithValue("$sourceSetId", query.SourceSetId.ToString());
+        command.Parameters.AddWithValue("$familyKind", (int)rowFamilyId.Kind);
+        command.Parameters.AddWithValue("$familyAnchorPath", rowFamilyId.AnchorPath);
         if (query.SearchText is not null)
         {
             var escaped = query.SearchText.Replace("\\", "\\\\", StringComparison.Ordinal)
@@ -735,6 +1030,39 @@ public sealed partial class StructuredInformationRepository
         command.Parameters.AddWithValue("$generationId", generationId.ToString());
         command.Parameters.AddWithValue("$sourceSetId", sourceSetId.ToString());
         return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), CultureInfo.InvariantCulture);
+    }
+
+    private static async Task<int> CountFamilyAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        string table,
+        OperationId generationId,
+        RowFamilyId rowFamilyId,
+        CancellationToken cancellationToken,
+        string additionalPredicate = "")
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            SELECT COUNT(*) FROM {table}
+            WHERE generation_id = $generationId AND source_set_id = $sourceSetId
+              AND family_kind = $familyKind AND family_anchor_path = $familyAnchorPath
+              {additionalPredicate};
+            """;
+        command.Parameters.AddWithValue("$generationId", generationId.ToString());
+        command.Parameters.AddWithValue("$sourceSetId", rowFamilyId.SourceSetId.ToString());
+        command.Parameters.AddWithValue("$familyKind", (int)rowFamilyId.Kind);
+        command.Parameters.AddWithValue("$familyAnchorPath", rowFamilyId.AnchorPath);
+        return Convert.ToInt32(
+            await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
+            CultureInfo.InvariantCulture);
+    }
+
+    private sealed record StoredRowFamily(RowFamilyDefinition Definition, string DisplayName)
+    {
+        public RowFamilyId Id => Definition.Id;
+
+        public RowFamilyId? ParentRowFamilyId => Definition.ParentRowFamilyId;
     }
 
     private static async Task ExecuteAsync(

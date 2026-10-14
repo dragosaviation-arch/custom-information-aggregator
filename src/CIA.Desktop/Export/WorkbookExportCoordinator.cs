@@ -94,7 +94,6 @@ public sealed class WorkbookExportCoordinator(
                 WorkflowRejectionCode.OperationFailed,
                 "Export requires the active prepared Extraction Result to be current.");
         }
-
         if (configuration is null)
         {
             return WorkflowOperationReadiness.Unavailable(
@@ -296,20 +295,32 @@ public sealed class WorkbookExportCoordinator(
             && pair.First.Worksheets.Count == pair.Second.Worksheets.Count
             && pair.First.Worksheets.Zip(pair.Second.Worksheets).All(worksheetPair =>
             {
-                var dataset = extractionResult.Datasets.Single(dataset =>
-                    dataset.SourceSetId == worksheetPair.First.Worksheet.SourceSetId);
+                var dataset = worksheetPair.First.Worksheet.OutputSetId is { } outputSetId
+                    ? extractionResult.Datasets.Single(candidate =>
+                        candidate.OutputSetId == outputSetId)
+                    : extractionResult.Datasets.Single(candidate =>
+                        candidate.RowFamilies.Any(family =>
+                            family.Id == worksheetPair.First.Worksheet.RowFamilyId));
+                var family = dataset.RowFamilies.Single(family =>
+                    family.Id == worksheetPair.First.Worksheet.RowFamilyId);
                 return worksheetPair.First.Worksheet.WorksheetDefinitionId
                         == worksheetPair.Second.WorksheetDefinitionId
+                    && worksheetPair.First.Worksheet.OutputSetId
+                        == worksheetPair.Second.OutputSetId
                     && worksheetPair.First.Worksheet.SourceSetId
                         == worksheetPair.Second.SourceSetId
+                    && worksheetPair.First.Worksheet.RowFamilyId
+                        == worksheetPair.Second.RowFamilyId
                     && string.Equals(
                         worksheetPair.First.Worksheet.Name,
                         worksheetPair.Second.Name,
                         StringComparison.Ordinal)
                     && worksheetPair.First.Worksheet.Order == worksheetPair.Second.Order
-                    && worksheetPair.Second.RowCount == dataset.RowCount
+                    && worksheetPair.Second.RowCount == family.RowCount
                     && worksheetPair.Second.ColumnCount
-                        == configuration.CreateIncludedOutputColumns(dataset.SourceSetId).Count;
+                        == (worksheetPair.First.Worksheet.OutputSetId is { } id
+                            ? configuration.CreateIncludedOutputColumns(id).Count
+                            : configuration.CreateIncludedOutputColumns(family.Id).Count);
             }));
     }
 }

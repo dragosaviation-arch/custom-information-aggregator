@@ -1,5 +1,6 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Sources;
 
 namespace CIA.Core.Database;
@@ -48,17 +49,33 @@ public static class DatabaseTagMapper
     public static IReadOnlyList<DatabaseFieldMapping> CreateFieldMappings(
         SourceSetId sourceSetId,
         IEnumerable<DiscoveryConfigurationItem> configurationItems,
-        IReadOnlyDictionary<DiscoveryInformationIdentity, string> overridesByIdentity)
+        IReadOnlyDictionary<DiscoveryInformationIdentity, string> overridesByIdentity,
+        IReadOnlyDictionary<DiscoveryInformationIdentity, RowFamilyId> familyAssignments)
     {
         ArgumentNullException.ThrowIfNull(configurationItems);
         ArgumentNullException.ThrowIfNull(overridesByIdentity);
+        ArgumentNullException.ThrowIfNull(familyAssignments);
 
         var selected = configurationItems
             .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected
-                && item.Identity.SourceSetId == sourceSetId)
-            .GroupBy(item => DatabaseLogicalFieldIdentity.Create(item.Identity))
-            .OrderBy(group => group.Key.CandidateKind)
-            .ThenBy(group => group.Key.CanonicalFieldIdentity, StringComparer.Ordinal)
+                && item.Identity.SourceSetId == sourceSetId
+                && item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope)
+            .Select(item => new
+            {
+                item.Identity,
+                FamilyId = familyAssignments.TryGetValue(item.Identity, out var familyId)
+                    ? familyId
+                    : throw new ArgumentException(
+                        "Every selected Database field requires a published Row Family assignment.",
+                        nameof(familyAssignments)),
+                EffectiveName = overridesByIdentity.GetValueOrDefault(
+                    item.Identity,
+                    item.Identity.InformationType),
+                IsOverride = overridesByIdentity.ContainsKey(item.Identity)
+            })
+            .GroupBy(item => (item.FamilyId, item.EffectiveName))
+            .OrderBy(group => group.Key.FamilyId)
+            .ThenBy(group => group.Key.EffectiveName, StringComparer.Ordinal)
             .ToArray();
 
         var mappings = new List<DatabaseFieldMapping>(selected.Length);
@@ -69,34 +86,56 @@ public static class DatabaseTagMapper
                 .ThenBy(identity => identity.StructuralIdentity, StringComparer.Ordinal)
                 .ThenBy(identity => identity.InformationType, StringComparer.Ordinal)
                 .ToArray();
-            var explicitNames = identities
-                .Where(overridesByIdentity.ContainsKey)
-                .Select(identity => overridesByIdentity[identity])
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            if (explicitNames.Length > 1
-                || (explicitNames.Length == 1
-                    && identities.Any(identity => !overridesByIdentity.ContainsKey(identity))))
-            {
-                throw new ArgumentException(
-                    "Detailed path variants of one logical field require one consistent Database Tag mapping.",
-                    nameof(overridesByIdentity));
-            }
-
-            var isExplicitOverride = explicitNames.Length == 1;
-            var effectiveName = isExplicitOverride
-                ? explicitNames[0]
-                : identities.Select(identity => identity.InformationType)
-                    .Distinct(StringComparer.Ordinal)
-                    .Single();
             mappings.Add(new DatabaseFieldMapping(
-                group.Key,
-                effectiveName,
-                isExplicitOverride,
+                group.Key.FamilyId,
+                group.Key.EffectiveName,
+                group.Any(item => item.IsOverride),
                 identities));
         }
 
         return mappings;
+    }
+
+    public static IReadOnlyList<DatabaseFieldMapping> CreateFieldMappings(
+        SourceSetId sourceSetId,
+        IEnumerable<DiscoveryConfigurationItem> configurationItems,
+        IReadOnlyDictionary<DiscoveryInformationIdentity, string> overridesByIdentity)
+    {
+        var items = configurationItems.ToArray();
+        var legacyFamily = new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/legacy");
+        return items
+            .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected
+                && item.Identity.SourceSetId == sourceSetId
+                && item.Identity.CandidateKind != SourceValueCandidateKind.ElementScope)
+            .GroupBy(item => DatabaseLogicalFieldIdentity.Create(item.Identity))
+            .OrderBy(group => group.Key.CandidateKind)
+            .ThenBy(group => group.Key.CanonicalFieldIdentity, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var identities = group.Select(item => item.Identity)
+                    .OrderBy(identity => identity.StructuralPath, StringComparer.Ordinal)
+                    .ThenBy(identity => identity.StructuralIdentity, StringComparer.Ordinal)
+                    .ToArray();
+                var explicitNames = identities.Where(overridesByIdentity.ContainsKey)
+                    .Select(identity => overridesByIdentity[identity])
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
+                if (explicitNames.Length > 1
+                    || explicitNames.Length == 1
+                    && identities.Any(identity => !overridesByIdentity.ContainsKey(identity)))
+                {
+                    throw new ArgumentException(
+                        "Detailed path variants of one legacy logical field require one consistent Database Tag mapping.",
+                        nameof(overridesByIdentity));
+                }
+
+                return new DatabaseFieldMapping(
+                    legacyFamily,
+                    explicitNames.SingleOrDefault() ?? identities[0].InformationType,
+                    explicitNames.Length == 1,
+                    identities);
+            })
+            .ToArray();
     }
 
     public static DatabaseFieldMapping FindMapping(

@@ -1,5 +1,6 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core;
@@ -53,10 +54,19 @@ public sealed class DatabaseBuildCoordinatorTests
             context.Configuration,
             context.Workflow,
             coordinator);
+        using var discovery = new DiscoveryWorkspaceViewModel(
+            new UnexpectedDiscoveryClient(),
+            context.Configuration,
+            context.Sources,
+            context.Workflow,
+            coordinator);
+
+        Assert.AreEqual("Create Database", discovery.DatabaseBuildButtonText);
 
         var result = await coordinator.BuildAsync();
 
         Assert.IsTrue(result.Accepted);
+        Assert.AreEqual("Update Database", discovery.DatabaseBuildButtonText);
         Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Database);
         Assert.AreEqual(client.Correlation?.OperationId, coordinator.CurrentGeneration?.OperationId);
         Assert.HasCount(1, database.Columns);
@@ -295,7 +305,7 @@ public sealed class DatabaseBuildCoordinatorTests
         CollectionAssert.AreEqual(
             new[] { "Combined Excel", "Combined Excel SourceId", "Source ID" },
             exportConfiguration.CreateIncludedOutputColumns(
-                viewModel.SelectedDataset!.Summary.SourceSetId)
+                viewModel.SelectedRowFamily!.Summary.Id)
                 .Select(column => column.Header).ToArray());
         Assert.AreEqual("Combined", combined.DatabaseField);
         Assert.HasCount(1, reviewClient.Requests);
@@ -624,6 +634,89 @@ public sealed class DatabaseBuildCoordinatorTests
         Assert.AreEqual("Database generation failed unexpectedly.", viewModel.StatusDetail);
         Assert.AreNotEqual("Database created", viewModel.StatusTitle);
         Assert.AreEqual(WorkflowArtifactStatus.Unavailable, context.Workflow.Current.Database);
+    }
+
+    [TestMethod]
+    [TestCategory("Spr213RecoveryC1")]
+    public async Task OutputSetSelectionRequestsBoundedReviewByOutputSetIdentity()
+    {
+        var context = await BuildContext.CreateAsync();
+        var parentSourceSetId = context.Configuration.Current.Items.Single().Identity.SourceSetId;
+        var detailedIdentity = context.Configuration.Current.Items.Single().Identity;
+        var familyId = new RowFamilyId(parentSourceSetId, RowFamilyKind.Root, "/root");
+
+        DatabaseDatasetSummary Dataset(OutputSetId outputSetId, string name, int ordinal)
+        {
+            var mapping = new DatabaseFieldMapping(familyId, "DatabaseName", true, [detailedIdentity]);
+            var column = new DatabaseColumnDefinition(
+                new DatabaseColumnIdentity(
+                    familyId,
+                    mapping.FieldKey,
+                    DatabaseRepeatCoordinatePath.Empty),
+                mapping.EffectiveName,
+                1);
+            var family = new DatabaseRowFamilySummary(
+                familyId,
+                null,
+                1,
+                "Root",
+                1,
+                1,
+                1,
+                [column],
+                [mapping]);
+            return new DatabaseDatasetSummary(
+                outputSetId,
+                parentSourceSetId,
+                name,
+                ordinal,
+                RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+                1,
+                1,
+                [column],
+                [mapping],
+                [family]);
+        }
+
+        var firstOutputSetId = OutputSetId.CreateNew();
+        var secondOutputSetId = OutputSetId.CreateNew();
+        var generation = new DatabaseGenerationSummary(
+            OperationId.CreateNew(),
+            [
+                Dataset(firstOutputSetId, "Root", 1),
+                Dataset(secondOutputSetId, "book", 2)
+            ]);
+        var sourceId = SourceId.CreateNew();
+        var reviewClient = new RecordingHierarchyDatabaseReviewClient(query =>
+        {
+            var dataset = generation.Datasets.Single(candidate =>
+                candidate.OutputSetId == query.OutputSetId);
+            return AcceptedHierarchyReview(
+                generation.OperationId,
+                dataset,
+                query,
+                1,
+                [(sourceId, new[] { ("DatabaseName", dataset.DisplayName) })]);
+        });
+        var coordinator = context.CreateCoordinator(new RecordingDatabaseClient(
+            (Func<OperationCorrelation, DatabaseBuildSpecification, DatabaseClientResult>)((_, _) =>
+                throw new AssertFailedException("Review navigation must not rebuild the Database."))));
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            coordinator,
+            reviewClient);
+
+        coordinator.AdoptRestoredGeneration(generation);
+        await WaitForAsync(() => viewModel.Records.FirstOrDefault()?.Cells[0].DisplayValue == "Root");
+        Assert.HasCount(2, viewModel.Datasets);
+        Assert.AreEqual(firstOutputSetId, reviewClient.OutputSetRequests[^1]);
+
+        viewModel.SelectedDataset = viewModel.Datasets[1];
+        await WaitForAsync(() => viewModel.Records.FirstOrDefault()?.Cells[0].DisplayValue == "book");
+        Assert.AreEqual(secondOutputSetId, reviewClient.OutputSetRequests[^1]);
+        Assert.AreEqual(parentSourceSetId, reviewClient.SourceSetRequests[^1]);
+        Assert.AreEqual("book", viewModel.SelectedDataset.DisplayName);
     }
 
     [TestMethod]
@@ -961,6 +1054,8 @@ public sealed class DatabaseBuildCoordinatorTests
 
         public List<SourceSetId> SourceSetRequests { get; } = [];
 
+        public List<OutputSetId?> OutputSetRequests { get; } = [];
+
         public List<DatabaseRowInclusionChange> InclusionChanges { get; } = [];
 
         public Task<DatabaseReviewClientResult> ReadPageAsync(
@@ -969,6 +1064,7 @@ public sealed class DatabaseBuildCoordinatorTests
         {
             Requests.Add((query.GenerationId, query.StartRowOrdinal, query.RowCount));
             SourceSetRequests.Add(query.SourceSetId);
+            OutputSetRequests.Add(query.OutputSetId);
             return Task.FromResult(readPage(query));
         }
 

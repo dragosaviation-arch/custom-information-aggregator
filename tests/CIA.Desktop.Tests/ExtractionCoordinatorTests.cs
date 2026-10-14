@@ -424,10 +424,12 @@ public sealed class ExtractionCoordinatorTests
                         [new WorkbookExportWorksheetSummary(
                             worksheetId,
                             dataset.SourceSetId,
+                            dataset.RowFamilies.Single().Id,
                             "Results",
                             1,
                             dataset.RowCount,
-                            snapshot.CreateIncludedOutputColumns(dataset.SourceSetId).Count)])]),
+                            snapshot.CreateIncludedOutputColumns(
+                                dataset.RowFamilies.Single().Id).Count)])]),
                 FailureCode: null,
                 FailureDescription: null));
         var coordinator = new WorkbookExportCoordinator(
@@ -1292,10 +1294,12 @@ public sealed class ExtractionCoordinatorTests
                             return new WorkbookExportWorksheetSummary(
                                 worksheet.Worksheet.WorksheetDefinitionId,
                                 worksheet.Worksheet.SourceSetId,
+                                worksheet.Worksheet.RowFamilyId,
                                 worksheet.Worksheet.Name,
                                 worksheet.Worksheet.Order,
                                 dataset.RowCount,
-                                configuration.CreateIncludedOutputColumns(dataset.SourceSetId).Count);
+                                configuration.CreateIncludedOutputColumns(
+                                    worksheet.Worksheet.RowFamilyId).Count);
                         }).ToArray());
                 }).ToArray()),
             FailureCode: null,

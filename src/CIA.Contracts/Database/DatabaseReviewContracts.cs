@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Text.Json.Serialization;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 
@@ -51,7 +52,8 @@ public sealed record DatabaseReviewQuery
         int startRowOrdinal,
         int rowCount,
         string? searchText,
-        DatabaseRowInclusionFilter inclusionFilter)
+        DatabaseRowInclusionFilter inclusionFilter,
+        OutputSetId? outputSetId = null)
     {
         if (!OperationId.IsValid(generationId.Value))
         {
@@ -61,6 +63,13 @@ public sealed record DatabaseReviewQuery
         if (!SourceSetId.IsValid(sourceSetId.Value))
         {
             throw new ArgumentException("A Database review query requires a Source Set ID.", nameof(sourceSetId));
+        }
+
+        if (outputSetId is { } id && id.Value == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "A Database review Output Set requires an identity.",
+                nameof(outputSetId));
         }
 
         if (startRowOrdinal < 1
@@ -81,15 +90,74 @@ public sealed record DatabaseReviewQuery
 
         GenerationId = generationId;
         SourceSetId = sourceSetId;
+        OutputSetId = outputSetId;
         StartRowOrdinal = startRowOrdinal;
         RowCount = rowCount;
         SearchText = string.IsNullOrWhiteSpace(searchText) ? null : searchText.Trim();
         InclusionFilter = inclusionFilter;
     }
 
+    public DatabaseReviewQuery(
+        OperationId generationId,
+        SourceSetId sourceSetId,
+        RowFamilyId rowFamilyId,
+        int startRowOrdinal,
+        int rowCount,
+        string? searchText,
+        DatabaseRowInclusionFilter inclusionFilter)
+        : this(
+            generationId,
+            sourceSetId,
+            startRowOrdinal,
+            rowCount,
+            searchText,
+            inclusionFilter)
+    {
+        if (rowFamilyId.SourceSetId != sourceSetId)
+        {
+            throw new ArgumentException(
+                "A Database review Row Family must belong to the requested Source Set.",
+                nameof(rowFamilyId));
+        }
+
+        RowFamilyId = rowFamilyId;
+    }
+
+    public DatabaseReviewQuery(
+        OperationId generationId,
+        OutputSetId outputSetId,
+        SourceSetId parentSourceSetId,
+        RowFamilyId rowFamilyId,
+        int startRowOrdinal,
+        int rowCount,
+        string? searchText,
+        DatabaseRowInclusionFilter inclusionFilter)
+        : this(
+            generationId,
+            parentSourceSetId,
+            startRowOrdinal,
+            rowCount,
+            searchText,
+            inclusionFilter,
+            outputSetId)
+    {
+        if (rowFamilyId.SourceSetId != parentSourceSetId)
+        {
+            throw new ArgumentException(
+                "A Database review Row Family must belong to the parent Source Set.",
+                nameof(rowFamilyId));
+        }
+
+        RowFamilyId = rowFamilyId;
+    }
+
     public OperationId GenerationId { get; }
 
     public SourceSetId SourceSetId { get; }
+
+    public OutputSetId? OutputSetId { get; }
+
+    public RowFamilyId? RowFamilyId { get; init; }
 
     public int StartRowOrdinal { get; }
 
@@ -414,11 +482,33 @@ public sealed record DatabaseReviewRow
         Cells = new ReadOnlyCollection<DatabaseReviewCell>(cellArray);
     }
 
+    public DatabaseReviewRow(
+        int ordinal,
+        bool isIncluded,
+        DatabaseRecordIdentity semanticIdentity,
+        DatabaseSourceMetadata source,
+        IReadOnlyList<DatabaseReviewCell> cells)
+        : this(ordinal, isIncluded, semanticIdentity.ToString(), source, cells)
+    {
+        ArgumentNullException.ThrowIfNull(semanticIdentity);
+        if (semanticIdentity.SourceId != source.SourceId
+            || semanticIdentity.RowFamilyId.SourceSetId != source.SourceSetId)
+        {
+            throw new ArgumentException(
+                "A Database record identity must match its source metadata.",
+                nameof(semanticIdentity));
+        }
+
+        SemanticIdentity = semanticIdentity;
+    }
+
     public int Ordinal { get; }
 
     public bool IsIncluded { get; }
 
     public string RecordIdentity { get; }
+
+    public DatabaseRecordIdentity? SemanticIdentity { get; init; }
 
     public DatabaseSourceMetadata Source { get; }
 
@@ -491,11 +581,44 @@ public sealed record DatabaseReviewPage
         TotalRowCount = totalRowCount;
         Rows = new ReadOnlyCollection<DatabaseReviewRow>(rowArray);
         LegacyColumns = Array.Empty<DatabaseReviewColumn>();
+        RowFamily = dataset.RowFamilies.Count == 1
+            ? dataset.RowFamilies[0]
+            : null;
+    }
+
+    public DatabaseReviewPage(
+        OperationId generationId,
+        DatabaseDatasetSummary dataset,
+        DatabaseRowFamilySummary rowFamily,
+        int startRowOrdinal,
+        int requestedRowCount,
+        int totalRowCount,
+        IReadOnlyList<DatabaseReviewRow> rows)
+        : this(
+            generationId,
+            dataset,
+            startRowOrdinal,
+            requestedRowCount,
+            totalRowCount,
+            rows)
+    {
+        ArgumentNullException.ThrowIfNull(rowFamily);
+        if (rowFamily.Id.SourceSetId != dataset.SourceSetId
+            || !dataset.RowFamilies.Any(candidate => candidate.Id == rowFamily.Id))
+        {
+            throw new ArgumentException(
+                "The reviewed Row Family must belong to the Database dataset.",
+                nameof(rowFamily));
+        }
+
+        RowFamily = rowFamily;
     }
 
     public OperationId GenerationId { get; }
 
     public DatabaseDatasetSummary Dataset { get; }
+
+    public DatabaseRowFamilySummary? RowFamily { get; init; }
 
     public int StartRowOrdinal { get; }
 
@@ -515,7 +638,8 @@ public sealed record DatabaseReviewPage
     public int TotalPresentationRowCount => TotalRowCount;
 
     [JsonIgnore]
-    public IReadOnlyList<DatabaseColumnDefinition> Columns => Dataset.Columns;
+    public IReadOnlyList<DatabaseColumnDefinition> Columns =>
+        RowFamily?.Columns ?? Dataset.Columns;
 
     private static DatabaseDatasetSummary CreateLegacyDataset(
         OperationId generationId,
@@ -561,4 +685,9 @@ public sealed record DatabaseRowInclusionChange(
     OperationId GenerationId,
     SourceSetId SourceSetId,
     IReadOnlyList<int> RowOrdinals,
-    bool IsIncluded);
+    bool IsIncluded)
+{
+    public OutputSetId? OutputSetId { get; init; }
+
+    public RowFamilyId? RowFamilyId { get; init; }
+}

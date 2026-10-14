@@ -1,5 +1,6 @@
 using System.Globalization;
 using CIA.Contracts.Database;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using Microsoft.Data.Sqlite;
@@ -11,6 +12,17 @@ public sealed partial class StructuredInformationRepository
     public async Task<DatabaseGenerationSummary?> CreateWorkingStateSnapshotAsync(
         string snapshotPath,
         DatabaseGenerationSummary? expectedGeneration,
+        CancellationToken cancellationToken = default)
+        => await CreateWorkingStateSnapshotAsync(
+            snapshotPath,
+            expectedGeneration,
+            expectedExtraction: null,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<DatabaseGenerationSummary?> CreateWorkingStateSnapshotAsync(
+        string snapshotPath,
+        DatabaseGenerationSummary? expectedGeneration,
+        ExtractionResultSummary? expectedExtraction,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(snapshotPath);
@@ -30,12 +42,16 @@ public sealed partial class StructuredInformationRepository
                 source.BackupDatabase(destination);
             }
 
-            await RemoveNonRestorablePublicationsAsync(snapshotPath, cancellationToken)
+            await RemoveNonRestorablePublicationsAsync(
+                    snapshotPath,
+                    preserveExtraction: expectedExtraction is not null,
+                    cancellationToken)
                 .ConfigureAwait(false);
             var actual = await ValidateWorkingStateSnapshotAsync(
                     snapshotPath,
                     CurrentSchemaVersion,
                     expectedGeneration,
+                    expectedExtraction,
                     expectedSources: null,
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -56,6 +72,21 @@ public sealed partial class StructuredInformationRepository
         string snapshotPath,
         int expectedSchemaVersion,
         DatabaseGenerationSummary? expectedGeneration,
+        IReadOnlyList<LoadedSourceContract>? expectedSources,
+        CancellationToken cancellationToken = default)
+        => await ValidateWorkingStateSnapshotAsync(
+            snapshotPath,
+            expectedSchemaVersion,
+            expectedGeneration,
+            expectedExtraction: null,
+            expectedSources,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<DatabaseGenerationSummary?> ValidateWorkingStateSnapshotAsync(
+        string snapshotPath,
+        int expectedSchemaVersion,
+        DatabaseGenerationSummary? expectedGeneration,
+        ExtractionResultSummary? expectedExtraction,
         IReadOnlyList<LoadedSourceContract>? expectedSources,
         CancellationToken cancellationToken = default)
     {
@@ -100,10 +131,16 @@ public sealed partial class StructuredInformationRepository
                     .ConfigureAwait(false);
             }
 
-            if (await HasPublishedExtractionAsync(connection, cancellationToken).ConfigureAwait(false))
+            var actualExtraction = await ReadSnapshotPublishedExtractionAsync(
+                    connection,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (!ExtractionResultSnapshotComparer.AreEquivalent(
+                expectedExtraction,
+                actualExtraction))
             {
                 throw new StructuredInformationRepositoryException(
-                    "A working-state SQLite snapshot cannot retain an Extraction publication.");
+                    "The SQLite snapshot published Extraction Result does not match the working-state manifest.");
             }
 
             if (await HasDiscoveryIndexAsync(connection, cancellationToken).ConfigureAwait(false))
@@ -133,12 +170,30 @@ public sealed partial class StructuredInformationRepository
         IReadOnlyList<LoadedSourceContract> expectedSources,
         Func<bool> tryEnterNonCancellablePublicationBoundary,
         CancellationToken cancellationToken = default)
+        => await RestoreWorkingStateSnapshotAsync(
+            snapshotPath,
+            expectedSchemaVersion,
+            expectedGeneration,
+            expectedExtraction: null,
+            expectedSources,
+            tryEnterNonCancellablePublicationBoundary,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<DatabaseGenerationSummary?> RestoreWorkingStateSnapshotAsync(
+        string snapshotPath,
+        int expectedSchemaVersion,
+        DatabaseGenerationSummary? expectedGeneration,
+        ExtractionResultSummary? expectedExtraction,
+        IReadOnlyList<LoadedSourceContract> expectedSources,
+        Func<bool> tryEnterNonCancellablePublicationBoundary,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(tryEnterNonCancellablePublicationBoundary);
         await ValidateWorkingStateSnapshotAsync(
                 snapshotPath,
                 expectedSchemaVersion,
                 expectedGeneration,
+                expectedExtraction,
                 expectedSources,
                 cancellationToken)
             .ConfigureAwait(false);
@@ -167,6 +222,7 @@ public sealed partial class StructuredInformationRepository
                     DatabasePath,
                     expectedSchemaVersion,
                     expectedGeneration,
+                    expectedExtraction,
                     expectedSources,
                     CancellationToken.None)
                 .ConfigureAwait(false);
@@ -190,8 +246,65 @@ public sealed partial class StructuredInformationRepository
         }
     }
 
+    public async Task PrepareVersionOneWorkingStateSnapshotAsync(
+        string snapshotPath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(snapshotPath);
+        await using var connection = CreateExternalConnection(snapshotPath, SqliteOpenMode.ReadWrite);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        var version = await ReadSchemaVersionAsync(connection, cancellationToken).ConfigureAwait(false);
+        if (version > CurrentSchemaVersion)
+        {
+            throw new UnsupportedRepositorySchemaVersionException(version, CurrentSchemaVersion);
+        }
+
+        if (version < CurrentSchemaVersion)
+        {
+            version = await ApplyPendingMigrationsAsync(connection, version, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (version != CurrentSchemaVersion)
+        {
+            throw new StructuredInformationRepositoryException(
+                "The V1 working-state repository could not be migrated safely.");
+        }
+
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                DELETE FROM hierarchy_extraction_publication;
+                DELETE FROM hierarchy_extraction_results;
+                DELETE FROM extraction_publication;
+                DELETE FROM extraction_results;
+                DELETE FROM hierarchy_database_publication;
+                DELETE FROM hierarchy_database_generations;
+                DELETE FROM database_publication;
+                DELETE FROM database_generations;
+                DELETE FROM discovery_publication;
+                DELETE FROM discovery_results;
+                """;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
+        await ValidateCurrentSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+        await ValidateIntegrityAsync(connection, cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task RemoveNonRestorablePublicationsAsync(
         string snapshotPath,
+        bool preserveExtraction,
         CancellationToken cancellationToken)
     {
         await using var connection = CreateExternalConnection(snapshotPath, SqliteOpenMode.ReadWrite);
@@ -207,14 +320,21 @@ public sealed partial class StructuredInformationRepository
         {
             await using var command = connection.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = """
-                DELETE FROM hierarchy_extraction_publication;
-                DELETE FROM hierarchy_extraction_results;
-                DELETE FROM extraction_publication;
-                DELETE FROM extraction_results;
-                DELETE FROM discovery_publication;
-                DELETE FROM discovery_results;
-                """;
+            command.CommandText = preserveExtraction
+                ? """
+                    DELETE FROM extraction_publication;
+                    DELETE FROM extraction_results;
+                    DELETE FROM discovery_publication;
+                    DELETE FROM discovery_results;
+                    """
+                : """
+                    DELETE FROM hierarchy_extraction_publication;
+                    DELETE FROM hierarchy_extraction_results;
+                    DELETE FROM extraction_publication;
+                    DELETE FROM extraction_results;
+                    DELETE FROM discovery_publication;
+                    DELETE FROM discovery_results;
+                    """;
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -291,6 +411,28 @@ public sealed partial class StructuredInformationRepository
         return Convert.ToInt32(
             await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
             CultureInfo.InvariantCulture) != 0;
+    }
+
+    private static async Task<ExtractionResultSummary?> ReadSnapshotPublishedExtractionAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = connection.BeginTransaction(deferred: true);
+        var extractionId = await ReadPublishedHierarchyExtractionIdAsync(
+                connection,
+                transaction,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var result = extractionId is null
+            ? null
+            : await ReadHierarchyExtractionSummaryAsync(
+                    connection,
+                    transaction,
+                    extractionId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return result;
     }
 
     private static async Task<bool> HasDiscoveryIndexAsync(

@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Database;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -26,7 +27,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(20);
 
     [TestMethod]
-    public async Task SelectionCheckboxAlsoSelectsPreviewAndLoadsFirstOccurrence()
+    public async Task SelectionCheckboxAndInputOutputShellPreservePreviewState()
     {
         await WpfTestApplication.RunAsync(VerifyInteractionAsync).WaitAsync(TestTimeout);
     }
@@ -70,11 +71,12 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                 sourceSet,
                 workflow,
                 databaseBuild);
+            var view = new DiscoveryWorkspaceView { DataContext = viewModel };
             var window = new Window
             {
                 Width = 1400,
                 Height = 760,
-                Content = new DiscoveryWorkspaceView { DataContext = viewModel },
+                Content = view,
                 ShowInTaskbar = false,
                 WindowStyle = WindowStyle.None
             };
@@ -85,6 +87,25 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                 await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
                 await AwaitOccurrencePreviewAsync(viewModel);
                 var logical = viewModel.Information.Single();
+                Assert.HasCount(2, logical.Children);
+                logical.IsExpanded = true;
+                await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                view.UpdateLayout();
+                var detailedPreview = FindVisualDescendant<Button>(
+                    view,
+                    button => string.Equals(
+                        AutomationProperties.GetName(button),
+                        "Preview detailed discovered identity",
+                        StringComparison.Ordinal));
+                Assert.IsNotNull(detailedPreview);
+                Assert.IsNotNull(detailedPreview.Command);
+                detailedPreview.Command!.Execute(detailedPreview.CommandParameter);
+                await AwaitOccurrencePreviewAsync(viewModel);
+                var previewInformation = viewModel.PreviewInformation;
+                Assert.IsNotNull(previewInformation);
+                Assert.AreSame(logical.Children[0], previewInformation);
+                Assert.HasCount(1, previewInformation.DetailedIdentities);
+
                 viewModel.ToggleSelectionCommand.Execute(logical);
                 await Dispatcher.Yield(DispatcherPriority.DataBind);
                 Assert.IsTrue(logical.IsSelected);
@@ -213,11 +234,20 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
         Assert.IsTrue(load.Accepted);
 
         var client = new RecordingDiscoveryClient(source.SourceId);
+        var configuration = new ActiveDiscoveryConfiguration();
+        var databaseClient = new UnexpectedDatabaseClient();
+        var databaseBuild = new DatabaseBuildCoordinator(
+            configuration,
+            sourceSet,
+            workflow,
+            databaseClient,
+            NullLogger<DatabaseBuildCoordinator>.Instance);
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
-            new ActiveDiscoveryConfiguration(),
+            configuration,
             sourceSet,
-            workflow);
+            workflow,
+            databaseBuild);
         var view = new DiscoveryWorkspaceView
         {
             DataContext = viewModel
@@ -302,6 +332,182 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.AreEqual("Mapped beta", beta.DatabaseTag);
             Assert.IsTrue(beta.HasDatabaseTagOverride);
             Assert.AreEqual("Mapped beta", viewModel.SelectedDatabaseTag);
+
+            var selectedLayout = viewModel.SourceSetLayouts.Single();
+            selectedLayout.SelectedLayout = RepeatedDataLayout.AllCombinations;
+            viewModel.ShowBlacklisted = false;
+            viewModel.ShowOnlySelected = true;
+            viewModel.ShowOnlyDatabaseTagOverrides = true;
+            rows.SelectedItem = beta;
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            await AwaitOccurrencePreviewAsync(viewModel);
+            Assert.AreSame(beta, viewModel.SelectedInformation);
+            var runCalls = client.RunCallCount;
+            var occurrenceCalls = client.OccurrenceCallCount;
+            var previewText = viewModel.OccurrencePreviewText;
+
+            var inputPreview = (Grid)view.FindName("InputPreviewContent");
+            var outputPreview = (Border)view.FindName("OutputPreviewContent");
+            var inputSettings = (Grid)view.FindName("InputSettingsContent");
+            var outputSettings = (Grid)view.FindName("OutputSettingsContent");
+            var navigator = (WrapPanel)view.FindName("OccurrenceNavigator");
+            var ordinalInput = (TextBox)view.FindName("OccurrenceOrdinalInput");
+            var inputMode = (Button)view.FindName("InputModeButton");
+            var outputMode = (Button)view.FindName("OutputModeButton");
+            var outputGroupSelector = (ComboBox)view.FindName("OutputPreviewGroupSelector");
+            var outputPreviewScroll = (ScrollViewer)view.FindName("OutputPreviewScrollViewer");
+            var outputPlanGroups = (ItemsControl)view.FindName("OutputPlanGroups");
+            var outputSettingsGroups = (ItemsControl)view.FindName("OutputSettingsGroups");
+            var inputSettingsTabs = (TabControl)view.FindName("InputSettingsTabs");
+            var interpretationSummary = (Border)view.FindName("OutputInterpretationSummary");
+            var advancedOptions = (Expander)view.FindName("OutputAdvancedOptionsExpander");
+            var decomposer = (Button)view.FindName("DecomposerButton");
+            var sharedActions = (WrapPanel)view.FindName("SharedDiscoveryActions");
+            var sharedDatabaseAction = (WrapPanel)view.FindName("SharedDatabaseAction");
+            var buildDatabase = (Button)view.FindName("BuildDatabaseButton");
+            var buildCommand = viewModel.BuildDatabaseCommand;
+            var initialCanBuild = buildCommand.CanExecute(null);
+            var previewRow = (RowDefinition)view.FindName("PreviewRow");
+            var settingsRow = (RowDefinition)view.FindName("SettingsRow");
+
+            Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
+            Assert.IsTrue(inputPreview.IsVisible);
+            Assert.IsTrue(inputSettings.IsVisible);
+            Assert.IsFalse(outputPreview.IsVisible);
+            Assert.IsFalse(outputSettings.IsVisible);
+            Assert.IsTrue(inputMode.IsTabStop);
+            Assert.IsTrue(outputMode.IsTabStop);
+            Assert.IsNotNull(outputMode.Command);
+            Assert.IsFalse(inputSettingsTabs.Items.Cast<TabItem>().Any(item =>
+                string.Equals(item.Header?.ToString(), "Layout", StringComparison.Ordinal)));
+            Assert.IsTrue(sharedActions.IsVisible);
+            Assert.AreEqual(4, Grid.GetRow(sharedActions));
+            Assert.AreEqual(GridUnitType.Star, previewRow.Height.GridUnitType);
+            Assert.AreEqual(GridUnitType.Star, settingsRow.Height.GridUnitType);
+            Assert.AreEqual(previewRow.Height.Value, settingsRow.Height.Value);
+            Assert.IsNull(FindVisualDescendant<WrapPanel>(
+                (Border)view.FindName("PreviewPanel"),
+                panel => ReferenceEquals(panel, sharedActions)),
+                "Shared actions must remain outside the Preview/Settings allocation.");
+            Assert.IsTrue(sharedDatabaseAction.IsVisible);
+            Assert.IsTrue(buildDatabase.IsVisible);
+            Assert.AreSame(buildCommand, buildDatabase.Command);
+            Assert.AreEqual("Create Database", buildDatabase.Content);
+            Assert.IsTrue(initialCanBuild);
+            Assert.IsNull(FindVisualDescendant<Button>(
+                inputSettings,
+                button => ReferenceEquals(button.Command, buildCommand)),
+                "Input Settings must not retain a mode-specific Database action.");
+            Assert.AreEqual(0, databaseClient.BuildCallCount);
+
+            outputMode.Command!.Execute(outputMode.CommandParameter);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+
+            Assert.AreEqual(DiscoveryMode.Output, viewModel.Mode);
+            Assert.IsFalse(inputPreview.IsVisible);
+            Assert.IsFalse(inputSettings.IsVisible);
+            Assert.IsTrue(outputPreview.IsVisible);
+            Assert.IsTrue(outputSettings.IsVisible);
+            Assert.IsFalse(databaseTagField.IsVisible,
+                "Collapsed Input controls must not remain in the active focus tree.");
+            Assert.IsFalse(databaseTagField.Focus());
+            outputGroupSelector.BringIntoView();
+            view.UpdateLayout();
+            Assert.IsTrue(outputGroupSelector.IsVisible);
+            Assert.IsTrue(outputGroupSelector.Focusable);
+            Assert.AreEqual(ScrollBarVisibility.Auto, outputPreviewScroll.VerticalScrollBarVisibility);
+            Assert.AreEqual(viewModel.OutputSetGroups.Count, outputPlanGroups.Items.Count);
+            Assert.AreEqual(viewModel.OutputSetGroups.Count, outputSettingsGroups.Items.Count);
+            Assert.AreEqual(
+                viewModel.OutputSets.Count,
+                viewModel.OutputSetGroups.Sum(group => group.OutputSets.Count));
+            view.UpdateLayout();
+            var outputSetToggle = FindVisualDescendant<CheckBox>(
+                outputSettings,
+                checkBox => string.Equals(
+                    AutomationProperties.GetName(checkBox),
+                    "Enable Output Set",
+                    StringComparison.Ordinal));
+            var outputSetName = FindVisualDescendant<TextBox>(
+                outputSettings,
+                textBox => string.Equals(
+                    AutomationProperties.GetName(textBox),
+                    "Output Set name",
+                    StringComparison.Ordinal));
+            Assert.IsNotNull(outputSetToggle);
+            Assert.IsNotNull(outputSetName);
+            Assert.IsTrue(outputSetToggle.IsChecked.GetValueOrDefault());
+            Assert.AreEqual(viewModel.OutputSets.Single().Name, outputSetName.Text);
+            Assert.IsTrue(buildDatabase.IsVisible);
+            Assert.AreSame(buildCommand, buildDatabase.Command);
+            Assert.AreEqual(initialCanBuild, buildCommand.CanExecute(null));
+            Assert.AreEqual(0, databaseClient.BuildCallCount);
+            Assert.IsNull(databaseBuild.CurrentGeneration,
+                "Output Preview must remain ephemeral until the shared action is invoked.");
+            Assert.AreEqual(
+                outputGroupSelector,
+                FindVisualDescendant<ComboBox>(outputPreview, control => control.Focusable));
+            Assert.AreEqual(Visibility.Visible, interpretationSummary.Visibility);
+            Assert.AreEqual(Visibility.Visible, advancedOptions.Visibility);
+            Assert.IsFalse(advancedOptions.IsExpanded);
+            Assert.IsNull(FindVisualDescendant<ComboBox>(
+                outputSettings,
+                control => true),
+                "Historical layout choices must not remain in the Output Settings visual tree.");
+            Assert.IsFalse(decomposer.IsVisible);
+
+            advancedOptions.IsExpanded = true;
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            view.UpdateLayout();
+            Assert.AreEqual(Visibility.Visible, decomposer.Visibility);
+            Assert.IsFalse(decomposer.IsEnabled);
+            Assert.IsFalse(decomposer.Focusable);
+            Assert.IsFalse(decomposer.IsTabStop);
+            Assert.AreEqual(RepeatedDataLayout.AllCombinations, selectedLayout.SelectedLayout);
+            Assert.IsTrue(navigator.IsVisible);
+            Assert.IsTrue(ordinalInput.IsVisible);
+            Assert.AreSame(beta, viewModel.SelectedInformation);
+            Assert.IsTrue(beta.IsSelected);
+            Assert.AreEqual("Mapped beta", beta.DatabaseTag);
+            Assert.AreEqual(RepeatedDataLayout.AllCombinations, selectedLayout.SelectedLayout);
+            Assert.IsFalse(viewModel.ShowBlacklisted);
+            Assert.IsTrue(viewModel.ShowOnlySelected);
+            Assert.IsTrue(viewModel.ShowOnlyDatabaseTagOverrides);
+            Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+            Assert.AreEqual(3, viewModel.OccurrenceTotal);
+            Assert.AreEqual(previewText, viewModel.OccurrencePreviewText);
+            Assert.AreEqual(runCalls, client.RunCallCount);
+            Assert.AreEqual(occurrenceCalls, client.OccurrenceCallCount);
+
+            Assert.IsNotNull(inputMode.Command);
+            inputMode.Command!.Execute(inputMode.CommandParameter);
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+
+            Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
+            Assert.IsTrue(inputPreview.IsVisible);
+            Assert.IsTrue(inputSettings.IsVisible);
+            Assert.IsFalse(outputPreview.IsVisible);
+            Assert.IsFalse(outputSettings.IsVisible);
+            Assert.IsTrue(buildDatabase.IsVisible);
+            Assert.AreSame(buildCommand, buildDatabase.Command);
+            Assert.AreEqual(initialCanBuild, buildCommand.CanExecute(null));
+            Assert.AreEqual(0, databaseClient.BuildCallCount);
+            Assert.AreEqual(RepeatedDataLayout.AllCombinations, selectedLayout.SelectedLayout);
+            Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+            Assert.AreEqual(3, viewModel.OccurrenceTotal);
+            Assert.AreEqual(previewText, viewModel.OccurrencePreviewText);
+
+            window.Width = 1000;
+            await Dispatcher.Yield(DispatcherPriority.Render);
+            view.UpdateLayout();
+            Assert.AreEqual(0, Grid.GetRow((Border)view.FindName("PreviewPanel")));
+            Assert.AreEqual(0, Grid.GetRow((Border)view.FindName("SettingsPanel")));
+            Assert.AreEqual(0, Grid.GetColumn((Border)view.FindName("PreviewPanel")));
+            Assert.AreEqual(2, Grid.GetColumn((Border)view.FindName("SettingsPanel")));
+            Assert.AreEqual(4, Grid.GetRow(sharedActions));
+            Assert.IsTrue(sharedActions.IsVisible);
+            Assert.IsTrue(buildDatabase.IsVisible);
+            Assert.AreSame(buildCommand, buildDatabase.Command);
         }
         finally
         {
@@ -334,6 +540,10 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
 
     private sealed class RecordingDiscoveryClient(SourceId sourceId) : IDiscoveryClient
     {
+        public int RunCallCount { get; private set; }
+
+        public int OccurrenceCallCount { get; private set; }
+
         public DiscoveryOccurrenceLookup? LastOccurrenceLookup { get; private set; }
 
         public Task<DiscoveryClientResult> RunAsync(
@@ -341,6 +551,12 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             IReadOnlyList<LoadedSourceContract> sources,
             CancellationToken cancellationToken = default)
         {
+            RunCallCount++;
+            var source = sources.Single();
+            var familyId = new RowFamilyId(
+                source.SourceSetId,
+                RowFamilyKind.Root,
+                "/root");
             var completion = OperationCompletion.FromCompletedItems(
                 correlation,
                 sources.Select(source => OperationItemStatus.ProcessedSuccessfully(
@@ -349,31 +565,38 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                 true,
                 [
                     new DiscoveredInformation(
-                        "alpha",
+                        new DiscoveryInformationIdentity(
+                            source.SourceSetId, "/root/alpha", "alpha"),
                         2,
                         [new DiscoveredSourceContribution(sourceId, "source.xml", 2)],
-                        "alpha occurrence 1"),
+                        "alpha occurrence 1") { RowFamilyId = familyId },
                     new DiscoveredInformation(
-                        "beta",
+                        new DiscoveryInformationIdentity(
+                            source.SourceSetId, "/root/beta", "beta"),
                         3,
                         [new DiscoveredSourceContribution(sourceId, "source.xml", 3)],
-                        "beta occurrence 1")
+                        "beta occurrence 1") { RowFamilyId = familyId }
                 ],
                 [],
                 completion,
                 FailureCode: null,
-                FailureDescription: null));
+                FailureDescription: null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog(
+                    [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+            });
         }
 
         public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
             DiscoveryOccurrenceLookup lookup,
             CancellationToken cancellationToken = default)
         {
+            OccurrenceCallCount++;
             LastOccurrenceLookup = lookup;
             return Task.FromResult(new DiscoveryOccurrenceClientResult(
                 true,
                 new DiscoveredOccurrence(
-                    lookup.InformationType,
+                    lookup.Identity,
                     lookup.GlobalOrdinal,
                     lookup.TotalOccurrenceCount,
                     sourceId,
@@ -401,6 +624,10 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             var completion = OperationCompletion.FromCompletedItems(
                 correlation,
                 [OperationItemStatus.ProcessedSuccessfully(source.SourceId.ToString())]);
+            var familyId = new RowFamilyId(
+                source.SourceSetId,
+                RowFamilyKind.Root,
+                "/root");
             return Task.FromResult(new DiscoveryClientResult(
                 true,
                 [
@@ -413,7 +640,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                             "/root/first/comment"),
                         1,
                         contributions,
-                        "First"),
+                        "First") { RowFamilyId = familyId },
                     new DiscoveredInformation(
                         new DiscoveryInformationIdentity(
                             source.SourceSetId,
@@ -423,12 +650,16 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                             "/root/second/comment"),
                         1,
                         contributions,
-                        "Second")
+                        "Second") { RowFamilyId = familyId }
                 ],
                 [],
                 completion,
                 FailureCode: null,
-                FailureDescription: null));
+                FailureDescription: null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog(
+                    [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+            });
         }
 
         public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
@@ -452,11 +683,14 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
 
     private sealed class UnexpectedDatabaseClient : IDatabaseClient
     {
+        public int BuildCallCount { get; private set; }
+
         public Task<DatabaseClientResult> BuildAsync(
             OperationCorrelation correlation,
             DatabaseBuildSpecification specification,
             CancellationToken cancellationToken = default)
         {
+            BuildCallCount++;
             throw new AssertFailedException(
                 "The selection regression must not start Database generation.");
         }
@@ -507,6 +741,10 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             var completion = OperationCompletion.FromCompletedItems(
                 correlation,
                 [OperationItemStatus.ProcessedSuccessfully(source.SourceId.ToString())]);
+            var familyId = new RowFamilyId(
+                source.SourceSetId,
+                RowFamilyKind.Root,
+                "/root");
             return Task.FromResult(new DiscoveryClientResult(
                 true,
                 [
@@ -514,17 +752,21 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                         first,
                         2,
                         [new DiscoveredSourceContribution(source.SourceId, "source.xml", 2)],
-                        "first sample"),
+                        "first sample") { RowFamilyId = familyId },
                     new DiscoveredInformation(
                         second,
                         3,
                         [new DiscoveredSourceContribution(source.SourceId, "source.xml", 3)],
-                        "second sample")
+                        "second sample") { RowFamilyId = familyId }
                 ],
                 [],
                 completion,
                 FailureCode: null,
-                FailureDescription: null));
+                FailureDescription: null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog(
+                    [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+            });
         }
 
         public async Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<inventory xmlns="urn:cia:spr215:ipc" marker="physical-failure">
+  <container>
+    <entry code="A">Plain value</entry>
+    <entry code="B">
+      <value>Nested value</value>
+    </entry>
+    <empty />
+  </container>
+</inventory>

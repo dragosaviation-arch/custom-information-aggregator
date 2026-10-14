@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<catalog xmlns="urn:cia:spr215" source="generic">
+  <section id="hardware">
+    <title>Hardware</title>
+    <item sku="A-1">
+      <name>Widget <em>Pro</em></name>
+      <quantity>2</quantity>
+    </item>
+    <item sku="A-2">
+      <name>Gadget <em>Plus</em></name>
+      <quantity>5</quantity>
+    </item>
+    <empty />
+  </section>
+  <metadata>
+    <item>
+      <label>Reference</label>
+    </item>
+    <name>Catalog metadata</name>
+  </metadata>
+</catalog>

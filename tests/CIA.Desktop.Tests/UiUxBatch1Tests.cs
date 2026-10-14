@@ -104,18 +104,37 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(loadCode, "DetailsRow.Height = new GridLength(38");
         StringAssert.Contains(loadCode, "SettingsRow.Height = new GridLength(62");
 
-        var layoutTab = discoveryDocument.Descendants(presentationNamespace + "TabItem")
-            .Single(tab => string.Equals(tab.Attribute("Header")?.Value, "Layout", StringComparison.Ordinal));
+        Assert.IsFalse(discoveryDocument.Descendants(presentationNamespace + "TabItem")
+            .Any(tab => string.Equals(tab.Attribute("Header")?.Value, "Layout", StringComparison.Ordinal)));
         var generalTab = discoveryDocument.Descendants(presentationNamespace + "TabItem")
             .Single(tab => string.Equals(tab.Attribute("Header")?.Value, "General", StringComparison.Ordinal));
-        Assert.IsTrue(layoutTab.Descendants().Any(element =>
-            string.Equals(element.Attribute("Text")?.Value, "REPEATED DATA LAYOUT", StringComparison.Ordinal)));
         Assert.IsFalse(generalTab.Descendants().Any(element =>
             string.Equals(element.Attribute("Text")?.Value, "REPEATED DATA LAYOUT", StringComparison.Ordinal)));
+        Assert.IsNotNull(FindNamedElement(discovery, "OutputInterpretationSummary"));
+        Assert.IsNotNull(FindNamedElement(discovery, "OutputAdvancedOptionsExpander"));
+        Assert.IsNotNull(FindNamedElement(discovery, "DecomposerButton"));
+        StringAssert.Contains(discovery, "Text=\"Preserve relationships\"");
+        Assert.IsFalse(discovery.Contains("Advanced repeated data layout", StringComparison.Ordinal));
+        Assert.IsFalse(discovery.Contains("Preserve relationships — Recommended", StringComparison.Ordinal));
+        Assert.IsFalse(discovery.Contains("SelectedLayout, Mode=TwoWay", StringComparison.Ordinal));
+        var buildDatabaseButton = FindNamedElement(discovery, "BuildDatabaseButton");
+        var xamlName = XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml");
+        Assert.IsTrue(buildDatabaseButton.Ancestors().Any(element =>
+            string.Equals(
+                element.Attribute(xamlName)?.Value,
+                "SharedDiscoveryActions",
+                StringComparison.Ordinal)));
+        Assert.IsFalse(buildDatabaseButton.Ancestors().Any(element =>
+            element.Attribute(xamlName)?.Value is "InputSettingsContent" or "OutputSettingsContent"));
+        Assert.HasCount(1, discoveryDocument.Descendants().Where(element =>
+            string.Equals(
+                element.Attribute("Command")?.Value,
+                "{Binding BuildDatabaseCommand}",
+                StringComparison.Ordinal)));
         StringAssert.Contains(discovery, "Command=\"{Binding DataContext.ToggleBlacklistCommand");
         StringAssert.Contains(discovery, "Content=\"{Binding BlacklistActionText}\"");
-        StringAssert.Contains(discovery, "x:Name=\"PreviewRow\" Height=\"2*\"");
-        StringAssert.Contains(discovery, "x:Name=\"SettingsRow\" Height=\"3*\"");
+        StringAssert.Contains(discovery, "x:Name=\"PreviewRow\" Height=\"*\"");
+        StringAssert.Contains(discovery, "x:Name=\"SettingsRow\" Height=\"*\"");
         StringAssert.Contains(discovery, "Text=\"{Binding OccurrencePreviewText}\"");
         StringAssert.Contains(discovery, "Command=\"{Binding PreviousOccurrenceCommand}\"");
         StringAssert.Contains(discovery, "Command=\"{Binding NextOccurrenceCommand}\"");
@@ -262,17 +281,23 @@ public sealed class UiUxBatch1Tests
     }
 
     [TestMethod]
-    public void SettingsKeepsActionsAndStateWhileRemovingPermanentInstructionalCopy()
+    public void SettingsQuarantinesWorkingStateActionsWhileKeepingMaintenanceAvailable()
     {
         var settings = ReadDesktopFile("Views", "SettingsWorkspaceView.xaml");
 
-        Assert.IsFalse(settings.Contains(
-            "Save and restore explicit CIA working-state packages",
-            StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("WORKING STATE &amp; RECOVERY", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("x:Name=\"SaveStateButton\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("x:Name=\"RestoreSavedStateButton\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("x:Name=\"DeleteSavedStateButton\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("x:Name=\"RefreshSavedStatesButton\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("x:Name=\"DeleteSavedStateConfirmation\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("Command=\"{Binding SaveStateCommand}\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("Command=\"{Binding RestoreStateCommand}\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("Command=\"{Binding DeleteStateCommand}\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("Command=\"{Binding RefreshSavedStatesCommand}\"", StringComparison.Ordinal));
         Assert.IsFalse(settings.Contains(
             "Missing-source relinking is not available yet",
             StringComparison.Ordinal));
-        Assert.HasCount(1, Regex.Matches(settings, "No saved states\\.").Cast<Match>());
         Assert.IsFalse(settings.Contains(
             "Remove only currently eligible CIA-owned temporary and session artifacts",
             StringComparison.Ordinal));
@@ -280,12 +305,8 @@ public sealed class UiUxBatch1Tests
         Assert.IsFalse(settings.Contains(
             "One detail surface for retained entry types",
             StringComparison.Ordinal));
-        StringAssert.Contains(settings, "x:Name=\"SaveStateButton\"");
-        StringAssert.Contains(settings, "x:Name=\"RestoreSavedStateButton\"");
-        StringAssert.Contains(settings, "x:Name=\"DeleteSavedStateButton\"");
         StringAssert.Contains(settings, "x:Name=\"CleanTemporaryDataButton\"");
         StringAssert.Contains(settings, "Persistent and protected data is preserved.");
-        StringAssert.Contains(settings, "Text=\"{Binding SavedStateNameProblem}\"");
         StringAssert.Contains(settings, "Text=\"{Binding CleanupStatusText}\"");
     }
 

@@ -29,7 +29,8 @@ public sealed class ProcessingHostLifetimeService(
     ExcelWorkbookExportService workbookExport,
     WorkingStatePackageService workingState,
     IHostApplicationLifetime applicationLifetime,
-    ILogger<ProcessingHostLifetimeService> logger) : BackgroundService
+    ILogger<ProcessingHostLifetimeService> logger,
+    DiscoveryOutputPreviewService? discoveryOutputPreview = null) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -427,7 +428,10 @@ public sealed class ProcessingHostLifetimeService(
                                 discoveryResult.Completion,
                                 Array.Empty<DiscoveredInformation>(),
                                 discoveryResult.Issues,
-                                discoveryResult.Failure),
+                                discoveryResult.Failure)
+                            {
+                                FamilyCatalog = discoveryResult.FamilyCatalog
+                            },
                             cancellationToken)
                         .ConfigureAwait(false);
                     break;
@@ -449,6 +453,35 @@ public sealed class ProcessingHostLifetimeService(
                                     : CommandAcceptance.Rejected,
                                 occurrenceResult.Occurrence,
                                 occurrenceResult.Failure),
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+
+                case GetDiscoveryOutputPreviewCommand command when established:
+                    if (discoveryOutputPreview is null)
+                    {
+                        await SendRejectedAsync(
+                                connection,
+                                command.MessageId,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        break;
+                    }
+
+                    var outputPreviewResult = await discoveryOutputPreview
+                        .GetPreviewAsync(command.Request, cancellationToken)
+                        .ConfigureAwait(false);
+                    await connection.SendAsync(
+                            new GetDiscoveryOutputPreviewResponse(
+                                Guid.CreateVersion7(),
+                                DateTimeOffset.UtcNow,
+                                command.MessageId,
+                                command.Request.Occurrence.DiscoveryOperationId,
+                                outputPreviewResult.Accepted
+                                    ? CommandAcceptance.Accepted
+                                    : CommandAcceptance.Rejected,
+                                outputPreviewResult.Preview,
+                                outputPreviewResult.Failure),
                             cancellationToken)
                         .ConfigureAwait(false);
                     break;

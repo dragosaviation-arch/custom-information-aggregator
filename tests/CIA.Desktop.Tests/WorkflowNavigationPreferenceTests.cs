@@ -1,5 +1,6 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core;
@@ -74,7 +75,7 @@ public sealed class WorkflowNavigationPreferenceTests
         await run;
 
         Assert.IsFalse(viewModel.IsBusy);
-        Assert.AreEqual(2, viewModel.ProgressValue);
+        Assert.AreEqual(2, viewModel.ProgressValue, viewModel.StatusDetail);
         Assert.AreEqual("100%", viewModel.ProgressPercentText);
     }
 
@@ -279,19 +280,27 @@ public sealed class WorkflowNavigationPreferenceTests
                 source.SourceSetId,
                 "/root/value",
                 "value");
+            var familyId = RootFamily(source.SourceSetId);
             return Task.FromResult(new DiscoveryClientResult(
                 true,
                 [new DiscoveredInformation(
                     identity,
                     1,
                     [new DiscoveredSourceContribution(source.SourceId, "navigation.xml", 1)],
-                    "sample")],
+                    "sample")
+                {
+                    RowFamilyId = familyId
+                }],
                 [],
                 OperationCompletion.FromCompletedItems(
                     correlation,
                     [OperationItemStatus.ProcessedSuccessfully(source.SourceId.ToString())]),
                 FailureCode: null,
-                FailureDescription: null));
+                FailureDescription: null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog(
+                    [new RowFamilyDefinition(familyId, parentRowFamilyId: null)])
+            });
         }
 
         public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
@@ -337,11 +346,20 @@ public sealed class WorkflowNavigationPreferenceTests
             progress?.Report(new DiscoveryProgressSnapshot(1, sources.Count));
             _intermediateReported.TrySetResult();
             await _completion.Task.WaitAsync(cancellationToken);
-            var information = sources.Select(source => new DiscoveredInformation(
-                new DiscoveryInformationIdentity(source.SourceSetId, "/root/value", "value"),
-                1,
-                [new DiscoveredSourceContribution(source.SourceId, Path.GetFileName(source.Path), 1)],
-                "sample")).ToArray();
+            var information = sources
+                .GroupBy(source => source.SourceSetId)
+                .Select(group => new DiscoveredInformation(
+                    new DiscoveryInformationIdentity(group.Key, "/root/value", "value"),
+                    group.Count(),
+                    group.Select(source => new DiscoveredSourceContribution(
+                        source.SourceId,
+                        Path.GetFileName(source.Path),
+                        1)).ToArray(),
+                    "sample")
+                {
+                    RowFamilyId = RootFamily(group.Key)
+                })
+                .ToArray();
             return new DiscoveryClientResult(
                 true,
                 information,
@@ -351,7 +369,15 @@ public sealed class WorkflowNavigationPreferenceTests
                     sources.Select(source => OperationItemStatus.ProcessedSuccessfully(
                         source.SourceId.ToString())).ToArray()),
                 FailureCode: null,
-                FailureDescription: null);
+                FailureDescription: null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog(
+                    information
+                        .Select(item => item.RowFamilyId!.Value)
+                        .Distinct()
+                        .Select(id => new RowFamilyDefinition(id, parentRowFamilyId: null))
+                        .ToArray())
+            };
         }
 
         public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
@@ -431,11 +457,31 @@ public sealed class WorkflowNavigationPreferenceTests
 
             var columns = dataset.Fields.Select((field, index) => new DatabaseColumnDefinition(
                 new DatabaseColumnIdentity(
-                    dataset.SourceSetId,
+                    field.RowFamilyId,
                     field.FieldKey,
                     DatabaseRepeatCoordinatePath.Empty),
                 field.EffectiveName,
                 index + 1)).ToArray();
+            var rowFamilies = dataset.RowFamilies.Select((family, index) =>
+            {
+                var familyMappings = dataset.Fields
+                    .Where(field => field.RowFamilyId == family.Id)
+                    .ToArray();
+                var familyColumns = columns
+                    .Where(column => column.Identity.RowFamilyId == family.Id)
+                    .Select((column, columnIndex) => column with { Ordinal = columnIndex + 1 })
+                    .ToArray();
+                return new DatabaseRowFamilySummary(
+                    family.Id,
+                    family.ParentRowFamilyId,
+                    index + 1,
+                    family.Id.Kind == RowFamilyKind.Root ? "Root" : family.Id.AnchorPath,
+                    rowCount: 1,
+                    includedRowCount: 1,
+                    valueCount: familyColumns.Length,
+                    familyColumns,
+                    familyMappings);
+            }).ToArray();
             var generation = new DatabaseGenerationSummary(
                 correlation.OperationId,
                 [new DatabaseDatasetSummary(
@@ -443,10 +489,11 @@ public sealed class WorkflowNavigationPreferenceTests
                     dataset.DisplayName,
                     dataset.Ordinal,
                     dataset.RepeatedDataLayout,
-                    1,
-                    1,
+                    rowFamilies.Length,
+                    columns.Length,
                     columns,
-                    dataset.Fields)]);
+                    dataset.Fields,
+                    rowFamilies)]);
             return Task.FromResult(new DatabaseClientResult(
                 true,
                 OperationCompletion.FromCompletedItems(
@@ -458,6 +505,9 @@ public sealed class WorkflowNavigationPreferenceTests
                 FailureDescription: null));
         }
     }
+
+    private static RowFamilyId RootFamily(SourceSetId sourceSetId) =>
+        new(sourceSetId, RowFamilyKind.Root, "/root");
 
     private sealed class StaticSourceIntakeClient(
         IReadOnlyList<LoadedSourceContract> sources) : ISourceIntakeClient

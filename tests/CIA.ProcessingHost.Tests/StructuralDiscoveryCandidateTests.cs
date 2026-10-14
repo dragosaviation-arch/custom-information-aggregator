@@ -1,4 +1,5 @@
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core.Runtime;
@@ -15,6 +16,254 @@ namespace CIA.ProcessingHost.Tests;
 [TestClass]
 public sealed class StructuralDiscoveryCandidateTests
 {
+    [TestMethod]
+    public async Task GenericRoleIdentityInventoryRoundTripsThroughDiscoveryPageFraming()
+    {
+        using var workspace = new StructuralDiscoveryWorkspace();
+        var source = workspace.CopyFixture("role-identity-ipc.xml");
+        var result = await CreateDiscoveryService(workspace.Repository).RunAsync(
+            OperationCorrelation.CreateNew(),
+            [source]);
+
+        Assert.IsTrue(result.Accepted);
+        var structural = result.Information.Single(item =>
+            item.InformationType == "container"
+            && item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope);
+        var scalar = result.Information.Single(item =>
+            item.InformationType == "value"
+            && item.Identity.CandidateKind == SourceValueCandidateKind.Element);
+        var mixed = result.Information.Single(item =>
+            item.InformationType == "entry"
+            && item.Identity.CandidateKind == SourceValueCandidateKind.Element);
+        var attribute = result.Information.Single(item =>
+            item.InformationType == "code"
+            && item.Identity.CandidateKind == SourceValueCandidateKind.Attribute);
+
+        Assert.AreEqual(SourceElementRole.Structural, structural.ElementRole);
+        Assert.AreEqual(SourceElementRole.ValueBearing, scalar.ElementRole);
+        Assert.AreEqual(SourceElementRole.Mixed, mixed.ElementRole);
+        Assert.IsNull(attribute.ElementRole);
+
+        var roundTrippedInformation = new List<DiscoveredInformation>();
+        for (var index = 0; index < result.Information.Count; index++)
+        {
+            var page = new DiscoveryResultPageEvent(
+                Guid.CreateVersion7(),
+                DateTimeOffset.UtcNow,
+                Guid.CreateVersion7(),
+                index,
+                [result.Information[index]]);
+            IpcContractValidator.Validate(page);
+            await using var stream = new MemoryStream();
+
+            await LengthPrefixedJsonMessageFramer.WriteAsync(stream, page);
+            stream.Position = 0;
+            var roundTripped = (DiscoveryResultPageEvent)await LengthPrefixedJsonMessageFramer
+                .ReadAsync(stream);
+            roundTrippedInformation.Add(roundTripped.Information.Single());
+        }
+
+        Assert.HasCount(result.Information.Count, roundTrippedInformation);
+        Assert.IsNull(roundTrippedInformation.Single(item =>
+            item.Identity == attribute.Identity).ElementRole);
+        Assert.AreEqual(SourceElementRole.Mixed, roundTrippedInformation.Single(item =>
+            item.Identity == mixed.Identity).ElementRole);
+    }
+
+    [TestMethod]
+    public async Task DiscoveryPageFramingStillRejectsInconsistentRoleIdentityPairs()
+    {
+        using var workspace = new StructuralDiscoveryWorkspace();
+        var source = workspace.CopyFixture("role-identity-ipc.xml");
+        var result = await CreateDiscoveryService(workspace.Repository).RunAsync(
+            OperationCorrelation.CreateNew(),
+            [source]);
+        var attribute = result.Information.Single(item =>
+            item.InformationType == "code"
+            && item.Identity.CandidateKind == SourceValueCandidateKind.Attribute);
+        var structural = result.Information.Single(item =>
+            item.InformationType == "container"
+            && item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope);
+        var invalidItems = new[]
+        {
+            attribute with { ElementRole = (SourceElementRole)0 },
+            structural with { ElementRole = SourceElementRole.Mixed }
+        };
+
+        foreach (var invalid in invalidItems)
+        {
+            var page = new DiscoveryResultPageEvent(
+                Guid.CreateVersion7(),
+                DateTimeOffset.UtcNow,
+                Guid.CreateVersion7(),
+                PageIndex: 0,
+                [invalid]);
+            await using var stream = new MemoryStream();
+
+            var exception = await Assert.ThrowsExactlyAsync<IpcProtocolException>(
+                () => LengthPrefixedJsonMessageFramer.WriteAsync(stream, page).AsTask());
+
+            Assert.AreEqual(IpcProtocolError.InvalidContract, exception.Error);
+            StringAssert.Contains(exception.Message, "element role is inconsistent");
+            Assert.AreEqual(0, stream.Length);
+        }
+    }
+
+    [TestMethod]
+    public async Task RepeatedPathRoleAggregationIsIndependentOfOccurrenceOrder()
+    {
+        using var workspace = new StructuralDiscoveryWorkspace();
+        var first = workspace.CopyFixture(
+            "role-identity-ipc.xml",
+            targetName: "scalar-first.xml");
+        var second = workspace.CreateSource(
+            "structural-first.xml",
+            """
+            <inventory xmlns="urn:cia:spr215:ipc" marker="physical-failure">
+              <container>
+                <entry code="B"><value>Nested value</value></entry>
+                <entry code="A">Plain value</entry>
+                <empty />
+              </container>
+            </inventory>
+            """);
+
+        var firstDocument = await InterpretAsync(first);
+        var secondDocument = await InterpretAsync(second);
+        const string entryPath =
+            "/{urn:cia:spr215:ipc}inventory/{urn:cia:spr215:ipc}container/{urn:cia:spr215:ipc}entry";
+
+        Assert.AreEqual(
+            SourceElementRole.Mixed,
+            firstDocument.Elements.Single(element =>
+                element.StructuralPath == entryPath).Role);
+        Assert.AreEqual(
+            SourceElementRole.Mixed,
+            secondDocument.Elements.Single(element =>
+                element.StructuralPath == entryPath).Role);
+    }
+
+    [TestMethod]
+    public async Task GenericDiscoveryPublishesCompleteElementInventoryWithTruthfulRoles()
+    {
+        using var workspace = new StructuralDiscoveryWorkspace();
+        var source = workspace.CopyFixture("complete-element-inventory.xml");
+
+        var document = await InterpretAsync(source);
+        var paths = document.Elements.ToDictionary(
+            element => element.StructuralPath,
+            StringComparer.Ordinal);
+
+        Assert.AreEqual(
+            SourceElementRole.Structural,
+            paths["/{urn:cia:spr215}catalog"].Role);
+        Assert.AreEqual(
+            SourceElementRole.Structural,
+            paths["/{urn:cia:spr215}catalog/{urn:cia:spr215}section/{urn:cia:spr215}item"].Role);
+        Assert.AreEqual(
+            SourceElementRole.Mixed,
+            paths["/{urn:cia:spr215}catalog/{urn:cia:spr215}section/{urn:cia:spr215}item/{urn:cia:spr215}name"].Role);
+        Assert.AreEqual(
+            SourceElementRole.ValueBearing,
+            paths["/{urn:cia:spr215}catalog/{urn:cia:spr215}section/{urn:cia:spr215}item/{urn:cia:spr215}quantity"].Role);
+        Assert.AreEqual(
+            SourceElementRole.Structural,
+            paths["/{urn:cia:spr215}catalog/{urn:cia:spr215}section/{urn:cia:spr215}empty"].Role);
+        Assert.AreEqual(2, paths["/{urn:cia:spr215}catalog/{urn:cia:spr215}section/{urn:cia:spr215}item"].OccurrenceCount);
+
+        var result = await CreateDiscoveryService(workspace.Repository).RunAsync(
+            OperationCorrelation.CreateNew(),
+            [source]);
+        var scopes = result.Information
+            .Where(item => item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope)
+            .ToArray();
+
+        Assert.IsTrue(result.Accepted);
+        Assert.IsTrue(scopes.Any(item => item.InformationType == "catalog"));
+        Assert.IsTrue(scopes.Any(item => item.InformationType == "section"));
+        Assert.IsTrue(scopes.Any(item => item.InformationType == "item"));
+        Assert.IsTrue(scopes.Any(item => item.InformationType == "empty"));
+        Assert.IsTrue(scopes.All(item => item.ElementRole == SourceElementRole.Structural));
+        Assert.HasCount(2, scopes.Where(item => item.InformationType == "item").ToArray());
+        Assert.AreEqual(
+            SourceElementRole.Mixed,
+            result.Information.Single(item =>
+                item.InformationType == "name"
+                && item.Identity.CandidateKind == SourceValueCandidateKind.Element
+                && item.StructuralPath.Contains("/{urn:cia:spr215}item/", StringComparison.Ordinal)).ElementRole);
+        Assert.HasCount(2, result.Information.Where(item =>
+            item.InformationType == "name"
+            && item.Identity.CandidateKind == SourceValueCandidateKind.Element).ToArray());
+        Assert.AreEqual(
+            SourceElementRole.ValueBearing,
+            result.Information.Single(item =>
+                item.InformationType == "quantity"
+                && item.Identity.CandidateKind != SourceValueCandidateKind.Attribute).ElementRole);
+    }
+
+    [TestMethod]
+    public async Task StructuralContainerPreviewIsStatelessAndCarriesNoInventedScalar()
+    {
+        using var workspace = new StructuralDiscoveryWorkspace();
+        var source = workspace.CopyFixture("complete-element-inventory.xml");
+        var service = CreateDiscoveryService(workspace.Repository);
+        var correlation = OperationCorrelation.CreateNew();
+        var result = await service.RunAsync(correlation, [source]);
+        var itemScope = result.Information.Single(item =>
+            item.InformationType == "item"
+            && item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope
+            && item.StructuralPath.EndsWith("/{urn:cia:spr215}section/{urn:cia:spr215}item", StringComparison.Ordinal));
+
+        var second = await CreateDiscoveryService(workspace.Repository).GetOccurrenceAsync(
+            CreateLookup(correlation, itemScope, source, globalOrdinal: 2));
+
+        Assert.IsTrue(second.Accepted);
+        Assert.AreEqual(string.Empty, second.Occurrence?.Value);
+        Assert.AreEqual(2, second.Occurrence?.Ordinal);
+        Assert.AreEqual(2, second.Occurrence?.TotalOccurrenceCount);
+        Assert.AreEqual(itemScope.Identity, second.Occurrence?.Identity);
+    }
+
+    [TestMethod]
+    public async Task StructuralContainerSelectionTargetsOnlyMaterializableDescendants()
+    {
+        using var workspace = new StructuralDiscoveryWorkspace();
+        var source = workspace.CopyFixture("complete-element-inventory.xml");
+        var result = await CreateDiscoveryService(workspace.Repository).RunAsync(
+            OperationCorrelation.CreateNew(),
+            [source]);
+
+        var logical = DiscoveredInformationItemViewModel.CreateLogicalItems(
+                result.Information,
+                _ => "Set 1",
+                _ => DiscoveryInformationDisposition.Neutral,
+                _ => null)
+            .ToArray();
+        var itemScope = logical.Single(item =>
+            item.InformationType == "item"
+            && item.CandidateKind == SourceValueCandidateKind.ElementScope);
+
+        Assert.HasCount(2, itemScope.Children);
+        Assert.IsNotEmpty(itemScope.SelectionTargetIdentities);
+        Assert.IsTrue(itemScope.SelectionTargetIdentities.All(identity =>
+            identity.CandidateKind != SourceValueCandidateKind.ElementScope));
+        var scopePaths = itemScope.Children.Select(child => child.StructuralPath).ToArray();
+        Assert.IsTrue(itemScope.SelectionTargetIdentities.All(identity =>
+            scopePaths.Any(scopePath =>
+                string.Equals(identity.StructuralPath, scopePath, StringComparison.Ordinal)
+                || identity.StructuralPath.StartsWith(
+                    $"{scopePath}/",
+                    StringComparison.Ordinal))));
+        Assert.IsTrue(itemScope.SelectionTargetIdentities.Any(identity =>
+            identity.InformationType == "name"));
+        Assert.IsTrue(itemScope.SelectionTargetIdentities.Any(identity =>
+            identity.InformationType == "quantity"));
+        Assert.IsTrue(itemScope.SelectionTargetIdentities.Any(identity =>
+            identity.InformationType == "label"));
+        Assert.IsFalse(itemScope.SelectionTargetIdentities.Any(identity =>
+            identity.InformationType == "title"));
+    }
+
     [TestMethod]
     public async Task RepeatedExplicitElementsAcrossVariableStructuralContextsRemainCanonicalAndReconcile()
     {

@@ -1,18 +1,402 @@
 using System.Collections.Specialized;
+using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Database;
 using CIA.Desktop.Discovery;
+using CIA.Desktop.Database;
 using CIA.Desktop.Hosting;
 using CIA.Desktop.Presentation;
 using CIA.Desktop.Sources;
 using CIA.Desktop.Workflow;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CIA.Desktop.Tests;
 
 [TestClass]
 public sealed class DiscoveryWorkspaceViewModelTests
 {
+    [TestMethod]
+    public void ThreeExactValueIdentitiesInOneFamilyProduceThreeProjectedFields()
+    {
+        var sourceSetId = SourceSetId.CreateNew();
+        var sourceId = SourceId.CreateNew();
+        var family = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/root/record"),
+            parentRowFamilyId: null);
+        var information = new[] { "code", "name", "quantity" }
+            .Select(field => CreateDetailedInformation(
+                sourceSetId,
+                sourceId,
+                $"/root/record/{field}",
+                field,
+                SourceValueCandidateKind.Element,
+                $"/root/record/{field}") with
+            {
+                RowFamilyId = family.Id,
+                ElementRole = SourceElementRole.ValueBearing
+            })
+            .ToArray();
+        var configuration = new ActiveDiscoveryConfiguration();
+        configuration.Synchronize(information, new DiscoveryFamilyCatalog([family]));
+        configuration.SetSelection(information.Select(item => item.Identity), isSelected: true);
+
+        var mappings = DatabaseTagMapper.CreateFieldMappings(
+            sourceSetId,
+            configuration.Current.Items,
+            configuration.DatabaseTagOverridesByIdentity,
+            configuration.FamilyAssignments);
+
+        Assert.HasCount(3, mappings);
+        CollectionAssert.AreEquivalent(
+            new[] { "code", "name", "quantity" },
+            mappings.Select(mapping => mapping.EffectiveName).ToArray());
+        Assert.IsTrue(mappings.All(mapping => mapping.RowFamilyId == family.Id));
+    }
+
+    [TestMethod]
+    public void SelectionImpactKeepsRootRepeatedNestedAndSameNameFamiliesSeparate()
+    {
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            sourceSetId,
+            Path.GetFullPath("selection-impact.xml"),
+            true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
+        var root = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/root"),
+            null);
+        var repeated = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, "/root/book"),
+            root.Id);
+        var nested = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, "/root/book/review"),
+            repeated.Id);
+        var buyerName = new DiscoveryInformationIdentity(
+            sourceSetId,
+            "/root/book/buyer/name",
+            "name",
+            SourceValueCandidateKind.Element,
+            "/root/book/buyer/name");
+        var reviewName = new DiscoveryInformationIdentity(
+            sourceSetId,
+            "/root/book/review/name",
+            "name",
+            SourceValueCandidateKind.Element,
+            "/root/book/review/name");
+        var fields = new[]
+        {
+            new DatabaseFieldMapping(root.Id, "catalog", false,
+            [
+                new DiscoveryInformationIdentity(
+                    sourceSetId,
+                    "/root/catalog",
+                    "catalog",
+                    SourceValueCandidateKind.Element,
+                    "/root/catalog")
+            ]),
+            new DatabaseFieldMapping(repeated.Id, "Buyer", false, [buyerName]),
+            new DatabaseFieldMapping(nested.Id, "Reviewer", false, [reviewName])
+        };
+        var specification = new DatabaseBuildSpecification(
+        [
+            new DatabaseDatasetBuildSpecification(
+                sourceSetId,
+                "Books",
+                1,
+                RepeatedDataLayout.StructuralRows,
+                [source],
+                [root, repeated, nested],
+                fields)
+        ]);
+
+        var impact = DiscoverySelectionImpactBuilder.Create(specification);
+
+        Assert.HasCount(3, impact.Groups);
+        Assert.AreEqual(3, impact.SelectedDetailedContextCount);
+        Assert.IsTrue(impact.Groups.Any(group => group.RelationshipText == "Root output table"));
+        Assert.IsTrue(impact.Groups.Any(group => group.RelationshipText == "Repeated output table"));
+        Assert.IsTrue(impact.Groups.Any(group =>
+            group.RelationshipText == "Nested repeated output table"));
+        Assert.AreNotEqual(
+            impact.Groups.Single(group => group.ProjectedColumns.Contains("Buyer")).RowFamilyId,
+            impact.Groups.Single(group => group.ProjectedColumns.Contains("Reviewer")).RowFamilyId);
+    }
+
+    [TestMethod]
+    public async Task OutputPreviewRefreshesForOccurrenceSelectionAndLayoutAndDiscardsStaleResult()
+    {
+        var source = CreateSource("output-preview.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        source = sourceSet.CreateIncludedReadySnapshot().Single();
+        var sourceSetId = source.SourceSetId;
+        var rootFamily = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Root, "/root"),
+            null);
+        var repeatedFamily = new RowFamilyDefinition(
+            new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, "/root/record"),
+            rootFamily.Id);
+        var label = CreateDetailedInformation(
+            sourceSetId,
+            source.SourceId,
+            "/root/label",
+            "label",
+            SourceValueCandidateKind.Element,
+            "/root/label",
+            occurrenceCount: 2) with
+        {
+            RowFamilyId = rootFamily.Id
+        };
+        var value = CreateDetailedInformation(
+            sourceSetId,
+            source.SourceId,
+            "/root/record/value",
+            "value",
+            SourceValueCandidateKind.Element,
+            "/root/record/value",
+            occurrenceCount: 2) with
+        {
+            RowFamilyId = repeatedFamily.Id
+        };
+        var firstPreview = new TaskCompletionSource<DiscoveryOutputPreviewClientResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstPreviewStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var previewCall = 0;
+        var client = new StubDiscoveryClient(
+            (correlation, sources) =>
+            {
+                var completion = OperationCompletion.FromCompletedItems(
+                    correlation,
+                    sources.Select(item => OperationItemStatus.ProcessedSuccessfully(
+                        item.SourceId.ToString())));
+                return new DiscoveryClientResult(
+                    true,
+                    [label, value],
+                    [],
+                    completion,
+                    null,
+                    null)
+                {
+                    FamilyCatalog = new DiscoveryFamilyCatalog([rootFamily, repeatedFamily])
+                };
+            },
+            outputPreviewResultFactory: request =>
+            {
+                var call = Interlocked.Increment(ref previewCall);
+                if (call == 1)
+                {
+                    firstPreviewStarted.TrySetResult();
+                    return firstPreview.Task;
+                }
+
+                return Task.FromResult(CreateOutputPreviewResult(
+                    request,
+                    source.SourceId,
+                    $"occurrence-{request.Occurrence.GlobalOrdinal}"));
+            });
+        var configuration = new ActiveDiscoveryConfiguration();
+        var databaseCoordinator = new DatabaseBuildCoordinator(
+            configuration,
+            sourceSet,
+            workflow,
+            new NoOpDatabaseClient(),
+            NullLogger<DatabaseBuildCoordinator>.Instance);
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow,
+            databaseCoordinator);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        foreach (var information in viewModel.Information)
+        {
+            viewModel.ToggleSelectionCommand.Execute(information);
+        }
+
+        Assert.AreEqual(WorkflowArtifactStatus.Current, viewModel.DiscoveryStatus);
+        Assert.IsTrue(configuration.Current.Items.All(item =>
+            item.Disposition == DiscoveryInformationDisposition.Selected),
+            string.Join(",", configuration.Current.Items.Select(item => item.Disposition)));
+        _ = databaseCoordinator.CreateBuildSpecification();
+        Assert.IsTrue(viewModel.HasSelectionImpact, viewModel.SelectionImpact.SummaryText);
+        Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
+        viewModel.ShowOutputModeCommand.Execute(null);
+        await firstPreviewStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        viewModel.SelectedInformation = viewModel.Information.Single(item =>
+            item.InformationType == "value");
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        firstPreview.SetResult(CreateOutputPreviewResult(
+            client.OutputPreviewRequests[0],
+            source.SourceId,
+            "stale-preview"));
+        await WaitUntilAsync(() => client.OutputPreviewRequests.Count >= 2);
+        await WaitUntilAsync(() => viewModel.SelectedOutputPreviewGroup is not null
+            && viewModel.SelectedOutputPreviewGroup.Rows
+                .SelectMany(row => row.Cells)
+                .Any(cell => cell.Value == "occurrence-1"));
+
+        viewModel.ToggleSelectionCommand.Execute(viewModel.SelectedInformation);
+        await WaitUntilAsync(() => client.OutputPreviewRequests.Count >= 3);
+        var selectionImpactBeforeLayoutChange = viewModel.SelectionImpact;
+        viewModel.SourceSetLayouts.Single().SelectedLayout = RepeatedDataLayout.AllCombinations;
+        await WaitUntilAsync(() => client.OutputPreviewRequests.Count >= 4);
+        var planBeforeNavigation = viewModel.OutputPlan.OutputSets.Select(set =>
+            (set.OutputSetId, set.Name, set.SetNumber, set.IsEnabled)).ToArray();
+        await viewModel.NextOccurrenceCommand.ExecuteAsync(null);
+        await WaitUntilAsync(() => client.OutputPreviewRequests.Count >= 5);
+        await WaitUntilAsync(() => viewModel.SelectedOutputPreviewGroup is not null
+            && viewModel.SelectedOutputPreviewGroup.Rows.SelectMany(row => row.Cells)
+                .Any(cell => cell.Value == "occurrence-2"));
+        var buildSpecification = databaseCoordinator.CreateBuildSpecification();
+
+        Assert.IsFalse(viewModel.SelectedOutputPreviewGroup!.Rows
+            .SelectMany(row => row.Cells)
+            .Any(cell => cell.Value == "stale-preview"));
+        Assert.IsTrue(viewModel.SelectedOutputPreviewGroup.Rows
+            .SelectMany(row => row.Cells)
+            .Any(cell => cell.Value == "occurrence-2"));
+        Assert.AreEqual("Projected with Preserve relationships.", viewModel.OutputPreviewStatusText);
+        Assert.AreEqual(
+            RepeatedDataLayout.AllCombinations,
+            client.OutputPreviewRequests[^1].Projection.RepeatedDataLayout);
+        Assert.AreEqual(
+            client.OutputPreviewRequests[^1].Projection.RepeatedDataLayout,
+            buildSpecification.Datasets.Single().RepeatedDataLayout);
+        Assert.AreNotSame(selectionImpactBeforeLayoutChange, viewModel.SelectionImpact);
+        Assert.AreEqual(2, client.OutputPreviewRequests[^1].Occurrence.GlobalOrdinal);
+        Assert.AreEqual(
+            viewModel.SelectedOutputSet!.OutputSetId,
+            client.OutputPreviewRequests[^1].OutputSetId);
+        Assert.HasCount(1, client.OutputPreviewRequests[^1].Projection.Fields);
+        CollectionAssert.AreEqual(
+            planBeforeNavigation,
+            viewModel.OutputPlan.OutputSets.Select(set =>
+                (set.OutputSetId, set.Name, set.SetNumber, set.IsEnabled)).ToArray());
+    }
+
+    [TestMethod]
+    public async Task OutputPlanExistsBeforeOutputModeAndSelectedModelControlsPreviewWithoutAutoBuild()
+    {
+        var source = CreateSource("output-plan.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        source = sourceSet.CreateIncludedReadySnapshot().Single();
+        var root = new RowFamilyDefinition(
+            new RowFamilyId(source.SourceSetId, RowFamilyKind.Root, "/root"),
+            null);
+        var repeated = new RowFamilyDefinition(
+            new RowFamilyId(source.SourceSetId, RowFamilyKind.Repeated, "/root/book"),
+            root.Id);
+        var rootInformation = CreateDetailedInformation(
+            source.SourceSetId,
+            source.SourceId,
+            "/root/title",
+            "title",
+            SourceValueCandidateKind.Element,
+            "/root/title") with
+        {
+            RowFamilyId = root.Id
+        };
+        var repeatedInformation = CreateDetailedInformation(
+            source.SourceSetId,
+            source.SourceId,
+            "/root/book/name",
+            "name",
+            SourceValueCandidateKind.Element,
+            "/root/book/name") with
+        {
+            RowFamilyId = repeated.Id
+        };
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => new DiscoveryClientResult(
+                true,
+                [rootInformation, repeatedInformation],
+                [],
+                OperationCompletion.FromCompletedItems(
+                    correlation,
+                    sources.Select(item => OperationItemStatus.ProcessedSuccessfully(
+                        item.SourceId.ToString()))),
+                null,
+                null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog([root, repeated])
+            },
+            outputPreviewResultFactory: request => Task.FromResult(
+                CreateOutputPreviewResult(request, source.SourceId, "projected")));
+        var configuration = new ActiveDiscoveryConfiguration();
+        var databaseCoordinator = new DatabaseBuildCoordinator(
+            configuration,
+            sourceSet,
+            workflow,
+            new NoOpDatabaseClient(),
+            NullLogger<DatabaseBuildCoordinator>.Instance);
+        var outputPlan = new ActiveDiscoveryOutputPlan();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow,
+            databaseCoordinator,
+            outputPlan: outputPlan);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        foreach (var information in viewModel.Information)
+        {
+            viewModel.ToggleSelectionCommand.Execute(information);
+        }
+
+        Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
+        Assert.HasCount(2, viewModel.OutputSets);
+        Assert.IsTrue(viewModel.OutputSets.All(set => set.IsEnabled));
+        var baseline = outputPlan.Current;
+        var baselineIds = baseline.OutputSets.Select(set => set.OutputSetId).ToArray();
+        viewModel.ShowOutputModeCommand.Execute(null);
+        viewModel.ShowInputModeCommand.Execute(null);
+        CollectionAssert.AreEqual(
+            baselineIds,
+            outputPlan.Current.OutputSets.Select(set => set.OutputSetId).ToArray());
+
+        viewModel.ShowOutputModeCommand.Execute(null);
+        var repeatedSet = viewModel.OutputSets.Single(set =>
+            set.RowFamilyIds.Single() == repeated.Id);
+        viewModel.SelectedOutputSet = repeatedSet;
+        await WaitUntilAsync(() => client.OutputPreviewRequests.Any(request =>
+            request.Projection.RowFamilies.Count == 1
+            && request.Projection.RowFamilies[0].Id == repeated.Id));
+        Assert.IsTrue(client.OutputPreviewRequests[^1].Projection.Fields.All(field =>
+            field.RowFamilyId == repeated.Id));
+
+        var database = await workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
+        workflow.CompleteOperation(database.Operation!.OperationId, OperationOutcome.CompletedSuccessfully);
+        var extraction = await workflow.BeginOperationAsync(WorkflowOperationKind.Extraction);
+        workflow.CompleteOperation(extraction.Operation!.OperationId, OperationOutcome.CompletedSuccessfully);
+        var retainedId = repeatedSet.OutputSetId;
+        var retainedNumber = repeatedSet.SetNumber;
+
+        repeatedSet.IsEnabled = false;
+        repeatedSet.Name = "Book records";
+
+        Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Extraction);
+        var changed = outputPlan.Current.OutputSets.Single(set => set.OutputSetId == retainedId);
+        Assert.AreEqual(retainedNumber, changed.SetNumber);
+        Assert.AreEqual("Book records", changed.Name);
+        Assert.IsFalse(changed.IsEnabled);
+        Assert.AreEqual(1, client.CallCount);
+        Assert.IsNull(workflow.Current.ActiveOperation);
+    }
+
     [TestMethod]
     public void DiscoveryGridSampleIsSingleLineAndBoundedDefensively()
     {
@@ -366,7 +750,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
             Enum.GetValues<RepeatedDataLayout>(),
             viewModel.RepeatedDataLayoutOptions.Select(option => option.Mode).ToArray());
         Assert.IsTrue(viewModel.SourceSetLayouts.All(layout =>
-            layout.SelectedLayout == RepeatedDataLayout.AlignRepeatedGroupsByPosition));
+            layout.SelectedLayout == DiscoveryOutputLayoutDefaults.Recommended));
 
         var database = await workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
         workflow.CompleteOperation(database.Operation!.OperationId, OperationOutcome.CompletedSuccessfully);
@@ -377,17 +761,17 @@ public sealed class DiscoveryWorkspaceViewModelTests
         var secondLayout = viewModel.SourceSetLayouts.Single(layout =>
             layout.SourceSetId == setTwoBuyer.SourceSetId);
 
-        firstLayout.SelectedLayout = RepeatedDataLayout.StructuralRows;
+        firstLayout.SelectedLayout = RepeatedDataLayout.AllCombinations;
 
         Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Discovery);
         Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Database);
         Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Extraction);
-        Assert.AreEqual(RepeatedDataLayout.StructuralRows, firstLayout.SelectedLayout);
+        Assert.AreEqual(RepeatedDataLayout.AllCombinations, firstLayout.SelectedLayout);
         Assert.AreEqual(
-            RepeatedDataLayout.AlignRepeatedGroupsByPosition,
+            DiscoveryOutputLayoutDefaults.Recommended,
             secondLayout.SelectedLayout);
         Assert.AreEqual(
-            RepeatedDataLayout.StructuralRows,
+            RepeatedDataLayout.AllCombinations,
             configuration.Current.SourceSets.Single(item =>
                 item.SourceSetId == firstLayout.SourceSetId).RepeatedDataLayout);
 
@@ -452,7 +836,17 @@ public sealed class DiscoveryWorkspaceViewModelTests
                     lookup.TotalOccurrenceCount,
                     source.SourceId,
                     $"{identity.StructuralPath}:{lookup.GlobalOrdinal}");
-            });
+            },
+            query => new DiscoveryContributorClientResult(
+                true,
+                new DiscoveryContributorPage(
+                    query.DiscoveryOperationId,
+                    query.StartIndex,
+                    TotalSourceCount: 1,
+                    TotalOccurrenceCount: query.DetailedIdentities.Count,
+                    [new DiscoveredSourceContribution(source.SourceId, "logical-fields.xml", 1)]),
+                null,
+                null));
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
             new ActiveDiscoveryConfiguration(),
@@ -466,6 +860,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual("toolnbr", logicalField.InformationType);
         Assert.AreEqual(16, logicalField.TotalOccurrenceCount);
         Assert.HasCount(3, logicalField.DetailedIdentities);
+        Assert.HasCount(3, logicalField.Children);
         Assert.AreEqual(1, logicalField.SourceCount);
         Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
         Assert.AreEqual(16, viewModel.OccurrenceTotal);
@@ -479,6 +874,22 @@ public sealed class DiscoveryWorkspaceViewModelTests
             "/root/second/toolnbr",
             occurrenceLookups[^1].DetailedIdentities[1].StructuralPath);
         Assert.AreEqual(5, occurrenceLookups[^1].GlobalOrdinal);
+
+        var detailedChild = logicalField.Children.Single(child =>
+            child.StructuralPath == "/root/third/toolnbr");
+        viewModel.SelectDetailedInformationCommand.Execute(detailedChild);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreSame(detailedChild, viewModel.PreviewInformation);
+        Assert.AreEqual(6, viewModel.OccurrenceTotal);
+        Assert.HasCount(1, occurrenceLookups[^1].DetailedIdentities);
+        Assert.AreEqual(detailedChild.Identity, occurrenceLookups[^1].DetailedIdentities[0]);
+
+        await viewModel.InspectSourcesCommand.ExecuteAsync(detailedChild);
+        Assert.HasCount(1, client.ContributorQueries[^1].DetailedIdentities);
+        Assert.AreEqual(
+            detailedChild.Identity,
+            client.ContributorQueries[^1].DetailedIdentities[0]);
     }
 
     [TestMethod]
@@ -569,28 +980,43 @@ public sealed class DiscoveryWorkspaceViewModelTests
                         "/root/a/toolname",
                         "toolname",
                         SourceValueCandidateKind.Element,
-                        "/root/a/toolname"),
+                        "/root/a/toolname",
+                        sampleValue: "Alpha tool"),
                     CreateDetailedInformation(
                         loadedSource,
                         "/root/b/toolname",
                         "toolname",
                         SourceValueCandidateKind.Element,
-                        "/root/b/toolname")
+                        "/root/b/toolname",
+                        sampleValue: "Beta tool")
                 ]);
         });
+        var databaseCoordinator = new DatabaseBuildCoordinator(
+            configuration,
+            sourceSet,
+            workflow,
+            new NoOpDatabaseClient(),
+            NullLogger<DatabaseBuildCoordinator>.Instance);
         using var viewModel = new DiscoveryWorkspaceViewModel(
             client,
             configuration,
             sourceSet,
-            workflow);
+            workflow,
+            databaseCoordinator);
 
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
         await AwaitSelectedOccurrenceAsync(viewModel);
         var logicalField = viewModel.Information.Single();
 
+        Assert.AreEqual("Alpha tool", viewModel.OccurrencePreviewText);
+        StringAssert.Contains(viewModel.OccurrencePreviewContextText, "/root/a/toolname");
+
         viewModel.ToggleSelectionCommand.Execute(logicalField);
 
-        Assert.AreEqual("1 / 1 selected", viewModel.SelectionSummary);
+        Assert.AreEqual("2 / 2 selected", viewModel.SelectionSummary);
+        Assert.AreEqual(
+            "1 logical tags → 2 detailed fields → 2 output tables",
+            viewModel.SelectionFanoutSummary);
         Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
             configuration.Current.Items.Single(item => item.Identity == identity).Disposition
                 == DiscoveryInformationDisposition.Selected));
@@ -619,7 +1045,213 @@ public sealed class DiscoveryWorkspaceViewModelTests
         viewModel.ClearDatabaseTagOverrideCommand.Execute(null);
         Assert.IsTrue(logicalField.DetailedIdentities.All(identity =>
             !configuration.DatabaseTagOverridesByIdentity.ContainsKey(identity)));
+
+        var firstChild = logicalField.Children[0];
+        var secondChild = logicalField.Children[1];
+        viewModel.SelectDetailedInformationCommand.Execute(firstChild);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        Assert.AreEqual("Alpha tool", viewModel.OccurrencePreviewText);
+        StringAssert.Contains(viewModel.OccurrencePreviewContextText, "/root/a/toolname");
+        viewModel.SelectedDatabaseTag = "Child Only";
+
+        Assert.AreEqual(
+            "Child Only",
+            configuration.DatabaseTagOverridesByIdentity[firstChild.Identity]);
+        Assert.IsFalse(configuration.DatabaseTagOverridesByIdentity.ContainsKey(
+            secondChild.Identity));
+        Assert.AreEqual("Child Only", firstChild.DatabaseTag);
+        Assert.AreEqual("toolname", secondChild.DatabaseTag);
+        viewModel.SelectDetailedInformationCommand.Execute(secondChild);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        Assert.AreEqual("Beta tool", viewModel.OccurrencePreviewText);
+        StringAssert.Contains(viewModel.OccurrencePreviewContextText, "/root/b/toolname");
         Assert.HasCount(2, configuration.Current.Items);
+    }
+
+    [TestMethod]
+    public async Task StructuralScopeSelectionUsesDescendantFieldsAndPreviewsContextNotScalar()
+    {
+        var source = CreateSource("structural-scope.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        source = sourceSet.CreateIncludedReadySnapshot().Single();
+        var familyId = new RowFamilyId(
+            source.SourceSetId,
+            RowFamilyKind.Root,
+            "/root/record");
+        var scope = CreateDetailedInformation(
+            source,
+            "/root/record",
+            "record",
+            SourceValueCandidateKind.ElementScope,
+            "/root/record",
+            occurrenceCount: 2,
+            sampleValue: "Structural container (no scalar value)") with
+        {
+            RowFamilyId = familyId,
+            ElementRole = SourceElementRole.Structural
+        };
+        var name = CreateDetailedInformation(
+            source,
+            "/root/record/name",
+            "name",
+            SourceValueCandidateKind.Element,
+            "/root/record/name",
+            occurrenceCount: 2,
+            sampleValue: "Alpha") with
+        {
+            RowFamilyId = familyId,
+            ElementRole = SourceElementRole.ValueBearing
+        };
+        var quantity = CreateDetailedInformation(
+            source,
+            "/root/record/quantity",
+            "quantity",
+            SourceValueCandidateKind.Element,
+            "/root/record/quantity",
+            occurrenceCount: 2,
+            sampleValue: "2") with
+        {
+            RowFamilyId = familyId,
+            ElementRole = SourceElementRole.ValueBearing
+        };
+        var configuration = new ActiveDiscoveryConfiguration();
+        var client = new StubDiscoveryClient((correlation, sources) =>
+            Accept(correlation, sources, [scope, name, quantity]));
+        var databaseCoordinator = new DatabaseBuildCoordinator(
+            configuration,
+            sourceSet,
+            workflow,
+            new NoOpDatabaseClient(),
+            NullLogger<DatabaseBuildCoordinator>.Instance);
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow,
+            databaseCoordinator);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var structuralScope = viewModel.Information.Single(item =>
+            item.CandidateKind == SourceValueCandidateKind.ElementScope);
+        viewModel.SelectedInformation = structuralScope;
+        await AwaitSelectedOccurrenceAsync(viewModel);
+
+        Assert.AreEqual(
+            "Structural container — no scalar value. Selecting it applies to its materializable descendant fields.",
+            viewModel.OccurrencePreviewText);
+        StringAssert.Contains(viewModel.OccurrencePreviewContextText, "/root/record");
+        Assert.IsFalse(viewModel.CanEditDatabaseTagOverride);
+        Assert.AreEqual("Descendant fields", structuralScope.DatabaseTag);
+
+        viewModel.ToggleSelectionCommand.Execute(structuralScope);
+
+        Assert.IsTrue(structuralScope.SelectionState ?? false);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Selected,
+            configuration.Current.Items.Single(item => item.Identity == name.Identity).Disposition);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Selected,
+            configuration.Current.Items.Single(item => item.Identity == quantity.Identity).Disposition);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Neutral,
+            configuration.Current.Items.Single(item => item.Identity == scope.Identity).Disposition);
+        Assert.AreEqual("2 / 2 selected", viewModel.SelectionSummary);
+        StringAssert.Contains(viewModel.SelectionFanoutSummary, "2 detailed fields");
+
+        var specification = databaseCoordinator.CreateBuildSpecification();
+        Assert.HasCount(2, specification.Datasets.Single().Fields);
+        Assert.IsFalse(specification.Datasets.Single().Fields
+            .SelectMany(field => field.DetailedIdentities)
+            .Any(identity => identity.CandidateKind == SourceValueCandidateKind.ElementScope));
+    }
+
+    [TestMethod]
+    public async Task DetailedChildrenDriveTriStateSelectionAndCollapsedBulkActions()
+    {
+        var source = CreateSource("tri-state.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        var configuration = new ActiveDiscoveryConfiguration();
+        var client = new StubDiscoveryClient((correlation, sources) => Accept(
+            correlation,
+            sources,
+            [
+                CreateDetailedInformation(
+                    source,
+                    "/root/buyer/name",
+                    "name",
+                    SourceValueCandidateKind.Element,
+                    "/root/buyer/name"),
+                CreateDetailedInformation(
+                    source,
+                    "/root/seller/name",
+                    "name",
+                    SourceValueCandidateKind.Element,
+                    "/root/seller/name"),
+                CreateDetailedInformation(
+                    source,
+                    "/root/owner/name",
+                    "name",
+                    SourceValueCandidateKind.Element,
+                    "/root/owner/name")
+            ]));
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var parent = viewModel.Information.Single();
+        Assert.IsFalse(parent.IsExpanded);
+        Assert.HasCount(3, parent.Children);
+        Assert.IsFalse(parent.SelectionState ?? true);
+        var blacklistedChild = parent.Children.Single(child =>
+            child.StructuralPath == "/root/seller/name");
+
+        viewModel.ToggleSelectionCommand.Execute(parent.Children[0]);
+        Assert.IsNull(parent.SelectionState);
+        Assert.AreEqual("1 / 3 selected", viewModel.SelectionSummary);
+
+        viewModel.ToggleSelectionCommand.Execute(parent);
+        Assert.IsTrue(parent.SelectionState ?? false);
+        Assert.AreEqual("3 / 3 selected", viewModel.SelectionSummary);
+
+        viewModel.ToggleBlacklistCommand.Execute(blacklistedChild);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
+        Assert.IsTrue(parent.SelectionState ?? false);
+
+        viewModel.ToggleSelectionCommand.Execute(parent);
+        Assert.IsFalse(parent.SelectionState ?? true);
+        Assert.IsFalse(parent.Children[0].IsSelected);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
+
+        viewModel.SelectVisibleCommand.Execute(null);
+        Assert.IsTrue(parent.SelectionState ?? false);
+        Assert.IsTrue(parent.Children[0].IsSelected);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
+
+        viewModel.DeselectVisibleCommand.Execute(null);
+        Assert.IsFalse(parent.SelectionState ?? true);
+        Assert.IsFalse(parent.Children[0].IsSelected);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
+
+        viewModel.ToggleSelectionCommand.Execute(parent.Children[0]);
+        Assert.IsNull(parent.SelectionState);
+        viewModel.ShowOutputModeCommand.Execute(null);
+        Assert.AreEqual(DiscoveryMode.Output, viewModel.Mode);
+        Assert.IsNull(parent.SelectionState);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
+        viewModel.ShowInputModeCommand.Execute(null);
+        Assert.AreEqual(DiscoveryMode.Input, viewModel.Mode);
+        Assert.IsNull(parent.SelectionState);
+        Assert.IsTrue(blacklistedChild.IsBlacklisted);
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var reconstructed = viewModel.Information.Single();
+        Assert.IsNull(reconstructed.SelectionState);
+        Assert.IsTrue(reconstructed.Children.Single(child =>
+            child.StructuralPath == "/root/seller/name").IsBlacklisted);
     }
 
     [TestMethod]
@@ -1204,6 +1836,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
         await AwaitSelectedOccurrenceAsync(viewModel);
         var selectedInformation = viewModel.SelectedInformation;
+        var retainedFamilyIds = viewModel.RowFamilies.Select(family => family.Id).ToArray();
         var collectionChangeCount = 0;
         ((INotifyCollectionChanged)viewModel.Information).CollectionChanged +=
             (_, _) => collectionChangeCount++;
@@ -1217,6 +1850,9 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual(1, viewModel.CurrentOccurrenceOrdinal);
         Assert.AreEqual(3, viewModel.OccurrenceTotal);
         Assert.AreEqual(0, collectionChangeCount);
+        CollectionAssert.AreEqual(
+            retainedFamilyIds,
+            viewModel.RowFamilies.Select(family => family.Id).ToArray());
         Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Discovery);
         Assert.AreEqual("Discovery out of date", viewModel.DiscoveryStateText);
         Assert.AreEqual("Discovery re-run failed", viewModel.StatusTitle);
@@ -1665,17 +2301,35 @@ public sealed class DiscoveryWorkspaceViewModelTests
         IReadOnlyList<LoadedSourceContract> sources,
         IReadOnlyList<DiscoveredInformation> information)
     {
+        var assignedInformation = information.Select(item =>
+        {
+            var familyId = item.RowFamilyId
+                ?? new RowFamilyId(
+                    item.SourceSetId,
+                    RowFamilyKind.Root,
+                    item.StructuralPath);
+            return item with { RowFamilyId = familyId };
+        }).ToArray();
+        var families = assignedInformation
+            .Select(item => item.RowFamilyId!.Value)
+            .Distinct()
+            .Order()
+            .Select(familyId => new RowFamilyDefinition(familyId, parentRowFamilyId: null))
+            .ToArray();
         var completion = OperationCompletion.FromCompletedItems(
             correlation,
             sources.Select(source => OperationItemStatus.ProcessedSuccessfully(
                 source.SourceId.ToString())));
         return new DiscoveryClientResult(
             true,
-            information,
+            assignedInformation,
             [],
             completion,
             FailureCode: null,
-            FailureDescription: null);
+            FailureDescription: null)
+        {
+            FamilyCatalog = new DiscoveryFamilyCatalog(families)
+        };
     }
 
     private static DiscoveryClientResult Reject(
@@ -1735,6 +2389,58 @@ public sealed class DiscoveryWorkspaceViewModelTests
             FailureDescription: null);
     }
 
+    private static DiscoveryOutputPreviewClientResult CreateOutputPreviewResult(
+        DiscoveryOutputPreviewRequest request,
+        SourceId sourceId,
+        string value)
+    {
+        var field = request.Projection.Fields[0];
+        var columnIdentity = new DatabaseColumnIdentity(
+            field.RowFamilyId,
+            field.FieldKey,
+            DatabaseRepeatCoordinatePath.Empty);
+        var group = new DiscoveryOutputPreviewGroup(
+            field.RowFamilyId,
+            [new DiscoveryOutputPreviewColumn(columnIdentity, field.EffectiveName, 1)],
+            [
+                new DiscoveryOutputPreviewRow(
+                    1,
+                    new DatabaseRecordIdentity(field.RowFamilyId, sourceId, 1, 1),
+                    [
+                        new DiscoveryOutputPreviewCell(
+                            columnIdentity,
+                            [value],
+                            HasConflict: false,
+                            IsTruncated: false)
+                    ])
+            ],
+            IsTruncated: false);
+        return new DiscoveryOutputPreviewClientResult(
+            true,
+            new DiscoveryOutputPreview(
+                request.OutputSetId,
+                request.Occurrence.DiscoveryOperationId,
+                request.Occurrence.DetailedIdentities[0],
+                request.Occurrence.GlobalOrdinal,
+                sourceId,
+                "output-preview.xml",
+                request.Projection.RepeatedDataLayout,
+                [group]),
+            null,
+            null);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+        while (!predicate() && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.IsTrue(predicate(), "The expected asynchronous preview state was not reached.");
+    }
+
     private static async Task AwaitSelectedOccurrenceAsync(
         DiscoveryWorkspaceViewModel viewModel)
     {
@@ -1761,6 +2467,9 @@ public sealed class DiscoveryWorkspaceViewModelTests
         private readonly Func<
             DiscoveryContributorPageQuery,
             DiscoveryContributorClientResult>? _contributorResultFactory;
+        private readonly Func<
+            DiscoveryOutputPreviewRequest,
+            Task<DiscoveryOutputPreviewClientResult>>? _outputPreviewResultFactory;
         private IReadOnlyList<DiscoveredInformation> _lastInformation = [];
 
         public StubDiscoveryClient(
@@ -1773,11 +2482,15 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 DiscoveryOccurrenceClientResult>? occurrenceResultFactory = null,
             Func<
                 DiscoveryContributorPageQuery,
-                DiscoveryContributorClientResult>? contributorResultFactory = null)
+                DiscoveryContributorClientResult>? contributorResultFactory = null,
+            Func<
+                DiscoveryOutputPreviewRequest,
+                Task<DiscoveryOutputPreviewClientResult>>? outputPreviewResultFactory = null)
         {
             _resultFactory = resultFactory;
             _occurrenceResultFactory = occurrenceResultFactory;
             _contributorResultFactory = contributorResultFactory;
+            _outputPreviewResultFactory = outputPreviewResultFactory;
         }
 
         public IReadOnlyList<LoadedSourceContract> LastSources { get; private set; } = [];
@@ -1791,6 +2504,8 @@ public sealed class DiscoveryWorkspaceViewModelTests
         public List<DiscoveryOccurrenceLookup> OccurrenceLookups { get; } = [];
 
         public List<DiscoveryContributorPageQuery> ContributorQueries { get; } = [];
+
+        public List<DiscoveryOutputPreviewRequest> OutputPreviewRequests { get; } = [];
 
         public Task<DiscoveryClientResult> RunAsync(
             OperationCorrelation correlation,
@@ -1873,6 +2588,31 @@ public sealed class DiscoveryWorkspaceViewModelTests
                     contributors),
                 FailureCode: null,
                 FailureDescription: null));
+        }
+
+        public Task<DiscoveryOutputPreviewClientResult> GetOutputPreviewAsync(
+            DiscoveryOutputPreviewRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            OutputPreviewRequests.Add(request);
+            return _outputPreviewResultFactory?.Invoke(request)
+                ?? Task.FromResult(new DiscoveryOutputPreviewClientResult(
+                    false,
+                    null,
+                    "preview-unavailable",
+                    "Preview unavailable."));
+        }
+    }
+
+    private sealed class NoOpDatabaseClient : IDatabaseClient
+    {
+        public Task<DatabaseClientResult> BuildAsync(
+            OperationCorrelation correlation,
+            DatabaseBuildSpecification specification,
+            CancellationToken cancellationToken = default)
+        {
+            throw new AssertFailedException(
+                "Output preview must not start Database publication.");
         }
     }
 
