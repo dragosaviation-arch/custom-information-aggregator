@@ -4,6 +4,7 @@ using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Export;
 using CIA.Contracts.Extraction;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Contracts.WorkingState;
@@ -710,11 +711,23 @@ public static class IpcContractValidator
             command.Request.Occurrence));
         if (command.Request.MaximumRowsPerGroup is < 1
             or > DiscoveryOutputPreviewLimits.MaximumRowsPerGroup
+            || command.Request.ColumnStartIndex < 0
             || command.Request.Projection.RowFamilies.Count is < 1
                 or > DiscoveryOutputPreviewLimits.MaximumGroups
-            || command.Request.Projection.Fields.Count == 0)
+            || command.Request.Projection.Fields.Count == 0
+            || !Enum.IsDefined(command.Request.Projection.ProjectionMode))
         {
             throw InvalidContract("A Discovery output preview request exceeds its bounded limits.");
+        }
+
+        if (command.Request.Projection.ProjectionMode
+                == DiscoveryOutputProjectionMode.OneRowPerSourceFile
+            && (command.Request.Projection.RowFamilies.Count != 1
+                || command.Request.Projection.RowFamilies[0].Id.Kind
+                    != RowFamilyKind.SourceFileProjection))
+        {
+            throw InvalidContract(
+                "A source-file output preview requires one typed source-file projection family.");
         }
     }
 
@@ -805,6 +818,7 @@ public static class IpcContractValidator
             || preview.OccurrenceOrdinal < 1
             || !SourceId.IsValid(preview.SourceId.Value)
             || string.IsNullOrWhiteSpace(preview.SourceName)
+            || !Enum.IsDefined(preview.ProjectionMode)
             || preview.Groups.Count > DiscoveryOutputPreviewLimits.MaximumGroups)
         {
             throw InvalidContract("An accepted Discovery output preview is invalid.");
@@ -812,8 +826,19 @@ public static class IpcContractValidator
 
         foreach (var group in preview.Groups)
         {
-            if (group.Columns.Count > DiscoveryOutputPreviewLimits.MaximumColumnsPerGroup
+            var maximumColumns = preview.ProjectionMode
+                == DiscoveryOutputProjectionMode.OneRowPerSourceFile
+                    ? DiscoveryOutputPreviewLimits.SourceFileColumnsPerPage
+                    : DiscoveryOutputPreviewLimits.MaximumColumnsPerGroup;
+            var totalColumnCount = group.TotalColumnCount == 0
+                    && preview.ProjectionMode == DiscoveryOutputProjectionMode.PreserveRelationships
+                ? group.Columns.Count
+                : group.TotalColumnCount;
+            if (group.Columns.Count > maximumColumns
                 || group.Rows.Count > DiscoveryOutputPreviewLimits.MaximumRowsPerGroup
+                || totalColumnCount < group.Columns.Count
+                || group.ColumnStartIndex < 0
+                || group.ColumnStartIndex + group.Columns.Count > totalColumnCount
                 || group.Columns.Any(column => column.Identity.RowFamilyId != group.RowFamilyId)
                 || group.Rows.Any(row => row.RecordIdentity.RowFamilyId != group.RowFamilyId
                     || row.Cells.Any(cell => cell.ColumnIdentity.RowFamilyId != group.RowFamilyId

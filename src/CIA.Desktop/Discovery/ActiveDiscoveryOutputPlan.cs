@@ -11,13 +11,18 @@ public sealed record DiscoveryOutputModelProposal(
     DiscoveryOutputModelKey ModelKey,
     string SuggestedName,
     int ModelOrder,
-    IReadOnlyList<RowFamilyId> RowFamilyIds);
+    IReadOnlyList<RowFamilyId> RowFamilyIds,
+    DiscoveryOutputProjectionMode ProjectionMode =
+        DiscoveryOutputProjectionMode.PreserveRelationships);
 
 public sealed class ActiveDiscoveryOutputPlan
 {
     private readonly object _stateGate = new();
     private IReadOnlyList<DiscoveryOutputSetDefinition> _outputSets = [];
     private IReadOnlyList<SourceSetId> _parentSourceSetOrder = [];
+    private readonly Dictionary<SourceSetId, DiscoveryOutputProjectionMode> _projectionModes = [];
+    private readonly Dictionary<(SourceSetId, DiscoveryOutputModelKey),
+        DiscoveryOutputSetDefinition> _retainedOutputSets = [];
 
     public DiscoveryOutputPlanSnapshot Current
     {
@@ -32,7 +37,8 @@ public sealed class ActiveDiscoveryOutputPlan
                             parent,
                             _outputSets.Where(set => set.ParentSourceSetId == parent)
                                 .OrderBy(set => set.ModelOrder)
-                                .ToArray())).ToArray());
+                                .ToArray(),
+                            GetProjectionModeUnsafe(parent))).ToArray());
             }
         }
     }
@@ -80,11 +86,19 @@ public sealed class ActiveDiscoveryOutputPlan
         lock (_stateGate)
         {
             _parentSourceSetOrder = parents;
-            var existing = _outputSets.ToDictionary(
-                set => (set.ParentSourceSetId, set.ModelKey));
+            foreach (var parent in parents)
+            {
+                _projectionModes.TryAdd(
+                    parent,
+                    DiscoveryOutputProjectionMode.PreserveRelationships);
+            }
+
+            var existing = _retainedOutputSets;
             var nextNumber = Math.Max(
                 highestExistingSetNumber,
-                _outputSets.Count == 0 ? 0 : _outputSets.Max(set => set.SetNumber)) + 1;
+                _retainedOutputSets.Count == 0
+                    ? 0
+                    : _retainedOutputSets.Values.Max(set => set.SetNumber)) + 1;
             var synchronized = new List<DiscoveryOutputSetDefinition>(proposalArray.Length);
             foreach (var proposal in proposalArray)
             {
@@ -100,7 +114,8 @@ public sealed class ActiveDiscoveryOutputPlan
                         retained.SetNumber,
                         proposal.ModelOrder,
                         retained.IsEnabled,
-                        proposal.RowFamilyIds));
+                        proposal.RowFamilyIds,
+                        proposal.ProjectionMode));
                     continue;
                 }
 
@@ -112,12 +127,46 @@ public sealed class ActiveDiscoveryOutputPlan
                     nextNumber++,
                     proposal.ModelOrder,
                     isEnabled: true,
-                    proposal.RowFamilyIds));
+                    proposal.RowFamilyIds,
+                    proposal.ProjectionMode));
             }
 
             _outputSets = synchronized
                 .OrderBy(set => set.SetNumber)
                 .ToArray();
+            foreach (var outputSet in _outputSets)
+            {
+                _retainedOutputSets[(outputSet.ParentSourceSetId, outputSet.ModelKey)] = outputSet;
+            }
+        }
+    }
+
+    public DiscoveryOutputProjectionMode GetProjectionMode(SourceSetId parentSourceSetId)
+    {
+        lock (_stateGate)
+        {
+            return GetProjectionModeUnsafe(parentSourceSetId);
+        }
+    }
+
+    public bool SetProjectionMode(
+        SourceSetId parentSourceSetId,
+        DiscoveryOutputProjectionMode projectionMode)
+    {
+        if (!Enum.IsDefined(projectionMode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(projectionMode));
+        }
+
+        lock (_stateGate)
+        {
+            if (GetProjectionModeUnsafe(parentSourceSetId) == projectionMode)
+            {
+                return false;
+            }
+
+            _projectionModes[parentSourceSetId] = projectionMode;
+            return true;
         }
     }
 
@@ -141,8 +190,10 @@ public sealed class ActiveDiscoveryOutputPlan
                 current.SetNumber,
                 current.ModelOrder,
                 isEnabled,
-                current.RowFamilyIds);
+                current.RowFamilyIds,
+                current.ProjectionMode);
             _outputSets = sets;
+            _retainedOutputSets[(current.ParentSourceSetId, current.ModelKey)] = sets[index];
             return true;
         }
     }
@@ -222,11 +273,18 @@ public sealed class ActiveDiscoveryOutputPlan
                 current.SetNumber,
                 current.ModelOrder,
                 current.IsEnabled,
-                current.RowFamilyIds);
+                current.RowFamilyIds,
+                current.ProjectionMode);
             _outputSets = sets;
+            _retainedOutputSets[(current.ParentSourceSetId, current.ModelKey)] = sets[index];
             return true;
         }
     }
+
+    private DiscoveryOutputProjectionMode GetProjectionModeUnsafe(SourceSetId parentSourceSetId) =>
+        _projectionModes.GetValueOrDefault(
+            parentSourceSetId,
+            DiscoveryOutputProjectionMode.PreserveRelationships);
 
     private int FindIndex(OutputSetId outputSetId)
     {
@@ -245,12 +303,37 @@ public sealed class ActiveDiscoveryOutputPlan
 public static class DiscoveryOutputPlanBuilder
 {
     public static IReadOnlyList<DiscoveryOutputModelProposal> Create(
-        DatabaseBuildSpecification specification)
+        DatabaseBuildSpecification specification,
+        IReadOnlyDictionary<SourceSetId, DiscoveryOutputProjectionMode>? projectionModes = null)
     {
         ArgumentNullException.ThrowIfNull(specification);
         var proposals = new List<DiscoveryOutputModelProposal>();
         foreach (var dataset in specification.Datasets.OrderBy(dataset => dataset.Ordinal))
         {
+            var projectionMode = projectionModes?.GetValueOrDefault(
+                dataset.SourceSetId,
+                DiscoveryOutputProjectionMode.PreserveRelationships)
+                ?? DiscoveryOutputProjectionMode.PreserveRelationships;
+            if (projectionMode == DiscoveryOutputProjectionMode.OneRowPerSourceFile)
+            {
+                var selectedFamilies = dataset.RowFamilies
+                    .Where(family => dataset.Fields.Any(field => field.RowFamilyId == family.Id))
+                    .Select(family => family.Id)
+                    .ToArray();
+                if (selectedFamilies.Length > 0)
+                {
+                    proposals.Add(new DiscoveryOutputModelProposal(
+                        dataset.SourceSetId,
+                        new DiscoveryOutputModelKey("source-file-projection:v1"),
+                        $"{dataset.DisplayName} - Source files",
+                        1,
+                        selectedFamilies,
+                        projectionMode));
+                }
+
+                continue;
+            }
+
             var order = 0;
             foreach (var family in dataset.RowFamilies)
             {
@@ -265,7 +348,8 @@ public static class DiscoveryOutputPlanBuilder
                     CreateModelKey(family.Id),
                     CreateSuggestedName(dataset.DisplayName, family.Id),
                     order,
-                    [family.Id]));
+                    [family.Id],
+                    projectionMode));
             }
         }
 

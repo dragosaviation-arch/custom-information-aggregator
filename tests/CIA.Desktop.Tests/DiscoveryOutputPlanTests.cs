@@ -158,6 +158,91 @@ public sealed class DiscoveryOutputPlanTests
             set.RowFamilyIds.Single().Kind == RowFamilyKind.Root));
     }
 
+    [TestMethod]
+    [TestCategory("Spr224")]
+    public void SourceFileModeIsParentScopedAndSwitchingBackRestoresFamilyPlanSettings()
+    {
+        var specification = CreateSpecification(
+            ("Set 1", 1, true),
+            ("Set 2", 2, true));
+        var firstParent = specification.Datasets[0].SourceSetId;
+        var secondParent = specification.Datasets[1].SourceSetId;
+        var plan = new ActiveDiscoveryOutputPlan();
+        plan.Synchronize(
+            DiscoveryOutputPlanBuilder.Create(specification),
+            highestExistingSetNumber: 2);
+        var retainedFamily = plan.Current.OutputSets.First(set =>
+            set.ParentSourceSetId == firstParent
+            && set.RowFamilyIds.Single().Kind == RowFamilyKind.Repeated);
+        Assert.IsTrue(plan.SetEnabled(retainedFamily.OutputSetId, isEnabled: false));
+        Assert.IsTrue(plan.Rename(retainedFamily.OutputSetId, "Retained family name"));
+
+        Assert.IsTrue(plan.SetProjectionMode(
+            firstParent,
+            DiscoveryOutputProjectionMode.OneRowPerSourceFile));
+        plan.Synchronize(
+            DiscoveryOutputPlanBuilder.Create(specification, new Dictionary<
+                SourceSetId, DiscoveryOutputProjectionMode>
+            {
+                [firstParent] = DiscoveryOutputProjectionMode.OneRowPerSourceFile,
+                [secondParent] = DiscoveryOutputProjectionMode.PreserveRelationships
+            }),
+            highestExistingSetNumber: 2);
+
+        var firstPlan = plan.Current.ParentPlans.Single(parent =>
+            parent.ParentSourceSetId == firstParent);
+        var secondPlan = plan.Current.ParentPlans.Single(parent =>
+            parent.ParentSourceSetId == secondParent);
+        Assert.AreEqual(
+            DiscoveryOutputProjectionMode.OneRowPerSourceFile,
+            firstPlan.ProjectionMode);
+        Assert.HasCount(1, firstPlan.OutputSets);
+        Assert.HasCount(2, firstPlan.OutputSets.Single().RowFamilyIds);
+        Assert.AreEqual(
+            DiscoveryOutputProjectionMode.PreserveRelationships,
+            secondPlan.ProjectionMode);
+        Assert.HasCount(2, secondPlan.OutputSets);
+
+        Assert.IsTrue(plan.SetProjectionMode(
+            firstParent,
+            DiscoveryOutputProjectionMode.PreserveRelationships));
+        plan.Synchronize(
+            DiscoveryOutputPlanBuilder.Create(specification, new Dictionary<
+                SourceSetId, DiscoveryOutputProjectionMode>
+            {
+                [firstParent] = DiscoveryOutputProjectionMode.PreserveRelationships,
+                [secondParent] = DiscoveryOutputProjectionMode.PreserveRelationships
+            }),
+            highestExistingSetNumber: 2);
+
+        var restored = plan.Current.OutputSets.Single(set =>
+            set.OutputSetId == retainedFamily.OutputSetId);
+        Assert.AreEqual("Retained family name", restored.Name);
+        Assert.IsFalse(restored.IsEnabled);
+        Assert.AreEqual(retainedFamily.SetNumber, restored.SetNumber);
+        Assert.AreEqual(
+            plan.Current.OutputSets.Count,
+            plan.Current.OutputSets.Select(set => set.SetNumber).Distinct().Count());
+    }
+
+    [TestMethod]
+    [TestCategory("Spr224")]
+    public void MissingProjectionModeDefaultsToPreserveRelationships()
+    {
+        var specification = CreateSpecification(("Set 1", 1, true));
+        var proposals = DiscoveryOutputPlanBuilder.Create(specification);
+        var plan = new ActiveDiscoveryOutputPlan();
+
+        plan.Synchronize(proposals, highestExistingSetNumber: 1);
+
+        Assert.AreEqual(
+            DiscoveryOutputProjectionMode.PreserveRelationships,
+            plan.Current.ParentPlans.Single().ProjectionMode);
+        Assert.IsTrue(plan.Current.OutputSets.All(set =>
+            set.ProjectionMode == DiscoveryOutputProjectionMode.PreserveRelationships));
+        Assert.HasCount(2, plan.Current.OutputSets);
+    }
+
     private static DatabaseBuildSpecification CreateSpecification(
         params (string Name, int Ordinal, bool IncludeRepeated, bool IncludeNested)[] definitions)
     {

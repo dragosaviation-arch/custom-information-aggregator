@@ -113,6 +113,7 @@ public sealed class DatabaseGenerationService(
                                         outputSetId,
                                         source.SourceId,
                                         projection.Rows,
+                                        projection.Columns,
                                         sourceCancellation.Token).ConfigureAwait(false);
                                 }
                                 else

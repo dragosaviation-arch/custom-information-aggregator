@@ -122,6 +122,7 @@ public sealed partial class StructuredInformationRepository
         OutputSetId outputSetId,
         SourceId sourceId,
         IReadOnlyList<DatabaseReviewRow> sourceRows,
+        IReadOnlyList<DatabaseColumnIdentity>? sourceColumns = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(candidate);
@@ -136,7 +137,12 @@ public sealed partial class StructuredInformationRepository
             ?? throw new ArgumentException("The candidate does not contain the Output Set.", nameof(outputSetId));
         var allowedFamilies = dataset.RowFamilies.Select(family => family.Id).ToHashSet();
         var allowedFields = dataset.Fields.Select(field => (field.RowFamilyId, field.FieldKey)).ToHashSet();
+        var columns = (sourceColumns ?? sourceRows.SelectMany(row => row.Cells)
+                .Select(cell => cell.ColumnIdentity).ToArray()).ToArray();
         if (!dataset.Sources.Any(source => source.SourceId == sourceId)
+            || columns.Distinct().Count() != columns.Length
+            || columns.Any(column => !allowedFamilies.Contains(column.RowFamilyId)
+                || !allowedFields.Contains((column.RowFamilyId, column.FieldKey)))
             || sourceRows.Any(row => row.Source.SourceId != sourceId
                 || row.Source.SourceSetId != dataset.ParentSourceSetId
                 || row.SemanticIdentity is null
@@ -164,6 +170,18 @@ public sealed partial class StructuredInformationRepository
             try
             {
                 var generationId = candidate.Correlation.OperationId.ToString();
+                foreach (var column in columns)
+                {
+                    await EnsureOutputSetColumnAsync(
+                        connection,
+                        transaction,
+                        generationId,
+                        outputSetId,
+                        column,
+                        JsonSerializer.Serialize(column.RepeatCoordinates.Coordinates),
+                        cancellationToken).ConfigureAwait(false);
+                }
+
                 var nextRowOrdinals = new Dictionary<RowFamilyId, int>();
                 foreach (var sourceRow in sourceRows
                              .OrderBy(row => row.SemanticIdentity!.RowFamilyId)
@@ -519,7 +537,7 @@ public sealed partial class StructuredInformationRepository
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            SELECT family_kind, family_anchor_path, effective_name,
+            SELECT family_kind, family_anchor_path, field_key, effective_name,
                    is_explicit_override, detailed_identities_json
             FROM hierarchy_output_set_mappings
             WHERE generation_id = $generationId AND output_set_id = $outputSetId
@@ -530,20 +548,57 @@ public sealed partial class StructuredInformationRepository
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            var details = JsonSerializer.Deserialize<DiscoveryInformationIdentity[]>(reader.GetString(4))
+            var details = JsonSerializer.Deserialize<DiscoveryInformationIdentity[]>(reader.GetString(5))
                 ?? throw new StructuredInformationRepositoryException(
                     "Stored Output Set mapping identities are invalid.");
+            var rowFamilyId = new RowFamilyId(
+                parentSourceSetId,
+                (RowFamilyKind)reader.GetInt32(0),
+                reader.GetString(1));
             result.Add(new DatabaseFieldMapping(
-                new RowFamilyId(
-                    parentSourceSetId,
-                    (RowFamilyKind)reader.GetInt32(0),
-                    reader.GetString(1)),
-                reader.GetString(2),
-                reader.GetInt32(3) != 0,
-                details));
+                rowFamilyId,
+                reader.GetString(3),
+                reader.GetInt32(4) != 0,
+                details,
+                ParseOriginatingRowFamilyId(parentSourceSetId, rowFamilyId, reader.GetString(2))));
         }
 
         return result;
+    }
+
+    private static RowFamilyId ParseOriginatingRowFamilyId(
+        SourceSetId sourceSetId,
+        RowFamilyId storedFamilyId,
+        string fieldKey)
+    {
+        if (storedFamilyId.Kind != RowFamilyKind.SourceFileProjection)
+        {
+            return storedFamilyId;
+        }
+
+        var parts = fieldKey.Split(':');
+        if (parts.Length != 5
+            || !string.Equals(parts[0], "source-file", StringComparison.Ordinal)
+            || !int.TryParse(parts[1], CultureInfo.InvariantCulture, out var kindValue)
+            || !Enum.IsDefined(typeof(RowFamilyKind), kindValue))
+        {
+            throw new StructuredInformationRepositoryException(
+                "Stored source-file projection field identity is invalid.");
+        }
+
+        try
+        {
+            return new RowFamilyId(
+                sourceSetId,
+                (RowFamilyKind)kindValue,
+                System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(parts[2])));
+        }
+        catch (Exception exception) when (exception is FormatException or ArgumentException)
+        {
+            throw new StructuredInformationRepositoryException(
+                "Stored source-file projection Row Family origin is invalid.",
+                exception);
+        }
     }
 
     private static async Task<IReadOnlyList<DatabaseColumnDefinition>> ReadOutputSetColumnsAsync(

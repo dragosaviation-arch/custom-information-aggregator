@@ -74,21 +74,32 @@ public sealed class DiscoveryOutputPreviewService(
 
             var selectedOccurrence = matchingOccurrences[resolution.LocalOrdinal - 1];
             var dataset = new DatabaseDatasetBuildSpecification(
+                request.OutputSetId,
                 request.Projection.SourceSetId,
                 request.Projection.SourceSetName,
                 ordinal: 1,
                 request.Projection.RepeatedDataLayout,
                 [resolution.Source],
                 request.Projection.RowFamilies,
-                request.Projection.Fields);
-            var projected = await ProjectSelectedOccurrenceAsync(
-                dataset,
-                resolution.Source,
-                interpretation.Source,
-                selectedOccurrence,
-                request.MaximumRowsPerGroup,
-                cancellationToken).ConfigureAwait(false);
-            var groups = CreateGroups(dataset, projected);
+                request.Projection.Fields,
+                request.Projection.ProjectionMode,
+                request.Projection.SourceProjectionRepeatedPaths);
+            var projected = request.Projection.ProjectionMode ==
+                    DiscoveryOutputProjectionMode.OneRowPerSourceFile
+                ? await sourceProjection.ProjectAsync(
+                    dataset,
+                    resolution.Source,
+                    interpretation.Source,
+                    maximumRowsPerFamily: 1,
+                    cancellationToken).ConfigureAwait(false)
+                : await ProjectSelectedOccurrenceAsync(
+                    dataset,
+                    resolution.Source,
+                    interpretation.Source,
+                    selectedOccurrence,
+                    request.MaximumRowsPerGroup,
+                    cancellationToken).ConfigureAwait(false);
+            var groups = CreateGroups(dataset, projected, request.ColumnStartIndex);
             return DiscoveryOutputPreviewHostResult.Accept(new DiscoveryOutputPreview(
                 request.OutputSetId,
                 request.Occurrence.DiscoveryOperationId,
@@ -97,7 +108,8 @@ public sealed class DiscoveryOutputPreviewService(
                 resolution.Source.SourceId,
                 resolution.SourceName,
                 request.Projection.RepeatedDataLayout,
-                groups));
+                groups,
+                request.Projection.ProjectionMode));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -124,6 +136,7 @@ public sealed class DiscoveryOutputPreviewService(
         CancellationToken cancellationToken)
     {
         var rows = new List<DatabaseReviewRow>();
+        var columns = new List<DatabaseColumnIdentity>();
         var truncatedFamilies = new List<RowFamilyId>();
         foreach (var family in dataset.RowFamilies)
         {
@@ -159,11 +172,13 @@ public sealed class DiscoveryOutputPreviewService(
                     cancellationToken)
                 .ConfigureAwait(false);
             rows.AddRange(projection.Rows);
+            columns.AddRange(projection.Columns);
             truncatedFamilies.AddRange(projection.TruncatedRowFamilies);
         }
 
         return new DatabaseSourceProjection(
             rows,
+            columns.Distinct().ToArray(),
             truncatedFamilies.Count > 0,
             truncatedFamilies.Distinct().ToArray());
     }
@@ -206,7 +221,8 @@ public sealed class DiscoveryOutputPreviewService(
 
     private static IReadOnlyList<DiscoveryOutputPreviewGroup> CreateGroups(
         DatabaseDatasetBuildSpecification dataset,
-        DatabaseSourceProjection projection)
+        DatabaseSourceProjection projection,
+        int columnStartIndex)
     {
         var truncatedFamilies = projection.TruncatedRowFamilies.ToHashSet();
         return dataset.RowFamilies
@@ -217,8 +233,10 @@ public sealed class DiscoveryOutputPreviewService(
                 family.Id,
                 projection.Rows.Where(row => row.SemanticIdentity?.RowFamilyId == family.Id)
                     .ToArray(),
+                projection.Columns.Where(column => column.RowFamilyId == family.Id).ToArray(),
                 projection.IsTruncated && truncatedFamilies.Count == 0
-                    || truncatedFamilies.Contains(family.Id)))
+                    || truncatedFamilies.Contains(family.Id),
+                columnStartIndex))
             .ToArray();
     }
 
@@ -226,16 +244,16 @@ public sealed class DiscoveryOutputPreviewService(
         DatabaseDatasetBuildSpecification dataset,
         RowFamilyId familyId,
         IReadOnlyList<DatabaseReviewRow> rows,
-        bool isTruncated)
+        IReadOnlyList<DatabaseColumnIdentity> projectedColumns,
+        bool isTruncated,
+        int columnStartIndex)
     {
-        var allColumns = rows
-            .SelectMany(row => row.Cells)
-            .Select(cell => cell.ColumnIdentity)
+        var allColumns = projectedColumns
             .Concat(dataset.Fields
                 .Where(field => field.RowFamilyId == familyId)
-                .Where(field => rows.SelectMany(row => row.Cells).All(cell =>
+                .Where(field => projectedColumns.All(column =>
                     !string.Equals(
-                        cell.ColumnIdentity.FieldKey,
+                        column.FieldKey,
                         field.FieldKey,
                         StringComparison.Ordinal)))
                 .Select(field => new DatabaseColumnIdentity(
@@ -243,15 +261,26 @@ public sealed class DiscoveryOutputPreviewService(
                     field.FieldKey,
                     DatabaseRepeatCoordinatePath.Empty)))
             .Distinct()
-            .OrderBy(identity => ResolveFieldOrdinal(dataset, identity))
+            .OrderBy(identity => dataset.ProjectionMode
+                    == DiscoveryOutputProjectionMode.OneRowPerSourceFile
+                ? identity.RepeatCoordinates
+                : DatabaseRepeatCoordinatePath.Empty)
+            .ThenBy(identity => ResolveFieldOrdinal(dataset, identity))
             .ThenBy(identity => identity.RepeatCoordinates)
             .ToArray();
+        var pageSize = dataset.ProjectionMode == DiscoveryOutputProjectionMode.OneRowPerSourceFile
+            ? DiscoveryOutputPreviewLimits.SourceFileColumnsPerPage
+            : DiscoveryOutputPreviewLimits.MaximumColumnsPerGroup;
+        var normalizedStart = allColumns.Length == 0
+            ? 0
+            : Math.Min(columnStartIndex, ((allColumns.Length - 1) / pageSize) * pageSize);
         var columns = allColumns
-            .Take(DiscoveryOutputPreviewLimits.MaximumColumnsPerGroup)
+            .Skip(normalizedStart)
+            .Take(pageSize)
             .Select((identity, index) => new DiscoveryOutputPreviewColumn(
                 identity,
                 ResolveHeader(dataset, identity),
-                index + 1))
+                normalizedStart + index + 1))
             .ToArray();
         var includedColumns = columns.Select(column => column.Identity).ToHashSet();
         var previewRows = rows.Select(row => new DiscoveryOutputPreviewRow(
@@ -275,9 +304,9 @@ public sealed class DiscoveryOutputPreviewService(
             familyId,
             columns,
             previewRows,
-            isTruncated
-            || allColumns.Length > columns.Length
-            || previewRows.SelectMany(row => row.Cells).Any(cell => cell.IsTruncated));
+            isTruncated || previewRows.SelectMany(row => row.Cells).Any(cell => cell.IsTruncated),
+            allColumns.Length,
+            normalizedStart);
     }
 
     private static int ResolveFieldOrdinal(
@@ -295,9 +324,32 @@ public sealed class DiscoveryOutputPreviewService(
     {
         var field = dataset.Fields.Single(mapping =>
             string.Equals(mapping.FieldKey, identity.FieldKey, StringComparison.Ordinal));
+        if (dataset.ProjectionMode == DiscoveryOutputProjectionMode.OneRowPerSourceFile
+            && identity.RepeatCoordinates.Coordinates.Count > 0)
+        {
+            var identityPath = field.DetailedIdentities[0].StructuralPath;
+            var coordinateSegments = dataset.SourceProjectionRepeatedPaths
+                .Where(path => string.Equals(path, identityPath, StringComparison.Ordinal)
+                    || identityPath.StartsWith(path + "/", StringComparison.Ordinal))
+                .OrderBy(path => path.Count(character => character == '/'))
+                .Select(GetFinalPathSegment)
+                .Zip(identity.RepeatCoordinates.Coordinates)
+                .Select(pair => $"{pair.First}[{pair.Second}]");
+            return $"{string.Join('.', coordinateSegments)}.{field.EffectiveName}";
+        }
+
         return identity.RepeatCoordinates.Coordinates.Count == 0
             ? field.EffectiveName
             : $"{field.EffectiveName} {identity.RepeatCoordinates}";
+    }
+
+    private static string GetFinalPathSegment(string path)
+    {
+        var segment = path[(path.LastIndexOf('/') + 1)..];
+        var namespaceEnd = segment.LastIndexOf('}');
+        return namespaceEnd >= 0 && namespaceEnd < segment.Length - 1
+            ? segment[(namespaceEnd + 1)..]
+            : segment;
     }
 
     private readonly record struct ProjectionContext(string StructuralPath, long InstanceId);

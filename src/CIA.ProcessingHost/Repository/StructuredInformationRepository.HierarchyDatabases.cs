@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Export;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -348,6 +349,9 @@ public sealed partial class StructuredInformationRepository
                         || pair.First.ValueCount < 1
                         || pair.First.OutputSetId != pair.Second.OutputSetId
                         || pair.First.ParentSourceSetId != pair.Second.ParentSourceSetId
+                        || pair.First.RowFamilies.Any(family =>
+                            family.Id.Kind == RowFamilyKind.SourceFileProjection
+                            && family.Columns.Count > ExcelWorkbookLimits.MaximumColumns)
                         || !string.Equals(
                             pair.First.DisplayName,
                             pair.Second.DisplayName,

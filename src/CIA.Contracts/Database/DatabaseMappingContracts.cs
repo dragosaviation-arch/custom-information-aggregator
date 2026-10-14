@@ -63,7 +63,8 @@ public sealed record DatabaseFieldMapping
             new RowFamilyId(logicalIdentity.SourceSetId, RowFamilyKind.Root, "/legacy"),
             effectiveName,
             isExplicitOverride,
-            detailedIdentities)
+            detailedIdentities,
+            originatingRowFamilyId: default)
     {
     }
 
@@ -72,11 +73,13 @@ public sealed record DatabaseFieldMapping
         RowFamilyId rowFamilyId,
         string effectiveName,
         bool isExplicitOverride,
-        IReadOnlyList<DiscoveryInformationIdentity> detailedIdentities)
+        IReadOnlyList<DiscoveryInformationIdentity> detailedIdentities,
+        RowFamilyId originatingRowFamilyId = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(effectiveName);
         ArgumentNullException.ThrowIfNull(detailedIdentities);
         var details = detailedIdentities.ToArray();
+        var origin = originatingRowFamilyId == default ? rowFamilyId : originatingRowFamilyId;
         if (details.Length == 0
             || details.Any(identity => identity is null
                 || identity.SourceSetId != rowFamilyId.SourceSetId)
@@ -87,11 +90,21 @@ public sealed record DatabaseFieldMapping
                 nameof(detailedIdentities));
         }
 
+        if (origin.SourceSetId != rowFamilyId.SourceSetId
+            || rowFamilyId.Kind != RowFamilyKind.SourceFileProjection
+                && origin != rowFamilyId)
+        {
+            throw new ArgumentException(
+                "A projected Database field origin must remain in its Source Set and only source-file projections may cross Row Families.",
+                nameof(originatingRowFamilyId));
+        }
+
         RowFamilyId = rowFamilyId;
         LogicalIdentity = DatabaseLogicalFieldIdentity.Create(details[0]);
         EffectiveName = effectiveName.Trim();
         IsExplicitOverride = isExplicitOverride;
         DetailedIdentities = new ReadOnlyCollection<DiscoveryInformationIdentity>(details);
+        OriginatingRowFamilyId = origin;
     }
 
     public RowFamilyId RowFamilyId { get; }
@@ -106,8 +119,14 @@ public sealed record DatabaseFieldMapping
 
     public IReadOnlyList<DiscoveryInformationIdentity> DetailedIdentities { get; }
 
+    public RowFamilyId OriginatingRowFamilyId { get; }
+
     [JsonIgnore]
-    public string FieldKey => string.Equals(RowFamilyId.AnchorPath, "/legacy", StringComparison.Ordinal)
+    public string FieldKey => RowFamilyId.Kind == RowFamilyKind.SourceFileProjection
+        ? string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"source-file:{(int)OriginatingRowFamilyId.Kind}:{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(OriginatingRowFamilyId.AnchorPath))}:{(int)DetailedIdentities[0].CandidateKind}:{Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(DetailedIdentities[0].StructuralIdentity))}")
+        : string.Equals(RowFamilyId.AnchorPath, "/legacy", StringComparison.Ordinal)
         ? IsExplicitOverride
             ? $"mapped:{EffectiveName}"
             : $"logical:{(int)LogicalIdentity.CandidateKind}:{LogicalIdentity.CanonicalFieldIdentity}"
@@ -126,7 +145,10 @@ public sealed record DatabaseDatasetBuildSpecification
         RepeatedDataLayout repeatedDataLayout,
         IReadOnlyList<LoadedSourceContract> sources,
         IReadOnlyList<RowFamilyDefinition> rowFamilies,
-        IReadOnlyList<DatabaseFieldMapping> fields)
+        IReadOnlyList<DatabaseFieldMapping> fields,
+        DiscoveryOutputProjectionMode projectionMode =
+            DiscoveryOutputProjectionMode.PreserveRelationships,
+        IReadOnlyList<string>? sourceProjectionRepeatedPaths = null)
         : this(
             parentSourceSetId,
             displayName,
@@ -135,7 +157,9 @@ public sealed record DatabaseDatasetBuildSpecification
             sources,
             rowFamilies,
             fields,
-            outputSetId)
+            outputSetId,
+            projectionMode,
+            sourceProjectionRepeatedPaths)
     {
     }
 
@@ -156,7 +180,9 @@ public sealed record DatabaseDatasetBuildSpecification
                 .DistinctBy(family => family.Id)
                 .ToArray(),
             fields,
-            outputSetId: null)
+            outputSetId: null,
+            DiscoveryOutputProjectionMode.PreserveRelationships,
+            sourceProjectionRepeatedPaths: null)
     {
     }
 
@@ -169,7 +195,10 @@ public sealed record DatabaseDatasetBuildSpecification
         IReadOnlyList<LoadedSourceContract> sources,
         IReadOnlyList<RowFamilyDefinition> rowFamilies,
         IReadOnlyList<DatabaseFieldMapping> fields,
-        OutputSetId? outputSetId = null)
+        OutputSetId? outputSetId = null,
+        DiscoveryOutputProjectionMode projectionMode =
+            DiscoveryOutputProjectionMode.PreserveRelationships,
+        IReadOnlyList<string>? sourceProjectionRepeatedPaths = null)
     {
         if (!SourceSetId.IsValid(sourceSetId.Value))
         {
@@ -192,12 +221,18 @@ public sealed record DatabaseDatasetBuildSpecification
             throw new ArgumentOutOfRangeException(nameof(repeatedDataLayout));
         }
 
+        if (!Enum.IsDefined(projectionMode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(projectionMode));
+        }
+
         ArgumentNullException.ThrowIfNull(sources);
         ArgumentNullException.ThrowIfNull(rowFamilies);
         ArgumentNullException.ThrowIfNull(fields);
         var sourceArray = sources.ToArray();
         var familyArray = rowFamilies.ToArray();
         var fieldArray = fields.ToArray();
+        var repeatedPaths = sourceProjectionRepeatedPaths?.ToArray() ?? [];
         if (sourceArray.Length == 0
             || sourceArray.Any(source => source is null
                 || source.SourceSetId != sourceSetId
@@ -233,6 +268,23 @@ public sealed record DatabaseDatasetBuildSpecification
                 nameof(fields));
         }
 
+        var isSourceProjection = projectionMode ==
+            DiscoveryOutputProjectionMode.OneRowPerSourceFile;
+        if (isSourceProjection != (familyArray.Length == 1
+                && familyArray[0].Id.Kind == RowFamilyKind.SourceFileProjection)
+            || repeatedPaths.Any(path => string.IsNullOrWhiteSpace(path)
+                || path[0] != '/')
+            || repeatedPaths.Distinct(StringComparer.Ordinal).Count() != repeatedPaths.Length
+            || isSourceProjection && fieldArray.Any(field =>
+                field.RowFamilyId != familyArray[0].Id
+                || field.OriginatingRowFamilyId.Kind == RowFamilyKind.SourceFileProjection)
+            || !isSourceProjection && (repeatedPaths.Length > 0
+                || fieldArray.Any(field => field.OriginatingRowFamilyId != field.RowFamilyId)))
+        {
+            throw new ArgumentException(
+                "A Database dataset projection mode requires matching typed families, field origins and repeat paths.");
+        }
+
         SourceSetId = sourceSetId;
         OutputSetId = outputSetId;
         DisplayName = displayName.Trim();
@@ -241,6 +293,8 @@ public sealed record DatabaseDatasetBuildSpecification
         Sources = new ReadOnlyCollection<LoadedSourceContract>(sourceArray);
         RowFamilies = new ReadOnlyCollection<RowFamilyDefinition>(familyArray);
         Fields = new ReadOnlyCollection<DatabaseFieldMapping>(fieldArray);
+        ProjectionMode = projectionMode;
+        SourceProjectionRepeatedPaths = new ReadOnlyCollection<string>(repeatedPaths);
     }
 
     public SourceSetId SourceSetId { get; }
@@ -261,6 +315,10 @@ public sealed record DatabaseDatasetBuildSpecification
     public IReadOnlyList<RowFamilyDefinition> RowFamilies { get; }
 
     public IReadOnlyList<DatabaseFieldMapping> Fields { get; }
+
+    public DiscoveryOutputProjectionMode ProjectionMode { get; }
+
+    public IReadOnlyList<string> SourceProjectionRepeatedPaths { get; }
 }
 
 public sealed record DatabaseBuildSpecification

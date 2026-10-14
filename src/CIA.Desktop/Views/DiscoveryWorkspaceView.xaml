@@ -846,10 +846,24 @@
                                                Style="{StaticResource CiaSecondaryTextStyle}"
                                                Text="{Binding OutputPreviewSourceText}" />
                                 </Grid>
-                                <TextBlock Grid.Row="1"
-                                           Margin="0,5,0,5"
-                                           Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="{Binding OutputPreviewStatusText}" />
+                                <Grid Grid.Row="1" Margin="0,5,0,5">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
+                                               Text="{Binding OutputPreviewStatusText}"
+                                               TextWrapping="Wrap" />
+                                    <WrapPanel Grid.Column="1" Margin="8,0,0,0">
+                                        <Button Margin="0,0,5,0"
+                                                Command="{Binding PreviousOutputColumnsCommand}"
+                                                Style="{StaticResource CiaGhostButtonStyle}"
+                                                Content="Previous columns" />
+                                        <Button Command="{Binding NextOutputColumnsCommand}"
+                                                Style="{StaticResource CiaGhostButtonStyle}"
+                                                Content="Next columns" />
+                                    </WrapPanel>
+                                </Grid>
                                 <Border Grid.Row="2"
                                         MinHeight="70"
                                         Background="#FFFCFCFE"
@@ -1089,6 +1103,11 @@
                                                             FontWeight="SemiBold"
                                                             Style="{StaticResource CiaSecondaryTextStyle}"
                                                             Text="{Binding ParentSourceSetName, StringFormat=Parent: {0}}" />
+                                                 <CheckBox Margin="0,1,0,5"
+                                                           AutomationProperties.Name="One row per source file"
+                                                           Content="One row per source file"
+                                                           IsChecked="{Binding OneRowPerSourceFile, Mode=TwoWay}"
+                                                           ToolTip="Combine selected fields into one table. Repeated elements become numbered column groups." />
                                                  <ItemsControl ItemsSource="{Binding OutputSets}">
                                                      <ItemsControl.ItemTemplate>
                                                          <DataTemplate>

@@ -7,6 +7,7 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Database;
 using CIA.Core.Profiles;
 using CIA.Core.Runtime;
 using CIA.Desktop.Database;
@@ -58,6 +59,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _nextPageCommand;
     private readonly RelayCommand _showInputModeCommand;
     private readonly RelayCommand _showOutputModeCommand;
+    private readonly RelayCommand _previousOutputColumnsCommand;
+    private readonly RelayCommand _nextOutputColumnsCommand;
     private readonly AsyncRelayCommand<DiscoveredInformationItemViewModel?> _selectInformationCommand;
     private readonly RelayCommand<DiscoveredInformationItemViewModel> _selectDetailedInformationCommand;
     private readonly AsyncRelayCommand _previousOccurrenceCommand;
@@ -146,6 +149,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private string _outputPreviewStatusText =
         "Select output fields and an occurrence to preview the projected result.";
     private string _outputPreviewSourceText = string.Empty;
+    private int _outputPreviewColumnStartIndex;
+    private int _outputPreviewTotalColumnCount;
     private string _outputPlanStatusText = "Select information to create the Baseline output plan.";
     private IReadOnlyList<InformationSelectionProfileItem> _informationSelectionProfiles = [];
     private InformationSelectionProfileItem? _selectedInformationSelectionProfile;
@@ -239,6 +244,15 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             () => Mode = DiscoveryMode.Input);
         _showOutputModeCommand = new RelayCommand(
             () => Mode = DiscoveryMode.Output);
+        _previousOutputColumnsCommand = new RelayCommand(
+            MoveToPreviousOutputColumns,
+            () => _outputPreviewColumnStartIndex > 0 && !IsOutputPreviewLoading);
+        _nextOutputColumnsCommand = new RelayCommand(
+            MoveToNextOutputColumns,
+            () => _outputPreviewColumnStartIndex
+                + DiscoveryOutputPreviewLimits.SourceFileColumnsPerPage
+                < _outputPreviewTotalColumnCount
+                && !IsOutputPreviewLoading);
         _selectInformationCommand = new AsyncRelayCommand<DiscoveredInformationItemViewModel?>(
             SelectInformationAsync,
             _ => true,
@@ -374,7 +388,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         .Select(group => new DiscoveryOutputSetGroupPresentation(
             group.Key.ParentSourceSetId,
             group.Key.ParentSourceSetName,
-            group.ToArray()))
+            group.ToArray(),
+            _outputPlan.GetProjectionMode(group.Key.ParentSourceSetId) ==
+                DiscoveryOutputProjectionMode.OneRowPerSourceFile,
+            SetOneRowPerSourceFile))
         .ToArray();
 
     public DiscoveryOutputPlanSnapshot OutputPlan => _outputPlan.Current;
@@ -458,6 +475,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _selectedOutputSet, value))
             {
+                ResetOutputColumnPage();
                 ScheduleOutputPreview();
             }
         }
@@ -466,7 +484,14 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public bool IsOutputPreviewLoading
     {
         get => _isOutputPreviewLoading;
-        private set => SetProperty(ref _isOutputPreviewLoading, value);
+        private set
+        {
+            if (SetProperty(ref _isOutputPreviewLoading, value))
+            {
+                _previousOutputColumnsCommand.NotifyCanExecuteChanged();
+                _nextOutputColumnsCommand.NotifyCanExecuteChanged();
+            }
+        }
     }
 
     public string OutputPreviewStatusText
@@ -494,6 +519,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand ShowInputModeCommand => _showInputModeCommand;
 
     public IRelayCommand ShowOutputModeCommand => _showOutputModeCommand;
+
+    public IRelayCommand PreviousOutputColumnsCommand => _previousOutputColumnsCommand;
+
+    public IRelayCommand NextOutputColumnsCommand => _nextOutputColumnsCommand;
 
     public string DatabaseBuildButtonText =>
         _databaseBuildCoordinator?.CurrentGeneration is null
@@ -1691,9 +1720,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         if (TryCreateCurrentBuildSpecification(out var specification))
         {
             SelectionImpact = DiscoverySelectionImpactBuilder.Create(specification);
+            var projectionModes = parents.ToDictionary(
+                parent => parent,
+                _outputPlan.GetProjectionMode);
             _outputPlan.Synchronize(
                 parents,
-                DiscoveryOutputPlanBuilder.Create(specification),
+                DiscoveryOutputPlanBuilder.Create(specification, projectionModes),
                 _sourceSet.SourceSets.Count);
         }
         else
@@ -1711,11 +1743,28 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         var impactByFamily = SelectionImpact.Groups.ToDictionary(group => group.RowFamilyId);
         var items = _outputPlan.Current.OutputSets.Select(definition =>
         {
-            var impact = definition.RowFamilyIds
+            var familyImpacts = definition.RowFamilyIds
                 .Select(familyId => impactByFamily.GetValueOrDefault(familyId))
-                .FirstOrDefault(candidate => candidate is not null)
-                ?? throw new InvalidOperationException(
+                .Where(candidate => candidate is not null)
+                .Cast<DiscoverySelectionImpactGroupPresentation>()
+                .ToArray();
+            if (familyImpacts.Length == 0)
+            {
+                throw new InvalidOperationException(
                     "Every proposed Output Set requires current selection-impact metadata.");
+            }
+
+            var impact = definition.ProjectionMode ==
+                DiscoveryOutputProjectionMode.OneRowPerSourceFile
+                ? new DiscoverySelectionImpactGroupPresentation(
+                    familyImpacts[0].RowFamilyId,
+                    definition.Name,
+                    "Whole source file",
+                    "One row per source file",
+                    familyImpacts.SelectMany(item => item.ProjectedColumns)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray())
+                : familyImpacts[0];
             return new DiscoveryOutputSetItemViewModel(
                 definition,
                 ResolveSourceSetName(definition.ParentSourceSetId),
@@ -1765,6 +1814,34 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         SelectedOutputSet = OutputSets.FirstOrDefault(item =>
             item.ParentSourceSetId == parentSourceSetId);
+    }
+
+    private bool SetOneRowPerSourceFile(SourceSetId parentSourceSetId, bool enabled)
+    {
+        if (!CanChangeConfiguration())
+        {
+            return false;
+        }
+
+        var mode = enabled
+            ? DiscoveryOutputProjectionMode.OneRowPerSourceFile
+            : DiscoveryOutputProjectionMode.PreserveRelationships;
+        if (_outputPlan.GetProjectionMode(parentSourceSetId) == mode)
+        {
+            return false;
+        }
+
+        var workflowResult = _workflowCoordinator.RecordDiscoveryConfigurationChanged();
+        if (!workflowResult.Accepted || !_outputPlan.SetProjectionMode(parentSourceSetId, mode))
+        {
+            return false;
+        }
+
+        ResetOutputColumnPage();
+        RefreshSelectionImpact();
+        OnPropertyChanged(nameof(DatabaseStateText));
+        ScheduleOutputPreview();
+        return true;
     }
 
     private bool SetOutputSetEnabled(OutputSetId outputSetId, bool isEnabled)
@@ -1911,8 +1988,30 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return false;
         }
 
-        var dataset = specification.Datasets.FirstOrDefault(candidate =>
-            candidate.SourceSetId == information.SourceSetId);
+        DatabaseBuildSpecification approvedSpecification;
+        try
+        {
+            approvedSpecification = DatabaseBuildSpecificationFactory.CreateApprovedOutputSets(
+                _activeConfiguration.Current,
+                _activeConfiguration.DatabaseTagOverridesByIdentity,
+                _sourceSet.CreateIncludedReadySnapshot(),
+                _sourceSet.SourceSets.ToDictionary(
+                    definition => definition.SourceSetId,
+                    definition => definition.Name),
+                _activeConfiguration.FamilyCatalog!,
+                _activeConfiguration.FamilyAssignments,
+                _outputPlan.Current);
+        }
+        catch (ArgumentException)
+        {
+            request = null!;
+            unavailableReason = "The selected Output Set is no longer available.";
+            return false;
+        }
+
+        var dataset = approvedSpecification.Datasets.FirstOrDefault(candidate =>
+            candidate.OutputSetId == selectedOutputSet.OutputSetId
+            && candidate.SourceSetId == information.SourceSetId);
         if (dataset is null)
         {
             request = null!;
@@ -1921,13 +2020,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return false;
         }
 
-        var selectedFamilies = selectedOutputSet.RowFamilyIds.ToHashSet();
-        var rowFamilies = dataset.RowFamilies
-            .Where(family => selectedFamilies.Contains(family.Id))
-            .ToArray();
-        var fields = dataset.Fields
-            .Where(field => selectedFamilies.Contains(field.RowFamilyId))
-            .ToArray();
+        var rowFamilies = dataset.RowFamilies.ToArray();
+        var fields = dataset.Fields.ToArray();
         if (rowFamilies.Length == 0 || fields.Length == 0)
         {
             request = null!;
@@ -1943,7 +2037,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 dataset.DisplayName,
                 dataset.RepeatedDataLayout,
                 rowFamilies,
-                fields));
+                fields,
+                dataset.ProjectionMode,
+                dataset.SourceProjectionRepeatedPaths),
+            columnStartIndex: _outputPreviewColumnStartIndex);
         unavailableReason = string.Empty;
         return true;
     }
@@ -2032,10 +2129,21 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         var impactByFamily = SelectionImpact.Groups.ToDictionary(group => group.RowFamilyId);
+        var selectedDefinition = _outputPlan.Current.OutputSets.First(set =>
+            set.OutputSetId == request.OutputSetId);
         var groups = preview.Groups
-            .Where(group => impactByFamily.ContainsKey(group.RowFamilyId))
+            .Where(group => preview.ProjectionMode ==
+                    DiscoveryOutputProjectionMode.OneRowPerSourceFile
+                || impactByFamily.ContainsKey(group.RowFamilyId))
             .Select(group => new DiscoveryOutputPreviewGroupPresentation(
-                impactByFamily[group.RowFamilyId],
+                preview.ProjectionMode == DiscoveryOutputProjectionMode.OneRowPerSourceFile
+                    ? new DiscoverySelectionImpactGroupPresentation(
+                        group.RowFamilyId,
+                        selectedDefinition.Name,
+                        "Whole source file",
+                        "One row per source file",
+                        group.Columns.Select(column => column.Header).ToArray())
+                    : impactByFamily[group.RowFamilyId],
                 group))
             .ToArray();
         var previousFamily = SelectedOutputPreviewGroup?.RowFamilyId;
@@ -2044,11 +2152,20 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             ? groups.FirstOrDefault(group => group.RowFamilyId == selectedFamily)
                 ?? groups.FirstOrDefault()
             : groups.FirstOrDefault();
-        OutputPreviewSourceText =
-            $"Occurrence {preview.OccurrenceOrdinal:N0} · {preview.SourceName}";
+        var previewGroup = preview.Groups.FirstOrDefault();
+        _outputPreviewColumnStartIndex = previewGroup?.ColumnStartIndex ?? 0;
+        _outputPreviewTotalColumnCount = previewGroup?.TotalColumnCount ?? 0;
+        _previousOutputColumnsCommand.NotifyCanExecuteChanged();
+        _nextOutputColumnsCommand.NotifyCanExecuteChanged();
+        OutputPreviewSourceText = preview.ProjectionMode
+                == DiscoveryOutputProjectionMode.OneRowPerSourceFile
+            ? $"Source: {preview.SourceName} ({preview.SourceId})"
+            : $"Occurrence {preview.OccurrenceOrdinal:N0} · {preview.SourceName}";
         OutputPreviewStatusText = groups.Length == 0
             ? "The selected occurrence contributes to no selected output table."
-            : "Projected with Preserve relationships.";
+            : preview.ProjectionMode == DiscoveryOutputProjectionMode.OneRowPerSourceFile
+                ? CreateSourceFilePreviewStatus(previewGroup)
+                : "Projected with Preserve relationships.";
     }
 
     private bool IsCurrentOutputPreviewRequest(
@@ -2061,6 +2178,44 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             && SelectedOutputSet?.OutputSetId == request.OutputSetId
             && _publishedDiscoveryOperationId == request.Occurrence.DiscoveryOperationId
             && CurrentOccurrenceOrdinal == request.Occurrence.GlobalOrdinal;
+    }
+
+    private void MoveToPreviousOutputColumns()
+    {
+        _outputPreviewColumnStartIndex = Math.Max(
+            0,
+            _outputPreviewColumnStartIndex
+                - DiscoveryOutputPreviewLimits.SourceFileColumnsPerPage);
+        ScheduleOutputPreview();
+    }
+
+    private void MoveToNextOutputColumns()
+    {
+        _outputPreviewColumnStartIndex += DiscoveryOutputPreviewLimits.SourceFileColumnsPerPage;
+        ScheduleOutputPreview();
+    }
+
+    private void ResetOutputColumnPage()
+    {
+        _outputPreviewColumnStartIndex = 0;
+        _outputPreviewTotalColumnCount = 0;
+        _previousOutputColumnsCommand.NotifyCanExecuteChanged();
+        _nextOutputColumnsCommand.NotifyCanExecuteChanged();
+    }
+
+    internal static string CreateSourceFilePreviewStatus(DiscoveryOutputPreviewGroup? group)
+    {
+        if (group is null || group.TotalColumnCount == 0)
+        {
+            return "The selected source has no values for the selected fields.";
+        }
+
+        var first = group.ColumnStartIndex + 1;
+        var last = group.ColumnStartIndex + group.Columns.Count;
+        var range = $"Data columns {first:N0}-{last:N0} of {group.TotalColumnCount:N0} for this source sample. Final dataset and export metadata width are validated during build/export.";
+        return group.TotalColumnCount > DiscoveryOutputPreviewLimits.WideColumnWarningThreshold
+            ? $"{range} Wide output warning: the selected source exceeds 500 data columns."
+            : range;
     }
 
     private PreviewRequest SupersedeOutputPreviewRequest(bool clearPresentation)

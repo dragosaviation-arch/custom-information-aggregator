@@ -462,6 +462,7 @@ public sealed record ExtractionResultRow
         ArgumentNullException.ThrowIfNull(cells);
         var cellArray = cells.ToArray();
         if (cellArray.Length == 0
+                && !IsEmptySourceFileProjectionRecord(recordIdentity, source)
             || cellArray.Any(cell => cell is null
                 || cell.ColumnIdentity.SourceSetId != source.SourceSetId
                 || cell.Values.Any(value => value.SourceId != source.SourceId))
@@ -479,6 +480,36 @@ public sealed record ExtractionResultRow
         RecordIdentity = recordIdentity;
         Source = source;
         Cells = new ReadOnlyCollection<ExtractionResultCell>(cellArray);
+    }
+
+    private static bool IsEmptySourceFileProjectionRecord(
+        string recordIdentity,
+        DatabaseSourceMetadata source)
+    {
+        var parts = recordIdentity.Split('|');
+        return parts.Length == 6
+            && Guid.TryParse(parts[0], out var sourceSetId)
+            && sourceSetId == source.SourceSetId.Value
+            && int.TryParse(
+                parts[1],
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var kind)
+            && kind == (int)RowFamilyKind.SourceFileProjection
+            && Guid.TryParse(parts[3], out var sourceId)
+            && sourceId == source.SourceId.Value
+            && long.TryParse(
+                parts[4],
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var anchor)
+            && anchor > 0
+            && int.TryParse(
+                parts[5],
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var projection)
+            && projection > 0;
     }
 
     public ExtractionResultRow(
