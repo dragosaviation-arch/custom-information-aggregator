@@ -767,7 +767,6 @@ public sealed class SettingsWorkspaceV03InteractionTests
             var entries = (ListView)view.FindName("LogEntriesList");
             var export = (Button)view.FindName("ExportVisibleButton");
             var reset = (Button)view.FindName("ResetDefaultsButton");
-            var saveState = (Button)view.FindName("SaveStateButton");
             var cleanTemporary = (Button)view.FindName("CleanTemporaryDataButton");
             var selectedFailureCode = (TextBlock)view.FindName("SelectedFailureCode");
             var saveSettings = (Button)view.FindName("SavePersistentSettingsButton");
@@ -793,7 +792,10 @@ public sealed class SettingsWorkspaceV03InteractionTests
             Assert.AreEqual(2, entries.Items.Count);
             Assert.IsFalse(export.IsEnabled);
             Assert.IsTrue(reset.IsEnabled);
-            Assert.IsFalse(saveState.IsEnabled);
+            Assert.IsNull(view.FindName("SaveStateButton"));
+            Assert.IsNull(view.FindName("RestoreSavedStateButton"));
+            Assert.IsNull(view.FindName("DeleteSavedStateButton"));
+            Assert.IsNull(view.FindName("RefreshSavedStatesButton"));
             Assert.IsFalse(cleanTemporary.IsEnabled);
             Assert.IsTrue(saveSettings.IsEnabled);
             Assert.IsTrue(helpButtons.All(button => button.IsEnabled));

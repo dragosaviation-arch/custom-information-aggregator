@@ -281,17 +281,23 @@ public sealed class UiUxBatch1Tests
     }
 
     [TestMethod]
-    public void SettingsKeepsActionsAndStateWhileRemovingPermanentInstructionalCopy()
+    public void SettingsQuarantinesWorkingStateActionsWhileKeepingMaintenanceAvailable()
     {
         var settings = ReadDesktopFile("Views", "SettingsWorkspaceView.xaml");
 
-        Assert.IsFalse(settings.Contains(
-            "Save and restore explicit CIA working-state packages",
-            StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("WORKING STATE &amp; RECOVERY", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("x:Name=\"SaveStateButton\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("x:Name=\"RestoreSavedStateButton\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("x:Name=\"DeleteSavedStateButton\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("x:Name=\"RefreshSavedStatesButton\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("x:Name=\"DeleteSavedStateConfirmation\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("Command=\"{Binding SaveStateCommand}\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("Command=\"{Binding RestoreStateCommand}\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("Command=\"{Binding DeleteStateCommand}\"", StringComparison.Ordinal));
+        Assert.IsFalse(settings.Contains("Command=\"{Binding RefreshSavedStatesCommand}\"", StringComparison.Ordinal));
         Assert.IsFalse(settings.Contains(
             "Missing-source relinking is not available yet",
             StringComparison.Ordinal));
-        Assert.HasCount(1, Regex.Matches(settings, "No saved states\\.").Cast<Match>());
         Assert.IsFalse(settings.Contains(
             "Remove only currently eligible CIA-owned temporary and session artifacts",
             StringComparison.Ordinal));
@@ -299,12 +305,8 @@ public sealed class UiUxBatch1Tests
         Assert.IsFalse(settings.Contains(
             "One detail surface for retained entry types",
             StringComparison.Ordinal));
-        StringAssert.Contains(settings, "x:Name=\"SaveStateButton\"");
-        StringAssert.Contains(settings, "x:Name=\"RestoreSavedStateButton\"");
-        StringAssert.Contains(settings, "x:Name=\"DeleteSavedStateButton\"");
         StringAssert.Contains(settings, "x:Name=\"CleanTemporaryDataButton\"");
         StringAssert.Contains(settings, "Persistent and protected data is preserved.");
-        StringAssert.Contains(settings, "Text=\"{Binding SavedStateNameProblem}\"");
         StringAssert.Contains(settings, "Text=\"{Binding CleanupStatusText}\"");
     }
 

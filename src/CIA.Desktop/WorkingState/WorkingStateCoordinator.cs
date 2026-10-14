@@ -38,8 +38,7 @@ public sealed class WorkingStateCoordinator(
     IWorkingStateClient client,
     ILogger<WorkingStateCoordinator> logger,
     ExtractionCoordinator? extractionCoordinator = null,
-    ExportRoutingConfigurationPresentation? exportRouting = null,
-    ActiveDiscoveryOutputPlan? discoveryOutputPlan = null) : IWorkingStateCoordinator
+    ExportRoutingConfigurationPresentation? exportRouting = null) : IWorkingStateCoordinator
 {
     public WorkflowOperationReadiness EvaluateSaveReadiness()
     {
@@ -193,15 +192,6 @@ public sealed class WorkingStateCoordinator(
             discoveryConfiguration.RestoreWorkingState(
                 snapshot.DiscoveryConfiguration,
                 snapshot.DatabaseTagOverrides);
-            if (snapshot.DiscoveryOutputPlan is { } restoredOutputPlan)
-            {
-                discoveryOutputPlan?.Restore(restoredOutputPlan);
-            }
-            else
-            {
-                discoveryOutputPlan?.Reset();
-            }
-
             databaseBuildCoordinator.AdoptRestoredGeneration(snapshot.DatabaseGeneration);
             extractionCoordinator?.AdoptRestoredResult(snapshot.ExtractionResult);
             if (snapshot.DatabaseGeneration is { } restoredGeneration)
@@ -283,8 +273,7 @@ public sealed class WorkingStateCoordinator(
                 .ThenBy(item => item.Key.StructuralIdentity, StringComparer.Ordinal)
                 .ThenBy(item => item.Key.InformationType, StringComparer.Ordinal)
                 .Select(item => new WorkingStateDatabaseTagOverride(item.Key, item.Value))
-                .ToArray(),
-            discoveryOutputPlan?.Current);
+                .ToArray());
     }
 
     private WorkflowOperationReadiness EvaluateDatabaseSaveCoherence()

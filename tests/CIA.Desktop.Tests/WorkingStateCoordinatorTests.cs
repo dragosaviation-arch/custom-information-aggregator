@@ -3,7 +3,6 @@ using CIA.Contracts.Diagnostics;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Extraction;
 using CIA.Contracts.Export;
-using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Contracts.WorkingState;
@@ -402,143 +401,10 @@ public sealed class WorkingStateCoordinatorTests
             restoredFamily.WorksheetDefinitionId);
     }
 
-    [TestMethod]
-    [TestCategory("Spr214E2")]
-    public async Task OutputSetPlanAndExportRoutingSurviveFreshCoordinatorRestore()
-    {
-        var context = CreateContext();
-        var firstLoading = new SourceLoadingCoordinator(
-            new StaticSourceClient(Path.Combine(Path.GetTempPath(), "working-state-first.xml")),
-            context.Sources,
-            context.Workflow);
-        Assert.IsTrue((await firstLoading.AddAsync(
-            SourceSelectionKind.XmlFile,
-            Path.Combine(Path.GetTempPath(), "working-state-first.xml"))).Accepted);
-        var firstParent = context.Sources.ActiveSourceSet!;
-        Assert.IsTrue(firstLoading.CreateSourceSet("Second parent").Accepted);
-        var secondParent = context.Sources.ActiveSourceSet!;
-        var secondLoading = new SourceLoadingCoordinator(
-            new StaticSourceClient(Path.Combine(Path.GetTempPath(), "working-state-second.xml")),
-            context.Sources,
-            context.Workflow);
-        Assert.IsTrue((await secondLoading.AddAsync(
-            SourceSelectionKind.XmlFile,
-            Path.Combine(Path.GetTempPath(), "working-state-second.xml"))).Accepted);
-
-        var firstRoot = new RowFamilyId(firstParent.SourceSetId, RowFamilyKind.Root, "/first");
-        var firstChild = new RowFamilyId(firstParent.SourceSetId, RowFamilyKind.Root, "/first-child");
-        var secondRoot = new RowFamilyId(secondParent.SourceSetId, RowFamilyKind.Root, "/second");
-        var secondChild = new RowFamilyId(secondParent.SourceSetId, RowFamilyKind.Root, "/second-child");
-        var families = new[] { firstRoot, firstChild, secondRoot, secondChild };
-        var identities = families.Select((family, index) => new DiscoveryInformationIdentity(
-            family.SourceSetId,
-            $"{family.AnchorPath}/field",
-            $"field-{index + 1}")).ToArray();
-        context.Configuration.Synchronize(
-            identities.Select((identity, index) => new DiscoveredInformation(
-                identity,
-                1,
-                1,
-                $"value-{index + 1}")
-            {
-                RowFamilyId = families[index]
-            }),
-            new DiscoveryFamilyCatalog(families.Select(family =>
-                new RowFamilyDefinition(family, parentRowFamilyId: null)).ToArray()));
-        Assert.AreEqual(4, context.Configuration.SetSelection(identities, true));
-
-        var discovery = await context.Workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
-        Assert.IsTrue(discovery.Accepted);
-        Assert.IsTrue(context.Workflow.CompleteOperation(
-            discovery.Operation!.OperationId,
-            OperationOutcome.CompletedSuccessfully).Accepted);
-
-        var firstEnabledId = OutputSetId.CreateNew();
-        var firstDisabledId = OutputSetId.CreateNew();
-        var secondEnabledId = OutputSetId.CreateNew();
-        var secondOtherId = OutputSetId.CreateNew();
-        var plan = new DiscoveryOutputPlanSnapshot(
-        [
-            new DiscoveryParentOutputPlan(
-                firstParent.SourceSetId,
-                [
-                    CreateOutputSet(firstEnabledId, firstParent.SourceSetId, firstRoot, "Renamed first", 1, 1, true),
-                    CreateOutputSet(firstDisabledId, firstParent.SourceSetId, firstChild, "Disabled child", 2, 2, false)
-                ]),
-            new DiscoveryParentOutputPlan(
-                secondParent.SourceSetId,
-                [
-                    CreateOutputSet(secondEnabledId, secondParent.SourceSetId, secondRoot, "Second root", 3, 1, true),
-                    CreateOutputSet(secondOtherId, secondParent.SourceSetId, secondChild, "Renamed second child", 4, 2, true)
-                ])
-        ]);
-        context.OutputPlan.Restore(plan);
-        var generation = CreateOutputSetGeneration(
-            plan.OutputSets.Where(outputSet => outputSet.IsEnabled).ToArray(),
-            identities,
-            families);
-        var build = await context.Workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
-        Assert.IsTrue(build.Accepted);
-        Assert.IsTrue(context.Workflow.CompleteOperation(
-            build.Operation!.OperationId,
-            OperationOutcome.CompletedSuccessfully).Accepted);
-        context.Database.AdoptRestoredGeneration(generation);
-
-        context.ExportRouting.Synchronize(generation);
-        var firstExport = context.ExportRouting.GetSet(firstEnabledId);
-        var secondExport = context.ExportRouting.GetSet(secondEnabledId);
-        var otherExport = context.ExportRouting.GetSet(secondOtherId);
-        firstExport.WorksheetName = "First custom sheet";
-        secondExport.WorksheetName = "Second custom sheet";
-        otherExport.WorksheetName = "Other custom sheet";
-        otherExport.IsEnabled = false;
-        var secondWorkbook = context.ExportRouting.CreateWorkbookFor(secondEnabledId);
-        secondWorkbook.FileName = "Second custom workbook.xlsx";
-        Assert.IsTrue(context.ExportRouting.MoveWorksheet(secondOtherId, -1));
-        var expectedConfiguration = context.ExportRouting.Capture();
-
-        var saved = await context.Coordinator.SaveAsync("C:\\saved\\output-sets.cia");
-        Assert.IsTrue(saved.Accepted, saved.FailureDescription);
-        var snapshot = context.Client.LastSavedSnapshot!;
-        Assert.IsNotNull(snapshot.DiscoveryOutputPlan);
-
-        var restored = CreateContext();
-        restored.Client.RestoreManifest = CreateManifest(snapshot);
-        var result = await restored.Coordinator.RestoreAsync("C:\\saved\\output-sets.cia");
-
-        Assert.IsTrue(result.Accepted, result.FailureDescription);
-        CollectionAssert.AreEqual(
-            plan.OutputSets.Select(outputSet => outputSet.OutputSetId).ToArray(),
-            restored.OutputPlan.Current.OutputSets.Select(outputSet => outputSet.OutputSetId).ToArray());
-        CollectionAssert.AreEqual(
-            plan.OutputSets.Select(outputSet => outputSet.ParentSourceSetId).ToArray(),
-            restored.OutputPlan.Current.OutputSets.Select(outputSet => outputSet.ParentSourceSetId).ToArray());
-        CollectionAssert.AreEqual(
-            plan.OutputSets.Select(outputSet => outputSet.Name).ToArray(),
-            restored.OutputPlan.Current.OutputSets.Select(outputSet => outputSet.Name).ToArray());
-        CollectionAssert.AreEqual(
-            plan.OutputSets.Select(outputSet => outputSet.IsEnabled).ToArray(),
-            restored.OutputPlan.Current.OutputSets.Select(outputSet => outputSet.IsEnabled).ToArray());
-        CollectionAssert.AreEqual(
-            plan.OutputSets.Select(outputSet => outputSet.ModelOrder).ToArray(),
-            restored.OutputPlan.Current.OutputSets.Select(outputSet => outputSet.ModelOrder).ToArray());
-        Assert.IsFalse(restored.OutputPlan.Current.OutputSets.Single(outputSet =>
-            outputSet.OutputSetId == firstDisabledId).IsEnabled);
-        Assert.IsFalse(restored.ExportRouting.SourceSets.Any(set =>
-            set.OutputSetId == firstDisabledId));
-        Assert.AreEqual(
-            System.Text.Json.JsonSerializer.Serialize(expectedConfiguration),
-            System.Text.Json.JsonSerializer.Serialize(restored.ExportRouting.Capture()));
-        Assert.IsTrue(ExportConfigurationValidator.Validate(
-            restored.ExportRouting.Capture(),
-            restored.Database.CurrentGeneration!).IsValid);
-    }
-
     private static TestContext CreateContext()
     {
         var sources = new ActiveLoadedSourceSet();
         var configuration = new ActiveDiscoveryConfiguration();
-        var outputPlan = new ActiveDiscoveryOutputPlan();
         var workflow = new ApplicationWorkflowCoordinator(
             new ReadySupervisor(),
             new RecordingProcessingHistoryRecorder());
@@ -547,8 +413,7 @@ public sealed class WorkingStateCoordinatorTests
             sources,
             workflow,
             new UnusedDatabaseClient(),
-            NullLogger<DatabaseBuildCoordinator>.Instance,
-            outputPlan);
+            NullLogger<DatabaseBuildCoordinator>.Instance);
         var client = new StubWorkingStateClient();
         var extraction = new ExtractionCoordinator(
             database,
@@ -564,8 +429,7 @@ public sealed class WorkingStateCoordinatorTests
             client,
             NullLogger<WorkingStateCoordinator>.Instance,
             extraction,
-            exportRouting,
-            outputPlan);
+            exportRouting);
         return new TestContext(
             sources,
             configuration,
@@ -573,75 +437,8 @@ public sealed class WorkingStateCoordinatorTests
             database,
             extraction,
             exportRouting,
-            outputPlan,
             client,
             coordinator);
-    }
-
-    private static DiscoveryOutputSetDefinition CreateOutputSet(
-        OutputSetId outputSetId,
-        SourceSetId parentSourceSetId,
-        RowFamilyId rowFamilyId,
-        string name,
-        int setNumber,
-        int modelOrder,
-        bool isEnabled) =>
-        new(
-            outputSetId,
-            parentSourceSetId,
-            new DiscoveryOutputModelKey(rowFamilyId.AnchorPath),
-            name,
-            setNumber,
-            modelOrder,
-            isEnabled,
-            [rowFamilyId]);
-
-    private static DatabaseGenerationSummary CreateOutputSetGeneration(
-        IReadOnlyList<DiscoveryOutputSetDefinition> outputSets,
-        IReadOnlyList<DiscoveryInformationIdentity> identities,
-        IReadOnlyList<RowFamilyId> families)
-    {
-        var identityByFamily = identities.Zip(families).ToDictionary(pair => pair.Second, pair => pair.First);
-        return new DatabaseGenerationSummary(
-            OperationId.CreateNew(),
-            outputSets.Select((outputSet, index) =>
-            {
-                var familyId = outputSet.RowFamilyIds.Single();
-                var identity = identityByFamily[familyId];
-                var mapping = new DatabaseFieldMapping(
-                    familyId,
-                    identity.InformationType,
-                    isExplicitOverride: false,
-                    [identity]);
-                var column = new DatabaseColumnDefinition(
-                    new DatabaseColumnIdentity(
-                        familyId,
-                        mapping.FieldKey,
-                        DatabaseRepeatCoordinatePath.Empty),
-                    mapping.EffectiveName,
-                    1);
-                var family = new DatabaseRowFamilySummary(
-                    familyId,
-                    parentRowFamilyId: null,
-                    1,
-                    outputSet.Name,
-                    1,
-                    1,
-                    1,
-                    [column],
-                    [mapping]);
-                return new DatabaseDatasetSummary(
-                    outputSet.OutputSetId,
-                    outputSet.ParentSourceSetId,
-                    outputSet.Name,
-                    index + 1,
-                    RepeatedDataLayout.AlignRepeatedGroupsByPosition,
-                    1,
-                    1,
-                    [column],
-                    [mapping],
-                    [family]);
-            }).ToArray());
     }
 
     private static async Task<PreparedContext> CreateCurrentDatabaseContextAsync()
@@ -740,7 +537,6 @@ public sealed class WorkingStateCoordinatorTests
         DatabaseBuildCoordinator Database,
         ExtractionCoordinator Extraction,
         ExportRoutingConfigurationPresentation ExportRouting,
-        ActiveDiscoveryOutputPlan OutputPlan,
         StubWorkingStateClient Client,
         WorkingStateCoordinator Coordinator);
 

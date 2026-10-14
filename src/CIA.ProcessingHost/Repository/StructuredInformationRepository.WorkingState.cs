@@ -1,6 +1,5 @@
 using System.Globalization;
 using CIA.Contracts.Database;
-using CIA.Contracts.Discovery;
 using CIA.Contracts.Extraction;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -453,17 +452,6 @@ public sealed partial class StructuredInformationRepository
         IReadOnlyList<LoadedSourceContract> expectedSources,
         CancellationToken cancellationToken)
     {
-        if (generation.Datasets.All(dataset => dataset.OutputSetId is not null))
-        {
-            await ValidatePublishedOutputSetSourceRelationshipsAsync(
-                    connection,
-                    generation,
-                    expectedSources,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            return;
-        }
-
         var publishedSourceSetIds = generation.Datasets
             .Select(dataset => dataset.SourceSetId)
             .ToHashSet();
@@ -521,84 +509,6 @@ public sealed partial class StructuredInformationRepository
         {
             throw new StructuredInformationRepositoryException(
                 "The working-state manifest source membership does not match the published Database snapshot.");
-        }
-    }
-
-    private static async Task ValidatePublishedOutputSetSourceRelationshipsAsync(
-        SqliteConnection connection,
-        DatabaseGenerationSummary generation,
-        IReadOnlyList<LoadedSourceContract> expectedSources,
-        CancellationToken cancellationToken)
-    {
-        var datasets = generation.Datasets.ToDictionary(
-            dataset => dataset.OutputSetId!.Value,
-            dataset => dataset.ParentSourceSetId);
-        var sources = expectedSources
-            .Where(source => datasets.Values.Contains(source.SourceSetId)
-                && source.IsIncluded
-                && source.Status == LoadedSourceStatus.Ready)
-            .GroupBy(source => source.SourceSetId)
-            .SelectMany(group => group.Select((source, index) => new
-            {
-                Key = (source.SourceSetId, source.SourceId),
-                Source = source,
-                Ordinal = index + 1
-            }))
-            .ToDictionary(item => item.Key);
-        var expectedRelationships = datasets
-            .SelectMany(dataset => sources.Values
-                .Where(source => source.Key.SourceSetId == dataset.Value)
-                .Select(source => (dataset.Key, source.Key.SourceId)))
-            .ToHashSet();
-        var seen = new HashSet<(OutputSetId OutputSetId, SourceId SourceId)>();
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT datasets.output_set_id, datasets.parent_source_set_id,
-                   sources.source_id, sources.source_ordinal, sources.full_source_path,
-                   sources.source_kind, sources.archive_path, sources.archive_member_path
-            FROM hierarchy_output_set_sources AS sources
-            JOIN hierarchy_output_set_datasets AS datasets
-              ON datasets.generation_id = sources.generation_id
-             AND datasets.output_set_id = sources.output_set_id
-            WHERE sources.generation_id = $generationId
-            ORDER BY datasets.dataset_ordinal, sources.source_ordinal;
-            """;
-        command.Parameters.AddWithValue("$generationId", generation.OperationId.ToString());
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken)
-            .ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            var outputSetId = OutputSetId.From(Guid.Parse(reader.GetString(0)));
-            var parentSourceSetId = SourceSetId.From(Guid.Parse(reader.GetString(1)));
-            var sourceId = SourceId.From(Guid.Parse(reader.GetString(2)));
-            if (!datasets.TryGetValue(outputSetId, out var expectedParent)
-                || expectedParent != parentSourceSetId
-                || !sources.TryGetValue((parentSourceSetId, sourceId), out var expected)
-                || expected.Ordinal != reader.GetInt32(3)
-                || !string.Equals(
-                    Path.GetFullPath(expected.Source.Path),
-                    Path.GetFullPath(reader.GetString(4)),
-                    StringComparison.OrdinalIgnoreCase)
-                || (int)expected.Source.Kind != reader.GetInt32(5)
-                || !string.Equals(
-                    expected.Source.ArchiveProvenance?.OriginalArchivePath,
-                    reader.IsDBNull(6) ? null : reader.GetString(6),
-                    StringComparison.OrdinalIgnoreCase)
-                || !string.Equals(
-                    expected.Source.ArchiveProvenance?.ArchiveMemberPath,
-                    reader.IsDBNull(7) ? null : reader.GetString(7),
-                    StringComparison.Ordinal)
-                || !seen.Add((outputSetId, sourceId)))
-            {
-                throw new StructuredInformationRepositoryException(
-                    "The working-state manifest source references do not match the published Output Set Database snapshot.");
-            }
-        }
-
-        if (!seen.SetEquals(expectedRelationships))
-        {
-            throw new StructuredInformationRepositoryException(
-                "The working-state manifest source membership does not match the published Output Set Database snapshot.");
         }
     }
 
