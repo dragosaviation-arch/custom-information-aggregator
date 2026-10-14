@@ -706,10 +706,15 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
                         return databaseResponse;
                     }
 
-                    if (response is CommandAcknowledgement)
+                    if (response is CommandAcknowledgement acknowledgement)
                     {
                         // Cooperative-cancellation acknowledgements share this connection while
                         // the long-running Database response remains the sole awaited result.
+                        if (acknowledgement.CommandMessageId == command.MessageId)
+                        {
+                            return CreateRejectedDatabaseBuildResponse(command, acknowledgement);
+                        }
+
                         continue;
                     }
 
@@ -735,6 +740,41 @@ public sealed class ProcessingHostSupervisor : IProcessingHostSupervisor, IDispo
         {
             _lifecycleGate.Release();
         }
+    }
+
+    internal static BuildDatabaseResponse CreateRejectedDatabaseBuildResponse(
+        BuildDatabaseCommand command,
+        CommandAcknowledgement acknowledgement)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(acknowledgement);
+        if (acknowledgement.CommandMessageId != command.MessageId
+            || acknowledgement.Acceptance == CommandAcceptance.Accepted
+            || acknowledgement.Failure is null)
+        {
+            throw new IpcProtocolException(
+                IpcProtocolError.InvalidContract,
+                "The Processing Host returned an invalid Database build acknowledgement.");
+        }
+
+        var items = command.Specification.Datasets
+            .SelectMany(dataset => dataset.Sources)
+            .DistinctBy(source => source.SourceId)
+            .Select(source => OperationItemStatus.Unprocessed(
+                source.SourceId.ToString(),
+                acknowledgement.Failure.Code))
+            .ToArray();
+        return new BuildDatabaseResponse(
+            Guid.CreateVersion7(),
+            DateTimeOffset.UtcNow,
+            command.MessageId,
+            acknowledgement.Acceptance,
+            OperationCompletion.FromTerminalOutcome(
+                command.Correlation,
+                OperationOutcome.Failed,
+                items),
+            PublishedGeneration: null,
+            acknowledgement.Failure);
     }
 
     private static void TryReportDatabaseBuildProgress(

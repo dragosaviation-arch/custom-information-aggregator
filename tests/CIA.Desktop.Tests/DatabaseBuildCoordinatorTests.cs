@@ -1,6 +1,7 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Hierarchy;
+using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core;
@@ -134,6 +135,68 @@ public sealed class DatabaseBuildCoordinatorTests
         Assert.IsFalse((await coordinator.BuildAsync()).Accepted);
         Assert.AreSame(published, coordinator.CurrentGeneration);
         Assert.AreEqual(WorkflowArtifactStatus.Stale, context.Workflow.Current.Database);
+    }
+
+    [TestMethod]
+    public async Task CorrelatedInvalidContractRejectionTerminatesAndRetainsPublishedDatabase()
+    {
+        var context = await BuildContext.CreateAsync();
+        var callCount = 0;
+        var client = new RecordingDatabaseClient((correlation, specification) =>
+        {
+            callCount++;
+            if (callCount != 2)
+            {
+                return HierarchySuccess(correlation, specification, rowCount: 1, valueCount: 1);
+            }
+
+            var command = new BuildDatabaseCommand(
+                Guid.CreateVersion7(),
+                DateTimeOffset.UtcNow,
+                correlation,
+                specification);
+            var acknowledgement = new CommandAcknowledgement(
+                Guid.CreateVersion7(),
+                DateTimeOffset.UtcNow,
+                command.MessageId,
+                CommandAcceptance.Rejected,
+                new IpcFailure(
+                    "invalid-contract",
+                    "The Database build request did not satisfy the IPC contract."));
+            var response = ProcessingHostSupervisor.CreateRejectedDatabaseBuildResponse(
+                command,
+                acknowledgement);
+            return new DatabaseClientResult(
+                Accepted: false,
+                response.Completion,
+                response.PublishedGeneration,
+                response.Failure?.Code,
+                response.Failure?.Description);
+        });
+        var coordinator = context.CreateCoordinator(client);
+        Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
+        var published = coordinator.CurrentGeneration;
+        Assert.IsNotNull(published);
+
+        Assert.IsTrue(context.Workflow.RecordDiscoveryConfigurationChanged().Accepted);
+        Assert.IsTrue(context.Configuration.SetDatabaseTagOverride("tag", "Replacement"));
+        var rejected = await coordinator.BuildAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.IsFalse(rejected.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.OperationFailed, rejected.Rejection?.Code);
+        Assert.AreEqual(
+            "The Database build request did not satisfy the IPC contract.",
+            rejected.Rejection?.Reason);
+        Assert.IsNull(context.Workflow.Current.ActiveOperation);
+        Assert.AreEqual(WorkflowOperationState.Failed, context.Workflow.Current.LatestOperation?.State);
+        Assert.AreSame(published, coordinator.CurrentGeneration);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, context.Workflow.Current.Database);
+
+        var subsequent = await coordinator.BuildAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.IsTrue(subsequent.Accepted);
+        Assert.AreEqual(3, callCount);
+        Assert.AreNotSame(published, coordinator.CurrentGeneration);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Database);
     }
 
     [TestMethod]

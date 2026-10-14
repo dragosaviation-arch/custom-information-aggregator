@@ -122,7 +122,35 @@ public sealed class ProcessingHostLifetimeService(
                 activeProcessingRequest = null;
             }
 
-            var message = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+            IpcMessage message;
+            try
+            {
+                message = await connection.ReceiveAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (IpcProtocolException exception)
+                when (established
+                    && exception.Error == IpcProtocolError.InvalidContract
+                    && exception.MessageId is { } commandMessageId
+                    && string.Equals(
+                        exception.MessageType,
+                        "buildDatabaseCommand",
+                        StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    exception,
+                    "Processing Host rejected invalid Database build command {CommandMessageId}",
+                    commandMessageId);
+                await SendRejectedSerializedAsync(
+                        connection,
+                        commandMessageId,
+                        "invalid-contract",
+                        "The Database build request did not satisfy the IPC contract.",
+                        processingResponseSendGate,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                continue;
+            }
+
             if (activeProcessingRequest?.IsCompleted == true)
             {
                 await ObserveProcessingRequestAsync(activeProcessingRequest).ConfigureAwait(false);

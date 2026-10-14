@@ -285,7 +285,9 @@ public sealed record DatabaseBuildSpecification
             || !datasetArray.Select(dataset => dataset.Ordinal)
                 .SequenceEqual(Enumerable.Range(1, datasetArray.Length))
             || datasetArray.GroupBy(dataset => dataset.SourceSetId).Any(group =>
-                group.Skip(1).Any(dataset => !dataset.Sources.SequenceEqual(group.First().Sources))))
+                group.Skip(1).Any(dataset => !SourceBoundariesEqual(
+                    dataset.Sources,
+                    group.First().Sources))))
         {
             throw new ArgumentException(
                 "A Database build requires uniquely ordered datasets with one source boundary per parent Source Set.",
@@ -296,6 +298,105 @@ public sealed record DatabaseBuildSpecification
     }
 
     public IReadOnlyList<DatabaseDatasetBuildSpecification> Datasets { get; }
+
+    private static bool SourceBoundariesEqual(
+        IReadOnlyList<LoadedSourceContract> left,
+        IReadOnlyList<LoadedSourceContract> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Count; index++)
+        {
+            if (!SourcesEqual(left[index], right[index]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool SourcesEqual(LoadedSourceContract left, LoadedSourceContract right)
+    {
+        return left.SourceId == right.SourceId
+            && left.SourceSetId == right.SourceSetId
+            && string.Equals(left.Path, right.Path, StringComparison.Ordinal)
+            && left.IsIncluded == right.IsIncluded
+            && left.Status == right.Status
+            && left.Kind == right.Kind
+            && ArchiveProvenanceEqual(left.ArchiveProvenance, right.ArchiveProvenance);
+    }
+
+    private static bool ArchiveProvenanceEqual(
+        ArchiveSourceProvenance? left,
+        ArchiveSourceProvenance? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+
+        return left.OriginalArchiveSourceId == right.OriginalArchiveSourceId
+            && string.Equals(
+                left.OriginalArchivePath,
+                right.OriginalArchivePath,
+                StringComparison.Ordinal)
+            && ArchiveLineagesEqual(left.ArchiveLineage, right.ArchiveLineage)
+            && left.ArchiveNestingLevel == right.ArchiveNestingLevel
+            && string.Equals(
+                left.ArchiveMemberPath,
+                right.ArchiveMemberPath,
+                StringComparison.Ordinal)
+            && string.Equals(left.ExtractionRoot, right.ExtractionRoot, StringComparison.Ordinal)
+            && left.Retention == right.Retention
+            && left.MaximumArchiveNestingDepth == right.MaximumArchiveNestingDepth
+            && string.Equals(
+                left.PersistentExtractionDirectory,
+                right.PersistentExtractionDirectory,
+                StringComparison.Ordinal);
+    }
+
+    private static bool ArchiveLineagesEqual(
+        IReadOnlyList<ArchiveLineageItem?>? left,
+        IReadOnlyList<ArchiveLineageItem?>? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Count; index++)
+        {
+            var leftItem = left[index];
+            var rightItem = right[index];
+            if (leftItem is null || rightItem is null)
+            {
+                if (leftItem is not null || rightItem is not null)
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (leftItem.ArchiveSourceId != rightItem.ArchiveSourceId
+                || !string.Equals(leftItem.Path, rightItem.Path, StringComparison.Ordinal)
+                || leftItem.NestingLevel != rightItem.NestingLevel)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }
 
 public sealed class DatabaseRepeatCoordinatePath :
