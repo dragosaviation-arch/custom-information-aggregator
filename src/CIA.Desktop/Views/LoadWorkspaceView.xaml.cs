@@ -212,20 +212,40 @@ public partial class LoadWorkspaceView : UserControl
     private void OnLoadColumnDividerDragDelta(object sender, DragDeltaEventArgs e)
     {
         if (DataContext is LoadWorkspaceViewModel viewModel
-            && sender is Thumb { Tag: string tag }
-            && TryParseColumnPair(tag, out var leftKey, out var rightKey))
+            && sender is Thumb { Tag: string tag })
         {
-            viewModel.ResizeColumns(leftKey, rightKey, e.HorizontalChange);
+            if (TryParseColumnPair(tag, out var leftKey, out var rightKey))
+            {
+                viewModel.ResizeColumns(leftKey, rightKey, e.HorizontalChange);
+            }
+            else
+            {
+                viewModel.ResizeColumn(tag, e.HorizontalChange);
+            }
         }
     }
 
     private void OnLoadColumnDividerDragCompleted(object sender, DragCompletedEventArgs e)
     {
         if (DataContext is LoadWorkspaceViewModel viewModel
-            && sender is Thumb { Tag: string tag }
-            && TryParseColumnPair(tag, out var leftKey, out var rightKey))
+            && sender is Thumb { Tag: string tag })
         {
-            viewModel.PersistColumnWidths(leftKey, rightKey);
+            if (TryParseColumnPair(tag, out var leftKey, out var rightKey))
+            {
+                viewModel.PersistColumnWidths(leftKey, rightKey);
+            }
+            else
+            {
+                viewModel.PersistColumnWidth(tag);
+            }
+        }
+    }
+
+    private void OnSourceRowsScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (e.HorizontalChange != 0)
+        {
+            LoadHeaderTranslate.X = -e.HorizontalOffset;
         }
     }
 

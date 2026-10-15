@@ -573,6 +573,16 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         SetColumnWidth(rightKey, rightWidth - appliedChange);
     }
 
+    internal void ResizeColumn(string key, double horizontalChange)
+    {
+        SetColumnWidth(
+            key,
+            Math.Clamp(
+                GetColumnWidth(key) + horizontalChange,
+                GetColumnMinimum(key),
+                MaximumColumnWidth));
+    }
+
     internal void PersistColumnWidths(string leftKey, string rightKey)
     {
         ColumnWidthPreferences.Save(
@@ -580,6 +590,9 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
             (leftKey, GetColumnWidth(leftKey)),
             (rightKey, GetColumnWidth(rightKey)));
     }
+
+    internal void PersistColumnWidth(string key) =>
+        ColumnWidthPreferences.Save(_settingsService, (key, GetColumnWidth(key)));
 
     public void Dispose()
     {

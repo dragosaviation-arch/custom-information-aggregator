@@ -18,6 +18,12 @@ public static class DiscoveryOutputPreviewLimits
     public const int WideColumnWarningThreshold = 500;
 }
 
+public enum DiscoveryOutputPreviewSchemaState
+{
+    SourceFileSample = 0,
+    CurrentPublishedDatabase = 1
+}
+
 public sealed record DiscoveryOutputProjectionSpecification
 {
     [JsonConstructor]
@@ -93,7 +99,8 @@ public sealed record DiscoveryOutputPreviewRequest
         DiscoveryOccurrenceLookup occurrence,
         DiscoveryOutputProjectionSpecification projection,
         int maximumRowsPerGroup = DiscoveryOutputPreviewLimits.DefaultMaximumRowsPerGroup,
-        int columnStartIndex = 0)
+        int columnStartIndex = 0,
+        OperationId? publishedDatabaseOperationId = null)
     {
         if (outputSetId.Value == Guid.Empty)
         {
@@ -120,11 +127,20 @@ public sealed record DiscoveryOutputPreviewRequest
             throw new ArgumentOutOfRangeException(nameof(columnStartIndex));
         }
 
+        if (publishedDatabaseOperationId is { } operationId
+            && !OperationId.IsValid(operationId.Value))
+        {
+            throw new ArgumentException(
+                "A published preview schema requires a valid Database operation identity.",
+                nameof(publishedDatabaseOperationId));
+        }
+
         OutputSetId = outputSetId;
         Occurrence = occurrence;
         Projection = projection;
         MaximumRowsPerGroup = maximumRowsPerGroup;
         ColumnStartIndex = columnStartIndex;
+        PublishedDatabaseOperationId = publishedDatabaseOperationId;
     }
 
     public OutputSetId OutputSetId { get; }
@@ -136,6 +152,8 @@ public sealed record DiscoveryOutputPreviewRequest
     public int MaximumRowsPerGroup { get; }
 
     public int ColumnStartIndex { get; }
+
+    public OperationId? PublishedDatabaseOperationId { get; }
 }
 
 public sealed record DiscoveryOutputPreview(
@@ -148,7 +166,9 @@ public sealed record DiscoveryOutputPreview(
     RepeatedDataLayout RepeatedDataLayout,
     IReadOnlyList<DiscoveryOutputPreviewGroup> Groups,
     DiscoveryOutputProjectionMode ProjectionMode =
-        DiscoveryOutputProjectionMode.PreserveRelationships);
+        DiscoveryOutputProjectionMode.PreserveRelationships,
+    DiscoveryOutputPreviewSchemaState SchemaState =
+        DiscoveryOutputPreviewSchemaState.SourceFileSample);
 
 public sealed record DiscoveryOutputPreviewGroup(
     RowFamilyId RowFamilyId,

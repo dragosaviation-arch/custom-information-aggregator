@@ -2,7 +2,9 @@
 <catalog>
   <book code="B2">
     <title>Later schema</title>
-    <author><name>Only author</name></author>
+    <author><name>First later author</name></author>
+    <author><name>Second later author</name></author>
+    <author><name>Third later author</name></author>
     <late>Discovered in a later source</late>
   </book>
 </catalog>

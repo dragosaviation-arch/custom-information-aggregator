@@ -175,8 +175,12 @@
 
                     <Border Background="{StaticResource CiaPanelAlternateBrush}"
                             BorderBrush="{StaticResource CiaBorderBrush}"
-                            BorderThickness="0,0,0,1">
+                            BorderThickness="0,0,0,1"
+                            ClipToBounds="True">
                         <Grid Margin="6,0">
+                            <Grid.RenderTransform>
+                                <TranslateTransform x:Name="DiscoveryHeaderTranslate" />
+                            </Grid.RenderTransform>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="34" />
                                 <ColumnDefinition Width="{Binding SourceSetColumnWidth}" MinWidth="60" />
@@ -226,6 +230,7 @@
                             <Thumb Grid.Column="4" Tag="discovery.occurrences|discovery.sources" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="5" Tag="discovery.sources|discovery.sample" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="6" Tag="discovery.sample|discovery.blacklist" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="7" Tag="discovery.blacklist" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                         </Grid>
                     </Border>
 
@@ -254,7 +259,8 @@
                                  HorizontalContentAlignment="Stretch"
                                  ItemsSource="{Binding Information}"
                                  SelectedItem="{Binding SelectedInformation, Mode=TwoWay}"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                 ScrollViewer.ScrollChanged="OnDiscoveryRowsScrollChanged"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ListBox.ItemContainerStyle>
                                 <Style TargetType="ListBoxItem">

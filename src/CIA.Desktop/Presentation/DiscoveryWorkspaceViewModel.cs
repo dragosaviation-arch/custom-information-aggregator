@@ -1080,6 +1080,16 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         SetColumnWidth(rightKey, rightWidth - appliedChange);
     }
 
+    internal void ResizeColumn(string key, double horizontalChange)
+    {
+        SetColumnWidth(
+            key,
+            Math.Clamp(
+                GetColumnWidth(key) + horizontalChange,
+                GetColumnMinimum(key),
+                MaximumColumnWidth));
+    }
+
     internal void PersistColumnWidths(string leftKey, string rightKey)
     {
         ColumnWidthPreferences.Save(
@@ -1087,6 +1097,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             (leftKey, GetColumnWidth(leftKey)),
             (rightKey, GetColumnWidth(rightKey)));
     }
+
+    internal void PersistColumnWidth(string key) =>
+        ColumnWidthPreferences.Save(_settingsService, (key, GetColumnWidth(key)));
 
     public string DatabaseTagOverrideActionText =>
         PreviewInformation?.HasAnyDatabaseTagOverride == true ? "Revert" : "Default";
@@ -2040,7 +2053,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                 fields,
                 dataset.ProjectionMode,
                 dataset.SourceProjectionRepeatedPaths),
-            columnStartIndex: _outputPreviewColumnStartIndex);
+            columnStartIndex: _outputPreviewColumnStartIndex,
+            publishedDatabaseOperationId: ResolveMatchingPublishedDatabaseOperationId(
+                approvedSpecification));
         unavailableReason = string.Empty;
         return true;
     }
@@ -2164,7 +2179,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         OutputPreviewStatusText = groups.Length == 0
             ? "The selected occurrence contributes to no selected output table."
             : preview.ProjectionMode == DiscoveryOutputProjectionMode.OneRowPerSourceFile
-                ? CreateSourceFilePreviewStatus(previewGroup)
+                ? CreateSourceFilePreviewStatus(previewGroup, preview.SchemaState)
                 : "Projected with Preserve relationships.";
     }
 
@@ -2203,16 +2218,34 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _nextOutputColumnsCommand.NotifyCanExecuteChanged();
     }
 
-    internal static string CreateSourceFilePreviewStatus(DiscoveryOutputPreviewGroup? group)
+    private OperationId? ResolveMatchingPublishedDatabaseOperationId(
+        DatabaseBuildSpecification approvedSpecification)
+    {
+        var current = _databaseBuildCoordinator?.CurrentGeneration;
+        return _workflowCoordinator.Current.Database == WorkflowArtifactStatus.Current
+            && current is not null
+            && DatabaseGenerationContextComparer.Matches(approvedSpecification, current)
+                ? current.OperationId
+                : null;
+    }
+
+    internal static string CreateSourceFilePreviewStatus(
+        DiscoveryOutputPreviewGroup? group,
+        DiscoveryOutputPreviewSchemaState schemaState =
+            DiscoveryOutputPreviewSchemaState.SourceFileSample)
     {
         if (group is null || group.TotalColumnCount == 0)
         {
-            return "The selected source has no values for the selected fields.";
+            return schemaState == DiscoveryOutputPreviewSchemaState.CurrentPublishedDatabase
+                ? "The current published Database has no columns for this Output Set."
+                : "The selected source sample has no values for the selected fields.";
         }
 
         var first = group.ColumnStartIndex + 1;
         var last = group.ColumnStartIndex + group.Columns.Count;
-        var range = $"Data columns {first:N0}-{last:N0} of {group.TotalColumnCount:N0} for this source sample. Final dataset and export metadata width are validated during build/export.";
+        var range = schemaState == DiscoveryOutputPreviewSchemaState.CurrentPublishedDatabase
+            ? $"Current published schema columns {first:N0}-{last:N0} of {group.TotalColumnCount:N0} for this source row."
+            : $"Source-file sample columns {first:N0}-{last:N0} of {group.TotalColumnCount:N0}. Other files may add columns; pending configuration is not the published Database.";
         return group.TotalColumnCount > DiscoveryOutputPreviewLimits.WideColumnWarningThreshold
             ? $"{range} Wide output warning: the selected source exceeds 500 data columns."
             : range;
@@ -3214,6 +3247,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(DatabaseBuildButtonText));
             OnPropertyChanged(nameof(DatabaseBuildAvailabilityReason));
             BuildDatabaseCommand.NotifyCanExecuteChanged();
+            if (IsOutputMode)
+            {
+                ScheduleOutputPreview();
+            }
         });
     }
 

@@ -5,6 +5,7 @@ using CIA.Contracts.Discovery;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
+using CIA.Core.Database;
 using Microsoft.Data.Sqlite;
 
 namespace CIA.ProcessingHost.Repository;
@@ -177,6 +178,7 @@ public sealed partial class StructuredInformationRepository
                         transaction,
                         generationId,
                         outputSetId,
+                        dataset,
                         column,
                         JsonSerializer.Serialize(column.RepeatCoordinates.Coordinates),
                         cancellationToken).ConfigureAwait(false);
@@ -232,6 +234,7 @@ public sealed partial class StructuredInformationRepository
                             transaction,
                             generationId,
                             outputSetId,
+                            dataset,
                             cell.ColumnIdentity,
                             coordinatesJson,
                             cancellationToken).ConfigureAwait(false);
@@ -304,6 +307,7 @@ public sealed partial class StructuredInformationRepository
         SqliteTransaction transaction,
         string generationId,
         OutputSetId outputSetId,
+        DatabaseDatasetBuildSpecification dataset,
         DatabaseColumnIdentity identity,
         string coordinatesJson,
         CancellationToken cancellationToken)
@@ -321,11 +325,15 @@ public sealed partial class StructuredInformationRepository
         nameCommand.Parameters.AddWithValue("$familyKind", (int)identity.RowFamilyId.Kind);
         nameCommand.Parameters.AddWithValue("$familyAnchorPath", identity.RowFamilyId.AnchorPath);
         nameCommand.Parameters.AddWithValue("$fieldKey", identity.FieldKey);
-        var effectiveName = Convert.ToString(
+        var mappedEffectiveName = Convert.ToString(
             await nameCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
             CultureInfo.InvariantCulture)
             ?? throw new StructuredInformationRepositoryException(
                 "A flattened cell is outside its approved Output Set projection.");
+        var effectiveName = dataset.ProjectionMode ==
+                DiscoveryOutputProjectionMode.OneRowPerSourceFile
+            ? DatabaseOutputColumnHeaderFormatter.Resolve(dataset, identity)
+            : mappedEffectiveName;
         var nextOrdinal = await ScalarIntAsync(connection, transaction, """
             SELECT COALESCE(MAX(column_ordinal), 0) + 1
             FROM hierarchy_output_set_columns

@@ -40,10 +40,17 @@ public sealed class DiscoveryWorkspaceViewModelTests
         var warned = DiscoveryWorkspaceViewModel.CreateSourceFilePreviewStatus(aboveLimit);
 
         Assert.DoesNotContain("warning", allowed, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("source sample", allowed, StringComparison.Ordinal);
-        Assert.Contains("Final dataset", allowed, StringComparison.Ordinal);
+        Assert.Contains("Source-file sample", allowed, StringComparison.Ordinal);
+        Assert.Contains("Other files may add columns", allowed, StringComparison.Ordinal);
+        Assert.Contains("not the published Database", allowed, StringComparison.Ordinal);
         Assert.Contains("warning", warned, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("exceeds 500", warned, StringComparison.Ordinal);
+
+        var current = DiscoveryWorkspaceViewModel.CreateSourceFilePreviewStatus(
+            atLimit,
+            DiscoveryOutputPreviewSchemaState.CurrentPublishedDatabase);
+        Assert.Contains("Current published schema", current, StringComparison.Ordinal);
+        Assert.DoesNotContain("sample", current, StringComparison.OrdinalIgnoreCase);
     }
 
     [TestMethod]

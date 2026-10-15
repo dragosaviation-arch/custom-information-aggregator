@@ -153,21 +153,41 @@ public partial class DiscoveryWorkspaceView : UserControl
 
     private void OnColumnResizeDragDelta(object sender, DragDeltaEventArgs e)
     {
-        if (sender is Thumb { Tag: string pair }
-            && TryParseColumnPair(pair, out var left, out var right)
+        if (sender is Thumb { Tag: string tag }
             && DataContext is DiscoveryWorkspaceViewModel viewModel)
         {
-            viewModel.ResizeColumns(left, right, e.HorizontalChange);
+            if (TryParseColumnPair(tag, out var left, out var right))
+            {
+                viewModel.ResizeColumns(left, right, e.HorizontalChange);
+            }
+            else
+            {
+                viewModel.ResizeColumn(tag, e.HorizontalChange);
+            }
         }
     }
 
     private void OnColumnResizeDragCompleted(object sender, DragCompletedEventArgs e)
     {
-        if (sender is Thumb { Tag: string pair }
-            && TryParseColumnPair(pair, out var left, out var right)
+        if (sender is Thumb { Tag: string tag }
             && DataContext is DiscoveryWorkspaceViewModel viewModel)
         {
-            viewModel.PersistColumnWidths(left, right);
+            if (TryParseColumnPair(tag, out var left, out var right))
+            {
+                viewModel.PersistColumnWidths(left, right);
+            }
+            else
+            {
+                viewModel.PersistColumnWidth(tag);
+            }
+        }
+    }
+
+    private void OnDiscoveryRowsScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (e.HorizontalChange != 0)
+        {
+            DiscoveryHeaderTranslate.X = -e.HorizontalOffset;
         }
     }
 

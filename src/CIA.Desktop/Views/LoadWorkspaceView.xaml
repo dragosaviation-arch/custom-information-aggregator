@@ -251,8 +251,12 @@
 
                     <Border Background="{StaticResource CiaPanelAlternateBrush}"
                             BorderBrush="{StaticResource CiaBorderBrush}"
-                            BorderThickness="0,0,0,1">
+                            BorderThickness="0,0,0,1"
+                            ClipToBounds="True">
                         <Grid Margin="6,0">
+                            <Grid.RenderTransform>
+                                <TranslateTransform x:Name="LoadHeaderTranslate" />
+                            </Grid.RenderTransform>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="34" />
                                 <ColumnDefinition Width="{Binding SourceColumnWidth}" MinWidth="72" />
@@ -287,6 +291,7 @@
                             <Thumb Grid.Column="3" Tag="load.sourceSet|load.level" Style="{StaticResource LoadColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="4" Tag="load.level|load.size" Style="{StaticResource LoadColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="5" Tag="load.size|load.status" Style="{StaticResource LoadColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="6" Tag="load.status" Style="{StaticResource LoadColumnResizeThumbStyle}" />
                         </Grid>
                     </Border>
 
@@ -319,7 +324,8 @@
                                  LayoutUpdated="OnSourceRowsLayoutUpdated"
                                  SelectionChanged="OnSourceSelectionChanged"
                                  SelectionMode="Extended"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                 ScrollViewer.ScrollChanged="OnSourceRowsScrollChanged"
                                  ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ListBox.ContextMenu>
                                 <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">

@@ -189,8 +189,10 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(discoveryCode, "DiscoveryRightColumn.MinWidth = 360");
         StringAssert.Contains(load, "LoadColumnResizeThumbStyle");
         StringAssert.Contains(discovery, "DiscoveryColumnResizeThumbStyle");
-        Assert.HasCount(5, Regex.Matches(load, "Tag=\"load\\.").Cast<Match>());
-        Assert.HasCount(6, Regex.Matches(discovery, "Tag=\"discovery\\.").Cast<Match>());
+        Assert.HasCount(6, Regex.Matches(load, "Tag=\"load\\.").Cast<Match>());
+        Assert.HasCount(7, Regex.Matches(discovery, "Tag=\"discovery\\.").Cast<Match>());
+        StringAssert.Contains(load, "Tag=\"load.status\"");
+        StringAssert.Contains(discovery, "Tag=\"discovery.blacklist\"");
         StringAssert.Contains(theme, "x:Key=\"CiaColumnResizeThumbStyle\"");
         StringAssert.Contains(theme, "x:Name=\"ResizeGuide\"");
         StringAssert.Contains(theme, "Background=\"{StaticResource CiaBorderStrongBrush}\"");

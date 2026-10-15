@@ -12,6 +12,8 @@ public partial class DatabaseWorkspaceView : UserControl
     private const double DatabaseReviewRowHeight = 30;
     private bool _isCompact;
     private bool _showExcelExport;
+    private bool _synchronizingReviewScroll;
+    private ScrollViewer? _databaseReviewScrollViewer;
     private DatabaseColumnWidthFeedback? _columnResize;
 
     public DatabaseWorkspaceView()
@@ -172,6 +174,20 @@ public partial class DatabaseWorkspaceView : UserControl
 
     private async void OnDatabaseReviewScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        if (sender is ScrollViewer scrollViewer)
+        {
+            _databaseReviewScrollViewer = scrollViewer;
+            _synchronizingReviewScroll = true;
+            DatabaseReviewVerticalScrollBar.Maximum = scrollViewer.ScrollableHeight;
+            DatabaseReviewVerticalScrollBar.ViewportSize = scrollViewer.ViewportHeight;
+            DatabaseReviewVerticalScrollBar.LargeChange = Math.Max(
+                DatabaseReviewRowHeight,
+                scrollViewer.ViewportHeight);
+            DatabaseReviewVerticalScrollBar.Value = scrollViewer.VerticalOffset;
+            DatabaseReviewVerticalScrollBar.IsEnabled = scrollViewer.ScrollableHeight > 0;
+            _synchronizingReviewScroll = false;
+        }
+
         if (DataContext is not DatabaseWorkspaceViewModel viewModel
             || e.ViewportHeight <= 0)
         {
@@ -181,6 +197,16 @@ public partial class DatabaseWorkspaceView : UserControl
         var firstVisibleOrdinal = (int)Math.Floor(e.VerticalOffset / DatabaseReviewRowHeight) + 1;
         var visibleRowCount = (int)Math.Ceiling(e.ViewportHeight / DatabaseReviewRowHeight) + 2;
         await viewModel.EnsureReviewRowsAvailableAsync(firstVisibleOrdinal, visibleRowCount);
+    }
+
+    private void OnDatabaseReviewVerticalScrollBarValueChanged(
+        object sender,
+        RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_synchronizingReviewScroll)
+        {
+            _databaseReviewScrollViewer?.ScrollToVerticalOffset(e.NewValue);
+        }
     }
 
     private void ShowColumnSizeFeedback(DatabaseColumnWidthFeedback? feedback)

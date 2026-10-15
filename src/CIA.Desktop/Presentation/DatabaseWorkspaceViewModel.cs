@@ -1318,7 +1318,9 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         var columns = family.Columns.Select(column =>
         {
             var mappings = mappingsByKey[column.Identity.FieldKey];
-            var header = column.Identity.RepeatCoordinates.Coordinates.Count == 0
+            var header = family.Id.Kind == RowFamilyKind.SourceFileProjection
+                ? column.EffectiveName
+                : column.Identity.RepeatCoordinates.Coordinates.Count == 0
                 ? column.EffectiveName
                 : $"{column.EffectiveName} {column.Identity.RepeatCoordinates}";
             return new DatabaseColumnMapping(

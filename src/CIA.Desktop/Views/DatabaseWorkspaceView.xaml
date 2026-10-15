@@ -283,9 +283,15 @@
                 </Popup>
 
                 <Grid Grid.Row="2" MinHeight="0" Background="{StaticResource CiaPanelBrush}">
-                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ScrollViewer x:Name="DatabaseReviewHorizontalScrollViewer"
+                                  Grid.Column="0"
+                                  HorizontalScrollBarVisibility="Auto"
                                   VerticalScrollBarVisibility="Disabled">
-                        <Grid MinWidth="{Binding ElementName=DatabaseGridPanel, Path=ActualWidth}">
+                        <Grid MinWidth="{Binding ElementName=DatabaseReviewHorizontalScrollViewer, Path=ActualWidth}">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="30" />
                                 <RowDefinition Height="*" />
@@ -359,7 +365,7 @@
                                      ScrollViewer.CanContentScroll="True"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.ScrollChanged="OnDatabaseReviewScrollChanged"
-                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.VerticalScrollBarVisibility="Hidden"
                                      VirtualizingPanel.IsVirtualizing="True"
                                      VirtualizingPanel.ScrollUnit="Pixel"
                                      VirtualizingPanel.VirtualizationMode="Recycling">
@@ -434,7 +440,17 @@
                                                             <Border Width="{Binding Column.Width}"
                                                                     BorderBrush="{StaticResource CiaDividerBrush}"
                                                                     BorderThickness="0,0,1,1"
-                                                                    ToolTip="{Binding SourceContext}">
+                                                            ToolTipService.ShowDuration="60000">
+                                                                <Border.ToolTip>
+                                                                    <StackPanel MaxWidth="720">
+                                                                        <TextBlock FontWeight="SemiBold"
+                                                                                   Text="{Binding SourceContext}"
+                                                                                   TextWrapping="Wrap" />
+                                                                        <TextBlock Margin="0,5,0,0"
+                                                                                   Text="{Binding DisplayValue}"
+                                                                                   TextWrapping="Wrap" />
+                                                                    </StackPanel>
+                                                                </Border.ToolTip>
                                                                 <Border.Style>
                                                                     <Style TargetType="Border">
                                                                         <Style.Triggers>
@@ -448,7 +464,8 @@
                                                                            VerticalAlignment="Center"
                                                                            Foreground="{StaticResource CiaTextPrimaryBrush}"
                                                                            Text="{Binding DisplayValue}"
-                                                                           TextTrimming="CharacterEllipsis" />
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           TextWrapping="Wrap" />
                                                             </Border>
                                                         </DataTemplate>
                                                     </ItemsControl.ItemTemplate>
@@ -481,6 +498,12 @@
                             </ListBox>
                         </Grid>
                     </ScrollViewer>
+                    <ScrollBar x:Name="DatabaseReviewVerticalScrollBar"
+                               Grid.Column="1"
+                               Width="14"
+                               Orientation="Vertical"
+                               SmallChange="30"
+                               ValueChanged="OnDatabaseReviewVerticalScrollBarValueChanged" />
                     <Border x:Name="DatabaseColumnSizeFeedback"
                             Margin="0,34,12,0"
                             Padding="8,4"

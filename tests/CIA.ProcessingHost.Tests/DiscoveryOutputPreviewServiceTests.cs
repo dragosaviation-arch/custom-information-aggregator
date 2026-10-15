@@ -10,6 +10,8 @@ using CIA.Core.Database;
 using CIA.Core.Diagnostics;
 using CIA.Core.Hierarchy;
 using CIA.Core.Runtime;
+using CIA.Desktop.Export;
+using CIA.Desktop.Presentation;
 using CIA.ProcessingHost.Database;
 using CIA.ProcessingHost.Discovery;
 using CIA.ProcessingHost.Extraction;
@@ -23,6 +25,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace CIA.ProcessingHost.Tests;
 
 [TestClass]
+[DoNotParallelize]
 public sealed class DiscoveryOutputPreviewServiceTests
 {
     [TestMethod]
@@ -223,11 +226,17 @@ public sealed class DiscoveryOutputPreviewServiceTests
         {
             "code", "title", "name", "role", "value", "keyword", "label", "late"
         };
+        var overriddenIdentity = discovery.Information.First(information =>
+            information.InformationType == "name").Identity;
         var dataset = CreateSourceFileDataset(
             discovery,
             sources,
             information => selectedNames.Contains(information.InformationType)
-                || information.Identity.StructuralPath.Contains("label", StringComparison.Ordinal));
+                || information.Identity.StructuralPath.Contains("label", StringComparison.Ordinal),
+            new Dictionary<DiscoveryInformationIdentity, string>
+            {
+                [overriddenIdentity] = "Contributor"
+            });
         var interpreted = (await workspace.Interpreter.InterpretAsync(first)).Source!;
 
         var projection = await workspace.Projector.ProjectAsync(dataset, first, interpreted);
@@ -301,6 +310,9 @@ public sealed class DiscoveryOutputPreviewServiceTests
         Assert.AreEqual(
             DiscoveryOutputProjectionMode.OneRowPerSourceFile,
             firstPage.Preview.ProjectionMode);
+        Assert.AreEqual(
+            DiscoveryOutputPreviewSchemaState.SourceFileSample,
+            firstPage.Preview.SchemaState);
         var firstGroup = firstPage.Preview.Groups.Single();
         var secondGroup = secondPage.Preview!.Groups.Single();
         Assert.HasCount(DiscoveryOutputPreviewLimits.SourceFileColumnsPerPage, firstGroup.Columns);
@@ -347,7 +359,12 @@ public sealed class DiscoveryOutputPreviewServiceTests
         var publishedDataset = database.PublishedGeneration!.Datasets.Single();
         Assert.AreEqual(dataset.OutputSetId, publishedDataset.OutputSetId);
         Assert.AreEqual(sources.Length, publishedDataset.RowCount);
-        Assert.HasCount(projection.Columns.Count, publishedDataset.Columns);
+        Assert.IsGreaterThan(projection.Columns.Count, publishedDataset.Columns.Count);
+        Assert.IsTrue(projection.Columns.All(identity =>
+            publishedDataset.Columns.Any(column => column.Identity == identity)));
+        Assert.IsTrue(publishedDataset.Columns.Any(column =>
+            column.EffectiveName.EndsWith(".Contributor", StringComparison.Ordinal)
+            || string.Equals(column.EffectiveName, "Contributor", StringComparison.Ordinal)));
         var family = publishedDataset.RowFamilies.Single();
         var review = await workspace.Repository.ReadPublishedDatabasePageAsync(
             new DatabaseReviewQuery(
@@ -364,6 +381,105 @@ public sealed class DiscoveryOutputPreviewServiceTests
         Assert.HasCount(0, review.Rows.Single(candidate =>
             candidate.Source.SourceId == blank.SourceId).Cells);
 
+        var currentPreviewGroups = new List<DiscoveryOutputPreviewGroup>();
+        for (var start = 0;
+             start < publishedDataset.Columns.Count;
+             start += DiscoveryOutputPreviewLimits.SourceFileColumnsPerPage)
+        {
+            var currentPage = await workspace.Preview.GetPreviewAsync(
+                CreateSourceFilePreviewRequest(
+                    discovery,
+                    dataset,
+                    name,
+                    start,
+                    database.PublishedGeneration.OperationId));
+            Assert.IsTrue(currentPage.Accepted, currentPage.Failure?.Description);
+            Assert.AreEqual(
+                DiscoveryOutputPreviewSchemaState.CurrentPublishedDatabase,
+                currentPage.Preview!.SchemaState);
+            currentPreviewGroups.Add(currentPage.Preview.Groups.Single());
+        }
+
+        var currentPreviewColumns = currentPreviewGroups
+            .SelectMany(group => group.Columns)
+            .OrderBy(column => column.Ordinal)
+            .ToArray();
+        await using (var previewIpc = new MemoryStream())
+        {
+            var previewRequest = CreateSourceFilePreviewRequest(
+                discovery,
+                dataset,
+                name,
+                0,
+                database.PublishedGeneration.OperationId);
+            await LengthPrefixedJsonMessageFramer.WriteAsync(
+                previewIpc,
+                new GetDiscoveryOutputPreviewCommand(
+                    Guid.CreateVersion7(),
+                    DateTimeOffset.UtcNow,
+                    previewRequest));
+            previewIpc.Position = 0;
+            var roundTripPreview = Assert.IsInstanceOfType<GetDiscoveryOutputPreviewCommand>(
+                await LengthPrefixedJsonMessageFramer.ReadAsync(previewIpc));
+            Assert.AreEqual(
+                database.PublishedGeneration.OperationId,
+                roundTripPreview.Request.PublishedDatabaseOperationId);
+        }
+        CollectionAssert.AreEqual(
+            publishedDataset.Columns.Select(column => column.Identity).ToArray(),
+            currentPreviewColumns.Select(column => column.Identity).ToArray());
+        CollectionAssert.AreEqual(
+            publishedDataset.Columns.Select(column => column.EffectiveName).ToArray(),
+            currentPreviewColumns.Select(column => column.Header).ToArray());
+        var currentPresentations = currentPreviewGroups.Select(group =>
+            new DiscoveryOutputPreviewGroupPresentation(
+                new DiscoverySelectionImpactGroupPresentation(
+                    group.RowFamilyId,
+                    dataset.DisplayName,
+                    "Whole source file",
+                    "One row per source file",
+                    group.Columns.Select(column => column.Header).ToArray()),
+                group)).ToArray();
+        Assert.IsTrue(currentPresentations.SelectMany(group => group.Rows)
+            .SelectMany(row => row.Cells)
+            .Any(cell => string.IsNullOrEmpty(cell.Value)),
+            "The current schema preview must render columns absent from this source as sparse blanks.");
+        Assert.IsTrue(currentPreviewGroups.SelectMany(group => group.Rows)
+            .SelectMany(candidate => candidate.Cells)
+            .All(cell => review.Rows.Single(candidate =>
+                    candidate.Source.SourceId == first.SourceId).Cells.Any(databaseCell =>
+                        databaseCell.ColumnIdentity == cell.ColumnIdentity
+                        && databaseCell.Values.Select(value => value.Value)
+                            .SequenceEqual(cell.Values))));
+
+        var pendingDataset = new DatabaseDatasetBuildSpecification(
+            dataset.OutputSetId!.Value,
+            dataset.ParentSourceSetId,
+            "Pending renamed Set",
+            dataset.Ordinal,
+            dataset.RepeatedDataLayout,
+            dataset.Sources,
+            dataset.RowFamilies,
+            dataset.Fields,
+            dataset.ProjectionMode,
+            dataset.SourceProjectionRepeatedPaths);
+        var pendingPreview = await workspace.Preview.GetPreviewAsync(
+            CreateSourceFilePreviewRequest(
+                discovery,
+                pendingDataset,
+                name,
+                0,
+                database.PublishedGeneration.OperationId));
+        Assert.IsTrue(pendingPreview.Accepted, pendingPreview.Failure?.Description);
+        Assert.AreEqual(
+            DiscoveryOutputPreviewSchemaState.SourceFileSample,
+            pendingPreview.Preview!.SchemaState,
+            "Pending configuration must not be labeled as the previous published Database.");
+        Assert.IsLessThan(
+            publishedDataset.Columns.Count,
+            pendingPreview.Preview.Groups.Single().TotalColumnCount,
+            "The first-source sample must stay narrower than a schema extended by later sources.");
+
         var extraction = await workspace.Extraction.ExtractAsync(
             OperationCorrelation.CreateNew(),
             database.PublishedGeneration);
@@ -371,6 +487,20 @@ public sealed class DiscoveryOutputPreviewServiceTests
             extraction.Accepted,
             $"{extraction.Failure?.Description} {workspace.ExtractionLogger.Exception}");
         Assert.AreEqual(sources.Length, extraction.PublishedResult!.Datasets.Single().RowCount);
+        CollectionAssert.AreEqual(
+            publishedDataset.Columns.Select(column => column.EffectiveName).ToArray(),
+            extraction.PublishedResult.Datasets.Single().Columns
+                .Select(column => column.EffectiveName).ToArray());
+
+        var routing = new ExportRoutingConfigurationPresentation();
+        routing.Synchronize(database.PublishedGeneration);
+        var exportSet = routing.SourceSets.Single();
+        CollectionAssert.AreEqual(
+            publishedDataset.Columns.Select(column => column.EffectiveName).ToArray(),
+            exportSet.Fields.Select(field => field.ExcelHeader).ToArray());
+        exportSet.Fields[0].ExcelHeader = "Explicit workbook header";
+        routing.Synchronize(database.PublishedGeneration);
+        Assert.AreEqual("Explicit workbook header", routing.SourceSets.Single().Fields[0].ExcelHeader);
         var extractedRows = new List<ExtractionResultRow>();
         await foreach (var extractedRow in workspace.Repository.StreamPublishedExtractionRowsAsync(
             extraction.PublishedResult.OperationId,
@@ -435,7 +565,8 @@ public sealed class DiscoveryOutputPreviewServiceTests
         DiscoveryHostResult discovery,
         DatabaseDatasetBuildSpecification dataset,
         DiscoveredInformation selected,
-        int columnStartIndex)
+        int columnStartIndex,
+        OperationId? publishedDatabaseOperationId = null)
     {
         return new DiscoveryOutputPreviewRequest(
             dataset.OutputSetId!.Value,
@@ -453,7 +584,8 @@ public sealed class DiscoveryOutputPreviewServiceTests
                 dataset.ProjectionMode,
                 dataset.SourceProjectionRepeatedPaths),
             maximumRowsPerGroup: 20,
-            columnStartIndex);
+            columnStartIndex,
+            publishedDatabaseOperationId);
     }
 
     private static string[] Values(DiscoveryOutputPreviewHostResult result) => result.Preview!.Groups
@@ -502,7 +634,8 @@ public sealed class DiscoveryOutputPreviewServiceTests
     private static DatabaseDatasetBuildSpecification CreateSourceFileDataset(
         DiscoveryHostResult discovery,
         IReadOnlyList<LoadedSourceContract> sources,
-        Func<DiscoveredInformation, bool> include)
+        Func<DiscoveredInformation, bool> include,
+        IReadOnlyDictionary<DiscoveryInformationIdentity, string>? overrides = null)
     {
         var sourceSetId = sources[0].SourceSetId;
         var selected = discovery.Information
@@ -523,7 +656,7 @@ public sealed class DiscoveryOutputPreviewServiceTests
         var familyCatalog = discovery.FamilyCatalog!;
         var parent = DatabaseBuildSpecificationFactory.Create(
             configuration,
-            new Dictionary<DiscoveryInformationIdentity, string>(),
+            overrides ?? new Dictionary<DiscoveryInformationIdentity, string>(),
             sources,
             new Dictionary<SourceSetId, string> { [sourceSetId] = "Set 1" },
             familyCatalog,
@@ -546,7 +679,7 @@ public sealed class DiscoveryOutputPreviewServiceTests
                 DiscoveryOutputProjectionMode.OneRowPerSourceFile)]);
         return DatabaseBuildSpecificationFactory.CreateApprovedOutputSets(
             configuration,
-            new Dictionary<DiscoveryInformationIdentity, string>(),
+            overrides ?? new Dictionary<DiscoveryInformationIdentity, string>(),
             sources,
             new Dictionary<SourceSetId, string> { [sourceSetId] = "Set 1" },
             familyCatalog,

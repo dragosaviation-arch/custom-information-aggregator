@@ -108,6 +108,11 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var dynamicHeaders = (ItemsControl)view.FindName("DynamicDatabaseHeaders");
             var metadataHeaders = (ItemsControl)view.FindName("DatabaseMetadataHeaders");
             var reviewRows = (ListBox)view.FindName("DatabaseReviewRows");
+            var reviewVerticalScrollBar =
+                (ScrollBar)view.FindName("DatabaseReviewVerticalScrollBar");
+            var reviewHorizontalScrollViewer =
+                (ScrollViewer)view.FindName("DatabaseReviewHorizontalScrollViewer");
+            var databaseGridPanel = (Border)view.FindName("DatabaseGridPanel");
             var sourceSetTabs = (ListBox)view.FindName("DatabaseSourceSetTabs");
             var columnsButton = (Button)view.FindName("ColumnsButton");
             var lowerTabs = (Grid)view.FindName("LowerTabs");
@@ -143,7 +148,34 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var firstRow = (DatabaseReviewRowPresentation)reviewRows.Items[0];
             Assert.AreEqual("A1", firstRow.Cells[0].DisplayValue);
             StringAssert.Contains(firstRow.Cells[0].SourceContext!, sourceId.ToString());
-            Assert.AreEqual("B1", firstRow.Cells[1].DisplayValue);
+            Assert.AreEqual($"B1{Environment.NewLine}continued", firstRow.Cells[1].DisplayValue);
+            Assert.AreEqual(1, Grid.GetColumn(reviewVerticalScrollBar));
+            Assert.IsTrue(reviewVerticalScrollBar.IsEnabled);
+            var scrollBarPosition = reviewVerticalScrollBar
+                .TransformToAncestor(view)
+                .Transform(new Point()).X;
+            var panelRightEdge = databaseGridPanel.TransformToAncestor(view)
+                .Transform(new Point()).X + databaseGridPanel.ActualWidth;
+            Assert.IsGreaterThanOrEqualTo(
+                panelRightEdge - reviewVerticalScrollBar.ActualWidth - 2,
+                scrollBarPosition);
+            reviewHorizontalScrollViewer.ScrollToRightEnd();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            Assert.AreEqual(
+                scrollBarPosition,
+                reviewVerticalScrollBar.TransformToAncestor(view)
+                    .Transform(new Point()).X,
+                0.5,
+                "Horizontal navigation must not move the vertical scrollbar from the viewport edge.");
+            var firstRowContainer = (DependencyObject)reviewRows.ItemContainerGenerator
+                .ContainerFromIndex(0);
+            var multilineBorder = FindVisualChildren<Border>(firstRowContainer)
+                .Single(border => border.DataContext is DatabaseReviewCellPresentation cell
+                    && cell.DisplayValue.Contains("continued", StringComparison.Ordinal));
+            var multilineValue = FindVisualChild<TextBlock>(multilineBorder);
+            Assert.IsNotNull(multilineValue);
+            Assert.AreEqual(TextWrapping.Wrap, multilineValue.TextWrapping);
+            Assert.IsNotNull(multilineBorder.ToolTip);
             Assert.AreEqual(string.Empty, ((DatabaseReviewRowPresentation)reviewRows.Items[1])
                 .Cells[1].DisplayValue);
             Assert.IsTrue(((DatabaseReviewRowPresentation)reviewRows.Items[249]).IsLoading);
@@ -334,6 +366,24 @@ public sealed class DatabaseWorkspaceViewInteractionTests
         return null;
     }
 
+    private static IEnumerable<T> FindVisualChildren<T>(DependencyObject parent)
+        where T : DependencyObject
+    {
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(parent); index++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, index);
+            if (child is T match)
+            {
+                yield return match;
+            }
+
+            foreach (var nested in FindVisualChildren<T>(child))
+            {
+                yield return nested;
+            }
+        }
+    }
+
     private static async Task CompleteSuccessfullyAsync(
         IApplicationWorkflowCoordinator workflow,
         WorkflowOperationKind operationKind)
@@ -516,7 +566,12 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                         :
                         [
                             Cell(0, $"A{ordinal}", (ordinal * 2) - 1),
-                            Cell(1, $"B{ordinal}", ordinal * 2)
+                            Cell(
+                                1,
+                                ordinal == 1
+                                    ? $"B1{Environment.NewLine}continued"
+                                    : $"B{ordinal}",
+                                ordinal * 2)
                         ]))
                 .ToArray();
             return Task.FromResult(new DatabaseReviewClientResult(
