@@ -5,6 +5,7 @@
              xmlns:workflow="clr-namespace:CIA.Desktop.Workflow"
              x:Name="DatabaseViewRoot"
              Loaded="OnViewLoaded"
+             Unloaded="OnViewUnloaded"
              SizeChanged="OnViewSizeChanged"
              SnapsToDevicePixels="True">
     <UserControl.Resources>
@@ -290,6 +291,7 @@
                     <ScrollViewer x:Name="DatabaseReviewHorizontalScrollViewer"
                                   Grid.Column="0"
                                   HorizontalScrollBarVisibility="Auto"
+                                  ScrollChanged="OnDatabaseReviewHorizontalScrollChanged"
                                   VerticalScrollBarVisibility="Disabled">
                         <Grid MinWidth="{Binding ElementName=DatabaseReviewHorizontalScrollViewer, Path=ActualWidth}">
                             <Grid.RowDefinitions>
@@ -440,17 +442,10 @@
                                                             <Border Width="{Binding Column.Width}"
                                                                     BorderBrush="{StaticResource CiaDividerBrush}"
                                                                     BorderThickness="0,0,1,1"
-                                                            ToolTipService.ShowDuration="60000">
-                                                                <Border.ToolTip>
-                                                                    <StackPanel MaxWidth="720">
-                                                                        <TextBlock FontWeight="SemiBold"
-                                                                                   Text="{Binding SourceContext}"
-                                                                                   TextWrapping="Wrap" />
-                                                                        <TextBlock Margin="0,5,0,0"
-                                                                                   Text="{Binding DisplayValue}"
-                                                                                   TextWrapping="Wrap" />
-                                                                    </StackPanel>
-                                                                </Border.ToolTip>
+                                                                    ClipToBounds="True"
+                                                                    ToolTip="{Binding InspectionText}"
+                                                                    ToolTipService.InitialShowDelay="600"
+                                                                    ToolTipService.ShowDuration="60000">
                                                                 <Border.Style>
                                                                     <Style TargetType="Border">
                                                                         <Style.Triggers>
@@ -465,7 +460,7 @@
                                                                            Foreground="{StaticResource CiaTextPrimaryBrush}"
                                                                            Text="{Binding DisplayValue}"
                                                                            TextTrimming="CharacterEllipsis"
-                                                                           TextWrapping="Wrap" />
+                                                                           TextWrapping="NoWrap" />
                                                             </Border>
                                                         </DataTemplate>
                                                     </ItemsControl.ItemTemplate>

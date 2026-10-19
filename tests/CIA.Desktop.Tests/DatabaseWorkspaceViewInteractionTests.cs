@@ -34,6 +34,107 @@ public sealed class DatabaseWorkspaceViewInteractionTests
         await WpfTestApplication.RunAsync(VerifyInteractionAsync).WaitAsync(TestTimeout);
     }
 
+    [TestMethod]
+    public async Task WideVirtualizedReviewScrollsWithoutRichCellTreesOrUnintendedSelection()
+    {
+        await WpfTestApplication.RunAsync(VerifyWideReviewInteractionAsync)
+            .WaitAsync(TestTimeout);
+    }
+
+    private static async Task VerifyWideReviewInteractionAsync()
+    {
+        const int columnCount = 320;
+        const int rowCount = 250;
+        var columns = Enumerable.Range(1, columnCount)
+            .Select(index => new DatabaseColumnPresentation(
+                $"column-{index}",
+                new DatabaseColumnMapping($"Column {index}", [$"Tag_{index}"])))
+            .ToArray();
+        var cells = columns.Select(column => new DatabaseReviewCellPresentation(column, null))
+            .ToArray();
+        var rows = Enumerable.Range(1, rowCount)
+            .Select(ordinal => new DatabaseReviewRowPresentation(
+                ordinal,
+                IsIncluded: true,
+                $"record-{ordinal}",
+                Source: null,
+                HasConflict: false,
+                MetadataCells: [],
+                Cells: cells,
+                IsLoading: false))
+            .ToArray();
+        var view = new DatabaseWorkspaceView();
+        var headers = (ItemsControl)view.FindName("DynamicDatabaseHeaders");
+        var reviewRows = (ListBox)view.FindName("DatabaseReviewRows");
+        headers.ItemsSource = columns;
+        reviewRows.ItemsSource = rows;
+        var window = new Window
+        {
+            Width = 1280,
+            Height = 720,
+            Content = view,
+            ShowInTaskbar = false,
+            WindowStyle = WindowStyle.None
+        };
+
+        try
+        {
+            window.Show();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+
+            var verticalScrollBar =
+                (ScrollBar)view.FindName("DatabaseReviewVerticalScrollBar");
+            var horizontalScrollViewer =
+                (ScrollViewer)view.FindName("DatabaseReviewHorizontalScrollViewer");
+            var reviewScrollViewer = FindVisualChild<ScrollViewer>(reviewRows);
+            Assert.IsNotNull(reviewScrollViewer);
+            Assert.IsTrue(VirtualizingPanel.GetIsVirtualizing(reviewRows));
+            Assert.IsGreaterThan(0, verticalScrollBar.Maximum);
+            Assert.IsGreaterThan(0, horizontalScrollViewer.ScrollableWidth);
+            Assert.IsLessThan(
+                rowCount,
+                Enumerable.Range(0, rowCount).Count(index =>
+                    reviewRows.ItemContainerGenerator.ContainerFromIndex(index) is not null),
+                "The representative wide grid must retain row virtualization.");
+
+            var firstRowContainer = (DependencyObject)reviewRows.ItemContainerGenerator
+                .ContainerFromIndex(0);
+            var realizedCells = FindVisualChildren<Border>(firstRowContainer)
+                .Where(border => border.DataContext is DatabaseReviewCellPresentation)
+                .ToArray();
+            Assert.HasCount(columnCount, realizedCells);
+            Assert.IsFalse(realizedCells.Any(border => border.ToolTip is FrameworkElement));
+
+            var initialOffset = reviewScrollViewer.VerticalOffset;
+            reviewScrollViewer.LineDown();
+            await Dispatcher.Yield(DispatcherPriority.Render);
+            Assert.IsGreaterThan(initialOffset, reviewScrollViewer.VerticalOffset);
+            Assert.IsNull(reviewRows.SelectedItem);
+            Assert.IsFalse(ToolTipService.GetIsEnabled(reviewRows));
+            await WaitForAsync(() => ToolTipService.GetIsEnabled(reviewRows));
+
+            verticalScrollBar.Value = verticalScrollBar.Maximum / 2;
+            await Dispatcher.Yield(DispatcherPriority.Render);
+            Assert.AreEqual(
+                verticalScrollBar.Value,
+                reviewScrollViewer.VerticalOffset,
+                0.5);
+            Assert.IsNull(reviewRows.SelectedItem);
+            Assert.IsFalse(ToolTipService.GetIsEnabled(reviewRows));
+            await WaitForAsync(() => ToolTipService.GetIsEnabled(reviewRows));
+
+            horizontalScrollViewer.ScrollToRightEnd();
+            await Dispatcher.Yield(DispatcherPriority.Render);
+            Assert.IsGreaterThan(0, horizontalScrollViewer.HorizontalOffset);
+            Assert.IsNull(reviewRows.SelectedItem);
+            Assert.IsFalse(ToolTipService.GetIsEnabled(reviewRows));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static async Task VerifyInteractionAsync()
     {
         var settingsRoot = Directory.CreateTempSubdirectory("CIA.SPR191.DatabaseColumns.");
@@ -159,7 +260,34 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.IsGreaterThanOrEqualTo(
                 panelRightEdge - reviewVerticalScrollBar.ActualWidth - 2,
                 scrollBarPosition);
+            Assert.IsTrue(ToolTipService.GetIsEnabled(reviewRows));
+            Assert.IsNull(reviewRows.SelectedItem);
+            reviewVerticalScrollBar.Value = reviewVerticalScrollBar.Value + 60
+                <= reviewVerticalScrollBar.Maximum
+                ? reviewVerticalScrollBar.Value + 60
+                : Math.Max(0, reviewVerticalScrollBar.Value - 60);
+            await Dispatcher.Yield(DispatcherPriority.Render);
+            Assert.IsFalse(
+                ToolTipService.GetIsEnabled(reviewRows),
+                "Cell inspection popups must be suppressed while the review grid is scrolling.");
+            Assert.IsNull(
+                reviewRows.SelectedItem,
+                "Scrolling the review grid must not create an unintended row selection.");
+            await WaitForAsync(() => ToolTipService.GetIsEnabled(reviewRows));
+
+            var originalFirstWidth = viewModel.VisibleColumns[0].Width;
+            var originalSecondWidth = viewModel.VisibleColumns[1].Width;
+            viewModel.VisibleColumns[0].Width = 900;
+            viewModel.VisibleColumns[1].Width = 900;
+            reviewHorizontalScrollViewer.UpdateLayout();
             reviewHorizontalScrollViewer.ScrollToRightEnd();
+            await Dispatcher.Yield(DispatcherPriority.Render);
+            Assert.IsFalse(
+                ToolTipService.GetIsEnabled(reviewRows),
+                "Cell inspection popups must be suppressed while the review grid is scrolling.");
+            Assert.IsNull(
+                reviewRows.SelectedItem,
+                "Scrolling the review grid must not create an unintended row selection.");
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
             Assert.AreEqual(
                 scrollBarPosition,
@@ -167,6 +295,9 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                     .Transform(new Point()).X,
                 0.5,
                 "Horizontal navigation must not move the vertical scrollbar from the viewport edge.");
+            reviewVerticalScrollBar.Value = 0;
+            await Dispatcher.Yield(DispatcherPriority.Render);
+            reviewRows.UpdateLayout();
             var firstRowContainer = (DependencyObject)reviewRows.ItemContainerGenerator
                 .ContainerFromIndex(0);
             var multilineBorder = FindVisualChildren<Border>(firstRowContainer)
@@ -174,14 +305,24 @@ public sealed class DatabaseWorkspaceViewInteractionTests
                     && cell.DisplayValue.Contains("continued", StringComparison.Ordinal));
             var multilineValue = FindVisualChild<TextBlock>(multilineBorder);
             Assert.IsNotNull(multilineValue);
-            Assert.AreEqual(TextWrapping.Wrap, multilineValue.TextWrapping);
-            Assert.IsNotNull(multilineBorder.ToolTip);
+            Assert.AreEqual(TextWrapping.NoWrap, multilineValue.TextWrapping);
+            Assert.IsTrue(multilineBorder.ClipToBounds);
+            Assert.IsInstanceOfType<string>(multilineBorder.ToolTip);
+            Assert.AreEqual(firstRow.Cells[1].InspectionText, multilineBorder.ToolTip);
+            StringAssert.Contains((string)multilineBorder.ToolTip, "continued");
+            Assert.IsNotInstanceOfType<FrameworkElement>(
+                multilineBorder.ToolTip,
+                "Realized cells must not eagerly allocate a rich tooltip visual tree.");
+            await WaitForAsync(() => ToolTipService.GetIsEnabled(reviewRows));
+            viewModel.VisibleColumns[0].Width = originalFirstWidth;
+            viewModel.VisibleColumns[1].Width = originalSecondWidth;
             Assert.AreEqual(string.Empty, ((DatabaseReviewRowPresentation)reviewRows.Items[1])
                 .Cells[1].DisplayValue);
             Assert.IsTrue(((DatabaseReviewRowPresentation)reviewRows.Items[249]).IsLoading);
             reviewRows.ScrollIntoView(reviewRows.Items[249]);
             await WaitForAsync(() =>
                 !((DatabaseReviewRowPresentation)reviewRows.Items[249]).IsLoading);
+            Assert.IsNull(reviewRows.SelectedItem);
             Assert.AreEqual(
                 "A250",
                 ((DatabaseReviewRowPresentation)reviewRows.Items[249]).Cells[0].DisplayValue);

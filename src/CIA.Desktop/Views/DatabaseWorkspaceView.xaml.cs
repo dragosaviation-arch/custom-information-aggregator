@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
+using System.Windows.Threading;
 using CIA.Desktop.Presentation;
 
 namespace CIA.Desktop.Views;
@@ -15,10 +16,16 @@ public partial class DatabaseWorkspaceView : UserControl
     private bool _synchronizingReviewScroll;
     private ScrollViewer? _databaseReviewScrollViewer;
     private DatabaseColumnWidthFeedback? _columnResize;
+    private readonly DispatcherTimer _reviewToolTipRestoreTimer;
 
     public DatabaseWorkspaceView()
     {
         InitializeComponent();
+        _reviewToolTipRestoreTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _reviewToolTipRestoreTimer.Tick += OnReviewToolTipRestoreTimerTick;
     }
 
     private void OnViewLoaded(object sender, RoutedEventArgs e)
@@ -29,6 +36,12 @@ public partial class DatabaseWorkspaceView : UserControl
     private void OnViewSizeChanged(object sender, SizeChangedEventArgs e)
     {
         ApplyResponsiveLayout();
+    }
+
+    private void OnViewUnloaded(object sender, RoutedEventArgs e)
+    {
+        _reviewToolTipRestoreTimer.Stop();
+        ToolTipService.SetIsEnabled(DatabaseReviewRows, true);
     }
 
     private void OnColumnsClick(object sender, RoutedEventArgs e)
@@ -174,18 +187,15 @@ public partial class DatabaseWorkspaceView : UserControl
 
     private async void OnDatabaseReviewScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (sender is ScrollViewer scrollViewer)
+        var scrollViewer = sender as ScrollViewer ?? e.OriginalSource as ScrollViewer;
+        if (scrollViewer is not null)
         {
             _databaseReviewScrollViewer = scrollViewer;
-            _synchronizingReviewScroll = true;
-            DatabaseReviewVerticalScrollBar.Maximum = scrollViewer.ScrollableHeight;
-            DatabaseReviewVerticalScrollBar.ViewportSize = scrollViewer.ViewportHeight;
-            DatabaseReviewVerticalScrollBar.LargeChange = Math.Max(
-                DatabaseReviewRowHeight,
-                scrollViewer.ViewportHeight);
-            DatabaseReviewVerticalScrollBar.Value = scrollViewer.VerticalOffset;
-            DatabaseReviewVerticalScrollBar.IsEnabled = scrollViewer.ScrollableHeight > 0;
-            _synchronizingReviewScroll = false;
+            SynchronizeReviewVerticalScrollBar(scrollViewer);
+            if (Math.Abs(e.VerticalChange) > double.Epsilon)
+            {
+                SuppressReviewToolTipsWhileScrolling();
+            }
         }
 
         if (DataContext is not DatabaseWorkspaceViewModel viewModel
@@ -197,6 +207,73 @@ public partial class DatabaseWorkspaceView : UserControl
         var firstVisibleOrdinal = (int)Math.Floor(e.VerticalOffset / DatabaseReviewRowHeight) + 1;
         var visibleRowCount = (int)Math.Ceiling(e.ViewportHeight / DatabaseReviewRowHeight) + 2;
         await viewModel.EnsureReviewRowsAvailableAsync(firstVisibleOrdinal, visibleRowCount);
+    }
+
+    private void OnDatabaseReviewHorizontalScrollChanged(
+        object sender,
+        ScrollChangedEventArgs e)
+    {
+        if (Math.Abs(e.HorizontalChange) > double.Epsilon)
+        {
+            SuppressReviewToolTipsWhileScrolling();
+        }
+    }
+
+    private void SynchronizeReviewVerticalScrollBar(ScrollViewer scrollViewer)
+    {
+        _synchronizingReviewScroll = true;
+        try
+        {
+            SetIfChanged(
+                DatabaseReviewVerticalScrollBar.Maximum,
+                scrollViewer.ScrollableHeight,
+                value => DatabaseReviewVerticalScrollBar.Maximum = value);
+            SetIfChanged(
+                DatabaseReviewVerticalScrollBar.ViewportSize,
+                scrollViewer.ViewportHeight,
+                value => DatabaseReviewVerticalScrollBar.ViewportSize = value);
+            SetIfChanged(
+                DatabaseReviewVerticalScrollBar.LargeChange,
+                Math.Max(DatabaseReviewRowHeight, scrollViewer.ViewportHeight),
+                value => DatabaseReviewVerticalScrollBar.LargeChange = value);
+            SetIfChanged(
+                DatabaseReviewVerticalScrollBar.Value,
+                scrollViewer.VerticalOffset,
+                value => DatabaseReviewVerticalScrollBar.Value = value);
+            var isEnabled = scrollViewer.ScrollableHeight > 0;
+            if (DatabaseReviewVerticalScrollBar.IsEnabled != isEnabled)
+            {
+                DatabaseReviewVerticalScrollBar.IsEnabled = isEnabled;
+            }
+        }
+        finally
+        {
+            _synchronizingReviewScroll = false;
+        }
+    }
+
+    private static void SetIfChanged(double current, double next, Action<double> setter)
+    {
+        if (Math.Abs(current - next) > 0.01)
+        {
+            setter(next);
+        }
+    }
+
+    private void SuppressReviewToolTipsWhileScrolling()
+    {
+        ToolTipService.SetIsEnabled(DatabaseReviewRows, false);
+        _reviewToolTipRestoreTimer.Stop();
+        _reviewToolTipRestoreTimer.Start();
+    }
+
+    private void OnReviewToolTipRestoreTimerTick(object? sender, EventArgs e)
+    {
+        _reviewToolTipRestoreTimer.Stop();
+        if (IsLoaded)
+        {
+            ToolTipService.SetIsEnabled(DatabaseReviewRows, true);
+        }
     }
 
     private void OnDatabaseReviewVerticalScrollBarValueChanged(

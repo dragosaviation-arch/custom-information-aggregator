@@ -2552,6 +2552,10 @@ public sealed class DatabaseReviewCellPresentation
     public string? SourceContext => Value is null
         ? null
         : $"Source information: {Value.SourceInformationType}{Environment.NewLine}Source ID: {Value.SourceId}{Environment.NewLine}Path: {Value.DetailedIdentity.StructuralPath}";
+
+    public string InspectionText => string.IsNullOrEmpty(SourceContext)
+        ? DisplayValue
+        : $"{SourceContext}{Environment.NewLine}{Environment.NewLine}Value:{Environment.NewLine}{DisplayValue}";
 }
 
 public sealed class DatabaseColumnPresentation : ObservableObject
