@@ -120,7 +120,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _sourceSetColumnWidth = ResolveColumnWidth(SourceSetColumnKey, 80, 55);
         _levelColumnWidth = ResolveColumnWidth(LevelColumnKey, 42, 32);
         _sizeColumnWidth = ResolveColumnWidth(SizeColumnKey, 72, 48);
-        _statusColumnWidth = ResolveColumnWidth(StatusColumnKey, 100, 64);
+        _statusColumnWidth = 100;
         _uiSynchronizationContext = SynchronizationContext.Current;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
 

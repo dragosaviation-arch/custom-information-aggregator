@@ -9,6 +9,14 @@ namespace CIA.Desktop.Export;
 public interface IExportFolderPicker
 {
     string? Browse(string? currentFolder);
+
+    string? BrowseSingleWorkbook(string? currentFolder, string suggestedFileName)
+    {
+        var selectedFolder = Browse(currentFolder);
+        return string.IsNullOrWhiteSpace(selectedFolder)
+            ? null
+            : Path.Combine(selectedFolder, suggestedFileName);
+    }
 }
 
 public sealed class WindowsExportFolderPicker : IExportFolderPicker
@@ -27,6 +35,27 @@ public sealed class WindowsExportFolderPicker : IExportFolderPicker
 
         return dialog.ShowDialog(Application.Current?.MainWindow) == true
             ? dialog.FolderName
+            : null;
+    }
+
+    public string? BrowseSingleWorkbook(string? currentFolder, string suggestedFileName)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "Choose Excel export file",
+            AddExtension = true,
+            DefaultExt = ".xlsx",
+            FileName = suggestedFileName,
+            Filter = "Excel workbook (*.xlsx)|*.xlsx",
+            OverwritePrompt = false
+        };
+        if (!string.IsNullOrWhiteSpace(currentFolder) && Directory.Exists(currentFolder))
+        {
+            dialog.InitialDirectory = currentFolder;
+        }
+
+        return dialog.ShowDialog(Application.Current?.MainWindow) == true
+            ? dialog.FileName
             : null;
     }
 }

@@ -218,7 +218,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         _occurrencesColumnWidth = ResolveColumnWidth(OccurrencesColumnKey, 90, 52);
         _sourcesColumnWidth = ResolveColumnWidth(SourcesColumnKey, 64, 44);
         _sampleColumnWidth = ResolveColumnWidth(SampleColumnKey, 170, 72);
-        _blacklistColumnWidth = ResolveColumnWidth(BlacklistColumnKey, 104, 88);
+        _blacklistColumnWidth = 76;
         _profileDeleteConfirmation.Changed += OnProfileDeleteConfirmationChanged;
         _discoveryStatus = workflowCoordinator.Current.Discovery;
         _uiSynchronizationContext = SynchronizationContext.Current;
@@ -3485,7 +3485,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         OccurrencesColumnKey => 52,
         SourcesColumnKey => 44,
         SampleColumnKey => 72,
-        BlacklistColumnKey => 88,
+        BlacklistColumnKey => 72,
         _ => throw new ArgumentOutOfRangeException(nameof(key))
     };
 

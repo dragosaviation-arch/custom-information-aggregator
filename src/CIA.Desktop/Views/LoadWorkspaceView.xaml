@@ -151,7 +151,7 @@
                        VerticalAlignment="Center">
                 <StackPanel Margin="0,0,6,0"
                             Orientation="Horizontal">
-                    <Grid Width="142">
+                    <Grid x:Name="LoadSearchBox" Width="142">
                         <TextBox Style="{StaticResource CiaTextInputStyle}"
                                  Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Margin="9,0"

@@ -141,7 +141,7 @@
             </Grid>
 
             <WrapPanel Grid.Row="2" VerticalAlignment="Center">
-                <Grid Width="190" Margin="0,0,6,0">
+                <Grid x:Name="DiscoverySearchBox" Width="142" Margin="0,0,6,0">
                     <TextBox AutomationProperties.Name="Search discovered tags"
                              Style="{StaticResource CiaTextInputStyle}"
                              Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
@@ -242,7 +242,7 @@
                                 <ColumnDefinition Width="{Binding OccurrencesColumnWidth}" MinWidth="52" />
                                 <ColumnDefinition Width="{Binding SourcesColumnWidth}" MinWidth="44" />
                                 <ColumnDefinition Width="{Binding SampleColumnWidth}" MinWidth="72" />
-                                <ColumnDefinition Width="{Binding BlacklistColumnWidth}" MinWidth="88" />
+                                <ColumnDefinition Width="{Binding BlacklistColumnWidth}" MinWidth="72" />
                             </Grid.ColumnDefinitions>
                             <Button Grid.Column="1"
                                     Command="{Binding SortCommand}"
@@ -350,7 +350,7 @@
                                                 <ColumnDefinition Width="{Binding DataContext.OccurrencesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="52" />
                                                 <ColumnDefinition Width="{Binding DataContext.SourcesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="44" />
                                                 <ColumnDefinition Width="{Binding DataContext.SampleColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
-                                                <ColumnDefinition Width="{Binding DataContext.BlacklistColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="88" />
+                                                <ColumnDefinition Width="{Binding DataContext.BlacklistColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
                                             </Grid.ColumnDefinitions>
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
@@ -464,7 +464,7 @@
                                                             <ColumnDefinition Width="{Binding DataContext.OccurrencesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="52" />
                                                             <ColumnDefinition Width="{Binding DataContext.SourcesColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="44" />
                                                             <ColumnDefinition Width="{Binding DataContext.SampleColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
-                                                            <ColumnDefinition Width="{Binding DataContext.BlacklistColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="88" />
+                                                            <ColumnDefinition Width="{Binding DataContext.BlacklistColumnWidth, RelativeSource={RelativeSource AncestorType=ListBox}}" MinWidth="72" />
                                                         </Grid.ColumnDefinitions>
                                                         <CheckBox HorizontalAlignment="Center"
                                                                   VerticalAlignment="Center"

@@ -972,6 +972,127 @@ public sealed class ExtractionCoordinatorTests
     }
 
     [TestMethod]
+    public async Task UnifiedColumnConfigurationUpdatesDatabaseAndExportAndResetsDefaults()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator);
+        var generated = viewModel.ColumnChoices.Single(choice => choice.IsGenerated);
+        var originalName = generated.OriginalName;
+
+        generated.BeginRenameCommand.Execute(null);
+        generated.EditName = "   ";
+        generated.CommitRename();
+        Assert.IsTrue(generated.IsEditing);
+        Assert.IsNotNull(generated.ValidationText);
+        Assert.AreEqual(originalName, generated.DisplayName);
+
+        generated.CancelRename();
+        generated.BeginRenameCommand.Execute(null);
+        generated.EditName = "Owner header";
+        generated.CommitRename();
+        Assert.IsFalse(generated.IsEditing);
+        Assert.AreEqual("Owner header", viewModel.VisibleColumns.Single().DisplayName);
+        Assert.AreEqual(
+            "Owner header",
+            viewModel.CaptureExportConfiguration().SourceSets.Single().Fields.Single().ExcelHeader);
+
+        generated = viewModel.ColumnChoices.Single(choice => choice.IsGenerated);
+        generated.IsSourceIdIncluded = true;
+        var metadata = viewModel.ColumnChoices.First(choice => !choice.IsGenerated);
+        metadata.IsIncluded = true;
+        var secondMetadata = viewModel.ColumnChoices.Where(choice => !choice.IsGenerated).Skip(1).First();
+        secondMetadata.IsIncluded = true;
+        viewModel.MoveColumnChoiceUpCommand.Execute(secondMetadata);
+        metadata.BeginRenameCommand.Execute(null);
+        metadata.EditName = "Source group";
+        metadata.CommitRename();
+        var snapshot = viewModel.CaptureExportConfiguration();
+        Assert.IsTrue(snapshot.SourceSets.Single().Fields.Single().IsSourceIdCompanionIncluded);
+        Assert.AreEqual(
+            "Source group",
+            snapshot.SourceSets.Single().MetadataFields.Single(field =>
+                field.IsIncluded && field.MetadataField == metadata.MetadataColumn!.Field).ExcelHeader);
+        CollectionAssert.AreEqual(
+            new[] { secondMetadata.MetadataColumn!.Field, metadata.MetadataColumn!.Field },
+            snapshot.SourceSets.Single().MetadataFields
+                .Where(field => field.IsIncluded)
+                .Select(field => field.MetadataField)
+                .ToArray());
+
+        viewModel.SelectedWorksheetName = "Reviewed worksheet";
+        Assert.AreEqual("Reviewed worksheet", viewModel.SelectedDataset!.DisplayName);
+        var workbookId = viewModel.SelectedExportWorkbook!.WorkbookDefinitionId;
+        viewModel.BeginWorkbookRenameCommand.Execute(null);
+        viewModel.WorkbookNameEditText = "invalid/name.xlsx";
+        viewModel.CommitWorkbookRename();
+        Assert.IsTrue(viewModel.IsWorkbookNameEditing);
+        Assert.IsNotNull(viewModel.WorkbookRenameValidationText);
+        viewModel.CancelWorkbookRename();
+        viewModel.BeginWorkbookRenameCommand.Execute(null);
+        viewModel.WorkbookNameEditText = "Owner workbook.xlsx";
+        viewModel.CommitWorkbookRename();
+        Assert.IsFalse(viewModel.IsWorkbookNameEditing);
+        Assert.AreEqual("Owner workbook.xlsx", viewModel.SelectedExportWorkbook.FileName);
+        Assert.AreEqual(workbookId, viewModel.SelectedExportWorkbook.WorkbookDefinitionId);
+
+        viewModel.ResetColumnLayoutCommand.Execute(null);
+        snapshot = viewModel.CaptureExportConfiguration();
+        Assert.AreEqual(originalName, viewModel.VisibleColumns.Single().DisplayName);
+        Assert.AreEqual(originalName, snapshot.SourceSets.Single().Fields.Single().ExcelHeader);
+        Assert.IsFalse(snapshot.SourceSets.Single().Fields.Single().IsSourceIdCompanionIncluded);
+        Assert.IsTrue(snapshot.SourceSets.Single().MetadataFields.All(field => !field.IsIncluded));
+    }
+
+    [TestMethod]
+    public async Task DestinationPreparationWritesNothingAndNewConflictBlocksExecution()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var extraction = context.CreateExtractionCoordinator(
+            new RecordingExtractionClient((correlation, basis) => Success(correlation, basis)));
+        var exportClient = new RecordingWorkbookExportClient((_, _, _, _) =>
+            throw new AssertFailedException("A newly colliding prepared path must not be exported."));
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        using var directory = new TemporaryDirectory("CIA.SPR220.ExportPlan.Tests");
+        var picker = new StaticExportFolderPicker(directory.Path);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: picker,
+            workbookCollisionResolver: new RecordingCollisionResolver(_ => null));
+        var finalPath = Path.Combine(
+            directory.Path,
+            viewModel.WorkbookDefinitions.Single().FileName);
+
+        viewModel.BrowseOutputFolderCommand.Execute(null);
+
+        Assert.AreEqual(1, picker.CallCount);
+        Assert.IsTrue(viewModel.IsExportDestinationPrepared);
+        Assert.IsFalse(File.Exists(finalPath));
+        Assert.AreEqual(0, exportClient.CallCount);
+        StringAssert.Contains(viewModel.WorkbookExportStatusText, "No file has been written");
+
+        await File.WriteAllTextAsync(finalPath, "arrived after preparation");
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(0, exportClient.CallCount);
+        Assert.IsFalse(viewModel.IsExportDestinationPrepared);
+        StringAssert.Contains(viewModel.WorkbookExportStatusText, "now exists");
+        Assert.AreEqual("arrived after preparation", await File.ReadAllTextAsync(finalPath));
+    }
+
+    [TestMethod]
     public async Task ValidOutputFolderIsRememberedButAlwaysAskRemainsSessionOnly()
     {
         var context = await ExtractionContext.CreateAsync();
@@ -1121,6 +1242,7 @@ public sealed class ExtractionCoordinatorTests
             Path.Combine(directory.Path, originalFileName),
             "original");
 
+        viewModel.BrowseOutputFolderCommand.Execute(null);
         await viewModel.ExportToExcelCommand.ExecuteAsync(null);
 
         Assert.AreEqual(1, picker.CallCount);

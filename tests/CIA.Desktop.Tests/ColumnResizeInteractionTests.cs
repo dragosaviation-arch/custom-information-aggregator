@@ -100,6 +100,9 @@ public sealed class ColumnResizeInteractionTests
             window.Width = 1400;
             window.Content = discoveryView;
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            Assert.AreEqual(
+                ((FrameworkElement)loadView.FindName("LoadSearchBox")).Width,
+                ((FrameworkElement)discoveryView.FindName("DiscoverySearchBox")).Width);
             VerifyPrimaryActionIsRightAligned(discoveryView);
             var discoveryDivider = FindThumb(
                 discoveryView,
@@ -110,7 +113,7 @@ public sealed class ColumnResizeInteractionTests
             var blacklistDivider = FindThumb(discoveryView, "discovery.sample");
             Drag(blacklistDivider, -30);
             Assert.AreEqual(140, discoveryViewModel.SampleColumnWidth);
-            Assert.AreEqual(104, discoveryViewModel.BlacklistColumnWidth);
+            Assert.AreEqual(76, discoveryViewModel.BlacklistColumnWidth);
             Assert.IsNull(FindThumbOrDefault(discoveryView, "discovery.blacklist"));
             VerifyFinalColumnAlignment(
                 discoveryView,
@@ -156,7 +159,7 @@ public sealed class ColumnResizeInteractionTests
         Assert.AreEqual(160, restoredDiscovery.TagColumnWidth);
         Assert.AreEqual(70, restoredDiscovery.DatabaseTagColumnWidth);
         Assert.AreEqual(140, restoredDiscovery.SampleColumnWidth);
-        Assert.AreEqual(104, restoredDiscovery.BlacklistColumnWidth);
+        Assert.AreEqual(76, restoredDiscovery.BlacklistColumnWidth);
         root.Delete(recursive: true);
     }
 

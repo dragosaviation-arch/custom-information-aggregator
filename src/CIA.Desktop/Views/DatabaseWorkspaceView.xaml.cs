@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CIA.Desktop.Presentation;
@@ -47,6 +48,60 @@ public partial class DatabaseWorkspaceView : UserControl
     private void OnColumnsClick(object sender, RoutedEventArgs e)
     {
         ColumnsPopup.IsOpen = !ColumnsPopup.IsOpen;
+    }
+
+    private void OnColumnNameEditKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: DatabaseColumnChoicePresentation choice })
+        {
+            return;
+        }
+
+        if (e.Key == Key.Enter)
+        {
+            choice.CommitRename();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            choice.CancelRename();
+            e.Handled = true;
+        }
+    }
+
+    private void OnColumnNameEditLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: DatabaseColumnChoicePresentation choice })
+        {
+            choice.CommitRename();
+        }
+    }
+
+    private void OnWorkbookNameEditKeyDown(object sender, KeyEventArgs e)
+    {
+        if (DataContext is not DatabaseWorkspaceViewModel viewModel)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Enter)
+        {
+            viewModel.CommitWorkbookRename();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            viewModel.CancelWorkbookRename();
+            e.Handled = true;
+        }
+    }
+
+    private void OnWorkbookNameEditLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (DataContext is DatabaseWorkspaceViewModel viewModel)
+        {
+            viewModel.CommitWorkbookRename();
+        }
     }
 
     private void OnExportFieldsTabClick(object sender, RoutedEventArgs e)

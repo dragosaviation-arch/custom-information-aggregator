@@ -842,8 +842,13 @@ public sealed class DatabaseBuildCoordinatorTests
         await WaitForAsync(() => viewModel.Records.FirstOrDefault()?.Cells[0].DisplayValue == "first");
         Assert.HasCount(2, viewModel.Datasets);
         CollectionAssert.AreEqual(
-            new[] { "Set 1", "Set 2" },
+            viewModel.CaptureExportConfiguration().Workbooks
+                .SelectMany(workbook => workbook.Worksheets)
+                .OrderBy(worksheet => worksheet.Order)
+                .Select(worksheet => worksheet.Name)
+                .ToArray(),
             viewModel.Datasets.Select(dataset => dataset.DisplayName).ToArray());
+        var retainedSecondWorksheetName = viewModel.Datasets[1].DisplayName;
         var membershipsBeforeTabSwitch = sources.Items
             .ToDictionary(source => source.SourceId, source => source.SourceSetId);
         var firstColumn = viewModel.Columns.Single();
@@ -875,7 +880,9 @@ public sealed class DatabaseBuildCoordinatorTests
 
         Assert.IsTrue(loading.RenameSourceSet(sets[1].SourceSetId, "Renamed Set").Accepted);
         Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Database);
-        Assert.IsTrue(viewModel.Datasets.Any(dataset => dataset.DisplayName == "Set 2"));
+        Assert.IsTrue(viewModel.Datasets.Any(dataset =>
+            dataset.Summary.SourceSetId == sets[1].SourceSetId
+            && dataset.DisplayName == retainedSecondWorksheetName));
         var rerun = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
         Assert.IsTrue(rerun.Accepted);
         Assert.IsTrue(workflow.CompleteOperation(
@@ -884,7 +891,8 @@ public sealed class DatabaseBuildCoordinatorTests
         Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
         await WaitForAsync(() => viewModel.Datasets.Any(dataset =>
             dataset.Summary.SourceSetId == sets[1].SourceSetId
-            && dataset.DisplayName == "Renamed Set"));
+            && dataset.Summary.DisplayName == "Renamed Set"
+            && dataset.DisplayName == retainedSecondWorksheetName));
         CollectionAssert.AreEquivalent(
             membershipsBeforeTabSwitch.ToArray(),
             sources.Items.Select(source => new KeyValuePair<SourceId, SourceSetId>(
