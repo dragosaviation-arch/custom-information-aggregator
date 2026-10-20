@@ -82,9 +82,9 @@
 
     <Grid Margin="{StaticResource CiaWorkspaceMargin}" MinHeight="0">
         <Grid.RowDefinitions>
-            <RowDefinition Height="*" />
+            <RowDefinition x:Name="DatabaseGridRow" Height="5*" />
             <RowDefinition Height="8" />
-            <RowDefinition Height="*" />
+            <RowDefinition x:Name="DatabaseLowerRow" Height="3*" />
         </Grid.RowDefinitions>
 
         <Border x:Name="DatabaseGridPanel"
@@ -130,7 +130,7 @@
                                 Command="{Binding ExportToExcelCommand}"
                                 Content="▣ Export to Excel"
                                 Style="{StaticResource CiaPrimaryButtonStyle}"
-                                ToolTip="Publish the prepared workbook batch to the selected output folder." />
+                                ToolTip="Export the current workbook batch to the selected destination." />
                     </Grid>
                 </Border>
 
@@ -905,7 +905,7 @@
                         <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
                             <StackPanel Margin="9,7">
                                 <TextBlock Style="{StaticResource DatabaseSectionTextStyle}"
-                                           Text="DESTINATION &amp; READINESS" />
+                                           Text="DESTINATION" />
                                 <Grid Margin="0,6,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="82" />
@@ -914,7 +914,7 @@
                                     </Grid.ColumnDefinitions>
                                     <TextBlock VerticalAlignment="Center"
                                                Style="{StaticResource CiaSecondaryTextStyle}"
-                                               Text="Destination" />
+                                               Text="Save to" />
                                     <TextBox Grid.Column="1"
                                              AutomationProperties.Name="Excel output folder"
                                              IsReadOnly="True"
@@ -923,22 +923,22 @@
                                     <Button x:Name="BrowseOutputFolderButton"
                                             Grid.Column="2"
                                             Margin="5,0,0,0"
-                                            AutomationProperties.Name="Prepare Excel export destination"
+                                            AutomationProperties.Name="Browse for Excel export destination"
                                             Command="{Binding BrowseOutputFolderCommand}"
-                                            Content="Prepare destination…"
+                                            Content="Browse…"
                                             Style="{StaticResource CiaButtonStyle}"
-                                            ToolTip="For one workbook, choose its filename and folder. For a batch, choose the destination folder." />
+                                            ToolTip="Change the export destination without writing files." />
                                 </Grid>
-                                <CheckBox Margin="0,7,0,0"
-                                          Content="Choose destination for each export"
-                                          IsChecked="{Binding AlwaysAskWhereToExport}" />
-                                <TextBlock Margin="0,7,0,0"
-                                           FontWeight="SemiBold"
-                                           Text="{Binding PreparedExportDestinationText}"
-                                           TextTrimming="CharacterEllipsis"
-                                           ToolTip="{Binding PreparedExportDestinationText}" />
+                                <WrapPanel Margin="0,7,0,0">
+                                    <CheckBox Margin="0,0,18,0"
+                                              Content="Ask where to save each time"
+                                              IsChecked="{Binding AlwaysAskWhereToExport}" />
+                                    <CheckBox x:Name="OpenFilesAfterExportToggle"
+                                              Content="Open file(s) after export"
+                                              IsChecked="{Binding OpenFilesAfterExport}" />
+                                </WrapPanel>
                                 <ItemsControl Margin="0,3,0,0"
-                                              ItemsSource="{Binding PreparedExportTargets}">
+                                              ItemsSource="{Binding ExportDestinationTargets}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"

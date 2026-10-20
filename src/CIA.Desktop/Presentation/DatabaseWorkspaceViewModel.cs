@@ -2,10 +2,10 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Text;
-using System.Text.Json;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Export;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -74,9 +74,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         "CIA",
         "Exports");
     private bool _alwaysAskWhereToExport = true;
-    private string _workbookExportStatusText = "Choose an output folder to export the prepared workbook batch.";
-    private WorkbookPublicationPlan? _preparedPublicationPlan;
-    private string? _preparedConfigurationFingerprint;
+    private string _workbookExportStatusText = "Choose a destination for the workbook batch.";
     private bool _isWorkbookNameEditing;
     private string _workbookNameEditText = string.Empty;
     private string? _workbookRenameValidationText;
@@ -175,7 +173,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             PrepareForExportAsync,
             CanPrepareForExport);
         BrowseOutputFolderCommand = new RelayCommand(
-            PrepareExportDestination,
+            BrowseExportDestination,
             () => _exportFolderPicker is not null);
         ExportToExcelCommand = new AsyncRelayCommand(
             ExportToExcelAsync,
@@ -546,18 +544,30 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _workbookRenameValidationText, value);
     }
 
-    public bool IsExportDestinationPrepared => _preparedPublicationPlan is not null;
-
-    public string PreparedExportDestinationText => _preparedPublicationPlan is null
-        ? "Destination not prepared"
-        : _preparedPublicationPlan.Targets.Count == 1
-            ? _preparedPublicationPlan.Targets[0].FinalPath
-            : $"{_preparedPublicationPlan.Targets.Count:N0} workbooks in {_preparedPublicationPlan.OutputDirectory}";
-
-    public IReadOnlyList<string> PreparedExportTargets => _preparedPublicationPlan?.Targets
-        .Select(target =>
-            $"{(target.Disposition == WorkbookPublicationDisposition.OverwriteExisting ? "Overwrite" : "Create")} · {target.FinalPath}")
-        .ToArray() ?? [];
+    public IReadOnlyList<string> ExportDestinationTargets
+    {
+        get
+        {
+            try
+            {
+                var outputDirectory = Path.TrimEndingDirectorySeparator(
+                    Path.GetFullPath(OutputFolder));
+                return CurrentExportValidation.RunnableWorkbooks
+                    .Select(runnable =>
+                    {
+                        var path = Path.Combine(outputDirectory, runnable.Workbook.FileName);
+                        return $"{(File.Exists(path) ? "Existing file" : "New file")} · {path}";
+                    })
+                    .ToArray();
+            }
+            catch (Exception exception) when (exception is ArgumentException
+                                               or NotSupportedException
+                                               or PathTooLongException)
+            {
+                return [];
+            }
+        }
+    }
 
     public bool IsExportConfigurationValid => CurrentExportValidation.IsValid;
 
@@ -711,7 +721,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _outputFolder, value ?? string.Empty))
             {
-                InvalidatePreparedExportDestination();
+                OnPropertyChanged(nameof(ExportDestinationTargets));
                 NotifyExportReadinessChanged();
             }
         }
@@ -724,7 +734,37 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _alwaysAskWhereToExport, value))
             {
-                InvalidatePreparedExportDestination();
+                ExportToExcelCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool OpenFilesAfterExport
+    {
+        get => _settingsService?.Current.PostExportBehavior
+            == PostExportBehavior.OpenExportedFile;
+        set
+        {
+            if (_settingsService is null || value == OpenFilesAfterExport)
+            {
+                return;
+            }
+
+            var result = _settingsService.Save(_settingsService.Current with
+            {
+                PostExportBehavior = value
+                    ? PostExportBehavior.OpenExportedFile
+                    : PostExportBehavior.StatusOnly
+            });
+            if (result.Succeeded)
+            {
+                OnPropertyChanged();
+            }
+            else
+            {
+                WorkbookExportStatusText = result.FailureDescription
+                    ?? "The post-export preference could not be saved.";
+                OnPropertyChanged(nameof(OpenFilesAfterExport));
             }
         }
     }
@@ -1150,7 +1190,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     {
         DispatchToUi(() =>
         {
-            InvalidatePreparedExportDestination();
+            OnPropertyChanged(nameof(ExportDestinationTargets));
             if (_synchronizingDatabaseColumnState)
             {
                 NotifyExportRoutingPropertiesChanged();
@@ -1176,7 +1216,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(SelectedExportWorkbook));
         OnPropertyChanged(nameof(SelectedWorksheetName));
         OnPropertyChanged(nameof(WorksheetOrderText));
-        OnPropertyChanged(nameof(PreparedExportDestinationText));
+        OnPropertyChanged(nameof(ExportDestinationTargets));
         CreateExportWorkbookCommand.NotifyCanExecuteChanged();
         BeginWorkbookRenameCommand.NotifyCanExecuteChanged();
         CommitWorkbookRenameCommand.NotifyCanExecuteChanged();
@@ -1691,27 +1731,29 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void PrepareExportDestination()
+    private void BrowseExportDestination()
     {
-        if (_publishedGeneration is null || _workbookCollisionResolver is null)
+        var selectedFolder = _exportFolderPicker?.Browse(OutputFolder);
+        if (string.IsNullOrWhiteSpace(selectedFolder))
         {
-            var selectedFolder = _exportFolderPicker?.Browse(OutputFolder);
-            if (!string.IsNullOrWhiteSpace(selectedFolder))
-            {
-                OutputFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selectedFolder));
-                WorkbookExportStatusText = RememberOutputFolder()
-                    ? "Output folder selected and remembered."
-                    : "Output folder selected for this session.";
-            }
+            WorkbookExportStatusText = "Destination unchanged.";
             return;
         }
 
-        TryPrepareExportDestination(chooseDestination: true);
+        OutputFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selectedFolder));
+        WorkbookExportStatusText = RememberOutputFolder()
+            ? "Export destination selected and remembered."
+            : "Export destination selected for this session.";
     }
 
-    private bool TryPrepareExportDestination(bool chooseDestination)
+    private bool TryChooseDestinationForExport()
     {
-        if (_exportFolderPicker is null || _workbookCollisionResolver is null)
+        if (!AlwaysAskWhereToExport)
+        {
+            return true;
+        }
+
+        if (_exportFolderPicker is null)
         {
             return false;
         }
@@ -1720,20 +1762,21 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         if (!validation.IsValid || validation.RunnableWorkbooks.Count == 0)
         {
             WorkbookExportStatusText = validation.Failures.FirstOrDefault()?.Description
-                ?? "Enable at least one workbook before preparing export.";
+                ?? "Enable at least one workbook before exporting.";
             return false;
         }
 
-        var resolvedDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(OutputFolder));
-        if (chooseDestination && validation.RunnableWorkbooks.Count == 1)
+        var currentDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(OutputFolder));
+        if (validation.RunnableWorkbooks.Count == 1)
         {
             var runnable = validation.RunnableWorkbooks[0];
             var selectedPath = _exportFolderPicker.BrowseSingleWorkbook(
-                resolvedDirectory,
+                currentDirectory,
                 runnable.Workbook.FileName);
             if (string.IsNullOrWhiteSpace(selectedPath))
             {
-                WorkbookExportStatusText = "Export destination preparation cancelled; no file was written.";
+                WorkbookExportStatusText =
+                    "Export cancelled; the destination is unchanged and no file was written.";
                 return false;
             }
 
@@ -1745,36 +1788,46 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 return false;
             }
 
-            resolvedDirectory = Path.GetDirectoryName(fullPath)!;
-            _outputFolder = resolvedDirectory;
-            OnPropertyChanged(nameof(OutputFolder));
+            OutputFolder = Path.GetDirectoryName(fullPath)!;
             WorkbookDefinitions.Single(workbook =>
                 workbook.WorkbookDefinitionId == runnable.Workbook.WorkbookDefinitionId).FileName =
                 selectedFileName;
-            validation = CurrentExportValidation;
         }
-        else if (chooseDestination)
+        else
         {
-            var selectedFolder = _exportFolderPicker.Browse(resolvedDirectory);
+            var selectedFolder = _exportFolderPicker.Browse(currentDirectory);
             if (string.IsNullOrWhiteSpace(selectedFolder))
             {
-                WorkbookExportStatusText = "Export destination preparation cancelled; no file was written.";
+                WorkbookExportStatusText =
+                    "Export cancelled; the destination is unchanged and no file was written.";
                 return false;
             }
 
-            resolvedDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selectedFolder));
-            _outputFolder = resolvedDirectory;
-            OnPropertyChanged(nameof(OutputFolder));
+            OutputFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selectedFolder));
         }
 
         RememberOutputFolder();
-        var overwriteAuthorizations = new Dictionary<WorkbookDefinitionId, string>();
+        return true;
+    }
+
+    private bool TryCreatePublicationPlan(
+        ExtractionResultSummary extractionResult,
+        Dictionary<WorkbookDefinitionId, string> overwriteAuthorizations,
+        out WorkbookPublicationPlan? publicationPlan,
+        out ExportConfigurationSnapshot? configuration)
+    {
+        publicationPlan = null;
+        configuration = null;
+        if (_workbookCollisionResolver is null)
+        {
+            return false;
+        }
+
+        var outputDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(OutputFolder));
         while (true)
         {
-            var configuration = CaptureExportConfiguration();
-            validation = _publishedGeneration is { } generation
-                ? ExportConfigurationValidator.Validate(configuration, generation)
-                : CurrentExportValidation;
+            configuration = CaptureExportConfiguration();
+            var validation = ExportConfigurationValidator.Validate(configuration, extractionResult);
             if (!validation.IsValid || validation.RunnableWorkbooks.Count == 0)
             {
                 WorkbookExportStatusText = validation.Failures.FirstOrDefault()?.Description
@@ -1784,7 +1837,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
             var targets = validation.RunnableWorkbooks.Select(runnable =>
             {
-                var finalPath = Path.Combine(resolvedDirectory, runnable.Workbook.FileName);
+                var finalPath = Path.Combine(outputDirectory, runnable.Workbook.FileName);
                 return new WorkbookCollisionTarget(
                     runnable.Workbook.WorkbookDefinitionId,
                     runnable.Workbook.FileName,
@@ -1802,8 +1855,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                         StringComparison.OrdinalIgnoreCase))).ToArray();
             if (unresolved.Length == 0)
             {
-                _preparedPublicationPlan = new WorkbookPublicationPlan(
-                    resolvedDirectory,
+                publicationPlan = new WorkbookPublicationPlan(
+                    outputDirectory,
                     targets.Select(target => new WorkbookPublicationTarget(
                         target.WorkbookDefinitionId,
                         target.FinalPath,
@@ -1816,26 +1869,22 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                                 StringComparison.OrdinalIgnoreCase)
                                 ? WorkbookPublicationDisposition.OverwriteExisting
                                 : WorkbookPublicationDisposition.CreateNew)).ToArray());
-                _preparedConfigurationFingerprint = CreateExportConfigurationFingerprint(configuration);
-                WorkbookExportStatusText = $"Export plan prepared · {PreparedExportDestinationText}. No file has been written.";
-                NotifyPreparedExportDestinationChanged();
-                NotifyExportReadinessChanged();
                 return true;
             }
 
             var resolution = _workbookCollisionResolver.Resolve(
                 new WorkbookCollisionResolutionRequest(
-                    resolvedDirectory,
-                    targets,
+                    outputDirectory,
+                    unresolved,
                     configuration.Workbooks
-                        .Where(workbook => targets.All(target =>
+                        .Where(workbook => unresolved.All(target =>
                             target.WorkbookDefinitionId != workbook.WorkbookDefinitionId))
                         .Select(workbook => workbook.FileName)
                         .ToArray()));
             if (resolution is null || resolution.Decisions.Any(decision =>
                     decision.Action == WorkbookCollisionAction.Cancel))
             {
-                WorkbookExportStatusText = "Export destination preparation cancelled; no file was written.";
+                WorkbookExportStatusText = "Export cancelled; no file was written.";
                 return false;
             }
 
@@ -1862,7 +1911,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     || !ExportConfigurationValidator.IsValidWorkbookFileName(differentName)
                     || string.Equals(differentName, collision.FileName, StringComparison.OrdinalIgnoreCase))
                 {
-                    WorkbookExportStatusText = "A different workbook name must be valid, unique, and changed.";
+                    WorkbookExportStatusText =
+                        "A different workbook name must be valid, unique, and changed.";
                     return false;
                 }
 
@@ -1873,29 +1923,6 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             }
         }
     }
-
-    private void InvalidatePreparedExportDestination()
-    {
-        if (_preparedPublicationPlan is null && _preparedConfigurationFingerprint is null)
-        {
-            return;
-        }
-
-        _preparedPublicationPlan = null;
-        _preparedConfigurationFingerprint = null;
-        NotifyPreparedExportDestinationChanged();
-    }
-
-    private void NotifyPreparedExportDestinationChanged()
-    {
-        OnPropertyChanged(nameof(IsExportDestinationPrepared));
-        OnPropertyChanged(nameof(PreparedExportDestinationText));
-        OnPropertyChanged(nameof(PreparedExportTargets));
-        ExportToExcelCommand.NotifyCanExecuteChanged();
-    }
-
-    private static string CreateExportConfigurationFingerprint(
-        ExportConfigurationSnapshot configuration) => JsonSerializer.Serialize(configuration);
 
     private bool CanRunExportFlow()
     {
@@ -1939,28 +1966,9 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
-        var configuration = CaptureExportConfiguration();
-        var fingerprint = CreateExportConfigurationFingerprint(configuration);
-        if (_preparedPublicationPlan is null
-            || !string.Equals(
-                _preparedConfigurationFingerprint,
-                fingerprint,
-                StringComparison.Ordinal))
+        if (!TryChooseDestinationForExport())
         {
-            InvalidatePreparedExportDestination();
-            if (AlwaysAskWhereToExport)
-            {
-                WorkbookExportStatusText =
-                    "Prepare the export destination before exporting; no file was written.";
-                return;
-            }
-
-            if (!TryPrepareExportDestination(chooseDestination: false))
-            {
-                return;
-            }
-
-            configuration = CaptureExportConfiguration();
+            return;
         }
 
         if (_workflowCoordinator.Current.Extraction != WorkflowArtifactStatus.Current
@@ -2017,26 +2025,31 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
-        var publicationPlan = _preparedPublicationPlan!;
-        var executionValidation = ExportConfigurationValidator.Validate(
-            configuration,
-            extractionResult);
-        if (!executionValidation.IsValid)
+        var overwriteAuthorizations = new Dictionary<WorkbookDefinitionId, string>();
+        if (!TryCreatePublicationPlan(
+                extractionResult,
+                overwriteAuthorizations,
+                out var publicationPlan,
+                out var configuration))
         {
-            InvalidatePreparedExportDestination();
-            WorkbookExportStatusText = executionValidation.Failures[0].Description;
             return;
         }
 
-        var newConflict = publicationPlan.Targets.FirstOrDefault(target =>
-            target.Disposition == WorkbookPublicationDisposition.CreateNew
-            && File.Exists(target.FinalPath));
-        if (newConflict is not null)
+        // Recheck immediately before publication. Any target that appeared after the first
+        // collision pass is resolved in this same Export attempt. Existing overwrite choices
+        // are retained by identity and exact path, so the user is not prompted twice.
+        while (publicationPlan!.Targets.Any(target =>
+                   target.Disposition == WorkbookPublicationDisposition.CreateNew
+                   && File.Exists(target.FinalPath)))
         {
-            InvalidatePreparedExportDestination();
-            WorkbookExportStatusText =
-                $"{Path.GetFileName(newConflict.FinalPath)} now exists. Review the destination and prepare export again.";
-            return;
+            if (!TryCreatePublicationPlan(
+                    extractionResult,
+                    overwriteAuthorizations,
+                    out publicationPlan,
+                    out configuration))
+            {
+                return;
+            }
         }
 
         WorkbookExportStatusText = "Exporting workbook batch...";
@@ -2048,7 +2061,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 : $"Publishing {publicationPlan.Targets.Count:N0} workbooks");
         var execution = await _workbookExportCoordinator.ExportWithBatchAsync(
                 publicationPlan,
-                configuration)
+                configuration!)
             .ConfigureAwait(false);
         var publishedBatchMatchesOperation = execution.Command.Accepted
             && execution.PublishedBatch is { } publishedBatch
@@ -2088,7 +2101,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     $"Published {batch.Workbooks.Count:N0} workbook(s): {string.Join(", ", batch.Workbooks.Select(workbook => workbook.FinalPath))}";
                 if (postExportAction is { Succeeded: false })
                 {
-                    WorkbookExportStatusText = postExportAction.FailureDescription!;
+                    WorkbookExportStatusText =
+                        $"{WorkbookExportStatusText} {postExportAction.FailureDescription}";
                 }
             }
             else
@@ -2097,7 +2111,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     ?? "The workbook batch was not published.";
             }
 
-            InvalidatePreparedExportDestination();
+            OnPropertyChanged(nameof(ExportDestinationTargets));
             NotifyExportReadinessChanged();
         });
     }

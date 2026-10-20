@@ -214,6 +214,9 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var reviewHorizontalScrollViewer =
                 (ScrollViewer)view.FindName("DatabaseReviewHorizontalScrollViewer");
             var databaseGridPanel = (Border)view.FindName("DatabaseGridPanel");
+            var databaseLowerRegion = (Grid)view.FindName("DatabaseLowerRegion");
+            var databaseGridRow = (RowDefinition)view.FindName("DatabaseGridRow");
+            var databaseLowerRow = (RowDefinition)view.FindName("DatabaseLowerRow");
             var sourceSetTabs = (ListBox)view.FindName("DatabaseSourceSetTabs");
             var columnsButton = (Button)view.FindName("ColumnsButton");
             var lowerTabs = (Grid)view.FindName("LowerTabs");
@@ -227,6 +230,7 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             var excelExport = (Border)view.FindName("ExcelExportPanel");
             var exportButton = (Button)view.FindName("ExportToExcelButton");
             var browseOutputFolder = (Button)view.FindName("BrowseOutputFolderButton");
+            var openFilesAfterExport = (CheckBox)view.FindName("OpenFilesAfterExportToggle");
             var workbookExportStatus = (TextBlock)view.FindName("WorkbookExportStatusText");
             var extractionState = (TextBlock)view.FindName("ExtractionReviewStateText");
             var columnSizeFeedback = (Border)view.FindName("DatabaseColumnSizeFeedback");
@@ -339,6 +343,15 @@ public sealed class DatabaseWorkspaceViewInteractionTests
             Assert.IsTrue(viewModel.IsExportConfigurationValid);
             Assert.AreEqual(Visibility.Visible, excelExport.Visibility);
             Assert.IsFalse(exportButton.IsEnabled);
+            Assert.AreEqual("Browse…", browseOutputFolder.Content);
+            Assert.IsFalse(openFilesAfterExport.IsChecked.GetValueOrDefault());
+            Assert.IsGreaterThan(0d, databaseLowerRow.ActualHeight);
+            Assert.AreEqual(
+                0.375,
+                databaseLowerRow.ActualHeight
+                    / (databaseGridRow.ActualHeight + databaseLowerRow.ActualHeight),
+                0.02,
+                "The lower export area should use about 25% less height than the former half-height layout.");
 
             foreach (var metadataChoice in viewModel.ColumnChoices
                          .Where(choice => !choice.IsGenerated)
@@ -479,6 +492,17 @@ public sealed class DatabaseWorkspaceViewInteractionTests
 
             Assert.AreEqual(Visibility.Collapsed, exportFields.Visibility);
             Assert.AreEqual(Visibility.Visible, excelExport.Visibility);
+
+            window.Height = 620;
+            window.UpdateLayout();
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            Assert.IsGreaterThan(databaseLowerRegion.ActualHeight, databaseGridPanel.ActualHeight);
+            Assert.IsGreaterThan(150d, databaseLowerRegion.ActualHeight);
+            var exportFieldsTab = (Button)view.FindName("ExportFieldsTabButton");
+            exportFieldsTab.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Dispatcher.Yield(DispatcherPriority.DataBind);
+            Assert.IsTrue(browseOutputFolder.IsVisible);
+            Assert.IsTrue(openFilesAfterExport.IsVisible);
         }
         finally
         {
