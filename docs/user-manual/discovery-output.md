@@ -35,7 +35,7 @@ This option preserves source identity and structural association rather than for
 
 The source-file mode preview can show **10 columns per page**. The source-local preview may be narrower than the eventual dataset-wide schema until the current full schema is known. A preview never removes legitimate values from the final output.
 
-**Known limitation:** Real-world source-file mode can produce many sparsely populated repeated columns and blank source rows. It remains available by choice, with follow-up tracked for post-RC investigation (SPR-227). If the intended output is a concise relational table, prefer **Preserve relationships**. See [Known Limitations](known-limitations.md).
+**Known limitation:** Source-file mode can produce many sparsely populated repeated columns and blank source rows. If you need a more compact, family-oriented output, prefer **Preserve relationships**. See [Known Limitations](known-limitations.md).
 
 ## Before creating the Database
 

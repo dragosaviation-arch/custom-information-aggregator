@@ -6,7 +6,7 @@ nav_order: 2
 
 # Quick Start — first workbook
 
-This exercise uses **30 Goodbooks XML files** selected by the documentation author. The files are already available locally in the tutorial screenshots; the archive itself is **not included** with CIA or this draft. You can follow the same steps with your own supported XML files.
+The screenshots use a selection of **30 Goodbooks XML files**. Sample files are not bundled with CIA; you can follow the same steps using your own supported XML files.
 
 ## 1 — Load the files
 

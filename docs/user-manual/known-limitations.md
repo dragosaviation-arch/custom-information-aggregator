@@ -6,13 +6,13 @@ nav_order: 6
 
 # Known limitations and scope
 
-This section describes the **accepted Release Candidate scope** and clearly separates working functionality from deferred work.
+This section describes the available **CIA v1** workflow and its limitations.
 
 ## Optional source-file output: sparse columns and blank rows
 
 **One row per source file** is available and supported as an opt-in output interpretation. Because repeated structures are represented with numbered columns and source identity is preserved, a data set may produce many columns that are empty for most files. Sources with none of the selected values may still produce identifiable blank rows.
 
-A real-world TEM validation exposed blank source rows and excessive sparse column expansion; the owner accepted the default **Preserve relationships** / Root output as the useful v1 alternative. Further investigation is scheduled **after RC as SPR-227**. These observations do not establish missing stored values or license the manual to recommend discarding columns indiscriminately.
+Some XML collections contain extensive repeated structures. In this mode, that can lead to numerous sparsely populated columns and rows with no selected values. This does not, by itself, indicate lost source data. Check the selected fields and source identity before changing your configuration.
 
 **Suggested user choice:** For a concise, family-oriented output, leave **One row per source file** unchecked. Enable the source-file mode when you specifically need source-aligned rows and can accommodate repeated numbered columns.
 
@@ -29,6 +29,6 @@ Output Preview is intentionally bounded. Depending on current schema knowledge a
 
 ## Boundaries of this tutorial
 
-The examples are drawn from an author's local 30-file Goodbooks selection. Their screenshots demonstrate the UI, not a certified result for every possible collection of Goodbooks XML files. The documentation does not distribute the 30 sample files or claim that the final installer has been released.
+The screenshots use a local 30-file Goodbooks selection to illustrate CIA controls. Results depend on the XML files and selected fields. The sample files are not distributed with CIA.
 
 For installation or compatibility statements, consult the separate [Installation Guide](https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/docs/installation/README.md), rather than treating these workflow screenshots as an installation test.

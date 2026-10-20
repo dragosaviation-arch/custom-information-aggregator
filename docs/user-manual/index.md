@@ -6,13 +6,13 @@ nav_order: 1
 
 # Custom Information Aggregator — User Manual
 
-**Release Candidate documentation draft · 20 October 2026**
+**Version 1.0**
 
 CIA is a Windows desktop application that helps you inspect structured XML sources, choose the information you need, build a reviewable database, and export selected results to Excel workbooks.
 
 This manual explains the **actual user interface**, using screenshots from a 30-file selection of Goodbooks XML files. You do not need to understand XML internals or software development to follow the main workflow.
 
-> **Draft status:** This documentation is for review against the physically accepted CIA baseline (`6d16aabe74a5a8000dd46c60548e818ced92fde0`). It is not a claim that the final installer, website or public release is available. Screenshot callouts are documentation overlays, not controls inside CIA.
+> **Screenshot note:** Numbered callouts are documentation overlays, not controls inside CIA.
 
 ## Find what you need
 
@@ -26,6 +26,7 @@ This manual explains the **actual user interface**, using screenshots from a 30-
 | Configure CIA and inspect activity | [Settings and Diagnostics](settings-and-diagnostics.md) |
 | Solve a problem | [Troubleshooting](troubleshooting.md) |
 | Check feature boundaries | [Known Limitations](known-limitations.md) |
+| Download the offline manual | [PDF User Manual](https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/docs/user-manual/pdf/CIA-User-Manual.pdf) |
 
 ## The workflow at a glance
 

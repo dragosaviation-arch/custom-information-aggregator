@@ -21,7 +21,6 @@ Start by checking the relevant workspace status and **Settings → Log & Diagnos
 | A Database value appears clipped | Scroll horizontally, adjust relevant column width where supported, or inspect the value without assuming that the underlying export is empty. |
 | Workbook already exists | Use the explicit collision dialog: **Cancel**, **Overwrite**, or **Different name**. Check the filename carefully. |
 | Export ends without the expected workbook | Inspect destination behavior (**Save to / Browse / Ask**), the result status and **Log & Diagnostics**. Confirm the output was included and the intended workbook name was selected. |
-| Application link opens an unfinished documentation page | This is an RC documentation-draft limitation until the agreed manual and associated release pages are integrated. |
 
 ## If an operation is cancelled
 

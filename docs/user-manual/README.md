@@ -1,8 +1,6 @@
 # CIA User Manual
 
-**Documentation draft — not published.**
-
-The CIA application currently links to this stable GitHub path. Once the documentation is approved and integrated, it will provide the entry point for both the Markdown manual and any future Jekyll site/PDF distribution.
+This is the entry point for **Custom Information Aggregator v1** user documentation. CIA opens this page from **Settings → Help & About → User Manual**. Follow the chapters online or use the PDF for offline reference.
 
 ## Read the manual
 
@@ -13,6 +11,6 @@ The CIA application currently links to this stable GitHub path. Once the documen
 - [Troubleshooting](troubleshooting.md)
 - [Known limitations](known-limitations.md)
 - [Glossary](glossary.md)
-- [Download the PDF review draft](pdf/CIA-User-Manual-DRAFT.pdf)
+- [Download the PDF manual](pdf/CIA-User-Manual.pdf)
 
 See also: [Installation Guide](https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/docs/installation/README.md), [Release Notes](https://github.com/dragosaviation-arch/custom-information-aggregator/releases) and [Support](https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/SUPPORT.md).
