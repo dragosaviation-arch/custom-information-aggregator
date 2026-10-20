@@ -5,6 +5,7 @@
              xmlns:workflow="clr-namespace:CIA.Desktop.Workflow"
              x:Name="DatabaseViewRoot"
              Loaded="OnViewLoaded"
+             Unloaded="OnViewUnloaded"
              SizeChanged="OnViewSizeChanged"
              SnapsToDevicePixels="True">
     <UserControl.Resources>
@@ -81,9 +82,9 @@
 
     <Grid Margin="{StaticResource CiaWorkspaceMargin}" MinHeight="0">
         <Grid.RowDefinitions>
-            <RowDefinition Height="*" />
+            <RowDefinition x:Name="DatabaseGridRow" Height="5*" />
             <RowDefinition Height="8" />
-            <RowDefinition Height="*" />
+            <RowDefinition x:Name="DatabaseLowerRow" Height="3*" />
         </Grid.RowDefinitions>
 
         <Border x:Name="DatabaseGridPanel"
@@ -129,7 +130,7 @@
                                 Command="{Binding ExportToExcelCommand}"
                                 Content="▣ Export to Excel"
                                 Style="{StaticResource CiaPrimaryButtonStyle}"
-                                ToolTip="Publish the prepared workbook batch to the selected output folder." />
+                                ToolTip="Export the current workbook batch to the selected destination." />
                     </Grid>
                 </Border>
 
@@ -180,7 +181,7 @@
                        Placement="Bottom"
                        PlacementTarget="{Binding ElementName=ColumnsButton}"
                        StaysOpen="False">
-                    <Border Width="390"
+                    <Border Width="510"
                             Margin="0,4,0,0"
                             Padding="9"
                             Background="{StaticResource CiaPanelBrush}"
@@ -206,15 +207,18 @@
                             <TextBlock Grid.Row="1"
                                        Margin="0,4,0,6"
                                        Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Choose generated and metadata columns. Order and width affect CIA presentation only." />
+                                       Text="Names, inclusion and order apply to Database review and Excel. Width affects CIA only."
+                                       TextWrapping="Wrap" />
                             <Grid Grid.Row="2" Margin="2,0,2,3">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="24" />
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="54" />
+                                    <ColumnDefinition Width="58" />
+                                    <ColumnDefinition Width="82" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="1" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Column" />
-                                <TextBlock Grid.Column="2" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Order" />
+                                <TextBlock Grid.Column="2" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="SourceId" />
+                                <TextBlock Grid.Column="3" Style="{StaticResource CiaSourceHeaderTextStyle}" Text="Actions" />
                             </Grid>
                             <ScrollViewer Grid.Row="3"
                                           MaxHeight="300"
@@ -222,48 +226,111 @@
                                 <ItemsControl ItemsSource="{Binding ColumnChoices}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <Grid Height="33">
+                                            <Grid MinHeight="42">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="24" />
                                                     <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="54" />
+                                                    <ColumnDefinition Width="58" />
+                                                    <ColumnDefinition Width="82" />
                                                 </Grid.ColumnDefinitions>
                                                 <CheckBox VerticalAlignment="Center"
                                                           AutomationProperties.Name="Include Database column"
                                                           IsChecked="{Binding IsIncluded}" />
-                                                <StackPanel Grid.Column="1" Margin="2,0,4,0" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding DisplayName}"
-                                                               TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock FontSize="9"
-                                                               Foreground="{StaticResource CiaTextMutedBrush}"
-                                                               Text="{Binding Category}" />
-                                                </StackPanel>
-                                                <StackPanel Grid.Column="2"
-                                                            HorizontalAlignment="Right"
-                                                            Orientation="Horizontal">
-                                                    <StackPanel.Style>
-                                                        <Style TargetType="StackPanel">
-                                                            <Setter Property="Visibility" Value="Visible" />
+                                                <Grid Grid.Column="1" Margin="2,2,4,2" VerticalAlignment="Center">
+                                                    <StackPanel>
+                                                        <Button HorizontalContentAlignment="Left"
+                                                                Padding="0"
+                                                                Background="Transparent"
+                                                                BorderThickness="0"
+                                                                Command="{Binding BeginRenameCommand}"
+                                                                Content="{Binding DisplayName}"
+                                                                FontWeight="SemiBold"
+                                                                ToolTip="{Binding OriginalName, StringFormat=Original name: {0}}">
+                                                            <Button.Style>
+                                                                <Style TargetType="Button" BasedOn="{StaticResource CiaGhostButtonStyle}">
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Button.Style>
+                                                        </Button>
+                                                        <TextBlock FontSize="9"
+                                                                   Foreground="{StaticResource CiaTextMutedBrush}"
+                                                                   Text="{Binding Category}" />
+                                                    </StackPanel>
+                                                    <StackPanel>
+                                                        <StackPanel.Style>
+                                                            <Style TargetType="StackPanel">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </StackPanel.Style>
+                                                        <TextBox AutomationProperties.Name="Edit Database and Excel column name"
+                                                                 KeyDown="OnColumnNameEditKeyDown"
+                                                                 LostKeyboardFocus="OnColumnNameEditLostFocus"
+                                                                 Style="{StaticResource CiaTextInputStyle}"
+                                                                 Text="{Binding EditName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                                        <TextBlock FontSize="9"
+                                                                   Foreground="{StaticResource CiaDangerBrush}"
+                                                                   Text="{Binding ValidationText}"
+                                                                   TextWrapping="Wrap" />
+                                                    </StackPanel>
+                                                </Grid>
+                                                <CheckBox Grid.Column="2"
+                                                          HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center"
+                                                          AutomationProperties.Name="Include SourceId companion"
+                                                          IsChecked="{Binding IsSourceIdIncluded}">
+                                                    <CheckBox.Style>
+                                                        <Style TargetType="CheckBox">
                                                             <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsGenerated}" Value="False">
-                                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                                <DataTrigger Binding="{Binding SupportsSourceId}" Value="False">
+                                                                    <Setter Property="Visibility" Value="Hidden" />
                                                                 </DataTrigger>
                                                             </Style.Triggers>
                                                         </Style>
-                                                    </StackPanel.Style>
+                                                    </CheckBox.Style>
+                                                </CheckBox>
+                                                <StackPanel Grid.Column="3"
+                                                            HorizontalAlignment="Right"
+                                                            Orientation="Horizontal">
                                                     <Button Width="24"
                                                             Height="24"
                                                             Margin="0,0,2,0"
                                                             Padding="0"
-                                                            Command="{Binding DataContext.MoveColumnUpCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding DataColumn}"
+                                                            AutomationProperties.Name="Reset column name"
+                                                            Command="{Binding ResetNameCommand}"
+                                                            Content="&#x21BA;"
+                                                            ToolTip="Reset this column name">
+                                                        <Button.Style>
+                                                            <Style TargetType="Button" BasedOn="{StaticResource CiaButtonStyle}">
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding HasNameOverride}" Value="False">
+                                                                        <Setter Property="Visibility" Value="Hidden" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Button.Style>
+                                                    </Button>
+                                                    <Button Width="24"
+                                                            Height="24"
+                                                            Margin="0,0,2,0"
+                                                            Padding="0"
+                                                            Command="{Binding DataContext.MoveColumnChoiceUpCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}"
                                                             Content="↑"
                                                             Style="{StaticResource CiaButtonStyle}" />
                                                     <Button Width="24"
                                                             Height="24"
                                                             Padding="0"
-                                                            Command="{Binding DataContext.MoveColumnDownCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding DataColumn}"
+                                                            Command="{Binding DataContext.MoveColumnChoiceDownCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}"
                                                             Content="↓"
                                                             Style="{StaticResource CiaButtonStyle}" />
                                                 </StackPanel>
@@ -283,9 +350,16 @@
                 </Popup>
 
                 <Grid Grid.Row="2" MinHeight="0" Background="{StaticResource CiaPanelBrush}">
-                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ScrollViewer x:Name="DatabaseReviewHorizontalScrollViewer"
+                                  Grid.Column="0"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  ScrollChanged="OnDatabaseReviewHorizontalScrollChanged"
                                   VerticalScrollBarVisibility="Disabled">
-                        <Grid MinWidth="{Binding ElementName=DatabaseGridPanel, Path=ActualWidth}">
+                        <Grid MinWidth="{Binding ElementName=DatabaseReviewHorizontalScrollViewer, Path=ActualWidth}">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="30" />
                                 <RowDefinition Height="*" />
@@ -315,7 +389,8 @@
                                                         BorderThickness="0,0,1,0">
                                                     <Grid>
                                                         <TextBlock Style="{StaticResource DatabaseGridHeaderTextStyle}"
-                                                                   Text="{Binding DatabaseField}" />
+                                                                   Text="{Binding DisplayName}"
+                                                                   ToolTip="{Binding DatabaseField, StringFormat=Original name: {0}}" />
                                                         <Thumb Style="{StaticResource DatabaseColumnResizeThumbStyle}"
                                                                DragStarted="OnDatabaseColumnResizeStarted"
                                                                DragDelta="OnDatabaseColumnResizeDelta"
@@ -359,7 +434,7 @@
                                      ScrollViewer.CanContentScroll="True"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.ScrollChanged="OnDatabaseReviewScrollChanged"
-                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.VerticalScrollBarVisibility="Hidden"
                                      VirtualizingPanel.IsVirtualizing="True"
                                      VirtualizingPanel.ScrollUnit="Pixel"
                                      VirtualizingPanel.VirtualizationMode="Recycling">
@@ -434,7 +509,10 @@
                                                             <Border Width="{Binding Column.Width}"
                                                                     BorderBrush="{StaticResource CiaDividerBrush}"
                                                                     BorderThickness="0,0,1,1"
-                                                                    ToolTip="{Binding SourceContext}">
+                                                                    ClipToBounds="True"
+                                                                    ToolTip="{Binding InspectionText}"
+                                                                    ToolTipService.InitialShowDelay="600"
+                                                                    ToolTipService.ShowDuration="60000">
                                                                 <Border.Style>
                                                                     <Style TargetType="Border">
                                                                         <Style.Triggers>
@@ -448,7 +526,8 @@
                                                                            VerticalAlignment="Center"
                                                                            Foreground="{StaticResource CiaTextPrimaryBrush}"
                                                                            Text="{Binding DisplayValue}"
-                                                                           TextTrimming="CharacterEllipsis" />
+                                                                           TextTrimming="CharacterEllipsis"
+                                                                           TextWrapping="NoWrap" />
                                                             </Border>
                                                         </DataTemplate>
                                                     </ItemsControl.ItemTemplate>
@@ -481,6 +560,12 @@
                             </ListBox>
                         </Grid>
                     </ScrollViewer>
+                    <ScrollBar x:Name="DatabaseReviewVerticalScrollBar"
+                               Grid.Column="1"
+                               Width="14"
+                               Orientation="Vertical"
+                               SmallChange="30"
+                               ValueChanged="OnDatabaseReviewVerticalScrollBarValueChanged" />
                     <Border x:Name="DatabaseColumnSizeFeedback"
                             Margin="0,34,12,0"
                             Padding="8,4"
@@ -576,12 +661,18 @@
                             <TextBlock Margin="0,0,6,0"
                                        VerticalAlignment="Center"
                                        Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Row Family" />
-                            <ComboBox MinWidth="180"
-                                      ItemsSource="{Binding RowFamilies}"
-                                      SelectedItem="{Binding SelectedRowFamily, Mode=TwoWay}"
-                                      DisplayMemberPath="DisplayName"
-                                      ToolTip="Select the structural Row Family to review." />
+                                       Text="Current output" />
+                            <Border MinWidth="180"
+                                    Padding="8,4"
+                                    Background="{StaticResource CiaPanelBrush}"
+                                    BorderBrush="{StaticResource CiaBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    ToolTip="{Binding SelectedRowFamily.DisplayName, StringFormat=Internal structure: {0}}">
+                                <TextBlock FontWeight="SemiBold"
+                                           Text="{Binding SelectedDataset.DisplayName}"
+                                           TextTrimming="CharacterEllipsis" />
+                            </Border>
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -640,67 +731,105 @@
                                 Padding="8,6"
                                 BorderBrush="{StaticResource CiaDividerBrush}"
                                 BorderThickness="0,0,0,1">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="150" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="110" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="90" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <CheckBox x:Name="ExportEnabledToggle"
-                                          VerticalAlignment="Center"
-                                          AutomationProperties.Name="Export selected Row Family"
-                                          Content="Export this family"
-                                          IsChecked="{Binding IsSelectedSetExportEnabled}" />
-                                <ComboBox x:Name="WorkbookDefinitionSelector"
-                                          Grid.Column="1"
-                                          Margin="8,0,0,0"
-                                          AutomationProperties.Name="Workbook definition"
-                                          DisplayMemberPath="FileName"
-                                          ItemsSource="{Binding WorkbookDefinitions}"
-                                          SelectedItem="{Binding SelectedExportWorkbook, Mode=TwoWay}" />
-                                <Button x:Name="CreateWorkbookDefinitionButton"
-                                        Grid.Column="2"
-                                        Width="28"
-                                        Margin="4,0,0,0"
-                                        AutomationProperties.Name="Create workbook definition"
-                                        Command="{Binding CreateExportWorkbookCommand}"
-                                        Content="+"
-                                        Style="{StaticResource CiaGhostButtonStyle}" />
-                                <TextBox Grid.Column="3"
-                                         Margin="8,0,0,0"
-                                         AutomationProperties.Name="Workbook filename"
-                                         Style="{StaticResource CiaTextInputStyle}"
-                                         Text="{Binding SelectedExportWorkbook.FileName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <TextBlock Grid.Column="4"
-                                           Margin="8,0,4,0"
-                                           VerticalAlignment="Center"
-                                           Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="Worksheet" />
-                                <TextBox x:Name="WorksheetNameInput"
-                                         Grid.Column="5"
-                                         AutomationProperties.Name="Worksheet name"
-                                         Style="{StaticResource CiaTextInputStyle}"
-                                         Text="{Binding SelectedWorksheetName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <StackPanel Grid.Column="6" Margin="6,0,0,0" Orientation="Horizontal">
-                                    <Button Width="27"
-                                            AutomationProperties.Name="Move worksheet earlier"
-                                            Command="{Binding MoveWorksheetUpCommand}"
-                                            Content="&#x2191;"
-                                            Style="{StaticResource CiaGhostButtonStyle}" />
-                                    <Button Width="27"
-                                            Margin="3,0,0,0"
-                                            AutomationProperties.Name="Move worksheet later"
-                                            Command="{Binding MoveWorksheetDownCommand}"
-                                            Content="&#x2193;"
-                                            Style="{StaticResource CiaGhostButtonStyle}" />
-                                </StackPanel>
-                            </Grid>
+                            <WrapPanel>
+                                <Border Margin="0,0,7,4" Padding="7,5" BorderBrush="{StaticResource CiaBorderBrush}" BorderThickness="1" CornerRadius="5">
+                                    <StackPanel>
+                                        <TextBlock Margin="0,0,0,4" Style="{StaticResource CiaSecondaryTextStyle}" Text="OUTPUT INCLUSION" />
+                                        <CheckBox x:Name="ExportEnabledToggle"
+                                                  VerticalAlignment="Center"
+                                                  AutomationProperties.Name="Include current output in export"
+                                                  Content="Include current output"
+                                                  IsChecked="{Binding IsSelectedSetExportEnabled}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Margin="0,0,7,4" Padding="7,5" BorderBrush="{StaticResource CiaBorderBrush}" BorderThickness="1" CornerRadius="5">
+                                    <StackPanel>
+                                        <TextBlock Margin="0,0,0,4" Style="{StaticResource CiaSecondaryTextStyle}" Text="WORKBOOK" />
+                                        <WrapPanel>
+                                            <ComboBox x:Name="WorkbookDefinitionSelector"
+                                                      Width="155"
+                                                      AutomationProperties.Name="Select existing workbook definition"
+                                                      DisplayMemberPath="FileName"
+                                                      ItemsSource="{Binding WorkbookDefinitions}"
+                                                      SelectedItem="{Binding SelectedExportWorkbook, Mode=TwoWay}"
+                                                      ToolTip="Select an existing workbook definition." />
+                                            <Button x:Name="CreateWorkbookDefinitionButton"
+                                                    Width="30"
+                                                    Margin="4,0,7,0"
+                                                    AutomationProperties.Name="Create workbook definition"
+                                                    Command="{Binding CreateExportWorkbookCommand}"
+                                                    Content="+"
+                                                    Style="{StaticResource CiaButtonStyle}"
+                                                    ToolTip="Create a new workbook definition." />
+                                            <Button x:Name="RenameWorkbookButton"
+                                                    Padding="8,3"
+                                                    AutomationProperties.Name="Rename selected workbook"
+                                                    Command="{Binding BeginWorkbookRenameCommand}"
+                                                    Content="Rename">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource CiaGhostButtonStyle}">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsWorkbookNameEditing}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                            <TextBox x:Name="WorkbookNameInput"
+                                                     Width="170"
+                                                     Margin="4,0,0,0"
+                                                     AutomationProperties.Name="Edit selected workbook filename"
+                                                     KeyDown="OnWorkbookNameEditKeyDown"
+                                                     LostKeyboardFocus="OnWorkbookNameEditLostFocus"
+                                                     Text="{Binding WorkbookNameEditText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                                <TextBox.Style>
+                                                    <Style TargetType="TextBox" BasedOn="{StaticResource CiaTextInputStyle}">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsWorkbookNameEditing}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBox.Style>
+                                            </TextBox>
+                                        </WrapPanel>
+                                        <TextBlock Margin="0,3,0,0"
+                                                   FontSize="9"
+                                                   Foreground="{StaticResource CiaDangerBrush}"
+                                                   Text="{Binding WorkbookRenameValidationText}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Margin="0,0,0,4" Padding="7,5" BorderBrush="{StaticResource CiaBorderBrush}" BorderThickness="1" CornerRadius="5">
+                                    <StackPanel>
+                                        <TextBlock Margin="0,0,0,4" Style="{StaticResource CiaSecondaryTextStyle}" Text="WORKSHEET" />
+                                        <WrapPanel>
+                                            <TextBox x:Name="WorksheetNameInput"
+                                                     Width="150"
+                                                     AutomationProperties.Name="Worksheet name"
+                                                     Style="{StaticResource CiaTextInputStyle}"
+                                                     Text="{Binding SelectedWorksheetName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            <Button Width="30"
+                                                    Margin="5,0,0,0"
+                                                    AutomationProperties.Name="Move worksheet earlier"
+                                                    Command="{Binding MoveWorksheetUpCommand}"
+                                                    Content="&#x2191;"
+                                                    Style="{StaticResource CiaButtonStyle}"
+                                                    ToolTip="Move this worksheet earlier in the workbook." />
+                                            <Button Width="30"
+                                                    Margin="3,0,0,0"
+                                                    AutomationProperties.Name="Move worksheet later"
+                                                    Command="{Binding MoveWorksheetDownCommand}"
+                                                    Content="&#x2193;"
+                                                    Style="{StaticResource CiaButtonStyle}"
+                                                    ToolTip="Move this worksheet later in the workbook." />
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                            </WrapPanel>
                         </Border>
-                        <Grid Grid.Row="2" MinHeight="0">
+                        <Grid x:Name="LegacyExportHeaderOverrides" Grid.Row="2" MinHeight="0" Visibility="Collapsed">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="27" />
                                 <RowDefinition Height="*" />
@@ -773,6 +902,59 @@
                                 </StackPanel>
                             </ScrollViewer>
                         </Grid>
+                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="9,7">
+                                <TextBlock Style="{StaticResource DatabaseSectionTextStyle}"
+                                           Text="DESTINATION" />
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="82" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock VerticalAlignment="Center"
+                                               Style="{StaticResource CiaSecondaryTextStyle}"
+                                               Text="Save to" />
+                                    <TextBox Grid.Column="1"
+                                             AutomationProperties.Name="Excel output folder"
+                                             IsReadOnly="True"
+                                             Style="{StaticResource CiaTextInputStyle}"
+                                             Text="{Binding OutputFolder}" />
+                                    <Button x:Name="BrowseOutputFolderButton"
+                                            Grid.Column="2"
+                                            Margin="5,0,0,0"
+                                            AutomationProperties.Name="Browse for Excel export destination"
+                                            Command="{Binding BrowseOutputFolderCommand}"
+                                            Content="Browse…"
+                                            Style="{StaticResource CiaButtonStyle}"
+                                            ToolTip="Change the export destination without writing files." />
+                                </Grid>
+                                <WrapPanel Margin="0,7,0,0">
+                                    <CheckBox Margin="0,0,18,0"
+                                              Content="Ask where to save each time"
+                                              IsChecked="{Binding AlwaysAskWhereToExport}" />
+                                    <CheckBox x:Name="OpenFilesAfterExportToggle"
+                                              Content="Open file(s) after export"
+                                              IsChecked="{Binding OpenFilesAfterExport}" />
+                                </WrapPanel>
+                                <ItemsControl Margin="0,3,0,0"
+                                              ItemsSource="{Binding ExportDestinationTargets}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Style="{StaticResource CiaSecondaryTextStyle}"
+                                                       Text="{Binding}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock x:Name="WorkbookExportStatusText"
+                                           Margin="0,4,0,0"
+                                           Style="{StaticResource CiaSecondaryTextStyle}"
+                                           Text="{Binding WorkbookExportStatusText}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </ScrollViewer>
                         <Border Grid.Row="3"
                                 Padding="8,6"
                                 BorderBrush="{StaticResource CiaDividerBrush}"
@@ -782,11 +964,6 @@
                                            VerticalAlignment="Center"
                                            Style="{StaticResource CiaSecondaryTextStyle}"
                                            Text="{Binding ExportConfigurationValidationText}" />
-                                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal">
-                                    <Button Command="{Binding ResetHeadersCommand}"
-                                            Content="Reset headers"
-                                            Style="{StaticResource CiaGhostButtonStyle}" />
-                                </StackPanel>
                             </Grid>
                         </Border>
                     </Grid>
@@ -835,7 +1012,7 @@
                             </Grid>
                         </Border>
                         <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
-                            <Grid x:Name="ExcelSettingsGrid" Margin="9,7">
+                            <Grid x:Name="ExcelSettingsGrid" Margin="9,7" Visibility="Collapsed">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition x:Name="ExcelLocalColumn" Width="*" />
                                     <ColumnDefinition x:Name="ExcelSettingsGapColumn" Width="12" />
@@ -859,7 +1036,7 @@
                                                  AutomationProperties.Name="Excel output folder"
                                                  Style="{StaticResource CiaTextInputStyle}"
                                                  Text="{Binding OutputFolder, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                        <Button x:Name="BrowseOutputFolderButton"
+                                        <Button x:Name="LegacyBrowseOutputFolderButton"
                                                 Grid.Column="2"
                                                 Margin="5,0,0,0"
                                                 AutomationProperties.Name="Browse for Excel output folder"
@@ -870,7 +1047,7 @@
                                     <CheckBox Margin="0,7,0,0"
                                               Content="Always ask where to export"
                                               IsChecked="{Binding AlwaysAskWhereToExport}" />
-                                    <TextBlock x:Name="WorkbookExportStatusText"
+                                    <TextBlock x:Name="LegacyWorkbookExportStatusText"
                                                Margin="0,7,0,0"
                                                Style="{StaticResource CiaSecondaryTextStyle}"
                                                Text="{Binding WorkbookExportStatusText}"

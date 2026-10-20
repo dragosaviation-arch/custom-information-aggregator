@@ -374,6 +374,7 @@ public sealed partial class StructuredInformationRepository
             """
                 SELECT COUNT(*) FROM hierarchy_output_set_extraction_rows AS rows
                 WHERE rows.extraction_id = $extractionId
+                  AND rows.family_kind <> $sourceFileProjectionKind
                   AND NOT EXISTS (
                     SELECT 1 FROM hierarchy_output_set_extraction_cells AS cells
                     WHERE cells.extraction_id = rows.extraction_id
@@ -381,9 +382,11 @@ public sealed partial class StructuredInformationRepository
                       AND cells.family_kind = rows.family_kind
                       AND cells.family_anchor_path = rows.family_anchor_path
                       AND cells.row_ordinal = rows.row_ordinal);
-                """,
+            """,
             extractionId,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            ("$sourceFileProjectionKind", (int)RowFamilyKind.SourceFileProjection))
+            .ConfigureAwait(false);
         var incompleteCells = await ExtractionScalarIntAsync(
             connection,
             transaction,
@@ -914,7 +917,7 @@ public sealed partial class StructuredInformationRepository
             .SelectMany(mapping => mapping.DetailedIdentities.Select(identity =>
                 new KeyValuePair<DiscoveryInformationIdentity, RowFamilyId>(
                     identity,
-                    mapping.RowFamilyId)))
+                    mapping.OriginatingRowFamilyId)))
             .GroupBy(pair => pair.Key)
             .ToDictionary(
                 group => group.Key,

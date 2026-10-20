@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<catalog xmlns:a="urn:cia:spr224:a" xmlns:b="urn:cia:spr224:b">
+  <book code="B1">
+    <title>Illustrated edition</title>
+    <author>
+      <name>Rowling</name>
+      <role></role>
+    </author>
+    <author>
+      <name>Mary GrandPré</name>
+      <role>Illustrator</role>
+      <alias><value>Mary</value></alias>
+      <alias><value>MG</value></alias>
+    </author>
+    <keyword>K1</keyword>
+    <keyword>K2</keyword>
+    <a:label>Label A</a:label>
+    <b:label>Label B</b:label>
+  </book>
+</catalog>

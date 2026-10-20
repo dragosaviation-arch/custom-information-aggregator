@@ -1195,12 +1195,17 @@ public sealed partial class StructuredInformationRepository
         SqliteTransaction transaction,
         string sql,
         string extractionId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        params (string Name, object? Value)[] parameters)
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = sql;
         command.Parameters.AddWithValue("$extractionId", extractionId);
+        foreach (var parameter in parameters)
+        {
+            command.Parameters.AddWithValue(parameter.Name, parameter.Value ?? DBNull.Value);
+        }
         return Convert.ToInt32(
             await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
             CultureInfo.InvariantCulture);

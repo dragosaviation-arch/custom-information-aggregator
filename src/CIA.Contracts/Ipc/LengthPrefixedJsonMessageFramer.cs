@@ -89,6 +89,16 @@ public static class LengthPrefixedJsonMessageFramer
                 "The IPC frame did not contain a recognized JSON message contract.",
                 exception);
         }
+        catch (ArgumentException exception)
+        {
+            var envelope = TryReadValidatedEnvelope(payload);
+            throw new IpcProtocolException(
+                IpcProtocolError.InvalidContract,
+                "The IPC frame contained a message that violated its contract.",
+                exception,
+                envelope?.MessageId,
+                envelope?.MessageType);
+        }
 
         if (message is null)
         {
@@ -99,6 +109,44 @@ public static class LengthPrefixedJsonMessageFramer
 
         IpcContractValidator.Validate(message);
         return message;
+    }
+
+    private static IpcEnvelope? TryReadValidatedEnvelope(ReadOnlyMemory<byte> payload)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(
+                payload,
+                new JsonDocumentOptions
+                {
+                    AllowTrailingCommas = false,
+                    CommentHandling = JsonCommentHandling.Disallow,
+                    MaxDepth = 16
+                });
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("messageType", out var messageTypeProperty)
+                || messageTypeProperty.ValueKind != JsonValueKind.String
+                || !root.TryGetProperty("messageId", out var messageIdProperty)
+                || !messageIdProperty.TryGetGuid(out var messageId)
+                || messageId == Guid.Empty
+                || messageId.Version != 7
+                || !root.TryGetProperty("timestampUtc", out var timestampProperty)
+                || !timestampProperty.TryGetDateTimeOffset(out var timestampUtc)
+                || timestampUtc.Offset != TimeSpan.Zero)
+            {
+                return null;
+            }
+
+            var messageType = messageTypeProperty.GetString();
+            return string.IsNullOrWhiteSpace(messageType)
+                ? null
+                : new IpcEnvelope(messageId, messageType);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static async ValueTask ReadExactlyAsync(
@@ -139,4 +187,6 @@ public static class LengthPrefixedJsonMessageFramer
         options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false));
         return options;
     }
+
+    private sealed record IpcEnvelope(Guid MessageId, string MessageType);
 }

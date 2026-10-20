@@ -31,6 +31,7 @@ public static class DatabaseGenerationContextComparer
         expected.Count == actual.Count
         && expected.Zip(actual).All(pair =>
             pair.First.RowFamilyId == pair.Second.RowFamilyId
+            && pair.First.OriginatingRowFamilyId == pair.Second.OriginatingRowFamilyId
             && string.Equals(
                 pair.First.EffectiveName,
                 pair.Second.EffectiveName,

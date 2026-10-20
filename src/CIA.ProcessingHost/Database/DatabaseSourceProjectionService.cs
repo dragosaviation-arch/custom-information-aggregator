@@ -32,6 +32,11 @@ public sealed class DatabaseSourceProjectionService(IHierarchyFlatteningEngine h
                 nameof(source));
         }
 
+        if (dataset.ProjectionMode == DiscoveryOutputProjectionMode.OneRowPerSourceFile)
+        {
+            return ProjectSourceFile(dataset, source, interpretedSource);
+        }
+
         var selectedIdentities = dataset.Fields
             .SelectMany(field => field.DetailedIdentities)
             .ToArray();
@@ -87,8 +92,188 @@ public sealed class DatabaseSourceProjectionService(IHierarchyFlatteningEngine h
             row)).ToArray();
         return new DatabaseSourceProjection(
             rows,
+            rows.SelectMany(row => row.Cells)
+                .Select(cell => cell.ColumnIdentity)
+                .Distinct()
+                .ToArray(),
             flattened.IsTruncated,
             flattened.TruncatedRowFamilies);
+    }
+
+    private static DatabaseSourceProjection ProjectSourceFile(
+        DatabaseDatasetBuildSpecification dataset,
+        LoadedSourceContract source,
+        InterpretedSourceDocument interpretedSource)
+    {
+        var selected = dataset.Fields
+            .SelectMany(field => field.DetailedIdentities)
+            .ToHashSet();
+        var repeatedPaths = dataset.SourceProjectionRepeatedPaths.ToHashSet(StringComparer.Ordinal);
+        var siblingOrdinals = CreateSiblingOrdinals(interpretedSource);
+        var cells = interpretedSource.Values
+            .Where(value => value.Lineage is not null)
+            .Select(value => HierarchySourceOccurrence.FromInterpretedValue(dataset.SourceSetId, value))
+            .Where(occurrence => selected.Contains(occurrence.Identity))
+            .OrderBy(occurrence => occurrence.Lineage.TraversalOrder)
+            .Select(occurrence => new FlattenedHierarchyCell(
+                new FlattenedColumnIdentity(
+                    occurrence.Identity,
+                    CreateSourceFileCoordinates(
+                        occurrence.Lineage,
+                        repeatedPaths,
+                        siblingOrdinals)),
+                occurrence.Value,
+                occurrence.SourceId,
+                occurrence.Lineage))
+            .ToArray();
+        var projectionFamily = dataset.RowFamilies.Single().Id;
+        var anchorInstanceId = interpretedSource.Values
+            .Select(value => value.Lineage?.ElementPath.FirstOrDefault()?.InstanceId)
+            .FirstOrDefault(id => id is not null) ?? 1;
+        var row = new FlattenedHierarchyRow(
+            1,
+            source.SourceId,
+            cells,
+            projectionFamily,
+            anchorInstanceId,
+            1);
+        var projectedRow = CreateDatabaseRow(
+            dataset,
+            source,
+            CreateSourceMetadata(dataset, source),
+            row);
+        var columns = CreateSourceFileColumns(
+            dataset,
+            interpretedSource,
+            repeatedPaths,
+            siblingOrdinals);
+        return new DatabaseSourceProjection(
+            [projectedRow],
+            columns,
+            IsTruncated: false,
+            TruncatedRowFamilies: []);
+    }
+
+    private static IReadOnlyList<DatabaseColumnIdentity> CreateSourceFileColumns(
+        DatabaseDatasetBuildSpecification dataset,
+        InterpretedSourceDocument interpretedSource,
+        IReadOnlySet<string> repeatedPaths,
+        IReadOnlyDictionary<(long ParentInstanceId, string ExpandedName, long InstanceId), int>
+            siblingOrdinals)
+    {
+        var projectionFamily = dataset.RowFamilies.Single().Id;
+        var columns = new List<(DatabaseColumnIdentity Identity, int FieldOrdinal)>();
+        for (var fieldOrdinal = 0; fieldOrdinal < dataset.Fields.Count; fieldOrdinal++)
+        {
+            var field = dataset.Fields[fieldOrdinal];
+            var familyRepeatedPaths = repeatedPaths
+                .Where(path => string.Equals(
+                        path,
+                        field.OriginatingRowFamilyId.AnchorPath,
+                        StringComparison.Ordinal)
+                    || field.OriginatingRowFamilyId.AnchorPath.StartsWith(
+                        path + "/",
+                        StringComparison.Ordinal))
+                .ToHashSet(StringComparer.Ordinal);
+            var coordinates = field.OriginatingRowFamilyId.Kind == RowFamilyKind.Root
+                ? [DatabaseRepeatCoordinatePath.Empty]
+                : interpretedSource.Values
+                    .Where(value => value.Lineage is not null
+                        && IsWithinFamily(value.Lineage, field.OriginatingRowFamilyId.AnchorPath))
+                    .Select(value => new DatabaseRepeatCoordinatePath(
+                        CreateSourceFileCoordinates(
+                            value.Lineage!,
+                            familyRepeatedPaths,
+                            siblingOrdinals).Coordinates))
+                    .DistinctBy(coordinate => string.Join(",", coordinate.Coordinates))
+                    .ToArray();
+            columns.AddRange(coordinates.Select(coordinate => (
+                new DatabaseColumnIdentity(projectionFamily, field.FieldKey, coordinate),
+                fieldOrdinal)));
+        }
+
+        return columns
+            .DistinctBy(item => (
+                item.Identity.FieldKey,
+                Coordinates: string.Join(",", item.Identity.RepeatCoordinates.Coordinates)))
+            .OrderBy(item => item.Identity.RepeatCoordinates)
+            .ThenBy(item => item.FieldOrdinal)
+            .Select(item => item.Identity)
+            .ToArray();
+    }
+
+    private static bool IsWithinFamily(SourceValueLineage lineage, string anchorPath)
+    {
+        var path = string.Empty;
+        foreach (var element in lineage.ElementPath)
+        {
+            path += "/" + element.ExpandedName;
+            if (string.Equals(path, anchorPath, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyDictionary<(long ParentInstanceId, string ExpandedName, long InstanceId), int>
+        CreateSiblingOrdinals(InterpretedSourceDocument interpretedSource)
+    {
+        var instances = interpretedSource.Values
+            .Where(value => value.Lineage is not null)
+            .SelectMany(value => value.Lineage!.ElementPath.Select((element, index) => new
+            {
+                ParentInstanceId = index == 0
+                    ? 0
+                    : value.Lineage.ElementPath[index - 1].InstanceId,
+                element.ExpandedName,
+                element.InstanceId,
+                element.SiblingPosition
+            }))
+            .DistinctBy(item => item.InstanceId)
+            .GroupBy(item => (item.ParentInstanceId, item.ExpandedName));
+        var result = new Dictionary<(long, string, long), int>();
+        foreach (var group in instances)
+        {
+            var ordered = group
+                .OrderBy(item => item.SiblingPosition)
+                .ThenBy(item => item.InstanceId)
+                .ToArray();
+            for (var index = 0; index < ordered.Length; index++)
+            {
+                result[(group.Key.ParentInstanceId, group.Key.ExpandedName, ordered[index].InstanceId)] =
+                    index + 1;
+            }
+        }
+
+        return result;
+    }
+
+    private static RepeatCoordinatePath CreateSourceFileCoordinates(
+        SourceValueLineage lineage,
+        IReadOnlySet<string> repeatedPaths,
+        IReadOnlyDictionary<(long ParentInstanceId, string ExpandedName, long InstanceId), int>
+            siblingOrdinals)
+    {
+        var path = string.Empty;
+        var coordinates = new List<int>();
+        for (var index = 0; index < lineage.ElementPath.Count; index++)
+        {
+            var element = lineage.ElementPath[index];
+            path += "/" + element.ExpandedName;
+            if (!repeatedPaths.Contains(path))
+            {
+                continue;
+            }
+
+            var parentInstanceId = index == 0 ? 0 : lineage.ElementPath[index - 1].InstanceId;
+            coordinates.Add(siblingOrdinals.GetValueOrDefault(
+                (parentInstanceId, element.ExpandedName, element.InstanceId),
+                1));
+        }
+
+        return new RepeatCoordinatePath(coordinates);
     }
 
     private static DatabaseReviewRow CreateDatabaseRow(
@@ -176,5 +361,6 @@ public sealed class DatabaseSourceProjectionService(IHierarchyFlatteningEngine h
 
 public sealed record DatabaseSourceProjection(
     IReadOnlyList<DatabaseReviewRow> Rows,
+    IReadOnlyList<DatabaseColumnIdentity> Columns,
     bool IsTruncated,
     IReadOnlyList<RowFamilyId> TruncatedRowFamilies);

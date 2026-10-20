@@ -56,6 +56,36 @@ public static class DatabaseBuildSpecificationFactory
                     nameof(outputPlan));
             }
 
+            if (outputSet.ProjectionMode == DiscoveryOutputProjectionMode.OneRowPerSourceFile)
+            {
+                var projectionFamily = new RowFamilyId(
+                    outputSet.ParentSourceSetId,
+                    RowFamilyKind.SourceFileProjection,
+                    "/__cia_source_file__");
+                var projectionFields = CreateSourceFileFieldMappings(
+                    projectionFamily,
+                    fields);
+                var repeatedPaths = familyCatalog.Families
+                    .Where(family => family.Id.SourceSetId == outputSet.ParentSourceSetId
+                        && family.Id.Kind == RowFamilyKind.Repeated)
+                    .Select(family => family.Id.AnchorPath)
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal)
+                    .ToArray();
+                datasets.Add(new DatabaseDatasetBuildSpecification(
+                    outputSet.OutputSetId,
+                    outputSet.ParentSourceSetId,
+                    outputSet.Name,
+                    datasets.Count + 1,
+                    RepeatedDataLayout.NumberRepeatedValuesIntoColumns,
+                    parent.Sources,
+                    [new RowFamilyDefinition(projectionFamily, null)],
+                    projectionFields,
+                    outputSet.ProjectionMode,
+                    repeatedPaths));
+                continue;
+            }
+
             datasets.Add(new DatabaseDatasetBuildSpecification(
                 outputSet.OutputSetId,
                 outputSet.ParentSourceSetId,
@@ -64,10 +94,55 @@ public static class DatabaseBuildSpecificationFactory
                 parent.RepeatedDataLayout,
                 parent.Sources,
                 families,
-                fields));
+                fields,
+                outputSet.ProjectionMode));
         }
 
         return new DatabaseBuildSpecification(datasets);
+    }
+
+    private static IReadOnlyList<DatabaseFieldMapping> CreateSourceFileFieldMappings(
+        RowFamilyId projectionFamily,
+        IReadOnlyList<DatabaseFieldMapping> fields)
+    {
+        var candidates = fields
+            .SelectMany(field => field.DetailedIdentities.Select(identity => new
+            {
+                OriginatingFamilyId = field.RowFamilyId,
+                field.EffectiveName,
+                field.IsExplicitOverride,
+                Identity = identity
+            }))
+            .OrderBy(candidate => candidate.OriginatingFamilyId)
+            .ThenBy(candidate => candidate.Identity.StructuralPath, StringComparer.Ordinal)
+            .ThenBy(candidate => candidate.Identity.CandidateKind)
+            .ThenBy(candidate => candidate.Identity.StructuralIdentity, StringComparer.Ordinal)
+            .ToArray();
+        var usedNames = new HashSet<string>(StringComparer.Ordinal);
+        var mappings = new List<DatabaseFieldMapping>(candidates.Length);
+        foreach (var candidate in candidates)
+        {
+            var effectiveName = candidate.EffectiveName;
+            if (!usedNames.Add(effectiveName))
+            {
+                var suffix = 2;
+                while (!usedNames.Add($"{candidate.EffectiveName} ({suffix})"))
+                {
+                    suffix++;
+                }
+
+                effectiveName = $"{candidate.EffectiveName} ({suffix})";
+            }
+
+            mappings.Add(new DatabaseFieldMapping(
+                projectionFamily,
+                effectiveName,
+                candidate.IsExplicitOverride,
+                [candidate.Identity],
+                candidate.OriginatingFamilyId));
+        }
+
+        return mappings;
     }
 
     public static DatabaseBuildSpecification Create(

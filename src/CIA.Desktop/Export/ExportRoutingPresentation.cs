@@ -644,6 +644,46 @@ public sealed class ExportSourceSetPresentation
         OnChanged();
     }
 
+    public void ResetPresentation()
+    {
+        _suppressChildChanges = true;
+        try
+        {
+            foreach (var field in _fields)
+            {
+                field.ResetExport();
+                field.ResetHeader();
+            }
+
+            var orderedFields = _fields.OrderBy(field => field.CanonicalOrder).ToArray();
+            _fields.Clear();
+            foreach (var field in orderedFields)
+            {
+                _fields.Add(field);
+            }
+
+            foreach (var field in _metadataFields)
+            {
+                field.ResetExport();
+                field.ResetHeader();
+            }
+
+            var orderedMetadata = _metadataFields.OrderBy(field => field.MetadataField).ToArray();
+            _metadataFields.Clear();
+            foreach (var field in orderedMetadata)
+            {
+                _metadataFields.Add(field);
+            }
+            UpdateFieldPositions();
+        }
+        finally
+        {
+            _suppressChildChanges = false;
+        }
+
+        OnChanged();
+    }
+
     internal void ApplyDatabaseColumnState(
         IReadOnlyList<DatabaseExportFieldState> fields,
         IReadOnlyList<DatabaseExportMetadataState> metadataFields)
@@ -672,13 +712,22 @@ public sealed class ExportSourceSetPresentation
                 _fields.Add(field);
             }
 
-            var metadataByField = metadataFields.ToDictionary(state => state.Field);
-            foreach (var field in _metadataFields)
+            var metadataByField = _metadataFields.ToDictionary(field => field.MetadataField);
+            var orderedMetadata = new List<ExportMetadataFieldPresentation>(_metadataFields.Count);
+            foreach (var state in metadataFields.OrderBy(state => state.Order))
             {
-                if (metadataByField.TryGetValue(field.MetadataField, out var state))
+                if (metadataByField.TryGetValue(state.Field, out var field))
                 {
                     field.IsExported = state.IsIncluded;
+                    orderedMetadata.Add(field);
                 }
+            }
+
+            orderedMetadata.AddRange(_metadataFields.Where(field => !orderedMetadata.Contains(field)));
+            _metadataFields.Clear();
+            foreach (var field in orderedMetadata)
+            {
+                _metadataFields.Add(field);
             }
 
             UpdateFieldPositions();
@@ -921,7 +970,8 @@ internal sealed record DatabaseExportFieldState(
 
 internal sealed record DatabaseExportMetadataState(
     DatabaseMetadataField Field,
-    bool IsIncluded);
+    bool IsIncluded,
+    int Order);
 
 public sealed class ExportMetadataFieldPresentation : ObservableObject
 {
@@ -954,6 +1004,8 @@ public sealed class ExportMetadataFieldPresentation : ObservableObject
     }
 
     internal void ResetHeader() => ExcelHeader = DisplayName;
+
+    internal void ResetExport() => IsExported = false;
 
     internal ExportMetadataFieldConfiguration Capture() => new(
         MetadataField,

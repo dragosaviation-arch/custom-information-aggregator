@@ -6,6 +6,12 @@ using CIA.Contracts.Sources;
 
 namespace CIA.Contracts.Discovery;
 
+public enum DiscoveryOutputProjectionMode
+{
+    PreserveRelationships = 0,
+    OneRowPerSourceFile = 1
+}
+
 [JsonConverter(typeof(OutputSetIdJsonConverter))]
 public readonly record struct OutputSetId
 {
@@ -58,7 +64,9 @@ public sealed record DiscoveryOutputSetDefinition
         int setNumber,
         int modelOrder,
         bool isEnabled,
-        IReadOnlyList<RowFamilyId> rowFamilyIds)
+        IReadOnlyList<RowFamilyId> rowFamilyIds,
+        DiscoveryOutputProjectionMode projectionMode =
+            DiscoveryOutputProjectionMode.PreserveRelationships)
     {
         if (outputSetId.Value == Guid.Empty)
         {
@@ -91,6 +99,10 @@ public sealed record DiscoveryOutputSetDefinition
         }
 
         ArgumentNullException.ThrowIfNull(rowFamilyIds);
+        if (!Enum.IsDefined(projectionMode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(projectionMode));
+        }
         var families = rowFamilyIds.ToArray();
         if (families.Length == 0
             || families.Any(family => family.SourceSetId != parentSourceSetId)
@@ -109,6 +121,7 @@ public sealed record DiscoveryOutputSetDefinition
         ModelOrder = modelOrder;
         IsEnabled = isEnabled;
         RowFamilyIds = new ReadOnlyCollection<RowFamilyId>(families);
+        ProjectionMode = projectionMode;
     }
 
     public OutputSetId OutputSetId { get; }
@@ -126,6 +139,8 @@ public sealed record DiscoveryOutputSetDefinition
     public bool IsEnabled { get; }
 
     public IReadOnlyList<RowFamilyId> RowFamilyIds { get; }
+
+    public DiscoveryOutputProjectionMode ProjectionMode { get; }
 }
 
 public sealed record DiscoveryParentOutputPlan
@@ -133,7 +148,9 @@ public sealed record DiscoveryParentOutputPlan
     [JsonConstructor]
     public DiscoveryParentOutputPlan(
         SourceSetId parentSourceSetId,
-        IReadOnlyList<DiscoveryOutputSetDefinition> outputSets)
+        IReadOnlyList<DiscoveryOutputSetDefinition> outputSets,
+        DiscoveryOutputProjectionMode projectionMode =
+            DiscoveryOutputProjectionMode.PreserveRelationships)
     {
         if (parentSourceSetId.Value == Guid.Empty)
         {
@@ -143,8 +160,13 @@ public sealed record DiscoveryParentOutputPlan
         }
 
         ArgumentNullException.ThrowIfNull(outputSets);
+        if (!Enum.IsDefined(projectionMode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(projectionMode));
+        }
         var sets = outputSets.ToArray();
         if (sets.Any(set => set is null || set.ParentSourceSetId != parentSourceSetId)
+            || sets.Any(set => set.ProjectionMode != projectionMode)
             || sets.Select(set => set.ModelOrder).Distinct().Count() != sets.Length)
         {
             throw new ArgumentException(
@@ -155,11 +177,14 @@ public sealed record DiscoveryParentOutputPlan
         ParentSourceSetId = parentSourceSetId;
         OutputSets = new ReadOnlyCollection<DiscoveryOutputSetDefinition>(
             sets.OrderBy(set => set.ModelOrder).ToArray());
+        ProjectionMode = projectionMode;
     }
 
     public SourceSetId ParentSourceSetId { get; }
 
     public IReadOnlyList<DiscoveryOutputSetDefinition> OutputSets { get; }
+
+    public DiscoveryOutputProjectionMode ProjectionMode { get; }
 }
 
 public sealed record DiscoveryOutputPlanSnapshot

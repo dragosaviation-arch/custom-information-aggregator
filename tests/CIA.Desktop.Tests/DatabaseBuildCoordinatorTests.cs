@@ -1,6 +1,7 @@
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Hierarchy;
+using CIA.Contracts.Ipc;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core;
@@ -134,6 +135,68 @@ public sealed class DatabaseBuildCoordinatorTests
         Assert.IsFalse((await coordinator.BuildAsync()).Accepted);
         Assert.AreSame(published, coordinator.CurrentGeneration);
         Assert.AreEqual(WorkflowArtifactStatus.Stale, context.Workflow.Current.Database);
+    }
+
+    [TestMethod]
+    public async Task CorrelatedInvalidContractRejectionTerminatesAndRetainsPublishedDatabase()
+    {
+        var context = await BuildContext.CreateAsync();
+        var callCount = 0;
+        var client = new RecordingDatabaseClient((correlation, specification) =>
+        {
+            callCount++;
+            if (callCount != 2)
+            {
+                return HierarchySuccess(correlation, specification, rowCount: 1, valueCount: 1);
+            }
+
+            var command = new BuildDatabaseCommand(
+                Guid.CreateVersion7(),
+                DateTimeOffset.UtcNow,
+                correlation,
+                specification);
+            var acknowledgement = new CommandAcknowledgement(
+                Guid.CreateVersion7(),
+                DateTimeOffset.UtcNow,
+                command.MessageId,
+                CommandAcceptance.Rejected,
+                new IpcFailure(
+                    "invalid-contract",
+                    "The Database build request did not satisfy the IPC contract."));
+            var response = ProcessingHostSupervisor.CreateRejectedDatabaseBuildResponse(
+                command,
+                acknowledgement);
+            return new DatabaseClientResult(
+                Accepted: false,
+                response.Completion,
+                response.PublishedGeneration,
+                response.Failure?.Code,
+                response.Failure?.Description);
+        });
+        var coordinator = context.CreateCoordinator(client);
+        Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
+        var published = coordinator.CurrentGeneration;
+        Assert.IsNotNull(published);
+
+        Assert.IsTrue(context.Workflow.RecordDiscoveryConfigurationChanged().Accepted);
+        Assert.IsTrue(context.Configuration.SetDatabaseTagOverride("tag", "Replacement"));
+        var rejected = await coordinator.BuildAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.IsFalse(rejected.Accepted);
+        Assert.AreEqual(WorkflowRejectionCode.OperationFailed, rejected.Rejection?.Code);
+        Assert.AreEqual(
+            "The Database build request did not satisfy the IPC contract.",
+            rejected.Rejection?.Reason);
+        Assert.IsNull(context.Workflow.Current.ActiveOperation);
+        Assert.AreEqual(WorkflowOperationState.Failed, context.Workflow.Current.LatestOperation?.State);
+        Assert.AreSame(published, coordinator.CurrentGeneration);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, context.Workflow.Current.Database);
+
+        var subsequent = await coordinator.BuildAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.IsTrue(subsequent.Accepted);
+        Assert.AreEqual(3, callCount);
+        Assert.AreNotSame(published, coordinator.CurrentGeneration);
+        Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Database);
     }
 
     [TestMethod]
@@ -779,8 +842,13 @@ public sealed class DatabaseBuildCoordinatorTests
         await WaitForAsync(() => viewModel.Records.FirstOrDefault()?.Cells[0].DisplayValue == "first");
         Assert.HasCount(2, viewModel.Datasets);
         CollectionAssert.AreEqual(
-            new[] { "Set 1", "Set 2" },
+            viewModel.CaptureExportConfiguration().Workbooks
+                .SelectMany(workbook => workbook.Worksheets)
+                .OrderBy(worksheet => worksheet.Order)
+                .Select(worksheet => worksheet.Name)
+                .ToArray(),
             viewModel.Datasets.Select(dataset => dataset.DisplayName).ToArray());
+        var retainedSecondWorksheetName = viewModel.Datasets[1].DisplayName;
         var membershipsBeforeTabSwitch = sources.Items
             .ToDictionary(source => source.SourceId, source => source.SourceSetId);
         var firstColumn = viewModel.Columns.Single();
@@ -812,7 +880,9 @@ public sealed class DatabaseBuildCoordinatorTests
 
         Assert.IsTrue(loading.RenameSourceSet(sets[1].SourceSetId, "Renamed Set").Accepted);
         Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Database);
-        Assert.IsTrue(viewModel.Datasets.Any(dataset => dataset.DisplayName == "Set 2"));
+        Assert.IsTrue(viewModel.Datasets.Any(dataset =>
+            dataset.Summary.SourceSetId == sets[1].SourceSetId
+            && dataset.DisplayName == retainedSecondWorksheetName));
         var rerun = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
         Assert.IsTrue(rerun.Accepted);
         Assert.IsTrue(workflow.CompleteOperation(
@@ -821,7 +891,8 @@ public sealed class DatabaseBuildCoordinatorTests
         Assert.IsTrue((await coordinator.BuildAsync()).Accepted);
         await WaitForAsync(() => viewModel.Datasets.Any(dataset =>
             dataset.Summary.SourceSetId == sets[1].SourceSetId
-            && dataset.DisplayName == "Renamed Set"));
+            && dataset.Summary.DisplayName == "Renamed Set"
+            && dataset.DisplayName == retainedSecondWorksheetName));
         CollectionAssert.AreEquivalent(
             membershipsBeforeTabSwitch.ToArray(),
             sources.Items.Select(source => new KeyValuePair<SourceId, SourceSetId>(

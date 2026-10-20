@@ -19,6 +19,41 @@ namespace CIA.Desktop.Tests;
 public sealed class DiscoveryWorkspaceViewModelTests
 {
     [TestMethod]
+    [TestCategory("Spr224")]
+    public void SourceFileWidthWarningBeginsAboveFiveHundredAndStaysSourceLocal()
+    {
+        var sourceSetId = SourceSetId.CreateNew();
+        var familyId = new RowFamilyId(
+            sourceSetId,
+            RowFamilyKind.SourceFileProjection,
+            "/__cia_source_file__");
+        var atLimit = new DiscoveryOutputPreviewGroup(
+            familyId,
+            [],
+            [],
+            IsTruncated: false,
+            TotalColumnCount: 500,
+            ColumnStartIndex: 0);
+        var aboveLimit = atLimit with { TotalColumnCount = 501 };
+
+        var allowed = DiscoveryWorkspaceViewModel.CreateSourceFilePreviewStatus(atLimit);
+        var warned = DiscoveryWorkspaceViewModel.CreateSourceFilePreviewStatus(aboveLimit);
+
+        Assert.DoesNotContain("warning", allowed, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Source-file sample", allowed, StringComparison.Ordinal);
+        Assert.Contains("Other files may add columns", allowed, StringComparison.Ordinal);
+        Assert.Contains("not the published Database", allowed, StringComparison.Ordinal);
+        Assert.Contains("warning", warned, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("exceeds 500", warned, StringComparison.Ordinal);
+
+        var current = DiscoveryWorkspaceViewModel.CreateSourceFilePreviewStatus(
+            atLimit,
+            DiscoveryOutputPreviewSchemaState.CurrentPublishedDatabase);
+        Assert.Contains("Current published schema", current, StringComparison.Ordinal);
+        Assert.DoesNotContain("sample", current, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [TestMethod]
     public void ThreeExactValueIdentitiesInOneFamilyProduceThreeProjectedFields()
     {
         var sourceSetId = SourceSetId.CreateNew();
@@ -395,6 +430,115 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.IsFalse(changed.IsEnabled);
         Assert.AreEqual(1, client.CallCount);
         Assert.IsNull(workflow.Current.ActiveOperation);
+    }
+
+    [TestMethod]
+    [TestCategory("Spr224")]
+    public async Task SourceFileModeToggleStalesDownstreamWithoutBuildingAndRestoresFamilyPlan()
+    {
+        var source = CreateSource("source-file-mode.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        source = sourceSet.CreateIncludedReadySnapshot().Single();
+        var root = new RowFamilyDefinition(
+            new RowFamilyId(source.SourceSetId, RowFamilyKind.Root, "/root"),
+            null);
+        var repeated = new RowFamilyDefinition(
+            new RowFamilyId(source.SourceSetId, RowFamilyKind.Repeated, "/root/book"),
+            root.Id);
+        var rootInformation = CreateDetailedInformation(
+            source.SourceSetId,
+            source.SourceId,
+            "/root/title",
+            "title",
+            SourceValueCandidateKind.Element,
+            "/root/title") with
+        { RowFamilyId = root.Id };
+        var repeatedInformation = CreateDetailedInformation(
+            source.SourceSetId,
+            source.SourceId,
+            "/root/book/name",
+            "name",
+            SourceValueCandidateKind.Element,
+            "/root/book/name") with
+        { RowFamilyId = repeated.Id };
+        var client = new StubDiscoveryClient(
+            (correlation, sources) => new DiscoveryClientResult(
+                true,
+                [rootInformation, repeatedInformation],
+                [],
+                OperationCompletion.FromCompletedItems(
+                    correlation,
+                    sources.Select(item => OperationItemStatus.ProcessedSuccessfully(
+                        item.SourceId.ToString()))),
+                null,
+                null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog([root, repeated])
+            });
+        var configuration = new ActiveDiscoveryConfiguration();
+        var outputPlan = new ActiveDiscoveryOutputPlan();
+        var databaseCoordinator = new DatabaseBuildCoordinator(
+            configuration,
+            sourceSet,
+            workflow,
+            new NoOpDatabaseClient(),
+            NullLogger<DatabaseBuildCoordinator>.Instance,
+            outputPlan);
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            client,
+            configuration,
+            sourceSet,
+            workflow,
+            databaseCoordinator,
+            outputPlan: outputPlan);
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        await AwaitSelectedOccurrenceAsync(viewModel);
+        foreach (var information in viewModel.Information)
+        {
+            viewModel.ToggleSelectionCommand.Execute(information);
+        }
+
+        var familyPlan = outputPlan.Current.OutputSets.ToArray();
+        var database = await workflow.BeginOperationAsync(WorkflowOperationKind.DatabaseBuild);
+        workflow.CompleteOperation(database.Operation!.OperationId, OperationOutcome.CompletedSuccessfully);
+        var extraction = await workflow.BeginOperationAsync(WorkflowOperationKind.Extraction);
+        workflow.CompleteOperation(extraction.Operation!.OperationId, OperationOutcome.CompletedSuccessfully);
+
+        viewModel.OutputSetGroups.Single().OneRowPerSourceFile = true;
+
+        Assert.AreEqual(WorkflowArtifactStatus.Current, workflow.Current.Discovery);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Database);
+        Assert.AreEqual(WorkflowArtifactStatus.Stale, workflow.Current.Extraction);
+        Assert.IsNull(workflow.Current.ActiveOperation);
+        var sourcePlan = outputPlan.Current.ParentPlans.Single();
+        Assert.AreEqual(
+            DiscoveryOutputProjectionMode.OneRowPerSourceFile,
+            sourcePlan.ProjectionMode);
+        Assert.HasCount(1, sourcePlan.OutputSets);
+        var specification = databaseCoordinator.CreateBuildSpecification();
+        var projectedDataset = specification.Datasets.Single();
+        Assert.AreEqual(
+            DiscoveryOutputProjectionMode.OneRowPerSourceFile,
+            projectedDataset.ProjectionMode);
+        Assert.AreEqual(
+            RowFamilyKind.SourceFileProjection,
+            projectedDataset.RowFamilies.Single().Id.Kind);
+        CollectionAssert.AreEquivalent(
+            new[] { root.Id, repeated.Id },
+            projectedDataset.Fields.Select(field => field.OriginatingRowFamilyId).ToArray());
+        Assert.AreEqual(1, client.CallCount);
+
+        viewModel.OutputSetGroups.Single().OneRowPerSourceFile = false;
+
+        Assert.AreEqual(
+            DiscoveryOutputProjectionMode.PreserveRelationships,
+            outputPlan.Current.ParentPlans.Single().ProjectionMode);
+        CollectionAssert.AreEquivalent(
+            familyPlan.Select(set => set.OutputSetId).ToArray(),
+            outputPlan.Current.OutputSets.Select(set => set.OutputSetId).ToArray());
+        Assert.AreEqual(1, client.CallCount);
     }
 
     [TestMethod]
@@ -1159,11 +1303,154 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual("2 / 2 selected", viewModel.SelectionSummary);
         StringAssert.Contains(viewModel.SelectionFanoutSummary, "2 detailed fields");
 
+        viewModel.ShowOnlyDirectSelections = true;
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreSame(structuralScope, viewModel.Information[0]);
+        viewModel.ShowOnlyDirectSelections = false;
+
         var specification = databaseCoordinator.CreateBuildSpecification();
         Assert.HasCount(2, specification.Datasets.Single().Fields);
         Assert.IsFalse(specification.Datasets.Single().Fields
             .SelectMany(field => field.DetailedIdentities)
             .Any(identity => identity.CandidateKind == SourceValueCandidateKind.ElementScope));
+    }
+
+    [TestMethod]
+    public async Task ShowOnlyDirectSelectionsUsesUserIntentInsteadOfComputedTickState()
+    {
+        var source = CreateSource("direct-selection-filter.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        source = sourceSet.CreateIncludedReadySnapshot().Single();
+        var discovered = new[]
+        {
+            CreateDetailedInformation(
+                source,
+                "/tem/toolst/tool/toolnbr",
+                "toolnbr",
+                SourceValueCandidateKind.ElementScope,
+                "/tem/toolst/tool/toolnbr"),
+            CreateDetailedInformation(
+                source,
+                "/tem/toolst/tool/toolnbr/mfr",
+                "mfr",
+                SourceValueCandidateKind.Element,
+                "/tem/toolst/tool/toolnbr/mfr"),
+            CreateDetailedInformation(
+                source,
+                "/tem/toolst/tool/toolnbr/pnr",
+                "pnr",
+                SourceValueCandidateKind.Element,
+                "/tem/toolst/tool/toolnbr/pnr")
+        };
+        var configuration = new ActiveDiscoveryConfiguration();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            new StubDiscoveryClient((correlation, sources) =>
+                Accept(correlation, sources, discovered)),
+            configuration,
+            sourceSet,
+            workflow,
+            new DatabaseBuildCoordinator(
+                configuration,
+                sourceSet,
+                workflow,
+                new NoOpDatabaseClient(),
+                NullLogger<DatabaseBuildCoordinator>.Instance));
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var scope = viewModel.Information.Single(item => item.InformationType == "toolnbr");
+        var manufacturer = viewModel.Information.Single(item => item.InformationType == "mfr");
+        var partNumber = viewModel.Information.Single(item => item.InformationType == "pnr");
+        scope.IsExpanded = true;
+
+        viewModel.ToggleSelectionCommand.Execute(manufacturer);
+        viewModel.ToggleSelectionCommand.Execute(partNumber);
+
+        Assert.IsTrue(scope.SelectionState ?? false, "The scope becomes fully selected by propagation.");
+        Assert.IsTrue(manufacturer.SelectionState ?? false);
+        Assert.IsTrue(partNumber.SelectionState ?? false);
+        var selectedIdentities = configuration.Current.Items
+            .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected)
+            .Select(item => item.Identity)
+            .ToHashSet();
+        Assert.HasCount(2, selectedIdentities);
+
+        viewModel.ShowOnlySelected = true;
+        Assert.HasCount(3, viewModel.Information);
+        viewModel.ShowOnlyDirectSelections = true;
+
+        Assert.HasCount(2, viewModel.Information);
+        CollectionAssert.AreEquivalent(
+            new[] { "mfr", "pnr" },
+            viewModel.Information.Select(item => item.InformationType).ToArray());
+        CollectionAssert.DoesNotContain(viewModel.Information.ToArray(), scope);
+        CollectionAssert.AreEquivalent(
+            selectedIdentities.ToArray(),
+            configuration.Current.Items
+                .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected)
+                .Select(item => item.Identity)
+                .ToArray());
+
+        viewModel.ToggleSelectionCommand.Execute(manufacturer);
+
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreSame(partNumber, viewModel.Information[0]);
+        Assert.IsNull(scope.SelectionState, "The scope becomes partial after one direct field is removed.");
+        Assert.IsTrue(scope.IsExpanded, "Visibility filters must not collapse structural context.");
+
+        viewModel.ShowOnlyDirectSelections = false;
+        Assert.HasCount(2, viewModel.Information);
+        CollectionAssert.Contains(viewModel.Information.ToArray(), scope);
+        CollectionAssert.Contains(viewModel.Information.ToArray(), partNumber);
+    }
+
+    [TestMethod]
+    public async Task DirectSelectionFilterIncludesExplicitDetailedSelectionWhenParentIsPartial()
+    {
+        var source = CreateSource("direct-partial-filter.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        source = sourceSet.CreateIncludedReadySnapshot().Single();
+        var discovered = new[]
+        {
+            CreateDetailedInformation(
+                source,
+                "/root/one/name",
+                "name",
+                SourceValueCandidateKind.Element,
+                "/root/one/name"),
+            CreateDetailedInformation(
+                source,
+                "/root/two/name",
+                "name",
+                SourceValueCandidateKind.Element,
+                "/root/two/name")
+        };
+        var configuration = new ActiveDiscoveryConfiguration();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            new StubDiscoveryClient((correlation, sources) =>
+                Accept(correlation, sources, discovered)),
+            configuration,
+            sourceSet,
+            workflow,
+            new DatabaseBuildCoordinator(
+                configuration,
+                sourceSet,
+                workflow,
+                new NoOpDatabaseClient(),
+                NullLogger<DatabaseBuildCoordinator>.Instance));
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var parent = viewModel.Information.Single();
+        parent.IsExpanded = true;
+        viewModel.ToggleSelectionCommand.Execute(parent.Children[0]);
+
+        Assert.IsNull(parent.SelectionState);
+        viewModel.ShowOnlyDirectSelections = true;
+
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreSame(parent, viewModel.Information[0]);
+        Assert.IsTrue(parent.IsExpanded);
     }
 
     [TestMethod]
@@ -1232,7 +1519,12 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.IsTrue(parent.Children[0].IsSelected);
         Assert.IsTrue(blacklistedChild.IsBlacklisted);
 
+        viewModel.ShowOnlyDirectSelections = true;
+        Assert.HasCount(1, viewModel.Information);
+
         viewModel.DeselectVisibleCommand.Execute(null);
+        Assert.IsEmpty(viewModel.Information);
+        viewModel.ShowOnlyDirectSelections = false;
         Assert.IsFalse(parent.SelectionState ?? true);
         Assert.IsFalse(parent.Children[0].IsSelected);
         Assert.IsTrue(blacklistedChild.IsBlacklisted);
@@ -1252,6 +1544,9 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.IsNull(reconstructed.SelectionState);
         Assert.IsTrue(reconstructed.Children.Single(child =>
             child.StructuralPath == "/root/seller/name").IsBlacklisted);
+        viewModel.ShowOnlyDirectSelections = true;
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreSame(reconstructed, viewModel.Information[0]);
     }
 
     [TestMethod]

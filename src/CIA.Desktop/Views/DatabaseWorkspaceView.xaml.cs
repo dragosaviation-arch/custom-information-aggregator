@@ -1,7 +1,9 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using CIA.Desktop.Presentation;
 
 namespace CIA.Desktop.Views;
@@ -12,11 +14,19 @@ public partial class DatabaseWorkspaceView : UserControl
     private const double DatabaseReviewRowHeight = 30;
     private bool _isCompact;
     private bool _showExcelExport;
+    private bool _synchronizingReviewScroll;
+    private ScrollViewer? _databaseReviewScrollViewer;
     private DatabaseColumnWidthFeedback? _columnResize;
+    private readonly DispatcherTimer _reviewToolTipRestoreTimer;
 
     public DatabaseWorkspaceView()
     {
         InitializeComponent();
+        _reviewToolTipRestoreTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _reviewToolTipRestoreTimer.Tick += OnReviewToolTipRestoreTimerTick;
     }
 
     private void OnViewLoaded(object sender, RoutedEventArgs e)
@@ -29,9 +39,69 @@ public partial class DatabaseWorkspaceView : UserControl
         ApplyResponsiveLayout();
     }
 
+    private void OnViewUnloaded(object sender, RoutedEventArgs e)
+    {
+        _reviewToolTipRestoreTimer.Stop();
+        ToolTipService.SetIsEnabled(DatabaseReviewRows, true);
+    }
+
     private void OnColumnsClick(object sender, RoutedEventArgs e)
     {
         ColumnsPopup.IsOpen = !ColumnsPopup.IsOpen;
+    }
+
+    private void OnColumnNameEditKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: DatabaseColumnChoicePresentation choice })
+        {
+            return;
+        }
+
+        if (e.Key == Key.Enter)
+        {
+            choice.CommitRename();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            choice.CancelRename();
+            e.Handled = true;
+        }
+    }
+
+    private void OnColumnNameEditLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is TextBox { DataContext: DatabaseColumnChoicePresentation choice })
+        {
+            choice.CommitRename();
+        }
+    }
+
+    private void OnWorkbookNameEditKeyDown(object sender, KeyEventArgs e)
+    {
+        if (DataContext is not DatabaseWorkspaceViewModel viewModel)
+        {
+            return;
+        }
+
+        if (e.Key == Key.Enter)
+        {
+            viewModel.CommitWorkbookRename();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            viewModel.CancelWorkbookRename();
+            e.Handled = true;
+        }
+    }
+
+    private void OnWorkbookNameEditLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (DataContext is DatabaseWorkspaceViewModel viewModel)
+        {
+            viewModel.CommitWorkbookRename();
+        }
     }
 
     private void OnExportFieldsTabClick(object sender, RoutedEventArgs e)
@@ -172,6 +242,17 @@ public partial class DatabaseWorkspaceView : UserControl
 
     private async void OnDatabaseReviewScrollChanged(object sender, ScrollChangedEventArgs e)
     {
+        var scrollViewer = sender as ScrollViewer ?? e.OriginalSource as ScrollViewer;
+        if (scrollViewer is not null)
+        {
+            _databaseReviewScrollViewer = scrollViewer;
+            SynchronizeReviewVerticalScrollBar(scrollViewer);
+            if (Math.Abs(e.VerticalChange) > double.Epsilon)
+            {
+                SuppressReviewToolTipsWhileScrolling();
+            }
+        }
+
         if (DataContext is not DatabaseWorkspaceViewModel viewModel
             || e.ViewportHeight <= 0)
         {
@@ -181,6 +262,83 @@ public partial class DatabaseWorkspaceView : UserControl
         var firstVisibleOrdinal = (int)Math.Floor(e.VerticalOffset / DatabaseReviewRowHeight) + 1;
         var visibleRowCount = (int)Math.Ceiling(e.ViewportHeight / DatabaseReviewRowHeight) + 2;
         await viewModel.EnsureReviewRowsAvailableAsync(firstVisibleOrdinal, visibleRowCount);
+    }
+
+    private void OnDatabaseReviewHorizontalScrollChanged(
+        object sender,
+        ScrollChangedEventArgs e)
+    {
+        if (Math.Abs(e.HorizontalChange) > double.Epsilon)
+        {
+            SuppressReviewToolTipsWhileScrolling();
+        }
+    }
+
+    private void SynchronizeReviewVerticalScrollBar(ScrollViewer scrollViewer)
+    {
+        _synchronizingReviewScroll = true;
+        try
+        {
+            SetIfChanged(
+                DatabaseReviewVerticalScrollBar.Maximum,
+                scrollViewer.ScrollableHeight,
+                value => DatabaseReviewVerticalScrollBar.Maximum = value);
+            SetIfChanged(
+                DatabaseReviewVerticalScrollBar.ViewportSize,
+                scrollViewer.ViewportHeight,
+                value => DatabaseReviewVerticalScrollBar.ViewportSize = value);
+            SetIfChanged(
+                DatabaseReviewVerticalScrollBar.LargeChange,
+                Math.Max(DatabaseReviewRowHeight, scrollViewer.ViewportHeight),
+                value => DatabaseReviewVerticalScrollBar.LargeChange = value);
+            SetIfChanged(
+                DatabaseReviewVerticalScrollBar.Value,
+                scrollViewer.VerticalOffset,
+                value => DatabaseReviewVerticalScrollBar.Value = value);
+            var isEnabled = scrollViewer.ScrollableHeight > 0;
+            if (DatabaseReviewVerticalScrollBar.IsEnabled != isEnabled)
+            {
+                DatabaseReviewVerticalScrollBar.IsEnabled = isEnabled;
+            }
+        }
+        finally
+        {
+            _synchronizingReviewScroll = false;
+        }
+    }
+
+    private static void SetIfChanged(double current, double next, Action<double> setter)
+    {
+        if (Math.Abs(current - next) > 0.01)
+        {
+            setter(next);
+        }
+    }
+
+    private void SuppressReviewToolTipsWhileScrolling()
+    {
+        ToolTipService.SetIsEnabled(DatabaseReviewRows, false);
+        _reviewToolTipRestoreTimer.Stop();
+        _reviewToolTipRestoreTimer.Start();
+    }
+
+    private void OnReviewToolTipRestoreTimerTick(object? sender, EventArgs e)
+    {
+        _reviewToolTipRestoreTimer.Stop();
+        if (IsLoaded)
+        {
+            ToolTipService.SetIsEnabled(DatabaseReviewRows, true);
+        }
+    }
+
+    private void OnDatabaseReviewVerticalScrollBarValueChanged(
+        object sender,
+        RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!_synchronizingReviewScroll)
+        {
+            _databaseReviewScrollViewer?.ScrollToVerticalOffset(e.NewValue);
+        }
     }
 
     private void ShowColumnSizeFeedback(DatabaseColumnWidthFeedback? feedback)

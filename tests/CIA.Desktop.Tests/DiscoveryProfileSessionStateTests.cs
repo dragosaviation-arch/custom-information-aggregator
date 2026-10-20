@@ -115,6 +115,10 @@ public sealed class DiscoveryProfileSessionStateTests
             Disposition(configuration, excluded));
         Assert.AreEqual(DiscoveryInformationDisposition.Neutral,
             Disposition(configuration, cleared));
+        viewModel.ShowOnlyDirectSelections = true;
+        Assert.HasCount(2, viewModel.Information);
+        Assert.IsTrue(viewModel.Information.All(information =>
+            string.Equals(information.InformationType, "selected", StringComparison.Ordinal)));
         CollectionAssert.AreEqual(informationBytes, File.ReadAllBytes(informationProfile.Path));
         CollectionAssert.AreEqual(blacklistBytes, File.ReadAllBytes(blacklistProfile.Path));
     }

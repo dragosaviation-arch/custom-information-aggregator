@@ -96,10 +96,48 @@ public sealed record DiscoveryOutputPreviewCellPresentation(
     bool HasConflict,
     bool IsTruncated);
 
-public sealed record DiscoveryOutputSetGroupPresentation(
-    SourceSetId ParentSourceSetId,
-    string ParentSourceSetName,
-    IReadOnlyList<DiscoveryOutputSetItemViewModel> OutputSets);
+public sealed class DiscoveryOutputSetGroupPresentation : ObservableObject
+{
+    private readonly Func<SourceSetId, bool, bool> _setOneRowPerSourceFile;
+    private bool _oneRowPerSourceFile;
+
+    public DiscoveryOutputSetGroupPresentation(
+        SourceSetId parentSourceSetId,
+        string parentSourceSetName,
+        IReadOnlyList<DiscoveryOutputSetItemViewModel> outputSets,
+        bool oneRowPerSourceFile,
+        Func<SourceSetId, bool, bool> setOneRowPerSourceFile)
+    {
+        ParentSourceSetId = parentSourceSetId;
+        ParentSourceSetName = parentSourceSetName;
+        OutputSets = outputSets;
+        _oneRowPerSourceFile = oneRowPerSourceFile;
+        _setOneRowPerSourceFile = setOneRowPerSourceFile;
+    }
+
+    public SourceSetId ParentSourceSetId { get; }
+
+    public string ParentSourceSetName { get; }
+
+    public IReadOnlyList<DiscoveryOutputSetItemViewModel> OutputSets { get; }
+
+    public bool OneRowPerSourceFile
+    {
+        get => _oneRowPerSourceFile;
+        set
+        {
+            if (_oneRowPerSourceFile == value
+                || !_setOneRowPerSourceFile(ParentSourceSetId, value))
+            {
+                OnPropertyChanged();
+                return;
+            }
+
+            _oneRowPerSourceFile = value;
+            OnPropertyChanged();
+        }
+    }
+}
 
 public sealed class DiscoveryOutputSetItemViewModel : ObservableObject
 {

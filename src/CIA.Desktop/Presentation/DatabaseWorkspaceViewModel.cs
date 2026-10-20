@@ -5,6 +5,7 @@ using System.Text;
 using CIA.Contracts.Database;
 using CIA.Contracts.Discovery;
 using CIA.Contracts.Export;
+using CIA.Contracts.Extraction;
 using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
@@ -73,7 +74,10 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         "CIA",
         "Exports");
     private bool _alwaysAskWhereToExport = true;
-    private string _workbookExportStatusText = "Choose an output folder to export the prepared workbook batch.";
+    private string _workbookExportStatusText = "Choose a destination for the workbook batch.";
+    private bool _isWorkbookNameEditing;
+    private string _workbookNameEditText = string.Empty;
+    private string? _workbookRenameValidationText;
     private int _disposed;
 
     public DatabaseWorkspaceViewModel(
@@ -147,7 +151,16 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         MoveColumnDownCommand = new RelayCommand<DatabaseColumnPresentation>(
             MoveColumnDown,
             CanMoveColumnDown);
+        MoveColumnChoiceUpCommand = new RelayCommand<DatabaseColumnChoicePresentation>(
+            choice => MoveColumnChoice(choice, -1),
+            choice => CanMoveColumnChoice(choice, -1));
+        MoveColumnChoiceDownCommand = new RelayCommand<DatabaseColumnChoicePresentation>(
+            choice => MoveColumnChoice(choice, 1),
+            choice => CanMoveColumnChoice(choice, 1));
         CreateExportWorkbookCommand = new RelayCommand(CreateExportWorkbook, HasSelectedDataset);
+        BeginWorkbookRenameCommand = new RelayCommand(BeginWorkbookRename, HasSelectedDataset);
+        CommitWorkbookRenameCommand = new RelayCommand(CommitWorkbookRename, HasSelectedDataset);
+        CancelWorkbookRenameCommand = new RelayCommand(CancelWorkbookRename);
         MoveWorksheetUpCommand = new RelayCommand(
             () => MoveWorksheet(-1),
             () => CanMoveWorksheet(-1));
@@ -160,7 +173,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             PrepareForExportAsync,
             CanPrepareForExport);
         BrowseOutputFolderCommand = new RelayCommand(
-            BrowseOutputFolder,
+            BrowseExportDestination,
             () => _exportFolderPicker is not null);
         ExportToExcelCommand = new AsyncRelayCommand(
             ExportToExcelAsync,
@@ -224,7 +237,17 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     public IRelayCommand<DatabaseColumnPresentation> MoveColumnDownCommand { get; }
 
+    public IRelayCommand<DatabaseColumnChoicePresentation> MoveColumnChoiceUpCommand { get; }
+
+    public IRelayCommand<DatabaseColumnChoicePresentation> MoveColumnChoiceDownCommand { get; }
+
     public IRelayCommand CreateExportWorkbookCommand { get; }
+
+    public IRelayCommand BeginWorkbookRenameCommand { get; }
+
+    public IRelayCommand CommitWorkbookRenameCommand { get; }
+
+    public IRelayCommand CancelWorkbookRenameCommand { get; }
 
     public IRelayCommand MoveWorksheetUpCommand { get; }
 
@@ -257,6 +280,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             }
 
             SynchronizeSelectedDatabaseColumnState();
+            CancelWorkbookRename();
             if (!SetProperty(ref _selectedDataset, value) || value is null || _publishedGeneration is null)
             {
                 return;
@@ -476,6 +500,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             {
                 _exportRouting.AssignWorkbook(set.RowFamilyId, value.WorkbookDefinitionId);
             }
+            CancelWorkbookRename();
             NotifyExportRoutingPropertiesChanged();
         }
     }
@@ -492,6 +517,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             }
 
             set.WorksheetName = value;
+            RefreshDatasetDisplayNames();
             NotifyExportRoutingPropertiesChanged();
         }
     }
@@ -499,6 +525,49 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     public string WorksheetOrderText => SelectedExportSet is { } set
         ? $"Worksheet {set.WorksheetOrder:N0}"
         : "No worksheet";
+
+    public bool IsWorkbookNameEditing
+    {
+        get => _isWorkbookNameEditing;
+        private set => SetProperty(ref _isWorkbookNameEditing, value);
+    }
+
+    public string WorkbookNameEditText
+    {
+        get => _workbookNameEditText;
+        set => SetProperty(ref _workbookNameEditText, value ?? string.Empty);
+    }
+
+    public string? WorkbookRenameValidationText
+    {
+        get => _workbookRenameValidationText;
+        private set => SetProperty(ref _workbookRenameValidationText, value);
+    }
+
+    public IReadOnlyList<string> ExportDestinationTargets
+    {
+        get
+        {
+            try
+            {
+                var outputDirectory = Path.TrimEndingDirectorySeparator(
+                    Path.GetFullPath(OutputFolder));
+                return CurrentExportValidation.RunnableWorkbooks
+                    .Select(runnable =>
+                    {
+                        var path = Path.Combine(outputDirectory, runnable.Workbook.FileName);
+                        return $"{(File.Exists(path) ? "Existing file" : "New file")} · {path}";
+                    })
+                    .ToArray();
+            }
+            catch (Exception exception) when (exception is ArgumentException
+                                               or NotSupportedException
+                                               or PathTooLongException)
+            {
+                return [];
+            }
+        }
+    }
 
     public bool IsExportConfigurationValid => CurrentExportValidation.IsValid;
 
@@ -652,6 +721,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _outputFolder, value ?? string.Empty))
             {
+                OnPropertyChanged(nameof(ExportDestinationTargets));
                 NotifyExportReadinessChanged();
             }
         }
@@ -660,7 +730,43 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     public bool AlwaysAskWhereToExport
     {
         get => _alwaysAskWhereToExport;
-        set => SetProperty(ref _alwaysAskWhereToExport, value);
+        set
+        {
+            if (SetProperty(ref _alwaysAskWhereToExport, value))
+            {
+                ExportToExcelCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool OpenFilesAfterExport
+    {
+        get => _settingsService?.Current.PostExportBehavior
+            == PostExportBehavior.OpenExportedFile;
+        set
+        {
+            if (_settingsService is null || value == OpenFilesAfterExport)
+            {
+                return;
+            }
+
+            var result = _settingsService.Save(_settingsService.Current with
+            {
+                PostExportBehavior = value
+                    ? PostExportBehavior.OpenExportedFile
+                    : PostExportBehavior.StatusOnly
+            });
+            if (result.Succeeded)
+            {
+                OnPropertyChanged();
+            }
+            else
+            {
+                WorkbookExportStatusText = result.FailureDescription
+                    ?? "The post-export preference could not be saved.";
+                OnPropertyChanged(nameof(OpenFilesAfterExport));
+            }
+        }
     }
 
     public string WorkbookExportStatusText
@@ -734,6 +840,51 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
             && index < _columns.Count - 1;
     }
 
+    private bool CanMoveColumnChoice(DatabaseColumnChoicePresentation? choice, int offset)
+    {
+        if (choice is null)
+        {
+            return false;
+        }
+
+        if (choice.DataColumn is { } dataColumn)
+        {
+            var index = _columns.IndexOf(dataColumn);
+            return index >= 0 && index + offset >= 0 && index + offset < _columns.Count;
+        }
+
+        if (choice.MetadataColumn is { } metadataColumn)
+        {
+            var index = _metadataFields.IndexOf(metadataColumn);
+            return index >= 0 && index + offset >= 0 && index + offset < _metadataFields.Count;
+        }
+
+        return false;
+    }
+
+    private void MoveColumnChoice(DatabaseColumnChoicePresentation? choice, int offset)
+    {
+        if (!CanMoveColumnChoice(choice, offset) || choice is null)
+        {
+            return;
+        }
+
+        if (choice.DataColumn is { } dataColumn)
+        {
+            MoveColumn(dataColumn, offset);
+        }
+        else if (choice.MetadataColumn is { } metadataColumn)
+        {
+            var current = _metadataFields.IndexOf(metadataColumn);
+            _metadataFields.Move(current, current + offset);
+            RebuildVisibleMetadataColumns();
+            SynchronizeSelectedDatabaseColumnState();
+            RefreshOutputOverrideFields();
+        }
+
+        RebuildColumnChoices();
+    }
+
     private void MoveColumnUp(DatabaseColumnPresentation? column)
     {
         if (column is not null)
@@ -767,13 +918,10 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
     private void ResetColumnLayout()
     {
+        SelectedExportSet?.ResetPresentation();
         foreach (var column in _columns)
         {
             column.ResetPresentation();
-        }
-        foreach (var choice in _columnChoices.Where(choice => choice.IsGenerated).ToArray())
-        {
-            choice.IsIncluded = true;
         }
         foreach (var metadataColumn in _metadataFields)
         {
@@ -781,6 +929,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         ReorderColumns(_publishedColumnOrder);
+        ReorderMetadataColumns(Enum.GetValues<DatabaseMetadataField>());
         UpdatePositionsAndPresentation();
         PersistDatabaseColumnWidths(_columns);
         PersistMetadataColumnWidths(_metadataFields);
@@ -792,6 +941,52 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private void ResetHeaders()
     {
         SelectedExportSet?.ResetHeaders();
+    }
+
+    private void BeginWorkbookRename()
+    {
+        if (SelectedExportWorkbook is not { } workbook)
+        {
+            return;
+        }
+
+        WorkbookNameEditText = workbook.FileName;
+        WorkbookRenameValidationText = null;
+        IsWorkbookNameEditing = true;
+    }
+
+    internal void CommitWorkbookRename()
+    {
+        if (!IsWorkbookNameEditing || SelectedExportWorkbook is not { } workbook)
+        {
+            return;
+        }
+
+        var proposed = WorkbookNameEditText.Trim();
+        if (!ExportConfigurationValidator.IsValidWorkbookFileName(proposed))
+        {
+            WorkbookRenameValidationText = "Enter a valid .xlsx workbook filename.";
+            return;
+        }
+
+        if (WorkbookDefinitions.Any(candidate =>
+                candidate.WorkbookDefinitionId != workbook.WorkbookDefinitionId
+                && string.Equals(candidate.FileName, proposed, StringComparison.OrdinalIgnoreCase)))
+        {
+            WorkbookRenameValidationText = "Workbook filenames must be unique in this export batch.";
+            return;
+        }
+
+        workbook.FileName = proposed;
+        WorkbookRenameValidationText = null;
+        IsWorkbookNameEditing = false;
+    }
+
+    internal void CancelWorkbookRename()
+    {
+        WorkbookRenameValidationText = null;
+        IsWorkbookNameEditing = false;
+        WorkbookNameEditText = SelectedExportWorkbook?.FileName ?? string.Empty;
     }
 
     private void CreateExportWorkbook()
@@ -918,6 +1113,35 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void ReorderMetadataColumns(IEnumerable<DatabaseMetadataField> orderedFields)
+    {
+        var byField = _metadataFields.ToDictionary(field => field.Field);
+        _metadataFields.Clear();
+        foreach (var field in orderedFields)
+        {
+            if (byField.TryGetValue(field, out var presentation))
+            {
+                _metadataFields.Add(presentation);
+            }
+        }
+    }
+
+    private void RefreshDatasetDisplayNames()
+    {
+        foreach (var dataset in _datasets)
+        {
+            var route = dataset.Summary.OutputSetId is { } outputSetId
+                ? _exportRouting.SourceSets.SingleOrDefault(candidate =>
+                    candidate.OutputSetId == outputSetId)
+                : ReferenceEquals(dataset, SelectedDataset) && SelectedRowFamily is { } family
+                    ? _exportRouting.SourceSets.SingleOrDefault(candidate =>
+                        candidate.RowFamilyId == family.Summary.Id)
+                    : _exportRouting.SourceSets.FirstOrDefault(candidate =>
+                        candidate.SourceSetId == dataset.Summary.SourceSetId);
+            dataset.SetDisplayName(route?.WorksheetName ?? dataset.Summary.DisplayName);
+        }
+    }
+
     private void UpdatePositionsAndPresentation()
     {
         for (var index = 0; index < _columns.Count; index++)
@@ -966,6 +1190,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     {
         DispatchToUi(() =>
         {
+            OnPropertyChanged(nameof(ExportDestinationTargets));
             if (_synchronizingDatabaseColumnState)
             {
                 NotifyExportRoutingPropertiesChanged();
@@ -986,11 +1211,15 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
     private void NotifyExportRoutingPropertiesChanged()
     {
         NotifyExportConfigurationChanged();
+        RefreshDatasetDisplayNames();
         OnPropertyChanged(nameof(IsSelectedSetExportEnabled));
         OnPropertyChanged(nameof(SelectedExportWorkbook));
         OnPropertyChanged(nameof(SelectedWorksheetName));
         OnPropertyChanged(nameof(WorksheetOrderText));
+        OnPropertyChanged(nameof(ExportDestinationTargets));
         CreateExportWorkbookCommand.NotifyCanExecuteChanged();
+        BeginWorkbookRenameCommand.NotifyCanExecuteChanged();
+        CommitWorkbookRenameCommand.NotifyCanExecuteChanged();
         MoveWorksheetUpCommand.NotifyCanExecuteChanged();
         MoveWorksheetDownCommand.NotifyCanExecuteChanged();
         ResetHeadersCommand.NotifyCanExecuteChanged();
@@ -1318,7 +1547,9 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         var columns = family.Columns.Select(column =>
         {
             var mappings = mappingsByKey[column.Identity.FieldKey];
-            var header = column.Identity.RepeatCoordinates.Coordinates.Count == 0
+            var header = family.Id.Kind == RowFamilyKind.SourceFileProjection
+                ? column.EffectiveName
+                : column.Identity.RepeatCoordinates.Coordinates.Count == 0
                 ? column.EffectiveName
                 : $"{column.EffectiveName} {column.Identity.RepeatCoordinates}";
             return new DatabaseColumnMapping(
@@ -1346,14 +1577,19 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     CreateColumnIdentity(field.DatabaseColumnIdentity)));
                 foreach (var column in _columns)
                 {
-                    column.IsVisible = set.Fields.Single(field =>
+                    var exportField = set.Fields.Single(field =>
                         CreateColumnIdentity(field.DatabaseColumnIdentity)
-                            == column.MappingIdentity).IsExported;
+                            == column.MappingIdentity);
+                    column.IsVisible = exportField.IsExported;
+                    column.SetDisplayName(exportField.ExcelHeader);
                 }
+                ReorderMetadataColumns(set.MetadataFields.Select(field => field.MetadataField));
                 foreach (var metadata in _metadataFields)
                 {
-                    metadata.IsVisible = set.MetadataFields.Single(field =>
-                        field.MetadataField == metadata.Field).IsExported;
+                    var exportField = set.MetadataFields.Single(field =>
+                        field.MetadataField == metadata.Field);
+                    metadata.IsVisible = exportField.IsExported;
+                    metadata.SetDisplayName(exportField.ExcelHeader);
                 }
             }
             finally
@@ -1366,6 +1602,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         RebuildVisibleMetadataColumns();
         RefreshOutputOverrideFields();
         RebuildColumnChoices();
+        RefreshDatasetDisplayNames();
         NotifyExportRoutingPropertiesChanged();
     }
 
@@ -1413,9 +1650,10 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 fieldsByIdentity[column.MappingIdentity].DatabaseColumnIdentity,
                 column.IsVisible))
             .ToArray();
-        var metadata = _metadataFields.Select(field => new DatabaseExportMetadataState(
+        var metadata = _metadataFields.Select((field, index) => new DatabaseExportMetadataState(
             field.Field,
-            field.IsVisible)).ToArray();
+            field.IsVisible,
+            index)).ToArray();
 
         _synchronizingDatabaseColumnState = true;
         try
@@ -1442,14 +1680,15 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
             column.IsVisible = exportField.IsExported;
             _columnChoices.Add(new DatabaseColumnChoicePresentation(
-                column.DatabaseField,
+                exportField,
                 "Generated",
                 isIncluded: () => column.IsVisible,
                 setIncluded: value =>
                 {
                     column.IsVisible = value;
                 },
-                column));
+                column,
+                metadataColumn: null));
         }
 
         foreach (var metadata in _metadataFields)
@@ -1463,17 +1702,20 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
             metadata.IsVisible = exportField.IsExported;
             _columnChoices.Add(new DatabaseColumnChoicePresentation(
-                metadata.DisplayName,
+                exportField,
                 "Metadata",
                 isIncluded: () => metadata.IsVisible,
                 setIncluded: value =>
                 {
                     metadata.IsVisible = value;
                 },
-                dataColumn: null));
+                dataColumn: null,
+                metadata));
         }
 
         OnPropertyChanged(nameof(ColumnCountText));
+        MoveColumnChoiceUpCommand.NotifyCanExecuteChanged();
+        MoveColumnChoiceDownCommand.NotifyCanExecuteChanged();
     }
 
     private bool CanPrepareForExport()
@@ -1489,15 +1731,196 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void BrowseOutputFolder()
+    private void BrowseExportDestination()
     {
-        var selected = _exportFolderPicker?.Browse(OutputFolder);
-        if (!string.IsNullOrWhiteSpace(selected))
+        var selectedFolder = _exportFolderPicker?.Browse(OutputFolder);
+        if (string.IsNullOrWhiteSpace(selectedFolder))
         {
-            OutputFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selected));
-            WorkbookExportStatusText = RememberOutputFolder()
-                ? "Output folder selected and remembered."
-                : "Output folder selected for this session.";
+            WorkbookExportStatusText = "Destination unchanged.";
+            return;
+        }
+
+        OutputFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selectedFolder));
+        WorkbookExportStatusText = RememberOutputFolder()
+            ? "Export destination selected and remembered."
+            : "Export destination selected for this session.";
+    }
+
+    private bool TryChooseDestinationForExport()
+    {
+        if (!AlwaysAskWhereToExport)
+        {
+            return true;
+        }
+
+        if (_exportFolderPicker is null)
+        {
+            return false;
+        }
+
+        var validation = CurrentExportValidation;
+        if (!validation.IsValid || validation.RunnableWorkbooks.Count == 0)
+        {
+            WorkbookExportStatusText = validation.Failures.FirstOrDefault()?.Description
+                ?? "Enable at least one workbook before exporting.";
+            return false;
+        }
+
+        var currentDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(OutputFolder));
+        if (validation.RunnableWorkbooks.Count == 1)
+        {
+            var runnable = validation.RunnableWorkbooks[0];
+            var selectedPath = _exportFolderPicker.BrowseSingleWorkbook(
+                currentDirectory,
+                runnable.Workbook.FileName);
+            if (string.IsNullOrWhiteSpace(selectedPath))
+            {
+                WorkbookExportStatusText =
+                    "Export cancelled; the destination is unchanged and no file was written.";
+                return false;
+            }
+
+            var fullPath = Path.GetFullPath(selectedPath);
+            var selectedFileName = Path.GetFileName(fullPath);
+            if (!ExportConfigurationValidator.IsValidWorkbookFileName(selectedFileName))
+            {
+                WorkbookExportStatusText = "Choose a valid .xlsx workbook filename.";
+                return false;
+            }
+
+            OutputFolder = Path.GetDirectoryName(fullPath)!;
+            WorkbookDefinitions.Single(workbook =>
+                workbook.WorkbookDefinitionId == runnable.Workbook.WorkbookDefinitionId).FileName =
+                selectedFileName;
+        }
+        else
+        {
+            var selectedFolder = _exportFolderPicker.Browse(currentDirectory);
+            if (string.IsNullOrWhiteSpace(selectedFolder))
+            {
+                WorkbookExportStatusText =
+                    "Export cancelled; the destination is unchanged and no file was written.";
+                return false;
+            }
+
+            OutputFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selectedFolder));
+        }
+
+        RememberOutputFolder();
+        return true;
+    }
+
+    private bool TryCreatePublicationPlan(
+        ExtractionResultSummary extractionResult,
+        Dictionary<WorkbookDefinitionId, string> overwriteAuthorizations,
+        out WorkbookPublicationPlan? publicationPlan,
+        out ExportConfigurationSnapshot? configuration)
+    {
+        publicationPlan = null;
+        configuration = null;
+        if (_workbookCollisionResolver is null)
+        {
+            return false;
+        }
+
+        var outputDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(OutputFolder));
+        while (true)
+        {
+            configuration = CaptureExportConfiguration();
+            var validation = ExportConfigurationValidator.Validate(configuration, extractionResult);
+            if (!validation.IsValid || validation.RunnableWorkbooks.Count == 0)
+            {
+                WorkbookExportStatusText = validation.Failures.FirstOrDefault()?.Description
+                    ?? "No workbook is ready for export.";
+                return false;
+            }
+
+            var targets = validation.RunnableWorkbooks.Select(runnable =>
+            {
+                var finalPath = Path.Combine(outputDirectory, runnable.Workbook.FileName);
+                return new WorkbookCollisionTarget(
+                    runnable.Workbook.WorkbookDefinitionId,
+                    runnable.Workbook.FileName,
+                    finalPath,
+                    File.Exists(finalPath));
+            }).ToArray();
+            var unresolved = targets.Where(target =>
+                target.Exists
+                && (!overwriteAuthorizations.TryGetValue(
+                        target.WorkbookDefinitionId,
+                        out var authorizedPath)
+                    || !string.Equals(
+                        authorizedPath,
+                        target.FinalPath,
+                        StringComparison.OrdinalIgnoreCase))).ToArray();
+            if (unresolved.Length == 0)
+            {
+                publicationPlan = new WorkbookPublicationPlan(
+                    outputDirectory,
+                    targets.Select(target => new WorkbookPublicationTarget(
+                        target.WorkbookDefinitionId,
+                        target.FinalPath,
+                        overwriteAuthorizations.TryGetValue(
+                                target.WorkbookDefinitionId,
+                                out var authorizedPath)
+                            && string.Equals(
+                                authorizedPath,
+                                target.FinalPath,
+                                StringComparison.OrdinalIgnoreCase)
+                                ? WorkbookPublicationDisposition.OverwriteExisting
+                                : WorkbookPublicationDisposition.CreateNew)).ToArray());
+                return true;
+            }
+
+            var resolution = _workbookCollisionResolver.Resolve(
+                new WorkbookCollisionResolutionRequest(
+                    outputDirectory,
+                    unresolved,
+                    configuration.Workbooks
+                        .Where(workbook => unresolved.All(target =>
+                            target.WorkbookDefinitionId != workbook.WorkbookDefinitionId))
+                        .Select(workbook => workbook.FileName)
+                        .ToArray()));
+            if (resolution is null || resolution.Decisions.Any(decision =>
+                    decision.Action == WorkbookCollisionAction.Cancel))
+            {
+                WorkbookExportStatusText = "Export cancelled; no file was written.";
+                return false;
+            }
+
+            var decisionsById = resolution.Decisions.ToDictionary(decision =>
+                decision.WorkbookDefinitionId);
+            if (decisionsById.Count != unresolved.Length
+                || unresolved.Any(target => !decisionsById.ContainsKey(target.WorkbookDefinitionId)))
+            {
+                WorkbookExportStatusText = "Every colliding workbook requires an explicit decision.";
+                return false;
+            }
+
+            foreach (var collision in unresolved)
+            {
+                var decision = decisionsById[collision.WorkbookDefinitionId];
+                if (decision.Action == WorkbookCollisionAction.Overwrite)
+                {
+                    overwriteAuthorizations[collision.WorkbookDefinitionId] = collision.FinalPath;
+                    continue;
+                }
+
+                var differentName = decision.DifferentFileName ?? string.Empty;
+                if (decision.Action != WorkbookCollisionAction.DifferentName
+                    || !ExportConfigurationValidator.IsValidWorkbookFileName(differentName)
+                    || string.Equals(differentName, collision.FileName, StringComparison.OrdinalIgnoreCase))
+                {
+                    WorkbookExportStatusText =
+                        "A different workbook name must be valid, unique, and changed.";
+                    return false;
+                }
+
+                WorkbookDefinitions.Single(workbook =>
+                    workbook.WorkbookDefinitionId == collision.WorkbookDefinitionId).FileName =
+                    differentName;
+                overwriteAuthorizations.Remove(collision.WorkbookDefinitionId);
+            }
         }
     }
 
@@ -1540,6 +1963,11 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
         {
             WorkbookExportStatusText = initialValidation.Failures.FirstOrDefault()?.Description
                 ?? "At least one value field must be included for export.";
+            return;
+        }
+
+        if (!TryChooseDestinationForExport())
+        {
             return;
         }
 
@@ -1591,150 +2019,35 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
 
         var extractionResult = _extractionCoordinator.CurrentResult!;
 
-        if (AlwaysAskWhereToExport)
-        {
-            var selected = _exportFolderPicker?.Browse(OutputFolder);
-            if (string.IsNullOrWhiteSpace(selected))
-            {
-                WorkbookExportStatusText = "Export cancelled before processing started.";
-                return;
-            }
-
-            OutputFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(selected));
-            RememberOutputFolder();
-        }
-
         if (!IsExportAvailable)
         {
             WorkbookExportStatusText = "The prepared Extraction Result, export configuration, and output folder must all be ready.";
             return;
         }
 
-        var resolvedDirectory = Path.TrimEndingDirectorySeparator(
-            Path.GetFullPath(OutputFolder));
         var overwriteAuthorizations = new Dictionary<WorkbookDefinitionId, string>();
-        WorkbookPublicationPlan publicationPlan;
-        ExportConfigurationSnapshot configuration;
-        while (true)
+        if (!TryCreatePublicationPlan(
+                extractionResult,
+                overwriteAuthorizations,
+                out var publicationPlan,
+                out var configuration))
         {
-            configuration = CaptureExportConfiguration();
-            var validation = ExportConfigurationValidator.Validate(configuration, extractionResult);
-            if (!validation.IsValid
-                || validation.RunnableWorkbooks.Count == 0
-                || !configuration.SourceSets.Any(set =>
-                    set.IsEnabled && set.Fields.Any(field => field.IsValueIncluded)))
-            {
-                WorkbookExportStatusText = validation.Failures.FirstOrDefault()?.Description
-                    ?? "At least one value field must be included for export.";
-                return;
-            }
+            return;
+        }
 
-            var targets = validation.RunnableWorkbooks.Select(runnable =>
+        // Recheck immediately before publication. Any target that appeared after the first
+        // collision pass is resolved in this same Export attempt. Existing overwrite choices
+        // are retained by identity and exact path, so the user is not prompted twice.
+        while (publicationPlan!.Targets.Any(target =>
+                   target.Disposition == WorkbookPublicationDisposition.CreateNew
+                   && File.Exists(target.FinalPath)))
+        {
+            if (!TryCreatePublicationPlan(
+                    extractionResult,
+                    overwriteAuthorizations,
+                    out publicationPlan,
+                    out configuration))
             {
-                var finalPath = Path.Combine(
-                    resolvedDirectory,
-                    runnable.Workbook.FileName);
-                return new WorkbookCollisionTarget(
-                    runnable.Workbook.WorkbookDefinitionId,
-                    runnable.Workbook.FileName,
-                    finalPath,
-                    File.Exists(finalPath));
-            }).ToArray();
-            var unresolvedCollisions = targets.Where(target =>
-                target.Exists
-                && (!overwriteAuthorizations.TryGetValue(
-                        target.WorkbookDefinitionId,
-                        out var authorizedPath)
-                    || !string.Equals(
-                        authorizedPath,
-                        target.FinalPath,
-                        StringComparison.OrdinalIgnoreCase))).ToArray();
-            if (unresolvedCollisions.Length == 0)
-            {
-                publicationPlan = new WorkbookPublicationPlan(
-                    resolvedDirectory,
-                    targets.Select(target => new WorkbookPublicationTarget(
-                        target.WorkbookDefinitionId,
-                        target.FinalPath,
-                        overwriteAuthorizations.TryGetValue(
-                                target.WorkbookDefinitionId,
-                                out var authorizedPath)
-                            && string.Equals(
-                                authorizedPath,
-                                target.FinalPath,
-                                StringComparison.OrdinalIgnoreCase)
-                                ? WorkbookPublicationDisposition.OverwriteExisting
-                                : WorkbookPublicationDisposition.CreateNew)).ToArray());
-                break;
-            }
-
-            var resolution = _workbookCollisionResolver.Resolve(
-                new WorkbookCollisionResolutionRequest(
-                    resolvedDirectory,
-                    targets,
-                    configuration.Workbooks
-                        .Where(workbook => targets.All(target =>
-                            target.WorkbookDefinitionId != workbook.WorkbookDefinitionId))
-                        .Select(workbook => workbook.FileName)
-                        .ToArray()));
-            if (resolution is null
-                || resolution.Decisions.Any(decision =>
-                    decision.Action == WorkbookCollisionAction.Cancel))
-            {
-                WorkbookExportStatusText = "Export cancelled before processing started.";
-                return;
-            }
-
-            var decisionsById = resolution.Decisions.ToDictionary(decision =>
-                decision.WorkbookDefinitionId);
-            if (decisionsById.Count != unresolvedCollisions.Length
-                || unresolvedCollisions.Any(target =>
-                    !decisionsById.ContainsKey(target.WorkbookDefinitionId)))
-            {
-                WorkbookExportStatusText = "Every colliding workbook requires an explicit decision.";
-                return;
-            }
-
-            var renamed = false;
-            foreach (var collision in unresolvedCollisions)
-            {
-                var decision = decisionsById[collision.WorkbookDefinitionId];
-                if (decision.Action == WorkbookCollisionAction.Overwrite)
-                {
-                    overwriteAuthorizations[collision.WorkbookDefinitionId] = collision.FinalPath;
-                    continue;
-                }
-
-                if (decision.Action != WorkbookCollisionAction.DifferentName
-                    || !ExportConfigurationValidator.IsValidWorkbookFileName(
-                        decision.DifferentFileName ?? string.Empty)
-                    || string.Equals(
-                        decision.DifferentFileName,
-                        collision.FileName,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    WorkbookExportStatusText = "A different workbook name must be valid, unique, and changed.";
-                    return;
-                }
-
-                WorkbookDefinitions.Single(workbook =>
-                    workbook.WorkbookDefinitionId == collision.WorkbookDefinitionId).FileName =
-                    decision.DifferentFileName!;
-                overwriteAuthorizations.Remove(collision.WorkbookDefinitionId);
-                renamed = true;
-            }
-
-            if (!renamed)
-            {
-                continue;
-            }
-
-            var renamedValidation = ExportConfigurationValidator.Validate(
-                CaptureExportConfiguration(),
-                extractionResult);
-            if (!renamedValidation.IsValid)
-            {
-                WorkbookExportStatusText = renamedValidation.Failures[0].Description;
                 return;
             }
         }
@@ -1748,7 +2061,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                 : $"Publishing {publicationPlan.Targets.Count:N0} workbooks");
         var execution = await _workbookExportCoordinator.ExportWithBatchAsync(
                 publicationPlan,
-                configuration)
+                configuration!)
             .ConfigureAwait(false);
         var publishedBatchMatchesOperation = execution.Command.Accepted
             && execution.PublishedBatch is { } publishedBatch
@@ -1788,7 +2101,8 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     $"Published {batch.Workbooks.Count:N0} workbook(s): {string.Join(", ", batch.Workbooks.Select(workbook => workbook.FinalPath))}";
                 if (postExportAction is { Succeeded: false })
                 {
-                    WorkbookExportStatusText = postExportAction.FailureDescription!;
+                    WorkbookExportStatusText =
+                        $"{WorkbookExportStatusText} {postExportAction.FailureDescription}";
                 }
             }
             else
@@ -1797,6 +2111,7 @@ public sealed class DatabaseWorkspaceViewModel : ObservableObject, IDisposable
                     ?? "The workbook batch was not published.";
             }
 
+            OnPropertyChanged(nameof(ExportDestinationTargets));
             NotifyExportReadinessChanged();
         });
     }
@@ -2385,11 +2700,26 @@ public enum ExtractionReviewState
     Interrupted = 7
 }
 
-public sealed record DatabaseDatasetPresentation(DatabaseDatasetSummary Summary)
+public sealed class DatabaseDatasetPresentation : ObservableObject
 {
-    public string DisplayName => Summary.DisplayName;
+    private string _displayName;
+
+    public DatabaseDatasetPresentation(DatabaseDatasetSummary summary)
+    {
+        Summary = summary;
+        _displayName = summary.DisplayName;
+    }
+
+    public DatabaseDatasetSummary Summary { get; }
+
+    public string DisplayName
+    {
+        get => _displayName;
+        private set => SetProperty(ref _displayName, value);
+    }
 
     public string Context => $"{Summary.RowCount:N0} rows · {Summary.Columns.Count:N0} columns · {Summary.RepeatedDataLayout}";
+    internal void SetDisplayName(string displayName) => DisplayName = displayName;
 }
 
 public sealed record DatabaseRowFamilyPresentation(DatabaseRowFamilySummary Summary)
@@ -2434,28 +2764,116 @@ public sealed class DatabaseColumnChoicePresentation : ObservableObject
 {
     private readonly Func<bool> _isIncluded;
     private readonly Action<bool> _setIncluded;
+    private readonly Func<string> _getName;
+    private readonly Action<string> _setName;
+    private readonly Action _resetName;
+    private readonly Func<bool>? _getSourceIdIncluded;
+    private readonly Action<bool>? _setSourceIdIncluded;
+    private bool _isEditing;
+    private string _editName;
+    private string? _validationText;
 
     internal DatabaseColumnChoicePresentation(
-        string displayName,
+        object exportField,
         string category,
         Func<bool> isIncluded,
         Action<bool> setIncluded,
-        DatabaseColumnPresentation? dataColumn)
+        DatabaseColumnPresentation? dataColumn,
+        DatabaseMetadataFieldPresentation? metadataColumn)
     {
-        DisplayName = displayName;
+        ArgumentNullException.ThrowIfNull(exportField);
         Category = category;
         _isIncluded = isIncluded;
         _setIncluded = setIncluded;
         DataColumn = dataColumn;
+        MetadataColumn = metadataColumn;
+        switch (exportField)
+        {
+            case ExportFieldPresentation field:
+                OriginalName = field.DatabaseField;
+                _getName = () => field.ExcelHeader;
+                _setName = value => field.ExcelHeader = value;
+                _resetName = field.ResetHeader;
+                _getSourceIdIncluded = () => field.IsSourceIdExported;
+                _setSourceIdIncluded = value => field.IsSourceIdExported = value;
+                break;
+            case ExportMetadataFieldPresentation field:
+                OriginalName = field.DisplayName;
+                _getName = () => field.ExcelHeader;
+                _setName = value => field.ExcelHeader = value;
+                _resetName = field.ResetHeader;
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(exportField));
+        }
+
+        _editName = _getName();
+        BeginRenameCommand = new RelayCommand(BeginRename);
+        CommitRenameCommand = new RelayCommand(CommitRename);
+        CancelRenameCommand = new RelayCommand(CancelRename);
+        ResetNameCommand = new RelayCommand(ResetName);
     }
 
-    public string DisplayName { get; }
+    public string DisplayName => _getName();
+
+    public string OriginalName { get; }
 
     public string Category { get; }
 
     public bool IsGenerated => DataColumn is not null;
 
     public DatabaseColumnPresentation? DataColumn { get; }
+
+    public DatabaseMetadataFieldPresentation? MetadataColumn { get; }
+
+    public bool HasNameOverride => !string.Equals(
+        DisplayName,
+        OriginalName,
+        StringComparison.Ordinal);
+
+    public bool IsEditing
+    {
+        get => _isEditing;
+        private set => SetProperty(ref _isEditing, value);
+    }
+
+    public string EditName
+    {
+        get => _editName;
+        set => SetProperty(ref _editName, value ?? string.Empty);
+    }
+
+    public string? ValidationText
+    {
+        get => _validationText;
+        private set => SetProperty(ref _validationText, value);
+    }
+
+    public bool SupportsSourceId => _getSourceIdIncluded is not null;
+
+    public bool IsSourceIdIncluded
+    {
+        get => _getSourceIdIncluded?.Invoke() == true;
+        set
+        {
+            if (_getSourceIdIncluded is null || _setSourceIdIncluded is null
+                || value == _getSourceIdIncluded())
+            {
+                return;
+            }
+
+            _setSourceIdIncluded(value);
+            OnPropertyChanged();
+        }
+    }
+
+    public IRelayCommand BeginRenameCommand { get; }
+
+    public IRelayCommand CommitRenameCommand { get; }
+
+    public IRelayCommand CancelRenameCommand { get; }
+
+    public IRelayCommand ResetNameCommand { get; }
 
     public bool IsIncluded
     {
@@ -2471,6 +2889,55 @@ public sealed class DatabaseColumnChoicePresentation : ObservableObject
             OnPropertyChanged();
         }
     }
+
+    internal void CommitRename()
+    {
+        if (!IsEditing)
+        {
+            return;
+        }
+
+        var proposed = EditName.Trim();
+        if (string.IsNullOrWhiteSpace(proposed))
+        {
+            ValidationText = "Name is required.";
+            return;
+        }
+
+        if (proposed.Length > ExcelWorkbookLimits.MaximumCellTextLength)
+        {
+            ValidationText = $"Name must be at most {ExcelWorkbookLimits.MaximumCellTextLength:N0} characters.";
+            return;
+        }
+
+        _setName(proposed);
+        ValidationText = null;
+        IsEditing = false;
+        OnPropertyChanged(nameof(DisplayName));
+        OnPropertyChanged(nameof(HasNameOverride));
+    }
+
+    internal void CancelRename()
+    {
+        EditName = DisplayName;
+        ValidationText = null;
+        IsEditing = false;
+    }
+
+    private void BeginRename()
+    {
+        EditName = DisplayName;
+        ValidationText = null;
+        IsEditing = true;
+    }
+
+    private void ResetName()
+    {
+        _resetName();
+        CancelRename();
+        OnPropertyChanged(nameof(DisplayName));
+        OnPropertyChanged(nameof(HasNameOverride));
+    }
 }
 
 public sealed class DatabaseMetadataFieldPresentation : ObservableObject
@@ -2479,6 +2946,7 @@ public sealed class DatabaseMetadataFieldPresentation : ObservableObject
     internal const double MinimumWidth = 60;
     internal const double MaximumWidth = 2000;
     private bool _isVisible;
+    private string _displayName;
     private double _width = DefaultWidth;
     private bool _canResizeWithNext;
 
@@ -2488,13 +2956,20 @@ public sealed class DatabaseMetadataFieldPresentation : ObservableObject
         bool isVisible)
     {
         Field = field;
-        DisplayName = displayName;
+        OriginalDisplayName = displayName;
+        _displayName = displayName;
         _isVisible = isVisible;
     }
 
     public DatabaseMetadataField Field { get; }
 
-    public string DisplayName { get; }
+    public string OriginalDisplayName { get; }
+
+    public string DisplayName
+    {
+        get => _displayName;
+        private set => SetProperty(ref _displayName, value);
+    }
 
     public bool IsVisible
     {
@@ -2523,6 +2998,8 @@ public sealed class DatabaseMetadataFieldPresentation : ObservableObject
     {
         Width = DefaultWidth;
     }
+
+    internal void SetDisplayName(string value) => DisplayName = value;
 }
 
 public sealed class DatabaseReviewCellPresentation
@@ -2550,6 +3027,10 @@ public sealed class DatabaseReviewCellPresentation
     public string? SourceContext => Value is null
         ? null
         : $"Source information: {Value.SourceInformationType}{Environment.NewLine}Source ID: {Value.SourceId}{Environment.NewLine}Path: {Value.DetailedIdentity.StructuralPath}";
+
+    public string InspectionText => string.IsNullOrEmpty(SourceContext)
+        ? DisplayValue
+        : $"{SourceContext}{Environment.NewLine}{Environment.NewLine}Value:{Environment.NewLine}{DisplayValue}";
 }
 
 public sealed class DatabaseColumnPresentation : ObservableObject
@@ -2558,6 +3039,7 @@ public sealed class DatabaseColumnPresentation : ObservableObject
     internal const double MinimumWidth = 60;
     internal const double MaximumWidth = 2000;
     private string _databaseField;
+    private string _displayName;
     private bool _isVisible = true;
     private double _width = DefaultWidth;
     private int _position;
@@ -2573,6 +3055,7 @@ public sealed class DatabaseColumnPresentation : ObservableObject
         MappingIdentity = mappingIdentity;
         SourceInformationTypes = mapping.SourceInformationTypes;
         _databaseField = mapping.DatabaseTagName;
+        _displayName = mapping.DatabaseTagName;
     }
 
     internal string MappingIdentity { get; }
@@ -2585,6 +3068,12 @@ public sealed class DatabaseColumnPresentation : ObservableObject
     {
         get => _databaseField;
         private set => SetProperty(ref _databaseField, value);
+    }
+
+    public string DisplayName
+    {
+        get => _displayName;
+        private set => SetProperty(ref _displayName, value);
     }
 
     public bool IsVisible
@@ -2623,7 +3112,15 @@ public sealed class DatabaseColumnPresentation : ObservableObject
                 "A published Database column cannot change its source information identities.");
         }
 
+        var followsDatabaseField = string.Equals(
+            DisplayName,
+            DatabaseField,
+            StringComparison.Ordinal);
         DatabaseField = mapping.DatabaseTagName;
+        if (followsDatabaseField)
+        {
+            DisplayName = mapping.DatabaseTagName;
+        }
     }
 
     internal void SetPosition(int position)
@@ -2635,6 +3132,8 @@ public sealed class DatabaseColumnPresentation : ObservableObject
     {
         CanResizeWithNext = value;
     }
+
+    internal void SetDisplayName(string value) => DisplayName = value;
 
     internal void ResetPresentation()
     {

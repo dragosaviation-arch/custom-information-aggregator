@@ -185,6 +185,59 @@ public sealed class SourceLoadingCoordinatorTests
     }
 
     [TestMethod]
+    public async Task LoadHeaderSortUsesNumericSizeWithoutChangingInclusion()
+    {
+        var directory = Directory.CreateTempSubdirectory("CIA.SPR220.LoadSort.");
+        try
+        {
+            var largePath = Path.Combine(directory.FullName, "large.xml");
+            var smallPath = Path.Combine(directory.FullName, "small.xml");
+            await File.WriteAllBytesAsync(largePath, new byte[4096]);
+            await File.WriteAllBytesAsync(smallPath, new byte[128]);
+            var sourceSet = new ActiveLoadedSourceSet();
+            using var workflow = CreateWorkflowCoordinator();
+            var coordinator = new SourceLoadingCoordinator(
+                new SequencedSourceIntakeClient(
+                    Accept(CreateXml(largePath)),
+                    Accept(CreateXml(smallPath))),
+                sourceSet,
+                workflow);
+            using var viewModel = new LoadWorkspaceViewModel(
+                new MultiSourcePathPicker(
+                    SourceSelectionKind.XmlFile,
+                    [largePath, smallPath]),
+                coordinator,
+                sourceSet,
+                workflow,
+                new MainWindowViewModel(new ApplicationSession()));
+
+            await viewModel.AddXmlFileCommand.ExecuteAsync(null);
+            viewModel.ToggleSourceInclusionCommand.Execute(sourceSet.Items[0]);
+            var inclusionBeforeSort = sourceSet.Items.ToDictionary(
+                source => source.SourceId,
+                source => source.IsIncluded);
+
+            viewModel.SortCommand.Execute("Size");
+            var ascending = viewModel.VisibleSources.Cast<LoadedSourceItem>().ToArray();
+            Assert.AreEqual(smallPath, ascending[0].Path);
+            Assert.AreEqual(largePath, ascending[1].Path);
+            StringAssert.Contains(viewModel.SizeHeaderText, "↑");
+
+            viewModel.SortCommand.Execute("Size");
+            var descending = viewModel.VisibleSources.Cast<LoadedSourceItem>().ToArray();
+            Assert.AreEqual(largePath, descending[0].Path);
+            Assert.AreEqual(smallPath, descending[1].Path);
+            StringAssert.Contains(viewModel.SizeHeaderText, "↓");
+            Assert.IsTrue(sourceSet.Items.All(source =>
+                source.IsIncluded == inclusionBeforeSort[source.SourceId]));
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [TestMethod]
     [TestCategory("AlphaRegressionGate")]
     public async Task FirstSuccessfulLoadCreatesSetOneAndCarriesItsIdentityDownstream()
     {

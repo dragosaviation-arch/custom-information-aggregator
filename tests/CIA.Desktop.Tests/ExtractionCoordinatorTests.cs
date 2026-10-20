@@ -524,13 +524,14 @@ public sealed class ExtractionCoordinatorTests
             exportClient,
             NullLogger<WorkbookExportCoordinator>.Instance);
         using var directory = new TemporaryDirectory("CIA.SPR191.ExportFlow.Tests");
+        var picker = new StaticExportFolderPicker(directory.Path);
         using var viewModel = new DatabaseWorkspaceViewModel(
             context.Configuration,
             context.Workflow,
             context.DatabaseCoordinator,
             extractionCoordinator: extraction,
             workbookExportCoordinator: export,
-            exportFolderPicker: new StaticExportFolderPicker(directory.Path),
+            exportFolderPicker: picker,
             workbookCollisionResolver: new RecordingCollisionResolver(_ => null));
         viewModel.OutputFolder = directory.Path;
         viewModel.AlwaysAskWhereToExport = false;
@@ -541,6 +542,7 @@ public sealed class ExtractionCoordinatorTests
 
         Assert.AreEqual(1, extractionClient.CallCount);
         Assert.AreEqual(2, exportClient.CallCount);
+        Assert.AreEqual(0, picker.CallCount);
         Assert.AreEqual(WorkflowArtifactStatus.Current, context.Workflow.Current.Extraction);
         Assert.AreEqual(
             context.DatabaseCoordinator.CurrentGeneration!.OperationId,
@@ -949,21 +951,32 @@ public sealed class ExtractionCoordinatorTests
     }
 
     [TestMethod]
-    public async Task BrowseChangesOnlyTheCurrentViewModelSessionFolder()
+    public async Task BrowseChangesOnlyTheDestinationAndWritesNothing()
     {
         var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
         using var directory = new TemporaryDirectory("CIA.SPR88.Desktop.Tests");
         var picker = new StaticExportFolderPicker(directory.Path);
+        var collisions = new RecordingCollisionResolver(_ =>
+            throw new AssertFailedException("Browsing must not resolve export conflicts."));
         using var first = new DatabaseWorkspaceViewModel(
             context.Configuration,
             context.Workflow,
-            exportFolderPicker: picker);
+            context.DatabaseCoordinator,
+            exportFolderPicker: picker,
+            workbookCollisionResolver: collisions);
         var originalDefault = first.OutputFolder;
+        var target = Path.Combine(
+            directory.Path,
+            first.WorkbookDefinitions.Single().FileName);
 
         first.BrowseOutputFolderCommand.Execute(null);
 
         Assert.AreEqual(1, picker.CallCount);
         Assert.AreEqual(directory.Path, first.OutputFolder);
+        Assert.AreEqual(0, collisions.CallCount);
+        Assert.IsFalse(File.Exists(target));
+        StringAssert.Contains(first.ExportDestinationTargets.Single(), target);
         using var nextSession = new DatabaseWorkspaceViewModel(
             context.Configuration,
             context.Workflow);
@@ -972,7 +985,198 @@ public sealed class ExtractionCoordinatorTests
     }
 
     [TestMethod]
-    public async Task ValidOutputFolderIsRememberedButAlwaysAskRemainsSessionOnly()
+    public async Task UnifiedColumnConfigurationUpdatesDatabaseAndExportAndResetsDefaults()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator);
+        var generated = viewModel.ColumnChoices.Single(choice => choice.IsGenerated);
+        var originalName = generated.OriginalName;
+
+        generated.BeginRenameCommand.Execute(null);
+        generated.EditName = "   ";
+        generated.CommitRename();
+        Assert.IsTrue(generated.IsEditing);
+        Assert.IsNotNull(generated.ValidationText);
+        Assert.AreEqual(originalName, generated.DisplayName);
+
+        generated.CancelRename();
+        generated.BeginRenameCommand.Execute(null);
+        generated.EditName = "Owner header";
+        generated.CommitRename();
+        Assert.IsFalse(generated.IsEditing);
+        Assert.AreEqual("Owner header", viewModel.VisibleColumns.Single().DisplayName);
+        Assert.AreEqual(
+            "Owner header",
+            viewModel.CaptureExportConfiguration().SourceSets.Single().Fields.Single().ExcelHeader);
+
+        generated = viewModel.ColumnChoices.Single(choice => choice.IsGenerated);
+        generated.IsSourceIdIncluded = true;
+        var metadata = viewModel.ColumnChoices.First(choice => !choice.IsGenerated);
+        metadata.IsIncluded = true;
+        var secondMetadata = viewModel.ColumnChoices.Where(choice => !choice.IsGenerated).Skip(1).First();
+        secondMetadata.IsIncluded = true;
+        viewModel.MoveColumnChoiceUpCommand.Execute(secondMetadata);
+        metadata.BeginRenameCommand.Execute(null);
+        metadata.EditName = "Source group";
+        metadata.CommitRename();
+        var snapshot = viewModel.CaptureExportConfiguration();
+        Assert.IsTrue(snapshot.SourceSets.Single().Fields.Single().IsSourceIdCompanionIncluded);
+        Assert.AreEqual(
+            "Source group",
+            snapshot.SourceSets.Single().MetadataFields.Single(field =>
+                field.IsIncluded && field.MetadataField == metadata.MetadataColumn!.Field).ExcelHeader);
+        CollectionAssert.AreEqual(
+            new[] { secondMetadata.MetadataColumn!.Field, metadata.MetadataColumn!.Field },
+            snapshot.SourceSets.Single().MetadataFields
+                .Where(field => field.IsIncluded)
+                .Select(field => field.MetadataField)
+                .ToArray());
+
+        viewModel.SelectedWorksheetName = "Reviewed worksheet";
+        Assert.AreEqual("Reviewed worksheet", viewModel.SelectedDataset!.DisplayName);
+        var workbookId = viewModel.SelectedExportWorkbook!.WorkbookDefinitionId;
+        viewModel.BeginWorkbookRenameCommand.Execute(null);
+        viewModel.WorkbookNameEditText = "invalid/name.xlsx";
+        viewModel.CommitWorkbookRename();
+        Assert.IsTrue(viewModel.IsWorkbookNameEditing);
+        Assert.IsNotNull(viewModel.WorkbookRenameValidationText);
+        viewModel.CancelWorkbookRename();
+        viewModel.BeginWorkbookRenameCommand.Execute(null);
+        viewModel.WorkbookNameEditText = "Owner workbook.xlsx";
+        viewModel.CommitWorkbookRename();
+        Assert.IsFalse(viewModel.IsWorkbookNameEditing);
+        Assert.AreEqual("Owner workbook.xlsx", viewModel.SelectedExportWorkbook.FileName);
+        Assert.AreEqual(workbookId, viewModel.SelectedExportWorkbook.WorkbookDefinitionId);
+
+        viewModel.ResetColumnLayoutCommand.Execute(null);
+        snapshot = viewModel.CaptureExportConfiguration();
+        Assert.AreEqual(originalName, viewModel.VisibleColumns.Single().DisplayName);
+        Assert.AreEqual(originalName, snapshot.SourceSets.Single().Fields.Single().ExcelHeader);
+        Assert.IsFalse(snapshot.SourceSets.Single().Fields.Single().IsSourceIdCompanionIncluded);
+        Assert.IsTrue(snapshot.SourceSets.Single().MetadataFields.All(field => !field.IsIncluded));
+    }
+
+    [TestMethod]
+    public async Task AskForSingleWorkbookContinuesDirectlyIntoExport()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var extraction = context.CreateExtractionCoordinator(
+            new RecordingExtractionClient((correlation, basis) => Success(correlation, basis)));
+        var exportClient = new RecordingWorkbookExportClient(SuccessfulWorkbookExport);
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        using var directory = new TemporaryDirectory("CIA.SPR220.ExportPlan.Tests");
+        var selectedPath = Path.Combine(directory.Path, "Owner-selected.xlsx");
+        var picker = new StaticExportFolderPicker(directory.Path, selectedPath);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: picker,
+            workbookCollisionResolver: new RecordingCollisionResolver(_ =>
+                throw new AssertFailedException("A new destination must not require collision input.")));
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, picker.CallCount);
+        Assert.AreEqual(1, picker.SingleWorkbookCallCount);
+        Assert.AreEqual(1, exportClient.CallCount);
+        Assert.AreEqual(selectedPath, exportClient.PublicationPlan!.Targets.Single().FinalPath);
+        Assert.AreEqual("Owner-selected.xlsx", viewModel.WorkbookDefinitions.Single().FileName);
+        StringAssert.Contains(viewModel.WorkbookExportStatusText, "Published 1 workbook");
+    }
+
+    [TestMethod]
+    public async Task AskForWorkbookBatchChoosesFolderAndContinuesDirectlyIntoExport()
+    {
+        var context = await ExtractionContext.CreateAsync(includeSecondSourceSet: true);
+        await context.BuildCurrentDatabaseAsync();
+        var extraction = context.CreateExtractionCoordinator(
+            new RecordingExtractionClient((correlation, basis) => Success(correlation, basis)));
+        var exportClient = new RecordingWorkbookExportClient(SuccessfulWorkbookExport);
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        using var directory = new TemporaryDirectory("CIA.SPR220.ExportBatch.Tests");
+        var picker = new StaticExportFolderPicker(directory.Path);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: picker,
+            workbookCollisionResolver: new RecordingCollisionResolver(_ => null));
+        viewModel.CreateExportWorkbookCommand.Execute(null);
+        viewModel.SelectedDataset = viewModel.Datasets[1];
+        Assert.AreNotEqual(
+            viewModel.WorkbookDefinitions[1].WorkbookDefinitionId,
+            viewModel.SelectedExportWorkbook!.WorkbookDefinitionId);
+
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, picker.CallCount);
+        Assert.AreEqual(1, picker.FolderCallCount);
+        Assert.AreEqual(0, picker.SingleWorkbookCallCount);
+        Assert.AreEqual(1, exportClient.CallCount);
+        Assert.HasCount(2, exportClient.PublicationPlan!.Targets);
+        Assert.IsTrue(exportClient.PublicationPlan.Targets.All(target =>
+            string.Equals(
+                Path.GetDirectoryName(target.FinalPath),
+                directory.Path,
+                StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [TestMethod]
+    public async Task CancellingSaveAsRetainsDestinationAndConfiguration()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        var extraction = context.CreateExtractionCoordinator(
+            new RecordingExtractionClient((correlation, basis) => Success(correlation, basis)));
+        Assert.IsTrue((await extraction.ExtractAsync()).Accepted);
+        var exportClient = new RecordingWorkbookExportClient((_, _, _, _) =>
+            throw new AssertFailedException("A cancelled chooser must not export."));
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        var picker = new StaticExportFolderPicker(null);
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: picker,
+            workbookCollisionResolver: new RecordingCollisionResolver(_ => null));
+        var originalFolder = viewModel.OutputFolder;
+        var originalName = viewModel.WorkbookDefinitions.Single().FileName;
+
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, picker.CallCount);
+        Assert.AreEqual(1, picker.SingleWorkbookCallCount);
+        Assert.AreEqual(0, exportClient.CallCount);
+        Assert.AreEqual(originalFolder, viewModel.OutputFolder);
+        Assert.AreEqual(originalName, viewModel.WorkbookDefinitions.Single().FileName);
+        StringAssert.Contains(viewModel.WorkbookExportStatusText, "cancelled");
+    }
+
+    [TestMethod]
+    public async Task OutputFolderAndOpenFilesPreferenceAreRememberedButAlwaysAskIsSessionOnly()
     {
         var context = await ExtractionContext.CreateAsync();
         using var root = new TemporaryDirectory("CIA.SPR96.Output.Tests");
@@ -987,7 +1191,9 @@ public sealed class ExtractionCoordinatorTests
                    exportFolderPicker: new StaticExportFolderPicker(output),
                    settingsService: firstSettings))
         {
+            Assert.IsFalse(first.OpenFilesAfterExport);
             first.AlwaysAskWhereToExport = false;
+            first.OpenFilesAfterExport = true;
             first.BrowseOutputFolderCommand.Execute(null);
             Assert.AreEqual(output, first.OutputFolder);
         }
@@ -1001,6 +1207,7 @@ public sealed class ExtractionCoordinatorTests
 
         Assert.AreEqual(output, next.OutputFolder);
         Assert.IsTrue(next.AlwaysAskWhereToExport);
+        Assert.IsTrue(next.OpenFilesAfterExport);
     }
 
     [TestMethod]
@@ -1081,6 +1288,113 @@ public sealed class ExtractionCoordinatorTests
         Assert.AreEqual("original", await File.ReadAllTextAsync(existingPath));
         Assert.IsNull(context.Workflow.Current.ActiveOperation);
         StringAssert.Contains(viewModel.WorkbookExportStatusText, "cancelled");
+    }
+
+    [TestMethod]
+    public async Task ConflictDiscoveredDuringExtractionIsResolvedOnceInTheSameExportAttempt()
+    {
+        var context = await ExtractionContext.CreateAsync();
+        await context.BuildCurrentDatabaseAsync();
+        string? targetPath = null;
+        var extraction = context.CreateExtractionCoordinator(
+            new RecordingExtractionClient((correlation, basis) =>
+            {
+                File.WriteAllText(targetPath!, "new conflict");
+                return Success(correlation, basis);
+            }));
+        var exportClient = new RecordingWorkbookExportClient(SuccessfulWorkbookExport);
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        var collisions = new RecordingCollisionResolver(request =>
+            new WorkbookCollisionResolution(
+                request.Targets.Where(target => target.Exists)
+                    .Select(target => new WorkbookCollisionDecision(
+                        target.WorkbookDefinitionId,
+                        WorkbookCollisionAction.Overwrite))
+                    .ToArray()));
+        using var directory = new TemporaryDirectory("CIA.SPR220.NewCollision.Tests");
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: new StaticExportFolderPicker(directory.Path),
+            workbookCollisionResolver: collisions);
+        viewModel.OutputFolder = directory.Path;
+        viewModel.AlwaysAskWhereToExport = false;
+        targetPath = Path.Combine(
+            directory.Path,
+            viewModel.WorkbookDefinitions.Single().FileName);
+
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(1, collisions.CallCount);
+        Assert.AreEqual(1, exportClient.CallCount);
+        Assert.AreEqual(
+            WorkbookPublicationDisposition.OverwriteExisting,
+            exportClient.PublicationPlan!.Targets.Single().Disposition);
+        StringAssert.Contains(viewModel.WorkbookExportStatusText, "Published 1 workbook");
+    }
+
+    [TestMethod]
+    public async Task NewlyDiscoveredBatchConflictDoesNotRepeatUnchangedOverwriteConfirmation()
+    {
+        var context = await ExtractionContext.CreateAsync(includeSecondSourceSet: true);
+        await context.BuildCurrentDatabaseAsync();
+        var extraction = context.CreateExtractionCoordinator(
+            new RecordingExtractionClient((correlation, basis) => Success(correlation, basis)));
+        Assert.IsTrue((await extraction.ExtractAsync()).Accepted);
+        var exportClient = new RecordingWorkbookExportClient(SuccessfulWorkbookExport);
+        var export = new WorkbookExportCoordinator(
+            extraction,
+            context.Workflow,
+            exportClient,
+            NullLogger<WorkbookExportCoordinator>.Instance);
+        using var directory = new TemporaryDirectory("CIA.SPR220.BatchCollision.Tests");
+        var requestedIds = new List<WorkbookDefinitionId>();
+        string? laterConflictPath = null;
+        var collisions = new RecordingCollisionResolver(request =>
+        {
+            var target = request.Targets.Single();
+            requestedIds.Add(target.WorkbookDefinitionId);
+            if (requestedIds.Count == 1)
+            {
+                File.WriteAllText(laterConflictPath!, "later conflict");
+            }
+
+            return new WorkbookCollisionResolution(
+                [new WorkbookCollisionDecision(
+                    target.WorkbookDefinitionId,
+                    WorkbookCollisionAction.Overwrite)]);
+        });
+        using var viewModel = new DatabaseWorkspaceViewModel(
+            context.Configuration,
+            context.Workflow,
+            context.DatabaseCoordinator,
+            extractionCoordinator: extraction,
+            workbookExportCoordinator: export,
+            exportFolderPicker: new StaticExportFolderPicker(directory.Path),
+            workbookCollisionResolver: collisions);
+        viewModel.CreateExportWorkbookCommand.Execute(null);
+        viewModel.OutputFolder = directory.Path;
+        viewModel.AlwaysAskWhereToExport = false;
+        var firstPath = Path.Combine(directory.Path, viewModel.WorkbookDefinitions[0].FileName);
+        laterConflictPath = Path.Combine(
+            directory.Path,
+            viewModel.WorkbookDefinitions[1].FileName);
+        File.WriteAllText(firstPath, "first conflict");
+
+        await viewModel.ExportToExcelCommand.ExecuteAsync(null);
+
+        Assert.AreEqual(2, collisions.CallCount);
+        Assert.AreEqual(2, requestedIds.Distinct().Count());
+        Assert.AreEqual(1, exportClient.CallCount);
+        Assert.IsTrue(exportClient.PublicationPlan!.Targets.All(target =>
+            target.Disposition == WorkbookPublicationDisposition.OverwriteExisting));
     }
 
     [TestMethod]
@@ -1419,18 +1733,37 @@ public sealed class ExtractionCoordinatorTests
     private sealed class StaticExportFolderPicker : IExportFolderPicker
     {
         private readonly string? _selectedFolder;
+        private readonly string? _selectedSingleWorkbook;
 
-        public StaticExportFolderPicker(string? selectedFolder)
+        public StaticExportFolderPicker(
+            string? selectedFolder,
+            string? selectedSingleWorkbook = null)
         {
             _selectedFolder = selectedFolder;
+            _selectedSingleWorkbook = selectedSingleWorkbook;
         }
 
         public int CallCount { get; private set; }
 
+        public int FolderCallCount { get; private set; }
+
+        public int SingleWorkbookCallCount { get; private set; }
+
         public string? Browse(string? currentFolder)
         {
             CallCount++;
+            FolderCallCount++;
             return _selectedFolder;
+        }
+
+        public string? BrowseSingleWorkbook(string? currentFolder, string suggestedFileName)
+        {
+            CallCount++;
+            SingleWorkbookCallCount++;
+            return _selectedSingleWorkbook
+                ?? (string.IsNullOrWhiteSpace(_selectedFolder)
+                    ? null
+                    : Path.Combine(_selectedFolder, suggestedFileName));
         }
     }
 
@@ -1523,7 +1856,8 @@ public sealed class ExtractionCoordinatorTests
         private ConfigurableDatabaseClient DatabaseClient { get; }
 
         public static async Task<ExtractionContext> CreateAsync(
-            IProcessingHostSupervisor? supervisor = null)
+            IProcessingHostSupervisor? supervisor = null,
+            bool includeSecondSourceSet = false)
         {
             var sources = new ActiveLoadedSourceSet();
             var source = new LoadedSourceContract(
@@ -1532,24 +1866,59 @@ public sealed class ExtractionCoordinatorTests
                 IsIncluded: true,
                 LoadedSourceStatus.Ready,
                 LoadedSourceKind.XmlFile);
+            var secondSource = new LoadedSourceContract(
+                SourceId.CreateNew(),
+                Path.GetFullPath("source-2.xml"),
+                IsIncluded: true,
+                LoadedSourceStatus.Ready,
+                LoadedSourceKind.XmlFile);
             var workflow = new ApplicationWorkflowCoordinator(
                 supervisor ?? new TrackingProcessingHostSupervisor(),
                 new RecordingHistory());
             var loading = new SourceLoadingCoordinator(
-                new StaticSourceIntakeClient(source),
+                new StaticSourceIntakeClient(
+                    includeSecondSourceSet ? [source, secondSource] : [source]),
                 sources,
                 workflow);
             Assert.IsTrue((await loading.AddAsync(
                 SourceSelectionKind.XmlFile,
                 source.Path)).Accepted);
-            var identity = new DiscoveryInformationIdentity(
-                sources.SourceSets.Single().SourceSetId,
-                "/root/tag",
-                "tag");
+            var firstSourceSetId = sources.SourceSets.Single().SourceSetId;
+            SourceSetDefinition? secondSourceSet = null;
+            if (includeSecondSourceSet)
+            {
+                Assert.IsTrue((await loading.AddAsync(
+                    SourceSelectionKind.XmlFile,
+                    secondSource.Path)).Accepted);
+                secondSourceSet = loading.CreateSourceSet("Set 2").SourceSet;
+                Assert.IsNotNull(secondSourceSet);
+                Assert.IsTrue(loading.ReassignSources(
+                    [sources.Items.Single(item => item.SourceId == secondSource.SourceId)],
+                    secondSourceSet.SourceSetId).Accepted);
+            }
+
+            var identities = new List<DiscoveryInformationIdentity>
+            {
+                new(
+                    firstSourceSetId,
+                    "/root/tag",
+                    "tag")
+            };
+            if (secondSourceSet is not null)
+            {
+                identities.Add(new DiscoveryInformationIdentity(
+                    secondSourceSet.SourceSetId,
+                    "/root/tag",
+                    "tag"));
+            }
+
             var configuration = new ActiveDiscoveryConfiguration();
-            configuration.Synchronize([identity]);
-            configuration.SetSelection([identity], isSelected: true);
-            configuration.SetDatabaseTagOverride(identity, "Database Field");
+            configuration.Synchronize(identities);
+            configuration.SetSelection(identities, isSelected: true);
+            foreach (var identity in identities)
+            {
+                configuration.SetDatabaseTagOverride(identity, "Database Field");
+            }
             var discovery = await workflow.BeginOperationAsync(WorkflowOperationKind.Discovery);
             Assert.IsTrue(discovery.Accepted);
             Assert.IsTrue(workflow.CompleteOperation(
@@ -1627,7 +1996,7 @@ public sealed class ExtractionCoordinatorTests
         }
     }
 
-    private sealed class StaticSourceIntakeClient(LoadedSourceContract source)
+    private sealed class StaticSourceIntakeClient(params LoadedSourceContract[] sources)
         : ISourceIntakeClient
     {
         public Task<SourceIntakeClientResult> LoadAsync(
@@ -1636,6 +2005,10 @@ public sealed class ExtractionCoordinatorTests
             SourceLoadSettings settings,
             CancellationToken cancellationToken = default)
         {
+            var source = sources.Single(candidate => string.Equals(
+                candidate.Path,
+                Path.GetFullPath(path),
+                StringComparison.OrdinalIgnoreCase));
             return Task.FromResult(new SourceIntakeClientResult(
                 true,
                 [source],

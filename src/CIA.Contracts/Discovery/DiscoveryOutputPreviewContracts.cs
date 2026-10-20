@@ -14,6 +14,14 @@ public static class DiscoveryOutputPreviewLimits
     public const int MaximumGroups = 128;
     public const int MaximumColumnsPerGroup = 128;
     public const int MaximumValuesPerCell = 16;
+    public const int SourceFileColumnsPerPage = 10;
+    public const int WideColumnWarningThreshold = 500;
+}
+
+public enum DiscoveryOutputPreviewSchemaState
+{
+    SourceFileSample = 0,
+    CurrentPublishedDatabase = 1
 }
 
 public sealed record DiscoveryOutputProjectionSpecification
@@ -24,7 +32,10 @@ public sealed record DiscoveryOutputProjectionSpecification
         string sourceSetName,
         RepeatedDataLayout repeatedDataLayout,
         IReadOnlyList<RowFamilyDefinition> rowFamilies,
-        IReadOnlyList<DatabaseFieldMapping> fields)
+        IReadOnlyList<DatabaseFieldMapping> fields,
+        DiscoveryOutputProjectionMode projectionMode =
+            DiscoveryOutputProjectionMode.PreserveRelationships,
+        IReadOnlyList<string>? sourceProjectionRepeatedPaths = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceSetName);
         ArgumentNullException.ThrowIfNull(rowFamilies);
@@ -32,6 +43,11 @@ public sealed record DiscoveryOutputProjectionSpecification
         if (!Enum.IsDefined(repeatedDataLayout))
         {
             throw new ArgumentOutOfRangeException(nameof(repeatedDataLayout));
+        }
+
+        if (!Enum.IsDefined(projectionMode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(projectionMode));
         }
 
         var families = rowFamilies.ToArray();
@@ -55,6 +71,9 @@ public sealed record DiscoveryOutputProjectionSpecification
         RepeatedDataLayout = repeatedDataLayout;
         RowFamilies = new ReadOnlyCollection<RowFamilyDefinition>(families);
         Fields = new ReadOnlyCollection<DatabaseFieldMapping>(mappings);
+        ProjectionMode = projectionMode;
+        SourceProjectionRepeatedPaths = new ReadOnlyCollection<string>(
+            (sourceProjectionRepeatedPaths ?? []).ToArray());
     }
 
     public SourceSetId SourceSetId { get; }
@@ -66,6 +85,10 @@ public sealed record DiscoveryOutputProjectionSpecification
     public IReadOnlyList<RowFamilyDefinition> RowFamilies { get; }
 
     public IReadOnlyList<DatabaseFieldMapping> Fields { get; }
+
+    public DiscoveryOutputProjectionMode ProjectionMode { get; }
+
+    public IReadOnlyList<string> SourceProjectionRepeatedPaths { get; }
 }
 
 public sealed record DiscoveryOutputPreviewRequest
@@ -75,7 +98,9 @@ public sealed record DiscoveryOutputPreviewRequest
         OutputSetId outputSetId,
         DiscoveryOccurrenceLookup occurrence,
         DiscoveryOutputProjectionSpecification projection,
-        int maximumRowsPerGroup = DiscoveryOutputPreviewLimits.DefaultMaximumRowsPerGroup)
+        int maximumRowsPerGroup = DiscoveryOutputPreviewLimits.DefaultMaximumRowsPerGroup,
+        int columnStartIndex = 0,
+        OperationId? publishedDatabaseOperationId = null)
     {
         if (outputSetId.Value == Guid.Empty)
         {
@@ -97,10 +122,25 @@ public sealed record DiscoveryOutputPreviewRequest
             throw new ArgumentOutOfRangeException(nameof(maximumRowsPerGroup));
         }
 
+        if (columnStartIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(columnStartIndex));
+        }
+
+        if (publishedDatabaseOperationId is { } operationId
+            && !OperationId.IsValid(operationId.Value))
+        {
+            throw new ArgumentException(
+                "A published preview schema requires a valid Database operation identity.",
+                nameof(publishedDatabaseOperationId));
+        }
+
         OutputSetId = outputSetId;
         Occurrence = occurrence;
         Projection = projection;
         MaximumRowsPerGroup = maximumRowsPerGroup;
+        ColumnStartIndex = columnStartIndex;
+        PublishedDatabaseOperationId = publishedDatabaseOperationId;
     }
 
     public OutputSetId OutputSetId { get; }
@@ -110,6 +150,10 @@ public sealed record DiscoveryOutputPreviewRequest
     public DiscoveryOutputProjectionSpecification Projection { get; }
 
     public int MaximumRowsPerGroup { get; }
+
+    public int ColumnStartIndex { get; }
+
+    public OperationId? PublishedDatabaseOperationId { get; }
 }
 
 public sealed record DiscoveryOutputPreview(
@@ -120,13 +164,19 @@ public sealed record DiscoveryOutputPreview(
     SourceId SourceId,
     string SourceName,
     RepeatedDataLayout RepeatedDataLayout,
-    IReadOnlyList<DiscoveryOutputPreviewGroup> Groups);
+    IReadOnlyList<DiscoveryOutputPreviewGroup> Groups,
+    DiscoveryOutputProjectionMode ProjectionMode =
+        DiscoveryOutputProjectionMode.PreserveRelationships,
+    DiscoveryOutputPreviewSchemaState SchemaState =
+        DiscoveryOutputPreviewSchemaState.SourceFileSample);
 
 public sealed record DiscoveryOutputPreviewGroup(
     RowFamilyId RowFamilyId,
     IReadOnlyList<DiscoveryOutputPreviewColumn> Columns,
     IReadOnlyList<DiscoveryOutputPreviewRow> Rows,
-    bool IsTruncated);
+    bool IsTruncated,
+    int TotalColumnCount = 0,
+    int ColumnStartIndex = 0);
 
 public sealed record DiscoveryOutputPreviewColumn(
     DatabaseColumnIdentity Identity,

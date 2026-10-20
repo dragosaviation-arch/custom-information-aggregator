@@ -8,7 +8,8 @@ namespace CIA.Contracts.Hierarchy;
 public enum RowFamilyKind
 {
     Root = 1,
-    Repeated = 2
+    Repeated = 2,
+    SourceFileProjection = 3
 }
 
 public readonly record struct RowFamilyId : IComparable<RowFamilyId>
@@ -98,10 +99,11 @@ public sealed record RowFamilyDefinition
             throw new ArgumentException("A Row Family definition requires an ID.", nameof(id));
         }
 
-        if (id.Kind == RowFamilyKind.Root && parentRowFamilyId is not null)
+        if (id.Kind is RowFamilyKind.Root or RowFamilyKind.SourceFileProjection
+            && parentRowFamilyId is not null)
         {
             throw new ArgumentException(
-                "A root Row Family cannot have a parent.",
+                "A root or source-file projection family cannot have a parent.",
                 nameof(parentRowFamilyId));
         }
 

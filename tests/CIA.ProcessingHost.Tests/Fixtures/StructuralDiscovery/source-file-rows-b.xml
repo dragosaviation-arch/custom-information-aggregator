@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<catalog>
+  <book code="B2">
+    <title>Later schema</title>
+    <author><name>First later author</name></author>
+    <author><name>Second later author</name></author>
+    <author><name>Third later author</name></author>
+    <late>Discovered in a later source</late>
+  </book>
+</catalog>
