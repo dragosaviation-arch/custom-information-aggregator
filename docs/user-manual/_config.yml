@@ -1,0 +1,22 @@
+title: CIA User Manual
+description: Screenshot-driven documentation for Custom Information Aggregator v1
+theme: just-the-docs
+search_enabled: true
+color_scheme: light
+heading_anchors: true
+back_to_top: true
+back_to_top_text: Back to top
+url: ''
+baseurl: ''
+plugins:
+  - jekyll-relative-links
+  - jekyll-seo-tag
+relative_links:
+  enabled: true
+  collections: true
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - pandoc.yaml
+  - scripts
+  - '*.zip'

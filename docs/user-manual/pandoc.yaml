@@ -1,0 +1,24 @@
+from: markdown+yaml_metadata_block+fenced_divs+fenced_code_blocks
+to: pdf
+standalone: true
+toc: true
+toc-depth: 2
+number-sections: false
+pdf-engine: xelatex
+variables:
+  documentclass: article
+  papersize: a4
+  geometry:
+    - top=16mm
+    - bottom=17mm
+    - left=16mm
+    - right=16mm
+  mainfont: 'DejaVu Sans'
+  sansfont: 'DejaVu Sans'
+  fontsize: 9pt
+  colorlinks: true
+  linkcolor: 'blue'
+  urlcolor: 'blue'
+  header-includes:
+    - '\usepackage{float}'
+    - '\setlength{\parskip}{4pt}'
