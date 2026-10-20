@@ -347,7 +347,7 @@ public sealed class UiUxBatch1Tests
 
         StringAssert.Contains(discovery, "PinnedBlacklistOffset");
         StringAssert.Contains(discoveryCode, "PinnedBlacklistOffset = e.HorizontalOffset");
-        StringAssert.Contains(discovery, "Content=\"Hide child tags\"");
+        StringAssert.Contains(discovery, "Content=\"Show only direct selections\"");
         Assert.IsFalse(discovery.Contains("Show only tags with Database Tag Name Override", StringComparison.Ordinal));
         Assert.IsFalse(discovery.Contains("Revert Database Tag Name Override", StringComparison.Ordinal));
         StringAssert.Contains(discovery, "Text=\"No saved Discovery profiles\"");

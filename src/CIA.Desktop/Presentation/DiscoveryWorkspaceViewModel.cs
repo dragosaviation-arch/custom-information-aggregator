@@ -114,7 +114,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool _showBlacklisted = true;
     private bool _showOnlySelected;
     private bool _showOnlyDatabaseTagOverrides;
-    private bool _hideChildTags;
+    private bool _showOnlyDirectSelections;
     private int _issueCount;
     private int _progressCompletedSourceCount;
     private int _progressTotalSourceCount = 1;
@@ -1081,12 +1081,12 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         SetColumnWidth(rightKey, rightWidth - appliedChange);
     }
 
-    public bool HideChildTags
+    public bool ShowOnlyDirectSelections
     {
-        get => _hideChildTags;
+        get => _showOnlyDirectSelections;
         set
         {
-            if (SetProperty(ref _hideChildTags, value))
+            if (SetProperty(ref _showOnlyDirectSelections, value))
             {
                 _currentPage = 1;
                 RefreshPresentation();
@@ -3014,9 +3014,9 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             query = query.Where(information => information.HasAnySelectedChild);
         }
 
-        if (HideChildTags)
+        if (ShowOnlyDirectSelections)
         {
-            query = query.Where(information => !information.IsChildTag);
+            query = query.Where(information => information.SelectionState == true);
         }
 
         if (ShowOnlyDatabaseTagOverrides)
@@ -3518,7 +3518,6 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
             disposition,
             databaseTagOverride,
             isLogicalParent: true,
-            isChildTag: false,
             children: [],
             selectionTargetIdentities: [information.Identity],
             targetDispositions: [disposition])
@@ -3531,7 +3530,6 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         DiscoveryInformationDisposition disposition,
         string? databaseTagOverride,
         bool isLogicalParent,
-        bool isChildTag,
         IReadOnlyList<DiscoveredInformationItemViewModel> children,
         IReadOnlyList<DiscoveryInformationIdentity> selectionTargetIdentities,
         IReadOnlyList<DiscoveryInformationDisposition> targetDispositions)
@@ -3556,7 +3554,6 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
         Identity = information[0].Identity;
         RowFamilyId = information[0].RowFamilyId;
         IsLogicalParent = isLogicalParent;
-        IsChildTag = isChildTag;
         Children = children;
         _sourceSetName = sourceSetName;
         var candidate = databaseTagOverride?.Trim();
@@ -3589,14 +3586,6 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
 
         var detailedInformation = information.ToArray();
         var targetsByIdentity = CreateSelectionTargets(detailedInformation);
-        var structuralScopePaths = detailedInformation
-            .Where(item => item.Identity.CandidateKind == SourceValueCandidateKind.ElementScope)
-            .GroupBy(item => item.SourceSetId)
-            .ToDictionary(
-                group => group.Key,
-                group => group.Select(item => item.Identity.StructuralPath.TrimEnd('/'))
-                    .Distinct(StringComparer.Ordinal)
-                    .ToArray());
 
         return detailedInformation
             .GroupBy(item => DiscoveryLogicalIdentity.Create(item.Identity))
@@ -3620,7 +3609,6 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
                             ? null
                             : resolveDatabaseTagOverride(item.Identity),
                         isLogicalParent: false,
-                        isChildTag: false,
                         children: [],
                         targets,
                         targetDispositions);
@@ -3637,9 +3625,6 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
                     ResolveLogicalDatabaseTagOverride(
                         group.Select(item => resolveDatabaseTagOverride(item.Identity))),
                     isLogicalParent: true,
-                    isChildTag: group.All(item => IsUnderStructuralScope(
-                        item,
-                        structuralScopePaths)),
                     children,
                     parentTargets,
                     parentTargetDispositions);
@@ -3657,8 +3642,6 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
     public IReadOnlyList<DiscoveredInformationItemViewModel> Children { get; }
 
     public bool IsLogicalParent { get; }
-
-    public bool IsChildTag { get; }
 
     public bool HasDetailedChildren => Children.Count > 0;
 
@@ -3868,22 +3851,6 @@ public sealed class DiscoveredInformationItemViewModel : ObservableObject
     {
         var values = overrides.Distinct(StringComparer.Ordinal).ToArray();
         return values.Length == 1 ? values[0] : null;
-    }
-
-    private static bool IsUnderStructuralScope(
-        DiscoveredInformation information,
-        IReadOnlyDictionary<SourceSetId, string[]> structuralScopePaths)
-    {
-        if (!structuralScopePaths.TryGetValue(information.SourceSetId, out var scopePaths))
-        {
-            return false;
-        }
-
-        var path = information.Identity.StructuralPath.TrimEnd('/');
-        return scopePaths.Any(scopePath =>
-            path.Length > scopePath.Length
-            && path.StartsWith(scopePath, StringComparison.Ordinal)
-            && path[scopePath.Length] == '/');
     }
 
     private static SourceElementRole? ResolveElementRole(

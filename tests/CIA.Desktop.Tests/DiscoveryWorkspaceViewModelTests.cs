@@ -1311,40 +1311,43 @@ public sealed class DiscoveryWorkspaceViewModelTests
     }
 
     [TestMethod]
-    public async Task HideChildTagsFiltersOnlyUnambiguousLogicalRowsWithoutChangingSelection()
+    public async Task ShowOnlyDirectSelectionsHidesDotMarkedRowsWithoutChangingSelection()
     {
-        var source = CreateSource("child-tags.xml");
+        var source = CreateSource("direct-selection-filter.xml");
         using var workflow = CreateWorkflowCoordinator();
         var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
         source = sourceSet.CreateIncludedReadySnapshot().Single();
-        var familyId = new RowFamilyId(
-            source.SourceSetId,
-            RowFamilyKind.Root,
-            "/root/record");
-        var scope = CreateDetailedInformation(
-            source,
-            "/root/record",
-            "record",
-            SourceValueCandidateKind.ElementScope,
-            "/root/record") with
+        var discovered = new[]
         {
-            RowFamilyId = familyId,
-            ElementRole = SourceElementRole.Structural
-        };
-        var name = CreateDetailedInformation(
-            source,
-            "/root/record/name",
-            "name",
-            SourceValueCandidateKind.Element,
-            "/root/record/name") with
-        {
-            RowFamilyId = familyId,
-            ElementRole = SourceElementRole.ValueBearing
+            CreateDetailedInformation(
+                source,
+                "/root/one/direct",
+                "direct",
+                SourceValueCandidateKind.Element,
+                "/root/one/direct"),
+            CreateDetailedInformation(
+                source,
+                "/root/two/direct",
+                "direct",
+                SourceValueCandidateKind.Element,
+                "/root/two/direct"),
+            CreateDetailedInformation(
+                source,
+                "/root/one/automatic",
+                "automatic",
+                SourceValueCandidateKind.Element,
+                "/root/one/automatic"),
+            CreateDetailedInformation(
+                source,
+                "/root/two/automatic",
+                "automatic",
+                SourceValueCandidateKind.Element,
+                "/root/two/automatic")
         };
         var configuration = new ActiveDiscoveryConfiguration();
         using var viewModel = new DiscoveryWorkspaceViewModel(
             new StubDiscoveryClient((correlation, sources) =>
-                Accept(correlation, sources, [scope, name])),
+                Accept(correlation, sources, discovered)),
             configuration,
             sourceSet,
             workflow,
@@ -1356,28 +1359,40 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 NullLogger<DatabaseBuildCoordinator>.Instance));
 
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
-        var scopeRow = viewModel.Information.Single(item => item.InformationType == "record");
-        var childRow = viewModel.Information.Single(item => item.InformationType == "name");
-        Assert.IsFalse(scopeRow.IsChildTag);
-        Assert.IsTrue(childRow.IsChildTag);
-        scopeRow.IsExpanded = true;
-        viewModel.ToggleSelectionCommand.Execute(childRow);
-        var selectedIdentity = childRow.SelectionTargetIdentities.Single();
+        var directRow = viewModel.Information.Single(item => item.InformationType == "direct");
+        var automaticRow = viewModel.Information.Single(item => item.InformationType == "automatic");
+        Assert.HasCount(2, directRow.Children);
+        Assert.HasCount(2, automaticRow.Children);
+
+        viewModel.ToggleSelectionCommand.Execute(directRow);
+        automaticRow.IsExpanded = true;
+        viewModel.ToggleSelectionCommand.Execute(automaticRow.Children[0]);
+
+        Assert.IsTrue(directRow.SelectionState ?? false, "A full tick is a direct selection.");
+        Assert.IsNull(automaticRow.SelectionState, "A dot is an automatic partial selection.");
+        var selectedIdentities = configuration.Current.Items
+            .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected)
+            .Select(item => item.Identity)
+            .ToHashSet();
+        Assert.HasCount(3, selectedIdentities);
 
         viewModel.ShowOnlySelected = true;
-        viewModel.HideChildTags = true;
+        Assert.HasCount(2, viewModel.Information);
+        viewModel.ShowOnlyDirectSelections = true;
 
         Assert.HasCount(1, viewModel.Information);
-        Assert.AreSame(scopeRow, viewModel.Information[0]);
-        Assert.IsTrue(scopeRow.IsExpanded);
-        Assert.IsNotEmpty(scopeRow.Children);
-        Assert.AreEqual(
-            DiscoveryInformationDisposition.Selected,
-            configuration.Current.Items.Single(item => item.Identity == selectedIdentity).Disposition);
+        Assert.AreSame(directRow, viewModel.Information[0]);
+        CollectionAssert.AreEquivalent(
+            selectedIdentities.ToArray(),
+            configuration.Current.Items
+                .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected)
+                .Select(item => item.Identity)
+                .ToArray());
 
-        viewModel.HideChildTags = false;
-        Assert.IsTrue(viewModel.Information.Any(item => item.InformationType == "name"));
-        Assert.IsTrue(childRow.SelectionState ?? false);
+        viewModel.ShowOnlyDirectSelections = false;
+        Assert.HasCount(2, viewModel.Information);
+        Assert.IsTrue(automaticRow.IsExpanded);
+        Assert.IsNull(automaticRow.SelectionState);
     }
 
     [TestMethod]

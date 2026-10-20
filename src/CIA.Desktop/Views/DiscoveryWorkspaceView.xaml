@@ -1046,9 +1046,9 @@
                                                   Content="Show only selected"
                                                   IsChecked="{Binding ShowOnlySelected}" />
                                         <CheckBox Margin="0,4"
-                                                  Content="Hide child tags"
-                                                  IsChecked="{Binding HideChildTags}"
-                                                  ToolTip="Hide logical tag rows that are unambiguously nested beneath a structural container. Expanded structural-context choices remain available." />
+                                                  Content="Show only direct selections"
+                                                  IsChecked="{Binding ShowOnlyDirectSelections}"
+                                                  ToolTip="Show rows with a direct tick and hide automatically dot-marked partial selections. Selection and processing are unchanged." />
                                     </StackPanel>
                                 </Grid>
                             </ScrollViewer>
