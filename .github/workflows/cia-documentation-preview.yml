@@ -1,0 +1,20 @@
+name: CIA documentation preview (no publishing)
+on:
+  workflow_dispatch:
+jobs:
+  build-website-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: docs/user-manual
+      - name: Build Jekyll documentation (no deployment)
+        run: bundle exec jekyll build --source . --destination ../../_cia_docs_site
+        working-directory: docs/user-manual
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cia-documentation-preview
+          path: _cia_docs_site/
