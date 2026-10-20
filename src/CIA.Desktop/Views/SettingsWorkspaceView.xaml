@@ -29,14 +29,13 @@
         </Style>
         <Style x:Key="SettingsPathLabelButtonStyle"
                TargetType="Button"
-               BasedOn="{StaticResource CiaGhostButtonStyle}">
-            <Setter Property="Height" Value="25" />
-            <Setter Property="Padding" Value="0" />
-            <Setter Property="HorizontalContentAlignment" Value="Left" />
-            <Setter Property="FontSize" Value="9.8" />
+               BasedOn="{StaticResource CiaButtonStyle}">
+            <Setter Property="Height" Value="27" />
+            <Setter Property="Padding" Value="7,0" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="FontSize" Value="10.2" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="{StaticResource CiaTextPrimaryBrush}" />
-            <Setter Property="BorderThickness" Value="0" />
         </Style>
         <Style x:Key="SettingsLogListStyle" TargetType="ListView">
             <Setter Property="Background" Value="{StaticResource CiaPanelBrush}" />
@@ -624,7 +623,7 @@
                                         </Border>
                                         <StackPanel Grid.Row="1" Margin="8,6">
                                             <Grid Margin="0,2">
-                                                <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="80" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                 <Button Command="{Binding OpenManagedStorageFolderCommand}"
                                                         CommandParameter="Temporary"
                                                         Content="Temporary"
@@ -634,7 +633,7 @@
                                                 <Button x:Name="BrowseTemporaryDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseTemporaryDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
                                             <Grid Margin="0,2">
-                                                <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="80" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                 <Button Command="{Binding OpenManagedStorageFolderCommand}"
                                                         CommandParameter="Working"
                                                         Content="Working"
@@ -644,7 +643,7 @@
                                                 <Button x:Name="BrowseWorkingDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseWorkingDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
                                             <Grid Margin="0,2">
-                                                <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="80" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                 <Button Command="{Binding OpenManagedStorageFolderCommand}"
                                                         CommandParameter="Profiles"
                                                         Content="Profiles"
@@ -654,7 +653,7 @@
                                                 <Button x:Name="BrowseProfilesDirectoryButton" Grid.Column="2" Margin="5,0,0,0" Command="{Binding BrowseProfilesDirectoryCommand}" Content="Browse..." Style="{StaticResource SettingsCompactButtonStyle}" />
                                             </Grid>
                                             <Grid Margin="0,2">
-                                                <Grid.ColumnDefinitions><ColumnDefinition Width="65" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="80" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                                 <Button Command="{Binding OpenManagedStorageFolderCommand}"
                                                         CommandParameter="Settings"
                                                         Content="Settings"
@@ -670,13 +669,13 @@
                                                            Text="Open:" />
                                                 <Button Command="{Binding OpenManagedStorageFolderCommand}"
                                                         CommandParameter="Database"
-                                                        Content="Database"
+                                                        Margin="0,0,5,0"
+                                                        Content="Open Database"
                                                         Style="{StaticResource SettingsPathLabelButtonStyle}"
                                                         ToolTip="Open current Database folder" />
-                                                <TextBlock Margin="4,0" VerticalAlignment="Center" Text="|" />
                                                 <Button Command="{Binding OpenManagedStorageFolderCommand}"
                                                         CommandParameter="Logs"
-                                                        Content="Logs"
+                                                        Content="Open Logs"
                                                         Style="{StaticResource SettingsPathLabelButtonStyle}"
                                                         ToolTip="Open current Logs folder" />
                                             </WrapPanel>

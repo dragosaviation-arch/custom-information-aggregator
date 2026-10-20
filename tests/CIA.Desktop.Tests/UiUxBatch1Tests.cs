@@ -110,16 +110,17 @@ public sealed class UiUxBatch1Tests
             .Single(tab => string.Equals(tab.Attribute("Header")?.Value, "General", StringComparison.Ordinal));
         Assert.IsFalse(generalTab.Descendants().Any(element =>
             string.Equals(element.Attribute("Text")?.Value, "REPEATED DATA LAYOUT", StringComparison.Ordinal)));
-        Assert.IsNotNull(FindNamedElement(discovery, "OutputInterpretationSummary"));
-        Assert.IsNotNull(FindNamedElement(discovery, "OutputAdvancedOptionsExpander"));
-        Assert.IsNotNull(FindNamedElement(discovery, "DecomposerButton"));
+        Assert.IsNotNull(FindNamedElement(discovery, "OutputPlanExpander"));
+        Assert.IsFalse(discovery.Contains("OutputAdvancedOptionsExpander", StringComparison.Ordinal));
+        Assert.IsFalse(discovery.Contains("DecomposerButton", StringComparison.Ordinal));
         StringAssert.Contains(discovery, "Text=\"Preserve relationships\"");
+        StringAssert.Contains(discovery, "Text=\"One row per source file\"");
         Assert.IsFalse(discovery.Contains("Advanced repeated data layout", StringComparison.Ordinal));
         Assert.IsFalse(discovery.Contains("Preserve relationships — Recommended", StringComparison.Ordinal));
         Assert.IsFalse(discovery.Contains("SelectedLayout, Mode=TwoWay", StringComparison.Ordinal));
         var buildDatabaseButton = FindNamedElement(discovery, "BuildDatabaseButton");
         var xamlName = XName.Get("Name", "http://schemas.microsoft.com/winfx/2006/xaml");
-        Assert.IsTrue(buildDatabaseButton.Ancestors().Any(element =>
+        Assert.IsFalse(buildDatabaseButton.Ancestors().Any(element =>
             string.Equals(
                 element.Attribute(xamlName)?.Value,
                 "SharedDiscoveryActions",
@@ -138,7 +139,9 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(discovery, "Text=\"{Binding OccurrencePreviewText}\"");
         StringAssert.Contains(discovery, "Command=\"{Binding PreviousOccurrenceCommand}\"");
         StringAssert.Contains(discovery, "Command=\"{Binding NextOccurrenceCommand}\"");
-        StringAssert.Contains(discovery, "AutomationProperties.Name=\"Database Tag Name Override\"");
+        Assert.IsFalse(discovery.Contains(
+            "AutomationProperties.Name=\"Database Tag Name Override\"",
+            StringComparison.Ordinal));
 
         StringAssert.Contains(database, "x:Name=\"DatabaseSourceSetTabs\"");
         StringAssert.Contains(database, "SelectedItem=\"{Binding SelectedDataset, Mode=TwoWay}\"");
@@ -189,10 +192,10 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(discoveryCode, "DiscoveryRightColumn.MinWidth = 360");
         StringAssert.Contains(load, "LoadColumnResizeThumbStyle");
         StringAssert.Contains(discovery, "DiscoveryColumnResizeThumbStyle");
-        Assert.HasCount(6, Regex.Matches(load, "Tag=\"load\\.").Cast<Match>());
-        Assert.HasCount(7, Regex.Matches(discovery, "Tag=\"discovery\\.").Cast<Match>());
-        StringAssert.Contains(load, "Tag=\"load.status\"");
-        StringAssert.Contains(discovery, "Tag=\"discovery.blacklist\"");
+        Assert.HasCount(5, Regex.Matches(load, "Tag=\"load\\.").Cast<Match>());
+        Assert.HasCount(6, Regex.Matches(discovery, "Tag=\"discovery\\.").Cast<Match>());
+        StringAssert.Contains(load, "Tag=\"load.size\"");
+        StringAssert.Contains(discovery, "Tag=\"discovery.sample\"");
         StringAssert.Contains(theme, "x:Key=\"CiaColumnResizeThumbStyle\"");
         StringAssert.Contains(theme, "x:Name=\"ResizeGuide\"");
         StringAssert.Contains(theme, "Background=\"{StaticResource CiaBorderStrongBrush}\"");
@@ -322,6 +325,50 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(picker, "dialog.FolderNames");
         StringAssert.Contains(picker, "Filter = \"XML files (*.xml)|*.xml\"");
         StringAssert.Contains(picker, "Filter = \"Archive files|*.*\"");
+    }
+
+    [TestMethod]
+    public void Spr220FinalUiSurfacesBoundedActionsAndRemovesDeferredEditors()
+    {
+        var load = ReadDesktopFile("Views", "LoadWorkspaceView.xaml");
+        var loadCode = ReadDesktopFile("Views", "LoadWorkspaceView.xaml.cs");
+        var discovery = ReadDesktopFile("Views", "DiscoveryWorkspaceView.xaml");
+        var discoveryCode = ReadDesktopFile("Views", "DiscoveryWorkspaceView.xaml.cs");
+        var database = ReadDesktopFile("Views", "DatabaseWorkspaceView.xaml");
+        var settings = ReadDesktopFile("Views", "SettingsWorkspaceView.xaml");
+
+        Assert.HasCount(1, Regex.Matches(load, "x:Name=\"RunDiscoveryButton\"").Cast<Match>());
+        Assert.HasCount(1, Regex.Matches(discovery, "x:Name=\"BuildDatabaseButton\"").Cast<Match>());
+        StringAssert.Contains(load, "Width=\"142\"");
+        StringAssert.Contains(load, "PinnedStatusOffset");
+        StringAssert.Contains(loadCode, "PinnedStatusOffset = e.HorizontalOffset");
+        StringAssert.Contains(load, "CommandParameter=\"Size\"");
+        StringAssert.Contains(load, "Failed validation: content was rejected");
+
+        StringAssert.Contains(discovery, "PinnedBlacklistOffset");
+        StringAssert.Contains(discoveryCode, "PinnedBlacklistOffset = e.HorizontalOffset");
+        StringAssert.Contains(discovery, "Content=\"Hide child tags\"");
+        Assert.IsFalse(discovery.Contains("Show only tags with Database Tag Name Override", StringComparison.Ordinal));
+        Assert.IsFalse(discovery.Contains("Revert Database Tag Name Override", StringComparison.Ordinal));
+        StringAssert.Contains(discovery, "Text=\"No saved Discovery profiles\"");
+        StringAssert.Contains(discovery, "Text=\"No saved selection profiles\"");
+        StringAssert.Contains(discovery, "Text=\"No saved blacklist profiles\"");
+        StringAssert.Contains(discovery, "x:Name=\"OutputPlanExpander\"");
+        StringAssert.Contains(discovery, "Repeated records retain structural grouping");
+        StringAssert.Contains(discovery, "missing fields remain blank");
+
+        Assert.IsFalse(database.Contains("Text=\"Row Family\"", StringComparison.Ordinal));
+        StringAssert.Contains(database, "Text=\"Current output\"");
+        StringAssert.Contains(database, "Text=\"OUTPUT INCLUSION\"");
+        StringAssert.Contains(database, "Text=\"WORKBOOK\"");
+        StringAssert.Contains(database, "Text=\"WORKSHEET\"");
+        StringAssert.Contains(database, "AutomationProperties.Name=\"Select existing workbook definition\"");
+        StringAssert.Contains(database, "AutomationProperties.Name=\"Edit selected workbook filename\"");
+
+        StringAssert.Contains(settings, "BasedOn=\"{StaticResource CiaButtonStyle}\"");
+        StringAssert.Contains(settings, "CommandParameter=\"Temporary\"");
+        StringAssert.Contains(settings, "CommandParameter=\"Database\"");
+        StringAssert.Contains(settings, "CommandParameter=\"Logs\"");
     }
 
     private static XElement FindNamedElement(string xaml, string name)

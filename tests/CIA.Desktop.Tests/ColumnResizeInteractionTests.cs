@@ -23,7 +23,7 @@ public sealed class ColumnResizeInteractionTests
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(20);
 
     [TestMethod]
-    public async Task LoadAndDiscoveryHeaderDraggingPersistsAdjacentWidthsAcrossRestart()
+    public async Task LoadAndDiscoveryHeaderDraggingPersistsAdjustableWidthsAndLeavesPinnedColumnsFixed()
     {
         await WpfTestApplication.RunAsync(VerifyInteractionAsync).WaitAsync(TestTimeout);
     }
@@ -75,10 +75,11 @@ public sealed class ColumnResizeInteractionTests
             Drag(loadDivider, 80);
             Assert.AreEqual(240, loadViewModel.SourceColumnWidth);
             Assert.AreEqual(110, loadViewModel.PathColumnWidth);
-            var loadLastDivider = FindThumb(loadView, "load.status");
-            Drag(loadLastDivider, 80);
-            Drag(loadLastDivider, -30);
-            Assert.AreEqual(150, loadViewModel.StatusColumnWidth);
+            var loadSizeDivider = FindThumb(loadView, "load.size");
+            Drag(loadSizeDivider, 20);
+            Assert.AreEqual(92, loadViewModel.SizeColumnWidth);
+            Assert.AreEqual(100, loadViewModel.StatusColumnWidth);
+            Assert.IsNull(FindThumbOrDefault(loadView, "load.status"));
 
             window.Content = discoveryView;
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
@@ -88,18 +89,11 @@ public sealed class ColumnResizeInteractionTests
             Drag(discoveryDivider, 50);
             Assert.AreEqual(160, discoveryViewModel.TagColumnWidth);
             Assert.AreEqual(70, discoveryViewModel.DatabaseTagColumnWidth);
-            var blacklistDivider = FindThumb(
-                discoveryView,
-                "discovery.sample|discovery.blacklist");
+            var blacklistDivider = FindThumb(discoveryView, "discovery.sample");
             Drag(blacklistDivider, -30);
             Assert.AreEqual(140, discoveryViewModel.SampleColumnWidth);
-            Assert.AreEqual(134, discoveryViewModel.BlacklistColumnWidth);
-            var discoveryLastDivider = FindThumb(discoveryView, "discovery.blacklist");
-            Drag(discoveryLastDivider, 80);
-            window.Width = 900;
-            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
-            Drag(discoveryLastDivider, -30);
-            Assert.AreEqual(184, discoveryViewModel.BlacklistColumnWidth);
+            Assert.AreEqual(104, discoveryViewModel.BlacklistColumnWidth);
+            Assert.IsNull(FindThumbOrDefault(discoveryView, "discovery.blacklist"));
         }
         finally
         {
@@ -124,21 +118,25 @@ public sealed class ColumnResizeInteractionTests
 
         Assert.AreEqual(240, restoredLoad.SourceColumnWidth);
         Assert.AreEqual(110, restoredLoad.PathColumnWidth);
-        Assert.AreEqual(150, restoredLoad.StatusColumnWidth);
+        Assert.AreEqual(92, restoredLoad.SizeColumnWidth);
+        Assert.AreEqual(100, restoredLoad.StatusColumnWidth);
         Assert.AreEqual(160, restoredDiscovery.TagColumnWidth);
         Assert.AreEqual(70, restoredDiscovery.DatabaseTagColumnWidth);
         Assert.AreEqual(140, restoredDiscovery.SampleColumnWidth);
-        Assert.AreEqual(184, restoredDiscovery.BlacklistColumnWidth);
+        Assert.AreEqual(104, restoredDiscovery.BlacklistColumnWidth);
         root.Delete(recursive: true);
     }
 
     private static Thumb FindThumb(DependencyObject parent, string tag)
     {
-        var result = FindVisualChildren<Thumb>(parent).SingleOrDefault(thumb =>
-            string.Equals(thumb.Tag as string, tag, StringComparison.Ordinal));
+        var result = FindThumbOrDefault(parent, tag);
         Assert.IsNotNull(result, $"Column divider '{tag}' was not present in the real view.");
         return result;
     }
+
+    private static Thumb? FindThumbOrDefault(DependencyObject parent, string tag) =>
+        FindVisualChildren<Thumb>(parent).SingleOrDefault(thumb =>
+            string.Equals(thumb.Tag as string, tag, StringComparison.Ordinal));
 
     private static IEnumerable<T> FindVisualChildren<T>(DependencyObject parent)
         where T : DependencyObject

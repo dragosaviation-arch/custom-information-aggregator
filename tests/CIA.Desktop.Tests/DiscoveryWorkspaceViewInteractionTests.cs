@@ -321,12 +321,9 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
                     AutomationProperties.GetName(textBox),
                     "Database Tag Name Override",
                     StringComparison.Ordinal));
-            Assert.IsNotNull(databaseTagField);
-            Assert.IsTrue(databaseTagField.IsEnabled);
-            Assert.AreEqual("beta", databaseTagField.Text);
+            Assert.IsNull(databaseTagField, "The v1 Discovery rename editor must remain hidden.");
 
-            databaseTagField.Text = "Mapped beta";
-            databaseTagField.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+            viewModel.SelectedDatabaseTag = "Mapped beta";
             await Dispatcher.Yield(DispatcherPriority.DataBind);
 
             Assert.AreEqual("Mapped beta", beta.DatabaseTag);
@@ -357,13 +354,9 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             var outputGroupSelector = (ComboBox)view.FindName("OutputPreviewGroupSelector");
             var outputPreviewScroll = (ScrollViewer)view.FindName("OutputPreviewScrollViewer");
             var outputPlanGroups = (ItemsControl)view.FindName("OutputPlanGroups");
+            var outputPlan = (Expander)view.FindName("OutputPlanExpander");
             var outputSettingsGroups = (ItemsControl)view.FindName("OutputSettingsGroups");
             var inputSettingsTabs = (TabControl)view.FindName("InputSettingsTabs");
-            var interpretationSummary = (Border)view.FindName("OutputInterpretationSummary");
-            var advancedOptions = (Expander)view.FindName("OutputAdvancedOptionsExpander");
-            var decomposer = (Button)view.FindName("DecomposerButton");
-            var sharedActions = (WrapPanel)view.FindName("SharedDiscoveryActions");
-            var sharedDatabaseAction = (WrapPanel)view.FindName("SharedDatabaseAction");
             var buildDatabase = (Button)view.FindName("BuildDatabaseButton");
             var buildCommand = viewModel.BuildDatabaseCommand;
             var initialCanBuild = buildCommand.CanExecute(null);
@@ -380,16 +373,11 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsNotNull(outputMode.Command);
             Assert.IsFalse(inputSettingsTabs.Items.Cast<TabItem>().Any(item =>
                 string.Equals(item.Header?.ToString(), "Layout", StringComparison.Ordinal)));
-            Assert.IsTrue(sharedActions.IsVisible);
-            Assert.AreEqual(4, Grid.GetRow(sharedActions));
+            Assert.IsNull(view.FindName("SharedDiscoveryActions"));
+            Assert.IsNull(view.FindName("SharedDatabaseAction"));
             Assert.AreEqual(GridUnitType.Star, previewRow.Height.GridUnitType);
             Assert.AreEqual(GridUnitType.Star, settingsRow.Height.GridUnitType);
             Assert.AreEqual(previewRow.Height.Value, settingsRow.Height.Value);
-            Assert.IsNull(FindVisualDescendant<WrapPanel>(
-                (Border)view.FindName("PreviewPanel"),
-                panel => ReferenceEquals(panel, sharedActions)),
-                "Shared actions must remain outside the Preview/Settings allocation.");
-            Assert.IsTrue(sharedDatabaseAction.IsVisible);
             Assert.IsTrue(buildDatabase.IsVisible);
             Assert.AreSame(buildCommand, buildDatabase.Command);
             Assert.AreEqual("Create Database", buildDatabase.Content);
@@ -408,9 +396,6 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.IsFalse(inputSettings.IsVisible);
             Assert.IsTrue(outputPreview.IsVisible);
             Assert.IsTrue(outputSettings.IsVisible);
-            Assert.IsFalse(databaseTagField.IsVisible,
-                "Collapsed Input controls must not remain in the active focus tree.");
-            Assert.IsFalse(databaseTagField.Focus());
             outputGroupSelector.BringIntoView();
             view.UpdateLayout();
             Assert.IsTrue(outputGroupSelector.IsVisible);
@@ -447,22 +432,13 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.AreEqual(
                 outputGroupSelector,
                 FindVisualDescendant<ComboBox>(outputPreview, control => control.Focusable));
-            Assert.AreEqual(Visibility.Visible, interpretationSummary.Visibility);
-            Assert.AreEqual(Visibility.Visible, advancedOptions.Visibility);
-            Assert.IsFalse(advancedOptions.IsExpanded);
+            Assert.IsFalse(outputPlan.IsExpanded);
             Assert.IsNull(FindVisualDescendant<ComboBox>(
                 outputSettings,
                 control => true),
                 "Historical layout choices must not remain in the Output Settings visual tree.");
-            Assert.IsFalse(decomposer.IsVisible);
-
-            advancedOptions.IsExpanded = true;
-            await Dispatcher.Yield(DispatcherPriority.DataBind);
-            view.UpdateLayout();
-            Assert.AreEqual(Visibility.Visible, decomposer.Visibility);
-            Assert.IsFalse(decomposer.IsEnabled);
-            Assert.IsFalse(decomposer.Focusable);
-            Assert.IsFalse(decomposer.IsTabStop);
+            Assert.IsNull(view.FindName("OutputAdvancedOptionsExpander"));
+            Assert.IsNull(view.FindName("DecomposerButton"));
             Assert.AreEqual(RepeatedDataLayout.AllCombinations, selectedLayout.SelectedLayout);
             Assert.IsTrue(navigator.IsVisible);
             Assert.IsTrue(ordinalInput.IsVisible);
@@ -504,8 +480,7 @@ public sealed class DiscoveryWorkspaceViewInteractionTests
             Assert.AreEqual(0, Grid.GetRow((Border)view.FindName("SettingsPanel")));
             Assert.AreEqual(0, Grid.GetColumn((Border)view.FindName("PreviewPanel")));
             Assert.AreEqual(2, Grid.GetColumn((Border)view.FindName("SettingsPanel")));
-            Assert.AreEqual(4, Grid.GetRow(sharedActions));
-            Assert.IsTrue(sharedActions.IsVisible);
+            Assert.IsNull(view.FindName("SharedDiscoveryActions"));
             Assert.IsTrue(buildDatabase.IsVisible);
             Assert.AreSame(buildCommand, buildDatabase.Command);
         }

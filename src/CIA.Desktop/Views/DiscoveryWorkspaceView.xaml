@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:workflow="clr-namespace:CIA.Desktop.Workflow"
+             x:Name="DiscoveryViewRoot"
              Loaded="OnViewLoaded"
              SizeChanged="OnViewSizeChanged"
              SnapsToDevicePixels="True">
@@ -110,6 +111,26 @@
                 <TextBlock VerticalAlignment="Center"
                            Style="{StaticResource CiaSecondaryTextStyle}"
                            Text="{Binding IncludedSourceSummary}" />
+                <Border Margin="12,3,6,3"
+                        Style="{StaticResource CiaNeutralStateBadgeStyle}">
+                    <TextBlock VerticalAlignment="Center"
+                               Style="{StaticResource CiaSecondaryTextStyle}"
+                               Text="{Binding DatabaseStateText}" />
+                </Border>
+                <TextBlock Margin="0,0,6,0"
+                           MaxWidth="250"
+                           VerticalAlignment="Center"
+                           Style="{StaticResource CiaSecondaryTextStyle}"
+                           Text="Build from the current selected Discovery mapping."
+                           TextTrimming="CharacterEllipsis" />
+                <Button x:Name="BuildDatabaseButton"
+                        MinHeight="32"
+                        Padding="14,5"
+                        Command="{Binding BuildDatabaseCommand}"
+                        Content="{Binding DatabaseBuildButtonText}"
+                        FontWeight="SemiBold"
+                        Style="{StaticResource CiaPrimaryButtonStyle}"
+                        ToolTip="{Binding DatabaseBuildAvailabilityReason}" />
             </WrapPanel>
 
             <WrapPanel Grid.Row="2" VerticalAlignment="Center">
@@ -134,13 +155,38 @@
                         </TextBlock.Style>
                     </TextBlock>
                 </Grid>
-                <ComboBox Width="180"
-                          Height="29"
-                          Margin="0,0,6,0"
-                          DisplayMemberPath="DisplayName"
-                          ItemsSource="{Binding InformationSelectionProfiles}"
-                          SelectedItem="{Binding SelectedInformationSelectionProfile, Mode=TwoWay}"
-                          ToolTip="Select an information-selection profile. Use Load to apply it." />
+                <Grid Width="180" Height="29" Margin="0,0,6,0">
+                    <ComboBox DisplayMemberPath="DisplayName"
+                              ItemsSource="{Binding InformationSelectionProfiles}"
+                              SelectedItem="{Binding SelectedInformationSelectionProfile, Mode=TwoWay}"
+                              ToolTip="Select an information-selection profile. Use Load to apply it.">
+                        <ComboBox.Style>
+                            <Style TargetType="ComboBox">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding InformationSelectionProfiles.Count}" Value="0">
+                                        <Setter Property="IsEnabled" Value="False" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ComboBox.Style>
+                    </ComboBox>
+                    <TextBlock Margin="9,0"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource CiaTextMutedBrush}"
+                               IsHitTestVisible="False"
+                               Text="No saved Discovery profiles">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding InformationSelectionProfiles.Count}" Value="0">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
                 <Button Margin="0,0,6,0"
                         Command="{Binding LoadProfileCommand}"
                         Style="{StaticResource CiaGhostButtonStyle}"
@@ -221,16 +267,19 @@
                                     CommandParameter="Sample"
                                     Content="{Binding SampleHeaderText}"
                                     Style="{StaticResource DiscoverySortHeaderStyle}" />
-                            <TextBlock Grid.Column="7"
-                                       Style="{StaticResource CiaSourceHeaderTextStyle}"
-                                       Text="Blacklist" />
+                            <Grid Grid.Column="7" Background="{StaticResource CiaPanelAlternateBrush}">
+                                <Grid.RenderTransform>
+                                    <TranslateTransform X="{Binding PinnedBlacklistOffset, ElementName=DiscoveryViewRoot}" />
+                                </Grid.RenderTransform>
+                                <TextBlock Style="{StaticResource CiaSourceHeaderTextStyle}"
+                                           Text="Blacklist" />
+                            </Grid>
                             <Thumb Grid.Column="1" Tag="discovery.sourceSet|discovery.tag" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="2" Tag="discovery.tag|discovery.databaseTag" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="3" Tag="discovery.databaseTag|discovery.occurrences" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="4" Tag="discovery.occurrences|discovery.sources" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="5" Tag="discovery.sources|discovery.sample" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
-                            <Thumb Grid.Column="6" Tag="discovery.sample|discovery.blacklist" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
-                            <Thumb Grid.Column="7" Tag="discovery.blacklist" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="6" Tag="discovery.sample" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                         </Grid>
                     </Border>
 
@@ -383,12 +432,16 @@
                                                        Text="{Binding SampleValue}"
                                                        TextTrimming="CharacterEllipsis"
                                                        TextWrapping="NoWrap" />
-                                            <Button Grid.Column="7"
-                                                    AutomationProperties.Name="Toggle information group blacklist"
-                                                    Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                    CommandParameter="{Binding}"
-                                                    Content="{Binding BlacklistActionText}"
-                                                    Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
+                                            <Border Grid.Column="7" Background="{StaticResource CiaPanelBrush}">
+                                                <Border.RenderTransform>
+                                                    <TranslateTransform X="{Binding PinnedBlacklistOffset, ElementName=DiscoveryViewRoot}" />
+                                                </Border.RenderTransform>
+                                                <Button AutomationProperties.Name="Toggle information group blacklist"
+                                                        Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding}"
+                                                        Content="{Binding BlacklistActionText}"
+                                                        Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
+                                            </Border>
                                         </Grid>
                                         <ItemsControl ItemsSource="{Binding Children}">
                                             <ItemsControl.Style>
@@ -456,12 +509,16 @@
                                                                    Text="{Binding SampleValue}"
                                                                    TextTrimming="CharacterEllipsis"
                                                                    TextWrapping="NoWrap" />
-                                                        <Button Grid.Column="7"
-                                                                AutomationProperties.Name="Toggle detailed identity blacklist"
-                                                                Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                                CommandParameter="{Binding}"
-                                                                Content="{Binding BlacklistActionText}"
-                                                                Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
+                                                        <Border Grid.Column="7" Background="{StaticResource CiaPanelAlternateBrush}">
+                                                            <Border.RenderTransform>
+                                                                <TranslateTransform X="{Binding PinnedBlacklistOffset, ElementName=DiscoveryViewRoot}" />
+                                                            </Border.RenderTransform>
+                                                            <Button AutomationProperties.Name="Toggle detailed identity blacklist"
+                                                                    Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                    CommandParameter="{Binding}"
+                                                                    Content="{Binding BlacklistActionText}"
+                                                                    Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
+                                                        </Border>
                                                     </Grid>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
@@ -554,6 +611,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <Border Style="{StaticResource CiaPanelHeaderStyle}">
                         <Grid>
@@ -692,60 +750,6 @@
                                            TextWrapping="Wrap" />
                             </ScrollViewer>
                         </Border>
-                        <Grid Grid.Row="5">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="72" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock VerticalAlignment="Center"
-                                           Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="Database Tag" />
-                                <TextBox Grid.Column="1"
-                                         AutomationProperties.Name="Database Tag Name Override"
-                                         IsEnabled="{Binding CanEditDatabaseTagOverride}"
-                                         Text="{Binding SelectedDatabaseTag, Mode=TwoWay, UpdateSourceTrigger=LostFocus}">
-                                    <TextBox.Style>
-                                        <Style TargetType="TextBox"
-                                               BasedOn="{StaticResource CiaTextInputStyle}">
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding SelectedInformation.HasAnyDatabaseTagOverride}" Value="True">
-                                                    <Setter Property="BorderBrush" Value="{StaticResource CiaWarningBrush}" />
-                                                    <Setter Property="Foreground" Value="{StaticResource CiaWarningBrush}" />
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBox.Style>
-                                </TextBox>
-                                <Button Grid.Column="2"
-                                        Margin="6,0,0,0"
-                                        AutomationProperties.Name="Revert Database Tag Name Override"
-                                        Command="{Binding ClearDatabaseTagOverrideCommand}"
-                                        Style="{StaticResource CiaGhostButtonStyle}"
-                                        Content="{Binding DatabaseTagOverrideActionText}" />
-                            </Grid>
-                            <TextBlock Grid.Row="1"
-                                       Margin="72,4,0,0"
-                                       FontSize="10"
-                                       Foreground="{StaticResource CiaWarningBrush}"
-                                       Text="Modified mapping — not stored in the selection profile.">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding SelectedInformation.HasAnyDatabaseTagOverride}" Value="True">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Grid>
                     </Grid>
                     <Border x:Name="OutputPreviewContent"
                             Grid.Row="1"
@@ -770,11 +774,16 @@
                                       VerticalScrollBarVisibility="Auto">
                         <Grid>
                             <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="8" />
                                 <RowDefinition Height="*" />
+                                <RowDefinition Height="8" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
-                            <Border Padding="10,8"
+                            <Expander x:Name="OutputPlanExpander"
+                                      Grid.Row="2"
+                                      Header="Output Plan"
+                                      IsExpanded="False">
+                            <Border Margin="0,6,0,0"
+                                    Padding="10,8"
                                     Background="{StaticResource CiaPanelBrush}"
                                     BorderBrush="{StaticResource CiaBorderBrush}"
                                     BorderThickness="1"
@@ -822,7 +831,8 @@
                                     </ItemsControl>
                                 </StackPanel>
                             </Border>
-                            <Grid Grid.Row="2">
+                            </Expander>
+                            <Grid Grid.Row="0">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
@@ -936,6 +946,50 @@
                         </Grid>
                         </ScrollViewer>
                     </Border>
+                    <Border Grid.Row="2"
+                            Padding="8,6"
+                            BorderBrush="{StaticResource CiaDividerBrush}"
+                            BorderThickness="0,1,0,0">
+                        <WrapPanel x:Name="OccurrenceNavigator"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center">
+                            <Button Margin="0,0,6,0"
+                                    Command="{Binding PreviousOccurrenceCommand}"
+                                    Style="{StaticResource CiaButtonStyle}"
+                                    Content="&#x2039; Previous" />
+                            <TextBlock Margin="0,0,5,0"
+                                       VerticalAlignment="Center"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="Occurrence" />
+                            <TextBox x:Name="OccurrenceOrdinalInput"
+                                     Width="56"
+                                     Height="29"
+                                     Padding="4,0"
+                                     AutomationProperties.Name="Discovery occurrence ordinal"
+                                     HorizontalContentAlignment="Center"
+                                     VerticalContentAlignment="Center"
+                                     KeyDown="OnOccurrenceOrdinalKeyDown"
+                                     LostFocus="OnOccurrenceOrdinalLostFocus"
+                                     Text="{Binding OccurrenceOrdinalInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                <TextBox.Style>
+                                    <Style TargetType="TextBox" BasedOn="{StaticResource CiaTextInputStyle}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding CurrentOccurrenceOrdinal}" Value="0">
+                                                <Setter Property="IsEnabled" Value="False" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBox.Style>
+                            </TextBox>
+                            <TextBlock Margin="5,0,6,0"
+                                       VerticalAlignment="Center"
+                                       Style="{StaticResource CiaSecondaryTextStyle}"
+                                       Text="{Binding OccurrenceTotalText}" />
+                            <Button Command="{Binding NextOccurrenceCommand}"
+                                    Style="{StaticResource CiaButtonStyle}"
+                                    Content="Next &#x203A;" />
+                        </WrapPanel>
+                    </Border>
                 </Grid>
             </Border>
 
@@ -992,8 +1046,9 @@
                                                   Content="Show only selected"
                                                   IsChecked="{Binding ShowOnlySelected}" />
                                         <CheckBox Margin="0,4"
-                                                  Content="Show only tags with Database Tag Name Override"
-                                                  IsChecked="{Binding ShowOnlyDatabaseTagOverrides}" />
+                                                  Content="Hide child tags"
+                                                  IsChecked="{Binding HideChildTags}"
+                                                  ToolTip="Hide logical tag rows that are unambiguously nested beneath a structural container. Expanded structural-context choices remain available." />
                                     </StackPanel>
                                 </Grid>
                             </ScrollViewer>
@@ -1005,12 +1060,37 @@
                                            FontWeight="Bold"
                                            Foreground="{StaticResource CiaAccentBrush}"
                                            Text="SELECTION PROFILE MANAGEMENT" />
-                                <ComboBox Width="300"
-                                          Height="29"
-                                          Margin="0,0,0,7"
-                                          DisplayMemberPath="DisplayName"
-                                          ItemsSource="{Binding InformationSelectionProfiles}"
-                                          SelectedItem="{Binding SelectedInformationSelectionProfile, Mode=TwoWay}" />
+                                <Grid Width="300" Height="29" Margin="0,0,0,7">
+                                    <ComboBox DisplayMemberPath="DisplayName"
+                                              ItemsSource="{Binding InformationSelectionProfiles}"
+                                              SelectedItem="{Binding SelectedInformationSelectionProfile, Mode=TwoWay}">
+                                        <ComboBox.Style>
+                                            <Style TargetType="ComboBox">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding InformationSelectionProfiles.Count}" Value="0">
+                                                        <Setter Property="IsEnabled" Value="False" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ComboBox.Style>
+                                    </ComboBox>
+                                    <TextBlock Margin="9,0"
+                                               VerticalAlignment="Center"
+                                               Foreground="{StaticResource CiaTextMutedBrush}"
+                                               IsHitTestVisible="False"
+                                               Text="No saved selection profiles">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding InformationSelectionProfiles.Count}" Value="0">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
                                 <TextBox Width="300"
                                          AutomationProperties.Name="New information-selection profile name"
                                          Style="{StaticResource CiaTextInputStyle}"
@@ -1037,12 +1117,37 @@
                                            FontWeight="Bold"
                                            Foreground="{StaticResource CiaAccentBrush}"
                                            Text="BLACKLIST PROFILE MANAGEMENT" />
-                                <ComboBox Width="360"
-                                          Height="29"
-                                          Margin="0,0,0,7"
-                                          DisplayMemberPath="DisplayName"
-                                          ItemsSource="{Binding BlacklistProfiles}"
-                                          SelectedItem="{Binding SelectedBlacklistProfile, Mode=TwoWay}" />
+                                <Grid Width="360" Height="29" Margin="0,0,0,7">
+                                    <ComboBox DisplayMemberPath="DisplayName"
+                                              ItemsSource="{Binding BlacklistProfiles}"
+                                              SelectedItem="{Binding SelectedBlacklistProfile, Mode=TwoWay}">
+                                        <ComboBox.Style>
+                                            <Style TargetType="ComboBox">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding BlacklistProfiles.Count}" Value="0">
+                                                        <Setter Property="IsEnabled" Value="False" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ComboBox.Style>
+                                    </ComboBox>
+                                    <TextBlock Margin="9,0"
+                                               VerticalAlignment="Center"
+                                               Foreground="{StaticResource CiaTextMutedBrush}"
+                                               IsHitTestVisible="False"
+                                               Text="No saved blacklist profiles">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding BlacklistProfiles.Count}" Value="0">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
                                 <TextBox Width="360"
                                          AutomationProperties.Name="New blacklist profile name"
                                          Style="{StaticResource CiaTextInputStyle}"
@@ -1109,11 +1214,53 @@
                                                             FontWeight="SemiBold"
                                                             Style="{StaticResource CiaSecondaryTextStyle}"
                                                             Text="{Binding ParentSourceSetName, StringFormat=Parent: {0}}" />
-                                                 <CheckBox Margin="0,1,0,5"
-                                                           AutomationProperties.Name="One row per source file"
-                                                           Content="One row per source file"
-                                                           IsChecked="{Binding OneRowPerSourceFile, Mode=TwoWay}"
-                                                           ToolTip="Combine selected fields into one table. Repeated elements become numbered column groups." />
+                                                  <CheckBox Margin="0,1,0,5"
+                                                            AutomationProperties.Name="One row per source file"
+                                                            Content="One row per source file"
+                                                            IsChecked="{Binding OneRowPerSourceFile, Mode=TwoWay}"
+                                                            ToolTip="Combine selected fields into one table. Repeated elements become numbered column groups." />
+                                                  <Border Margin="0,0,0,6"
+                                                          Padding="8,6"
+                                                          Background="#FFFAFAFC"
+                                                          BorderBrush="{StaticResource CiaBorderBrush}"
+                                                          BorderThickness="1"
+                                                          CornerRadius="4">
+                                                      <Grid>
+                                                          <StackPanel>
+                                                              <StackPanel.Style>
+                                                                  <Style TargetType="StackPanel">
+                                                                      <Style.Triggers>
+                                                                          <DataTrigger Binding="{Binding OneRowPerSourceFile}" Value="True">
+                                                                              <Setter Property="Visibility" Value="Collapsed" />
+                                                                          </DataTrigger>
+                                                                      </Style.Triggers>
+                                                                  </Style>
+                                                              </StackPanel.Style>
+                                                              <TextBlock FontWeight="SemiBold" Text="Preserve relationships" />
+                                                              <TextBlock Margin="0,2,0,0"
+                                                                         Style="{StaticResource CiaSecondaryTextStyle}"
+                                                                         Text="Repeated records retain structural grouping and may produce multiple rows or OutputSets."
+                                                                         TextWrapping="Wrap" />
+                                                          </StackPanel>
+                                                          <StackPanel>
+                                                              <StackPanel.Style>
+                                                                  <Style TargetType="StackPanel">
+                                                                      <Setter Property="Visibility" Value="Collapsed" />
+                                                                      <Style.Triggers>
+                                                                          <DataTrigger Binding="{Binding OneRowPerSourceFile}" Value="True">
+                                                                              <Setter Property="Visibility" Value="Visible" />
+                                                                          </DataTrigger>
+                                                                      </Style.Triggers>
+                                                                  </Style>
+                                                              </StackPanel.Style>
+                                                              <TextBlock FontWeight="SemiBold" Text="One row per source file" />
+                                                              <TextBlock Margin="0,2,0,0"
+                                                                         Style="{StaticResource CiaSecondaryTextStyle}"
+                                                                         Text="Selected information from each source is combined into one row; repeated elements create additional columns and missing fields remain blank."
+                                                                         TextWrapping="Wrap" />
+                                                          </StackPanel>
+                                                      </Grid>
+                                                  </Border>
                                                  <ItemsControl ItemsSource="{Binding OutputSets}">
                                                      <ItemsControl.ItemTemplate>
                                                          <DataTemplate>
@@ -1160,114 +1307,11 @@
                                          </DataTemplate>
                                      </ItemsControl.ItemTemplate>
                                  </ItemsControl>
-                                 <TextBlock Margin="0,3,0,0"
-                                            FontSize="10"
-                                            Foreground="{StaticResource CiaAccentBrush}"
-                                            Text="OUTPUT INTERPRETATION" />
-                                 <Border x:Name="OutputInterpretationSummary"
-                                        Margin="0,5,0,8"
-                                        Padding="10,8"
-                                        Background="#FFFAFAFC"
-                                        BorderBrush="{StaticResource CiaBorderBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="4">
-                                    <StackPanel>
-                                        <TextBlock FontWeight="SemiBold"
-                                                   Text="Preserve relationships" />
-                                        <TextBlock Margin="0,3,0,0"
-                                                   Style="{StaticResource CiaSecondaryTextStyle}"
-                                                   Text="CIA keeps independently structured records separate and preserves source-defined relationships."
-                                                   TextWrapping="Wrap" />
-                                    </StackPanel>
-                                </Border>
-                                <Expander x:Name="OutputAdvancedOptionsExpander"
-                                          Margin="0,2,0,0"
-                                          AutomationProperties.Name="Advanced output interpretation options"
-                                          Header="Advanced options">
-                                    <StackPanel Margin="0,8,0,0">
-                                        <Button x:Name="DecomposerButton"
-                                                HorizontalAlignment="Left"
-                                                AutomationProperties.HelpText="Decomposer is not available in this release candidate build."
-                                                Content="Customize structure with Decomposer..."
-                                                Focusable="False"
-                                                IsEnabled="False"
-                                                IsTabStop="False"
-                                                Style="{StaticResource CiaGhostButtonStyle}"
-                                                ToolTip="Decomposer is not available in this release candidate build." />
-                                    </StackPanel>
-                                </Expander>
                             </StackPanel>
                         </ScrollViewer>
                     </Grid>
                 </Grid>
             </Border>
-            <WrapPanel x:Name="SharedDiscoveryActions"
-                       Grid.Row="4"
-                       Grid.Column="0"
-                       Grid.ColumnSpan="3"
-                       HorizontalAlignment="Center"
-                       VerticalAlignment="Center">
-                <WrapPanel x:Name="OccurrenceNavigator"
-                           Margin="0,0,10,0"
-                           VerticalAlignment="Center">
-                    <Button Margin="0,0,6,0"
-                            Command="{Binding PreviousOccurrenceCommand}"
-                            Style="{StaticResource CiaButtonStyle}"
-                            Content="&#x2039; Previous" />
-                    <TextBlock Margin="0,0,5,0"
-                               VerticalAlignment="Center"
-                               Style="{StaticResource CiaSecondaryTextStyle}"
-                               Text="Occurrence" />
-                    <TextBox x:Name="OccurrenceOrdinalInput"
-                             Width="56"
-                             Height="29"
-                             Padding="4,0"
-                             AutomationProperties.Name="Discovery occurrence ordinal"
-                             HorizontalContentAlignment="Center"
-                             VerticalContentAlignment="Center"
-                             KeyDown="OnOccurrenceOrdinalKeyDown"
-                             LostFocus="OnOccurrenceOrdinalLostFocus"
-                             Text="{Binding OccurrenceOrdinalInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
-                        <TextBox.Style>
-                            <Style TargetType="TextBox"
-                                   BasedOn="{StaticResource CiaTextInputStyle}">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding CurrentOccurrenceOrdinal}" Value="0">
-                                        <Setter Property="IsEnabled" Value="False" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBox.Style>
-                    </TextBox>
-                    <TextBlock Margin="5,0,6,0"
-                               VerticalAlignment="Center"
-                               Style="{StaticResource CiaSecondaryTextStyle}"
-                               Text="{Binding OccurrenceTotalText}" />
-                    <Button Command="{Binding NextOccurrenceCommand}"
-                            Style="{StaticResource CiaButtonStyle}"
-                            Content="Next &#x203A;" />
-                </WrapPanel>
-                <WrapPanel x:Name="SharedDatabaseAction"
-                           VerticalAlignment="Center">
-                    <Border Margin="0,0,6,0" Style="{StaticResource CiaNeutralStateBadgeStyle}">
-                        <TextBlock VerticalAlignment="Center"
-                                   Style="{StaticResource CiaSecondaryTextStyle}"
-                                   Text="{Binding DatabaseStateText}" />
-                    </Border>
-                    <TextBlock Margin="0,0,6,0"
-                               VerticalAlignment="Center"
-                               Style="{StaticResource CiaSecondaryTextStyle}"
-                               Text="Build from the current selected Discovery mapping." />
-                    <Button x:Name="BuildDatabaseButton"
-                            Command="{Binding BuildDatabaseCommand}"
-                            MinHeight="32"
-                            Padding="14,5"
-                            FontWeight="SemiBold"
-                            Style="{StaticResource CiaPrimaryButtonStyle}"
-                            Content="{Binding DatabaseBuildButtonText}"
-                            ToolTip="{Binding DatabaseBuildAvailabilityReason}" />
-                </WrapPanel>
-            </WrapPanel>
         </Grid>
 
         <Grid x:Name="DeleteInformationSelectionProfileConfirmation"

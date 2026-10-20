@@ -1311,6 +1311,76 @@ public sealed class DiscoveryWorkspaceViewModelTests
     }
 
     [TestMethod]
+    public async Task HideChildTagsFiltersOnlyUnambiguousLogicalRowsWithoutChangingSelection()
+    {
+        var source = CreateSource("child-tags.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        source = sourceSet.CreateIncludedReadySnapshot().Single();
+        var familyId = new RowFamilyId(
+            source.SourceSetId,
+            RowFamilyKind.Root,
+            "/root/record");
+        var scope = CreateDetailedInformation(
+            source,
+            "/root/record",
+            "record",
+            SourceValueCandidateKind.ElementScope,
+            "/root/record") with
+        {
+            RowFamilyId = familyId,
+            ElementRole = SourceElementRole.Structural
+        };
+        var name = CreateDetailedInformation(
+            source,
+            "/root/record/name",
+            "name",
+            SourceValueCandidateKind.Element,
+            "/root/record/name") with
+        {
+            RowFamilyId = familyId,
+            ElementRole = SourceElementRole.ValueBearing
+        };
+        var configuration = new ActiveDiscoveryConfiguration();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            new StubDiscoveryClient((correlation, sources) =>
+                Accept(correlation, sources, [scope, name])),
+            configuration,
+            sourceSet,
+            workflow,
+            new DatabaseBuildCoordinator(
+                configuration,
+                sourceSet,
+                workflow,
+                new NoOpDatabaseClient(),
+                NullLogger<DatabaseBuildCoordinator>.Instance));
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var scopeRow = viewModel.Information.Single(item => item.InformationType == "record");
+        var childRow = viewModel.Information.Single(item => item.InformationType == "name");
+        Assert.IsFalse(scopeRow.IsChildTag);
+        Assert.IsTrue(childRow.IsChildTag);
+        scopeRow.IsExpanded = true;
+        viewModel.ToggleSelectionCommand.Execute(childRow);
+        var selectedIdentity = childRow.SelectionTargetIdentities.Single();
+
+        viewModel.ShowOnlySelected = true;
+        viewModel.HideChildTags = true;
+
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreSame(scopeRow, viewModel.Information[0]);
+        Assert.IsTrue(scopeRow.IsExpanded);
+        Assert.IsNotEmpty(scopeRow.Children);
+        Assert.AreEqual(
+            DiscoveryInformationDisposition.Selected,
+            configuration.Current.Items.Single(item => item.Identity == selectedIdentity).Disposition);
+
+        viewModel.HideChildTags = false;
+        Assert.IsTrue(viewModel.Information.Any(item => item.InformationType == "name"));
+        Assert.IsTrue(childRow.SelectionState ?? false);
+    }
+
+    [TestMethod]
     public async Task DetailedChildrenDriveTriStateSelectionAndCollapsedBulkActions()
     {
         var source = CreateSource("tri-state.xml");

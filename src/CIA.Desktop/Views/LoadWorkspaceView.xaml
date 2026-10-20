@@ -8,6 +8,15 @@
              SizeChanged="OnViewSizeChanged"
              SnapsToDevicePixels="True">
     <UserControl.Resources>
+        <Style x:Key="LoadSortHeaderStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource CiaGhostButtonStyle}">
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="FontSize" Value="10.8" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
         <Style x:Key="LoadColumnResizeThumbStyle"
                TargetType="Thumb"
                BasedOn="{StaticResource CiaColumnResizeThumbStyle}">
@@ -45,11 +54,16 @@
                 <RowDefinition Height="*" />
                 <RowDefinition Height="6" />
                 <RowDefinition Height="Auto" />
-                <RowDefinition Height="6" />
-                <RowDefinition Height="Auto" />
+                <RowDefinition Height="0" />
+                <RowDefinition Height="0" />
             </Grid.RowDefinitions>
 
-            <StackPanel Orientation="Horizontal">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <WrapPanel>
                 <StackPanel Margin="0,0,6,0" Orientation="Horizontal">
                     <Button Command="{Binding AddXmlFileCommand}"
                             Style="{StaticResource CiaPrimaryButtonStyle}"
@@ -120,13 +134,24 @@
                         Style="{StaticResource CiaDangerButtonStyle}"
                         Content="− Remove selected"
                         ToolTip="Remove highlighted rows from this session only." />
-            </StackPanel>
+                </WrapPanel>
+                <Button x:Name="RunDiscoveryButton"
+                        Grid.Column="1"
+                        Margin="8,0,0,0"
+                        MinHeight="32"
+                        Padding="14,5"
+                        AutomationProperties.Name="Run Discovery"
+                        Command="{Binding DiscoveryWorkspace.RunDiscoveryCommand, ElementName=LoadViewRoot}"
+                        Content="{Binding DiscoveryWorkspace.RunButtonText, ElementName=LoadViewRoot}"
+                        FontWeight="SemiBold"
+                        Style="{StaticResource CiaPrimaryButtonStyle}" />
+            </Grid>
 
             <WrapPanel Grid.Row="2"
                        VerticalAlignment="Center">
                 <StackPanel Margin="0,0,6,0"
                             Orientation="Horizontal">
-                    <Grid Width="190">
+                    <Grid Width="142">
                         <TextBox Style="{StaticResource CiaTextInputStyle}"
                                  Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Margin="9,0"
@@ -179,6 +204,8 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="9" />
                                         <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="8" />
+                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
                                     <TextBlock VerticalAlignment="Center"
                                                Style="{StaticResource CiaSecondaryTextStyle}"
@@ -215,6 +242,12 @@
                                                 Style="{StaticResource CiaPrimaryButtonStyle}"
                                                 Content="Apply" />
                                     </StackPanel>
+                                    <TextBlock Grid.Row="8"
+                                               Grid.ColumnSpan="2"
+                                               FontSize="9.6"
+                                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                               Text="Ready: validated and available. Unavailable: path cannot be read. Unsupported: format is not supported. Failed validation: content was rejected; inspect the row for details."
+                                               TextWrapping="Wrap" />
                                 </Grid>
                             </Border>
                         </Popup>
@@ -232,6 +265,38 @@
                            FontWeight="Bold"
                            Foreground="{StaticResource CiaTextPrimaryBrush}"
                            Text="{Binding IncludedSummary}" />
+                <Border Margin="10,0,6,0"
+                        Height="22"
+                        Padding="8,0"
+                        VerticalAlignment="Center"
+                        CornerRadius="11">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Background" Value="{StaticResource CiaDividerBrush}" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding DiscoveryStatus}"
+                                             Value="{x:Static workflow:WorkflowArtifactStatus.Stale}">
+                                    <Setter Property="Background" Value="{StaticResource CiaWarningSoftBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding DiscoveryStatus}"
+                                             Value="{x:Static workflow:WorkflowArtifactStatus.Current}">
+                                    <Setter Property="Background" Value="{StaticResource CiaAccentSoftBrush}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock VerticalAlignment="Center"
+                               FontSize="11"
+                               FontWeight="Bold"
+                               Foreground="{StaticResource CiaTextSecondaryBrush}"
+                               Text="{Binding DiscoveryStatusText}" />
+                </Border>
+                <TextBlock MaxWidth="320"
+                           VerticalAlignment="Center"
+                           Style="{StaticResource CiaSecondaryTextStyle}"
+                           Text="{Binding DiscoveryStatusDetail}"
+                           TextTrimming="CharacterEllipsis"
+                           ToolTip="{Binding DiscoveryStatusDetail}" />
             </WrapPanel>
 
             <Border x:Name="SourceListPanel"
@@ -266,32 +331,22 @@
                                 <ColumnDefinition Width="{Binding SizeColumnWidth}" MinWidth="48" />
                                 <ColumnDefinition Width="{Binding StatusColumnWidth}" MinWidth="64" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="1"
-                                       Style="{StaticResource CiaSourceHeaderTextStyle}"
-                                       Text="Source" />
-                            <TextBlock Grid.Column="2"
-                                       Style="{StaticResource CiaSourceHeaderTextStyle}"
-                                       Text="Path" />
-                            <TextBlock Grid.Column="3"
-                                       Style="{StaticResource CiaSourceHeaderTextStyle}"
-                                       Text="Set" />
-                            <TextBlock Grid.Column="4"
-                                       HorizontalAlignment="Center"
-                                       Style="{StaticResource CiaSourceHeaderTextStyle}"
-                                       Text="Lvl"
-                                       ToolTip="Archive nesting depth" />
-                            <TextBlock Grid.Column="5"
-                                       Style="{StaticResource CiaSourceHeaderTextStyle}"
-                                       Text="Size" />
-                            <TextBlock Grid.Column="6"
-                                       Style="{StaticResource CiaSourceHeaderTextStyle}"
-                                       Text="Status" />
+                            <Button Grid.Column="1" Command="{Binding SortCommand}" CommandParameter="Source" Content="{Binding SourceHeaderText}" Style="{StaticResource LoadSortHeaderStyle}" />
+                            <Button Grid.Column="2" Command="{Binding SortCommand}" CommandParameter="Path" Content="{Binding PathHeaderText}" Style="{StaticResource LoadSortHeaderStyle}" />
+                            <Button Grid.Column="3" Command="{Binding SortCommand}" CommandParameter="Set" Content="{Binding SourceSetHeaderText}" Style="{StaticResource LoadSortHeaderStyle}" />
+                            <Button Grid.Column="4" Command="{Binding SortCommand}" CommandParameter="Level" Content="{Binding LevelHeaderText}" Style="{StaticResource LoadSortHeaderStyle}" ToolTip="Archive nesting depth" />
+                            <Button Grid.Column="5" Command="{Binding SortCommand}" CommandParameter="Size" Content="{Binding SizeHeaderText}" Style="{StaticResource LoadSortHeaderStyle}" />
+                            <Grid Grid.Column="6" Background="{StaticResource CiaPanelAlternateBrush}">
+                                <Grid.RenderTransform>
+                                    <TranslateTransform X="{Binding PinnedStatusOffset, ElementName=LoadViewRoot}" />
+                                </Grid.RenderTransform>
+                                <Button Command="{Binding SortCommand}" CommandParameter="Status" Content="{Binding StatusHeaderText}" Style="{StaticResource LoadSortHeaderStyle}" />
+                            </Grid>
                             <Thumb Grid.Column="1" Tag="load.source|load.path" Style="{StaticResource LoadColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="2" Tag="load.path|load.sourceSet" Style="{StaticResource LoadColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="3" Tag="load.sourceSet|load.level" Style="{StaticResource LoadColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="4" Tag="load.level|load.size" Style="{StaticResource LoadColumnResizeThumbStyle}" />
-                            <Thumb Grid.Column="5" Tag="load.size|load.status" Style="{StaticResource LoadColumnResizeThumbStyle}" />
-                            <Thumb Grid.Column="6" Tag="load.status" Style="{StaticResource LoadColumnResizeThumbStyle}" />
+                            <Thumb Grid.Column="5" Tag="load.size" Style="{StaticResource LoadColumnResizeThumbStyle}" />
                         </Grid>
                     </Border>
 
@@ -440,10 +495,14 @@
                                                        VerticalAlignment="Center"
                                                        Style="{StaticResource CiaSecondaryTextStyle}"
                                                        Text="{Binding SizeText}" />
-                                            <StackPanel Grid.Column="6"
-                                                        VerticalAlignment="Center"
-                                                        Orientation="Horizontal"
-                                                        ToolTip="{Binding StatusDetail}">
+                                            <Border Grid.Column="6"
+                                                    Background="{StaticResource CiaPanelBrush}">
+                                                <Border.RenderTransform>
+                                                    <TranslateTransform X="{Binding PinnedStatusOffset, ElementName=LoadViewRoot}" />
+                                                </Border.RenderTransform>
+                                                <StackPanel VerticalAlignment="Center"
+                                                            Orientation="Horizontal"
+                                                            ToolTip="{Binding StatusDetail}">
                                                 <Ellipse Width="6"
                                                          Height="6"
                                                          Margin="0,0,5,0"
@@ -477,7 +536,8 @@
                                                            FontWeight="Bold"
                                                            Foreground="{StaticResource CiaTextSecondaryBrush}"
                                                            Text="{Binding StatusText}" />
-                                            </StackPanel>
+                                                </StackPanel>
+                                            </Border>
                                         </Grid>
                                     </Border>
                                 </DataTemplate>
@@ -550,57 +610,6 @@
                 </StackPanel>
             </Border>
 
-            <Border Grid.Row="8"
-                    Padding="8,5"
-                    Style="{StaticResource CiaPanelStyle}">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel VerticalAlignment="Center" Orientation="Horizontal">
-                        <Border Height="22"
-                                Padding="8,0"
-                                VerticalAlignment="Center"
-                                CornerRadius="11">
-                        <Border.Style>
-                            <Style TargetType="Border">
-                                <Setter Property="Background" Value="{StaticResource CiaDividerBrush}" />
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding DiscoveryStatus}"
-                                                 Value="{x:Static workflow:WorkflowArtifactStatus.Stale}">
-                                        <Setter Property="Background" Value="{StaticResource CiaWarningSoftBrush}" />
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding DiscoveryStatus}"
-                                                 Value="{x:Static workflow:WorkflowArtifactStatus.Current}">
-                                        <Setter Property="Background" Value="{StaticResource CiaAccentSoftBrush}" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Border.Style>
-                            <TextBlock VerticalAlignment="Center"
-                                       FontSize="11"
-                                       FontWeight="Bold"
-                                       Foreground="{StaticResource CiaTextSecondaryBrush}"
-                                       Text="{Binding DiscoveryStatusText}" />
-                        </Border>
-                        <TextBlock Margin="8,0,8,0"
-                                   VerticalAlignment="Center"
-                                   Style="{StaticResource CiaSecondaryTextStyle}"
-                                   Text="{Binding DiscoveryStatusDetail}"
-                                   TextTrimming="CharacterEllipsis" />
-                    </StackPanel>
-                    <Button x:Name="RunDiscoveryButton"
-                            Grid.Column="1"
-                            MinHeight="32"
-                            Padding="14,5"
-                            AutomationProperties.Name="Run Discovery"
-                            Command="{Binding DiscoveryWorkspace.RunDiscoveryCommand, ElementName=LoadViewRoot}"
-                            Content="{Binding DiscoveryWorkspace.RunButtonText, ElementName=LoadViewRoot}"
-                            FontWeight="SemiBold"
-                            Style="{StaticResource CiaPrimaryButtonStyle}" />
-                </Grid>
-            </Border>
         </Grid>
 
         <Grid x:Name="LoadRightRail"

@@ -43,6 +43,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private readonly AsyncRelayCommand _reloadHighlightedSourcesCommand;
     private readonly RelayCommand _createSourceSetCommand;
     private readonly RelayCommand _renameActiveSourceSetCommand;
+    private readonly RelayCommand<string> _sortCommand;
     private IReadOnlyList<LoadedSourceItem> _highlightedSources = [];
     private IReadOnlyList<LoadedSourceItem> _pendingRemovalSources = [];
     private bool _includeXmlFiles = true;
@@ -83,6 +84,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     private double _sizeColumnWidth;
     private double _statusColumnWidth;
     private WorkflowArtifactStatus _discoveryStatus;
+    private string _sortColumn = "Source";
+    private bool _sortAscending = true;
     private int _disposed;
 
     public LoadWorkspaceViewModel(
@@ -124,6 +127,8 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         Sources = sourceSet.Items;
         VisibleSources = CollectionViewSource.GetDefaultView(Sources);
         VisibleSources.Filter = MatchesFilter;
+        _sortCommand = new RelayCommand<string>(SortBy, column => column is not null);
+        ApplySort();
 
         foreach (var source in Sources)
         {
@@ -190,6 +195,7 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         _reloadHighlightedSourcesCommand;
     public IRelayCommand CreateSourceSetCommand => _createSourceSetCommand;
     public IRelayCommand RenameActiveSourceSetCommand => _renameActiveSourceSetCommand;
+    public IRelayCommand<string> SortCommand => _sortCommand;
     public IRelayCommand ToggleFilterOptionsCommand { get; }
     public IRelayCommand ApplyFilterOptionsCommand { get; }
     public IRelayCommand ClearFilterOptionsCommand { get; }
@@ -200,6 +206,18 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
     public int HighlightedSourceCount => _highlightedSources.Count;
     public int IncludedCount => Sources.Count(source => source.IsIncluded);
     public string IncludedSummary => $"{IncludedCount} / {Sources.Count} included";
+
+    public string SourceHeaderText => HeaderText("Source", "Source");
+
+    public string PathHeaderText => HeaderText("Path", "Path");
+
+    public string SourceSetHeaderText => HeaderText("Set", "Set");
+
+    public string LevelHeaderText => HeaderText("Level", "Lvl");
+
+    public string SizeHeaderText => HeaderText("Size", "Size");
+
+    public string StatusHeaderText => HeaderText("Status", "Status");
 
     public SourceSetDefinition? ActiveSourceSet
     {
@@ -1125,6 +1143,58 @@ public sealed class LoadWorkspaceViewModel : ObservableObject, IDisposable
         VisibleSources.Refresh();
         NotifySourceCommandsCanExecuteChanged();
     }
+
+    private void SortBy(string? column)
+    {
+        if (string.IsNullOrWhiteSpace(column))
+        {
+            return;
+        }
+
+        if (string.Equals(_sortColumn, column, StringComparison.Ordinal))
+        {
+            _sortAscending = !_sortAscending;
+        }
+        else
+        {
+            _sortColumn = column;
+            _sortAscending = true;
+        }
+
+        ApplySort();
+        OnPropertyChanged(nameof(SourceHeaderText));
+        OnPropertyChanged(nameof(PathHeaderText));
+        OnPropertyChanged(nameof(SourceSetHeaderText));
+        OnPropertyChanged(nameof(LevelHeaderText));
+        OnPropertyChanged(nameof(SizeHeaderText));
+        OnPropertyChanged(nameof(StatusHeaderText));
+    }
+
+    private void ApplySort()
+    {
+        var propertyName = _sortColumn switch
+        {
+            "Path" => nameof(LoadedSourceItem.Path),
+            "Set" => nameof(LoadedSourceItem.SourceSetName),
+            "Level" => nameof(LoadedSourceItem.LevelText),
+            "Size" => nameof(LoadedSourceItem.SizeBytes),
+            "Status" => nameof(LoadedSourceItem.Status),
+            _ => nameof(LoadedSourceItem.DisplayName)
+        };
+
+        using (VisibleSources.DeferRefresh())
+        {
+            VisibleSources.SortDescriptions.Clear();
+            VisibleSources.SortDescriptions.Add(new SortDescription(
+                propertyName,
+                _sortAscending ? ListSortDirection.Ascending : ListSortDirection.Descending));
+        }
+    }
+
+    private string HeaderText(string column, string label) =>
+        string.Equals(_sortColumn, column, StringComparison.Ordinal)
+            ? $"{label} {(_sortAscending ? '↑' : '↓')}"
+            : label;
 
     private void NotifySourceCommandsCanExecuteChanged()
     {

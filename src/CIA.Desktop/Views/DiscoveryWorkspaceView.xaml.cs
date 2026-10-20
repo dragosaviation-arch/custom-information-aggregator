@@ -10,9 +10,22 @@ public partial class DiscoveryWorkspaceView : UserControl
 {
     private const double CompactLayoutBreakpoint = 1180;
 
+    public static readonly DependencyProperty PinnedBlacklistOffsetProperty =
+        DependencyProperty.Register(
+            nameof(PinnedBlacklistOffset),
+            typeof(double),
+            typeof(DiscoveryWorkspaceView),
+            new PropertyMetadata(0d));
+
     public DiscoveryWorkspaceView()
     {
         InitializeComponent();
+    }
+
+    public double PinnedBlacklistOffset
+    {
+        get => (double)GetValue(PinnedBlacklistOffsetProperty);
+        private set => SetValue(PinnedBlacklistOffsetProperty, value);
     }
 
     private void OnViewLoaded(object sender, RoutedEventArgs e)
@@ -110,8 +123,8 @@ public partial class DiscoveryWorkspaceView : UserControl
         PreviewRow.Height = new GridLength(1, GridUnitType.Star);
         RightRailGapRow.Height = new GridLength(0);
         SettingsRow.Height = new GridLength(0);
-        SharedActionGapRow.Height = new GridLength(8);
-        SharedActionRow.Height = GridLength.Auto;
+        SharedActionGapRow.Height = new GridLength(0);
+        SharedActionRow.Height = new GridLength(0);
 
         Grid.SetRow(PreviewPanel, 0);
         Grid.SetColumn(PreviewPanel, 0);
@@ -142,8 +155,8 @@ public partial class DiscoveryWorkspaceView : UserControl
         PreviewRow.Height = new GridLength(1, GridUnitType.Star);
         RightRailGapRow.Height = new GridLength(8);
         SettingsRow.Height = new GridLength(1, GridUnitType.Star);
-        SharedActionGapRow.Height = new GridLength(8);
-        SharedActionRow.Height = GridLength.Auto;
+        SharedActionGapRow.Height = new GridLength(0);
+        SharedActionRow.Height = new GridLength(0);
 
         Grid.SetRow(PreviewPanel, 0);
         Grid.SetColumn(PreviewPanel, 0);
@@ -185,9 +198,11 @@ public partial class DiscoveryWorkspaceView : UserControl
 
     private void OnDiscoveryRowsScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (e.HorizontalChange != 0)
+        if (e.HorizontalChange != 0 || e.ExtentWidthChange != 0 || e.ViewportWidthChange != 0)
         {
             DiscoveryHeaderTranslate.X = -e.HorizontalOffset;
+            PinnedBlacklistOffset = e.HorizontalOffset
+                - Math.Max(0, e.ExtentWidth - e.ViewportWidth);
         }
     }
 

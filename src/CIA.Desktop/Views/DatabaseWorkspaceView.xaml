@@ -594,12 +594,18 @@
                             <TextBlock Margin="0,0,6,0"
                                        VerticalAlignment="Center"
                                        Style="{StaticResource CiaSecondaryTextStyle}"
-                                       Text="Row Family" />
-                            <ComboBox MinWidth="180"
-                                      ItemsSource="{Binding RowFamilies}"
-                                      SelectedItem="{Binding SelectedRowFamily, Mode=TwoWay}"
-                                      DisplayMemberPath="DisplayName"
-                                      ToolTip="Select the structural Row Family to review." />
+                                       Text="Current output" />
+                            <Border MinWidth="180"
+                                    Padding="8,4"
+                                    Background="{StaticResource CiaPanelBrush}"
+                                    BorderBrush="{StaticResource CiaBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    ToolTip="{Binding SelectedRowFamily.DisplayName, StringFormat=Internal structure: {0}}">
+                                <TextBlock FontWeight="SemiBold"
+                                           Text="{Binding SelectedDataset.DisplayName}"
+                                           TextTrimming="CharacterEllipsis" />
+                            </Border>
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -658,65 +664,72 @@
                                 Padding="8,6"
                                 BorderBrush="{StaticResource CiaDividerBrush}"
                                 BorderThickness="0,0,0,1">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="150" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="110" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="90" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <CheckBox x:Name="ExportEnabledToggle"
-                                          VerticalAlignment="Center"
-                                          AutomationProperties.Name="Export selected Row Family"
-                                          Content="Export this family"
-                                          IsChecked="{Binding IsSelectedSetExportEnabled}" />
-                                <ComboBox x:Name="WorkbookDefinitionSelector"
-                                          Grid.Column="1"
-                                          Margin="8,0,0,0"
-                                          AutomationProperties.Name="Workbook definition"
-                                          DisplayMemberPath="FileName"
-                                          ItemsSource="{Binding WorkbookDefinitions}"
-                                          SelectedItem="{Binding SelectedExportWorkbook, Mode=TwoWay}" />
-                                <Button x:Name="CreateWorkbookDefinitionButton"
-                                        Grid.Column="2"
-                                        Width="28"
-                                        Margin="4,0,0,0"
-                                        AutomationProperties.Name="Create workbook definition"
-                                        Command="{Binding CreateExportWorkbookCommand}"
-                                        Content="+"
-                                        Style="{StaticResource CiaGhostButtonStyle}" />
-                                <TextBox Grid.Column="3"
-                                         Margin="8,0,0,0"
-                                         AutomationProperties.Name="Workbook filename"
-                                         Style="{StaticResource CiaTextInputStyle}"
-                                         Text="{Binding SelectedExportWorkbook.FileName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <TextBlock Grid.Column="4"
-                                           Margin="8,0,4,0"
-                                           VerticalAlignment="Center"
-                                           Style="{StaticResource CiaSecondaryTextStyle}"
-                                           Text="Worksheet" />
-                                <TextBox x:Name="WorksheetNameInput"
-                                         Grid.Column="5"
-                                         AutomationProperties.Name="Worksheet name"
-                                         Style="{StaticResource CiaTextInputStyle}"
-                                         Text="{Binding SelectedWorksheetName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <StackPanel Grid.Column="6" Margin="6,0,0,0" Orientation="Horizontal">
-                                    <Button Width="27"
-                                            AutomationProperties.Name="Move worksheet earlier"
-                                            Command="{Binding MoveWorksheetUpCommand}"
-                                            Content="&#x2191;"
-                                            Style="{StaticResource CiaGhostButtonStyle}" />
-                                    <Button Width="27"
-                                            Margin="3,0,0,0"
-                                            AutomationProperties.Name="Move worksheet later"
-                                            Command="{Binding MoveWorksheetDownCommand}"
-                                            Content="&#x2193;"
-                                            Style="{StaticResource CiaGhostButtonStyle}" />
-                                </StackPanel>
-                            </Grid>
+                            <WrapPanel>
+                                <Border Margin="0,0,7,4" Padding="7,5" BorderBrush="{StaticResource CiaBorderBrush}" BorderThickness="1" CornerRadius="5">
+                                    <StackPanel>
+                                        <TextBlock Margin="0,0,0,4" Style="{StaticResource CiaSecondaryTextStyle}" Text="OUTPUT INCLUSION" />
+                                        <CheckBox x:Name="ExportEnabledToggle"
+                                                  VerticalAlignment="Center"
+                                                  AutomationProperties.Name="Include current output in export"
+                                                  Content="Include current output"
+                                                  IsChecked="{Binding IsSelectedSetExportEnabled}" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Margin="0,0,7,4" Padding="7,5" BorderBrush="{StaticResource CiaBorderBrush}" BorderThickness="1" CornerRadius="5">
+                                    <StackPanel>
+                                        <TextBlock Margin="0,0,0,4" Style="{StaticResource CiaSecondaryTextStyle}" Text="WORKBOOK" />
+                                        <WrapPanel>
+                                            <ComboBox x:Name="WorkbookDefinitionSelector"
+                                                      Width="155"
+                                                      AutomationProperties.Name="Select existing workbook definition"
+                                                      DisplayMemberPath="FileName"
+                                                      ItemsSource="{Binding WorkbookDefinitions}"
+                                                      SelectedItem="{Binding SelectedExportWorkbook, Mode=TwoWay}"
+                                                      ToolTip="Select an existing workbook definition." />
+                                            <Button x:Name="CreateWorkbookDefinitionButton"
+                                                    Width="30"
+                                                    Margin="4,0,7,0"
+                                                    AutomationProperties.Name="Create workbook definition"
+                                                    Command="{Binding CreateExportWorkbookCommand}"
+                                                    Content="+"
+                                                    Style="{StaticResource CiaButtonStyle}"
+                                                    ToolTip="Create a new workbook definition." />
+                                            <TextBlock Margin="0,0,4,0" VerticalAlignment="Center" Style="{StaticResource CiaSecondaryTextStyle}" Text="Name" />
+                                            <TextBox Width="150"
+                                                     AutomationProperties.Name="Edit selected workbook filename"
+                                                     Style="{StaticResource CiaTextInputStyle}"
+                                                     Text="{Binding SelectedExportWorkbook.FileName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                     ToolTip="Edit the filename of the selected workbook definition." />
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                                <Border Margin="0,0,0,4" Padding="7,5" BorderBrush="{StaticResource CiaBorderBrush}" BorderThickness="1" CornerRadius="5">
+                                    <StackPanel>
+                                        <TextBlock Margin="0,0,0,4" Style="{StaticResource CiaSecondaryTextStyle}" Text="WORKSHEET" />
+                                        <WrapPanel>
+                                            <TextBox x:Name="WorksheetNameInput"
+                                                     Width="150"
+                                                     AutomationProperties.Name="Worksheet name"
+                                                     Style="{StaticResource CiaTextInputStyle}"
+                                                     Text="{Binding SelectedWorksheetName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                            <Button Width="30"
+                                                    Margin="5,0,0,0"
+                                                    AutomationProperties.Name="Move worksheet earlier"
+                                                    Command="{Binding MoveWorksheetUpCommand}"
+                                                    Content="&#x2191;"
+                                                    Style="{StaticResource CiaButtonStyle}"
+                                                    ToolTip="Move this worksheet earlier in the workbook." />
+                                            <Button Width="30"
+                                                    Margin="3,0,0,0"
+                                                    AutomationProperties.Name="Move worksheet later"
+                                                    Command="{Binding MoveWorksheetDownCommand}"
+                                                    Content="&#x2193;"
+                                                    Style="{StaticResource CiaButtonStyle}"
+                                                    ToolTip="Move this worksheet later in the workbook." />
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                            </WrapPanel>
                         </Border>
                         <Grid Grid.Row="2" MinHeight="0">
                             <Grid.RowDefinitions>
