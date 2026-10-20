@@ -1,8 +1,10 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Threading;
 using CIA.Contracts.Discovery;
+using CIA.Contracts.Hierarchy;
 using CIA.Contracts.Operations;
 using CIA.Contracts.Sources;
 using CIA.Core;
@@ -23,7 +25,7 @@ public sealed class ColumnResizeInteractionTests
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(20);
 
     [TestMethod]
-    public async Task LoadAndDiscoveryHeaderDraggingPersistsAdjustableWidthsAndLeavesPinnedColumnsFixed()
+    public async Task LoadAndDiscoveryTablesResizeAdjustableColumnsAndScrollFixedFinalColumnsInAlignment()
     {
         await WpfTestApplication.RunAsync(VerifyInteractionAsync).WaitAsync(TestTimeout);
     }
@@ -35,10 +37,19 @@ public sealed class ColumnResizeInteractionTests
             new ReadyProcessingHostSupervisor(),
             new RecordingProcessingHistoryRecorder());
         var sources = new ActiveLoadedSourceSet();
+        var source = new LoadedSourceContract(
+            SourceId.CreateNew(),
+            Path.Combine(root.FullName, "source.xml"),
+            IsIncluded: true,
+            LoadedSourceStatus.Ready,
+            LoadedSourceKind.XmlFile);
         var loading = new SourceLoadingCoordinator(
-            new EmptySourceIntakeClient(),
+            new StaticSourceIntakeClient(source),
             sources,
             workflow);
+        var loadResult = await loading.AddAsync(SourceSelectionKind.XmlFile, source.Path);
+        Assert.IsTrue(loadResult.Accepted, loadResult.FailureDescription);
+        source = sources.CreateIncludedReadySnapshot().Single();
         var shell = new MainWindowViewModel(new ApplicationSession());
         var settings = new ApplicationSettingsService(
             new ApplicationSettingsStore(root.FullName));
@@ -50,7 +61,7 @@ public sealed class ColumnResizeInteractionTests
             shell,
             settings);
         using var discoveryViewModel = new DiscoveryWorkspaceViewModel(
-            new EmptyDiscoveryClient(),
+            new StaticDiscoveryClient(source),
             new ActiveDiscoveryConfiguration(),
             sources,
             workflow,
@@ -80,9 +91,16 @@ public sealed class ColumnResizeInteractionTests
             Assert.AreEqual(92, loadViewModel.SizeColumnWidth);
             Assert.AreEqual(100, loadViewModel.StatusColumnWidth);
             Assert.IsNull(FindThumbOrDefault(loadView, "load.status"));
+            VerifyFinalColumnAlignment(loadView, "SourceRowsList", "Status", "Ready", 6);
+            window.Width = 620;
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            VerifyFinalColumnScrollsWithRows(loadView, "SourceRowsList", "Status", "Ready", 6);
 
+            await discoveryViewModel.RunDiscoveryCommand.ExecuteAsync(null);
+            window.Width = 1400;
             window.Content = discoveryView;
             await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            VerifyPrimaryActionIsRightAligned(discoveryView);
             var discoveryDivider = FindThumb(
                 discoveryView,
                 "discovery.tag|discovery.databaseTag");
@@ -94,6 +112,21 @@ public sealed class ColumnResizeInteractionTests
             Assert.AreEqual(140, discoveryViewModel.SampleColumnWidth);
             Assert.AreEqual(104, discoveryViewModel.BlacklistColumnWidth);
             Assert.IsNull(FindThumbOrDefault(discoveryView, "discovery.blacklist"));
+            VerifyFinalColumnAlignment(
+                discoveryView,
+                "DiscoveryRows",
+                "Blacklist",
+                "Blacklist",
+                7);
+            window.Width = 620;
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+            VerifyPrimaryActionIsRightAligned(discoveryView);
+            VerifyFinalColumnScrollsWithRows(
+                discoveryView,
+                "DiscoveryRows",
+                "Blacklist",
+                "Blacklist",
+                7);
         }
         finally
         {
@@ -109,7 +142,7 @@ public sealed class ColumnResizeInteractionTests
             shell,
             reopened);
         using var restoredDiscovery = new DiscoveryWorkspaceViewModel(
-            new EmptyDiscoveryClient(),
+            new StaticDiscoveryClient(source),
             new ActiveDiscoveryConfiguration(),
             sources,
             workflow,
@@ -137,6 +170,105 @@ public sealed class ColumnResizeInteractionTests
     private static Thumb? FindThumbOrDefault(DependencyObject parent, string tag) =>
         FindVisualChildren<Thumb>(parent).SingleOrDefault(thumb =>
             string.Equals(thumb.Tag as string, tag, StringComparison.Ordinal));
+
+    private static void VerifyFinalColumnAlignment(
+        FrameworkElement view,
+        string listName,
+        string headerText,
+        string cellText,
+        int column)
+    {
+        var list = FindVisualChildren<ListBox>(view).Single(item => item.Name == listName);
+        var header = FindVisualChildren<FrameworkElement>(view).Single(element =>
+            Grid.GetColumn(element) == column
+            && string.Equals(GetDisplayedText(element), headerText, StringComparison.Ordinal)
+            && !IsDescendantOf(element, list));
+        var cell = FindVisualChildren<FrameworkElement>(list).First(element =>
+            Grid.GetColumn(element) == column
+            && string.Equals(GetDisplayedText(element), cellText, StringComparison.Ordinal));
+        Assert.AreEqual(
+            GetX(header, view),
+            GetX(cell, view),
+            1.5,
+            $"The {headerText} header and row cell must share the same table column.");
+        Assert.AreEqual(header.ActualWidth, cell.ActualWidth, 1.5);
+    }
+
+    private static void VerifyFinalColumnScrollsWithRows(
+        FrameworkElement view,
+        string listName,
+        string headerText,
+        string cellText,
+        int column)
+    {
+        var list = FindVisualChildren<ListBox>(view).Single(item => item.Name == listName);
+        var scrollViewer = FindVisualChildren<ScrollViewer>(list).Single();
+        Assert.IsGreaterThan(0, scrollViewer.ScrollableWidth);
+        scrollViewer.ScrollToHorizontalOffset(0);
+        view.UpdateLayout();
+        var header = FindVisualChildren<FrameworkElement>(view).Single(element =>
+            Grid.GetColumn(element) == column
+            && string.Equals(GetDisplayedText(element), headerText, StringComparison.Ordinal)
+            && !IsDescendantOf(element, list));
+        var cell = FindVisualChildren<FrameworkElement>(list).First(element =>
+            Grid.GetColumn(element) == column
+            && string.Equals(GetDisplayedText(element), cellText, StringComparison.Ordinal));
+        var initialHeaderX = GetX(header, view);
+        var initialCellX = GetX(cell, view);
+
+        scrollViewer.ScrollToHorizontalOffset(scrollViewer.ScrollableWidth);
+        view.UpdateLayout();
+
+        var scrolledHeaderX = GetX(header, view);
+        var scrolledCellX = GetX(cell, view);
+        Assert.IsLessThan(initialHeaderX - 10, scrolledHeaderX);
+        Assert.IsLessThan(initialCellX - 10, scrolledCellX);
+        Assert.AreEqual(scrolledHeaderX, scrolledCellX, 1.5);
+        Assert.AreEqual(
+            initialHeaderX - scrolledHeaderX,
+            initialCellX - scrolledCellX,
+            1.5,
+            "The fixed final column must scroll as one aligned part of the table.");
+    }
+
+    private static string? GetDisplayedText(FrameworkElement element) => element switch
+    {
+        Button button => button.Content as string,
+        TextBlock text => text.Text,
+        Border border => border.Child is FrameworkElement child ? GetDisplayedText(child) : null,
+        StackPanel panel => panel.Children.OfType<FrameworkElement>()
+            .Select(GetDisplayedText)
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)),
+        _ => null
+    };
+
+    private static bool IsDescendantOf(DependencyObject child, DependencyObject ancestor)
+    {
+        for (var current = child; current is not null; current = VisualTreeHelper.GetParent(current))
+        {
+            if (ReferenceEquals(current, ancestor))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static double GetX(Visual element, Visual ancestor) =>
+        element.TransformToAncestor(ancestor).Transform(new Point()).X;
+
+    private static void VerifyPrimaryActionIsRightAligned(FrameworkElement view)
+    {
+        var button = FindVisualChildren<Button>(view).Single(candidate =>
+            candidate.Name == "BuildDatabaseButton");
+        var actionGrid = VisualTreeHelper.GetParent(button) as Grid;
+        Assert.IsNotNull(actionGrid);
+        Assert.AreEqual(
+            actionGrid.ActualWidth,
+            GetX(button, actionGrid) + button.ActualWidth + button.Margin.Right,
+            1.5);
+    }
 
     private static IEnumerable<T> FindVisualChildren<T>(DependencyObject parent)
         where T : DependencyObject
@@ -168,7 +300,7 @@ public sealed class ColumnResizeInteractionTests
         });
     }
 
-    private sealed class EmptySourceIntakeClient : ISourceIntakeClient
+    private sealed class StaticSourceIntakeClient(LoadedSourceContract source) : ISourceIntakeClient
     {
         public Task<SourceIntakeClientResult> LoadAsync(
             SourceSelectionKind selectionKind,
@@ -176,10 +308,10 @@ public sealed class ColumnResizeInteractionTests
             SourceLoadSettings settings,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new SourceIntakeClientResult(
-                false,
-                [],
-                "not-used",
-                "This client is not used by the interaction."));
+                true,
+                [source],
+                FailureCode: null,
+                FailureDescription: null));
 
         public Task<SourceRefreshClientResult> RefreshAsync(
             LoadedSourceContract source,
@@ -200,13 +332,39 @@ public sealed class ColumnResizeInteractionTests
         public string? PickArchive() => null;
     }
 
-    private sealed class EmptyDiscoveryClient : IDiscoveryClient
+    private sealed class StaticDiscoveryClient(LoadedSourceContract source) : IDiscoveryClient
     {
         public Task<DiscoveryClientResult> RunAsync(
             OperationCorrelation correlation,
             IReadOnlyList<LoadedSourceContract> sources,
-            CancellationToken cancellationToken = default) =>
-            throw new InvalidOperationException("Discovery is not used by the interaction.");
+            CancellationToken cancellationToken = default)
+        {
+            var family = new RowFamilyId(
+                source.SourceSetId,
+                RowFamilyKind.Root,
+                "/root");
+            var information = new DiscoveredInformation(
+                new DiscoveryInformationIdentity(source.SourceSetId, "/root/code", "code"),
+                1,
+                [new DiscoveredSourceContribution(source.SourceId, "source.xml", 1)],
+                "value")
+            {
+                RowFamilyId = family
+            };
+            return Task.FromResult(new DiscoveryClientResult(
+                true,
+                [information],
+                [],
+                OperationCompletion.FromCompletedItems(
+                    correlation,
+                    [OperationItemStatus.ProcessedSuccessfully(source.SourceId.ToString())]),
+                FailureCode: null,
+                FailureDescription: null)
+            {
+                FamilyCatalog = new DiscoveryFamilyCatalog(
+                    [new RowFamilyDefinition(family, null)])
+            });
+        }
 
         public Task<DiscoveryOccurrenceClientResult> GetOccurrenceAsync(
             DiscoveryOccurrenceLookup lookup,

@@ -102,6 +102,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private IReadOnlyList<DiscoveredInformationItemViewModel> _allInformation = [];
     private IReadOnlyList<DiscoveredInformationItemViewModel> _filteredInformation = [];
+    private readonly HashSet<DirectSelectionIntent> _directSelectionIntents = [];
     private DiscoveryMode _mode = DiscoveryMode.Input;
     private string _searchText = string.Empty;
     private string _sortColumn = "Tag";
@@ -115,6 +116,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private bool _showOnlySelected;
     private bool _showOnlyDatabaseTagOverrides;
     private bool _showOnlyDirectSelections;
+    private bool _hasInitializedDirectSelectionIntents;
     private int _issueCount;
     private int _progressCompletedSourceCount;
     private int _progressTotalSourceCount = 1;
@@ -1431,6 +1433,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
                     identity => dispositions[identity],
                     identity => databaseTagOverrides.GetValueOrDefault(identity))
                 .ToArray();
+            SynchronizeDirectSelectionIntents(seedWhenEmpty: true);
             _familyCatalog = result.FamilyCatalog;
             OnPropertyChanged(nameof(RowFamilies));
             RefreshSourceSetLayouts();
@@ -2563,9 +2566,17 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             SelectedInformationSelectionProfile = null;
         }
 
-        if (result.Succeeded && result.ChangedCount > 0)
+        if (result.Succeeded)
         {
-            ApplyActiveConfiguration();
+            ReplaceDirectSelectionIntentsFromConfiguration();
+            if (result.ChangedCount > 0)
+            {
+                ApplyActiveConfiguration();
+            }
+            else
+            {
+                RefreshPresentation();
+            }
         }
 
         NotifyProfileCommandsChanged();
@@ -2799,10 +2810,23 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
+        var isSelecting = information.SelectionState != true;
         ApplyConfigurationChange(
             () => _activeConfiguration.SetSelection(
                 information.SelectionTargetIdentities,
-                information.SelectionState != true));
+                isSelecting),
+            () =>
+            {
+                if (isSelecting)
+                {
+                    _directSelectionIntents.Add(CreateDirectSelectionIntent(information));
+                }
+                else
+                {
+                    RemoveDirectSelectionIntentsAffectedBy(
+                        information.SelectionTargetIdentities);
+                }
+            });
     }
 
     private void ToggleBlacklist(DiscoveredInformationItemViewModel? information)
@@ -2871,6 +2895,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
     private void SetVisibleSelection(bool isSelected)
     {
+        var visibleItems = _filteredInformation
+            .Where(information => isSelected
+                ? information.SelectionState != true && !information.IsBlacklisted
+                : information.HasAnySelectedChild)
+            .ToArray();
         var targets = GetDetailedItems(_filteredInformation)
             .Where(information => isSelected
                 ? !information.IsSelected && !information.IsBlacklisted
@@ -2884,7 +2913,22 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         ApplyConfigurationChange(
-            () => _activeConfiguration.SetSelection(targets, isSelected));
+            () => _activeConfiguration.SetSelection(targets, isSelected),
+            () =>
+            {
+                if (!isSelected)
+                {
+                    RemoveDirectSelectionIntentsAffectedBy(
+                        visibleItems.SelectMany(information =>
+                            information.SelectionTargetIdentities));
+                    return;
+                }
+
+                foreach (var information in visibleItems)
+                {
+                    _directSelectionIntents.Add(CreateDirectSelectionIntent(information));
+                }
+            });
     }
 
     private static IEnumerable<DiscoveredInformationItemViewModel> GetDetailedItems(
@@ -2895,7 +2939,73 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             : information.Children);
     }
 
-    private void ApplyConfigurationChange(Func<int> applyChange)
+    private static DirectSelectionIntent CreateDirectSelectionIntent(
+        DiscoveredInformationItemViewModel information) =>
+        new(
+            DiscoveryLogicalIdentity.Create(information.Identity),
+            information.IsLogicalParent ? null : information.Identity);
+
+    private void RemoveDirectSelectionIntentsAffectedBy(
+        IEnumerable<DiscoveryInformationIdentity> targetIdentities)
+    {
+        var affectedTargets = targetIdentities.ToHashSet();
+        _directSelectionIntents.RemoveWhere(intent =>
+        {
+            var intendedItem = ResolveDirectSelectionIntent(intent);
+            return intendedItem is not null
+                && intendedItem.SelectionTargetIdentities.Any(affectedTargets.Contains);
+        });
+    }
+
+    private void ReplaceDirectSelectionIntentsFromConfiguration()
+    {
+        var selectedIdentities = _activeConfiguration.Current.Items
+            .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected)
+            .Select(item => item.Identity)
+            .ToHashSet();
+        _directSelectionIntents.Clear();
+        foreach (var child in _allInformation.SelectMany(information => information.Children))
+        {
+            if (selectedIdentities.Contains(child.Identity))
+            {
+                _directSelectionIntents.Add(CreateDirectSelectionIntent(child));
+            }
+        }
+
+        _hasInitializedDirectSelectionIntents = true;
+    }
+
+    private void SynchronizeDirectSelectionIntents(bool seedWhenEmpty)
+    {
+        if (seedWhenEmpty && !_hasInitializedDirectSelectionIntents)
+        {
+            ReplaceDirectSelectionIntentsFromConfiguration();
+            return;
+        }
+
+        _directSelectionIntents.RemoveWhere(intent =>
+        {
+            var intendedItem = ResolveDirectSelectionIntent(intent);
+            return intendedItem is null || !intendedItem.HasAnySelectedChild;
+        });
+        _hasInitializedDirectSelectionIntents = true;
+    }
+
+    private DiscoveredInformationItemViewModel? ResolveDirectSelectionIntent(
+        DirectSelectionIntent intent)
+    {
+        var logicalItem = _allInformation.FirstOrDefault(information =>
+            DiscoveryLogicalIdentity.Create(information.Identity) == intent.LogicalIdentity);
+        if (logicalItem is null || intent.DetailedIdentity is null)
+        {
+            return logicalItem;
+        }
+
+        return logicalItem.Children.FirstOrDefault(child =>
+            child.Identity == intent.DetailedIdentity);
+    }
+
+    private void ApplyConfigurationChange(Func<int> applyChange, Action? onChanged = null)
     {
         if (!CanChangeConfiguration())
         {
@@ -2908,6 +3018,7 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
+        onChanged?.Invoke();
         ApplyActiveConfiguration();
     }
 
@@ -2921,6 +3032,8 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
         {
             information.ApplyDetailedConfiguration(dispositions, databaseTagOverrides);
         }
+
+        SynchronizeDirectSelectionIntents(seedWhenEmpty: false);
 
         OnPropertyChanged(nameof(SelectedDatabaseTag));
         OnPropertyChanged(nameof(DatabaseTagOverrideActionText));
@@ -3016,7 +3129,11 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
 
         if (ShowOnlyDirectSelections)
         {
-            query = query.Where(information => information.SelectionState == true);
+            var directlySelectedLogicalIdentities = _directSelectionIntents
+                .Select(intent => intent.LogicalIdentity)
+                .ToHashSet();
+            query = query.Where(information => directlySelectedLogicalIdentities.Contains(
+                DiscoveryLogicalIdentity.Create(information.Identity)));
         }
 
         if (ShowOnlyDatabaseTagOverrides)
@@ -3496,6 +3613,10 @@ public sealed class DiscoveryWorkspaceViewModel : ObservableObject, IDisposable
     private readonly record struct PreviewRequest(
         int Version,
         CancellationToken CancellationToken);
+
+    private readonly record struct DirectSelectionIntent(
+        DiscoveryLogicalIdentity LogicalIdentity,
+        DiscoveryInformationIdentity? DetailedIdentity);
 }
 
 public sealed class DiscoveredInformationItemViewModel : ObservableObject

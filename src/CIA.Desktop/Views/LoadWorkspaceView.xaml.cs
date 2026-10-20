@@ -18,22 +18,9 @@ public partial class LoadWorkspaceView : UserControl
     private const double DropOverlaySafeSpace = 20;
     private bool? _dropOverlayVisible;
 
-    public static readonly DependencyProperty PinnedStatusOffsetProperty =
-        DependencyProperty.Register(
-            nameof(PinnedStatusOffset),
-            typeof(double),
-            typeof(LoadWorkspaceView),
-            new PropertyMetadata(0d));
-
     public LoadWorkspaceView()
     {
         InitializeComponent();
-    }
-
-    public double PinnedStatusOffset
-    {
-        get => (double)GetValue(PinnedStatusOffsetProperty);
-        private set => SetValue(PinnedStatusOffsetProperty, value);
     }
 
     public static readonly DependencyProperty DiscoveryWorkspaceProperty =
@@ -256,11 +243,9 @@ public partial class LoadWorkspaceView : UserControl
 
     private void OnSourceRowsScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (e.HorizontalChange != 0 || e.ExtentWidthChange != 0 || e.ViewportWidthChange != 0)
+        if (e.HorizontalChange != 0)
         {
             LoadHeaderTranslate.X = -e.HorizontalOffset;
-            PinnedStatusOffset = e.HorizontalOffset
-                - Math.Max(0, e.ExtentWidth - e.ViewportWidth);
         }
     }
 

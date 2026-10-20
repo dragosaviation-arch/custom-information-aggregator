@@ -2,7 +2,6 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:workflow="clr-namespace:CIA.Desktop.Workflow"
-             x:Name="DiscoveryViewRoot"
              Loaded="OnViewLoaded"
              SizeChanged="OnViewSizeChanged"
              SnapsToDevicePixels="True">
@@ -99,31 +98,39 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <WrapPanel VerticalAlignment="Center">
-                <Border Margin="0,3,8,3"
-                        Style="{StaticResource DiscoveryStateBadgeStyle}">
-                    <TextBlock VerticalAlignment="Center"
-                               FontSize="10.8"
-                               FontWeight="Bold"
-                               Foreground="{StaticResource CiaTextSecondaryBrush}"
-                               Text="{Binding DiscoveryStateText}" />
-                </Border>
-                <TextBlock VerticalAlignment="Center"
-                           Style="{StaticResource CiaSecondaryTextStyle}"
-                           Text="{Binding IncludedSourceSummary}" />
-                <Border Margin="12,3,6,3"
-                        Style="{StaticResource CiaNeutralStateBadgeStyle}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <WrapPanel VerticalAlignment="Center">
+                    <Border Margin="0,3,8,3"
+                            Style="{StaticResource DiscoveryStateBadgeStyle}">
+                        <TextBlock VerticalAlignment="Center"
+                                   FontSize="10.8"
+                                   FontWeight="Bold"
+                                   Foreground="{StaticResource CiaTextSecondaryBrush}"
+                                   Text="{Binding DiscoveryStateText}" />
+                    </Border>
                     <TextBlock VerticalAlignment="Center"
                                Style="{StaticResource CiaSecondaryTextStyle}"
-                               Text="{Binding DatabaseStateText}" />
-                </Border>
-                <TextBlock Margin="0,0,6,0"
-                           MaxWidth="250"
-                           VerticalAlignment="Center"
-                           Style="{StaticResource CiaSecondaryTextStyle}"
-                           Text="Build from the current selected Discovery mapping."
-                           TextTrimming="CharacterEllipsis" />
+                               Text="{Binding IncludedSourceSummary}" />
+                    <Border Margin="12,3,6,3"
+                            Style="{StaticResource CiaNeutralStateBadgeStyle}">
+                        <TextBlock VerticalAlignment="Center"
+                                   Style="{StaticResource CiaSecondaryTextStyle}"
+                                   Text="{Binding DatabaseStateText}" />
+                    </Border>
+                    <TextBlock Margin="0,0,6,0"
+                               MaxWidth="250"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CiaSecondaryTextStyle}"
+                               Text="Build from the current selected Discovery mapping."
+                               TextTrimming="CharacterEllipsis" />
+                </WrapPanel>
                 <Button x:Name="BuildDatabaseButton"
+                        Grid.Column="1"
+                        Margin="8,0,0,0"
                         MinHeight="32"
                         Padding="14,5"
                         Command="{Binding BuildDatabaseCommand}"
@@ -131,7 +138,7 @@
                         FontWeight="SemiBold"
                         Style="{StaticResource CiaPrimaryButtonStyle}"
                         ToolTip="{Binding DatabaseBuildAvailabilityReason}" />
-            </WrapPanel>
+            </Grid>
 
             <WrapPanel Grid.Row="2" VerticalAlignment="Center">
                 <Grid Width="190" Margin="0,0,6,0">
@@ -267,13 +274,9 @@
                                     CommandParameter="Sample"
                                     Content="{Binding SampleHeaderText}"
                                     Style="{StaticResource DiscoverySortHeaderStyle}" />
-                            <Grid Grid.Column="7" Background="{StaticResource CiaPanelAlternateBrush}">
-                                <Grid.RenderTransform>
-                                    <TranslateTransform X="{Binding PinnedBlacklistOffset, ElementName=DiscoveryViewRoot}" />
-                                </Grid.RenderTransform>
-                                <TextBlock Style="{StaticResource CiaSourceHeaderTextStyle}"
-                                           Text="Blacklist" />
-                            </Grid>
+                            <TextBlock Grid.Column="7"
+                                       Style="{StaticResource CiaSourceHeaderTextStyle}"
+                                       Text="Blacklist" />
                             <Thumb Grid.Column="1" Tag="discovery.sourceSet|discovery.tag" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="2" Tag="discovery.tag|discovery.databaseTag" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
                             <Thumb Grid.Column="3" Tag="discovery.databaseTag|discovery.occurrences" Style="{StaticResource DiscoveryColumnResizeThumbStyle}" />
@@ -432,16 +435,12 @@
                                                        Text="{Binding SampleValue}"
                                                        TextTrimming="CharacterEllipsis"
                                                        TextWrapping="NoWrap" />
-                                            <Border Grid.Column="7" Background="{StaticResource CiaPanelBrush}">
-                                                <Border.RenderTransform>
-                                                    <TranslateTransform X="{Binding PinnedBlacklistOffset, ElementName=DiscoveryViewRoot}" />
-                                                </Border.RenderTransform>
-                                                <Button AutomationProperties.Name="Toggle information group blacklist"
-                                                        Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                        CommandParameter="{Binding}"
-                                                        Content="{Binding BlacklistActionText}"
-                                                        Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
-                                            </Border>
+                                            <Button Grid.Column="7"
+                                                    AutomationProperties.Name="Toggle information group blacklist"
+                                                    Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}"
+                                                    Content="{Binding BlacklistActionText}"
+                                                    Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
                                         </Grid>
                                         <ItemsControl ItemsSource="{Binding Children}">
                                             <ItemsControl.Style>
@@ -509,16 +508,12 @@
                                                                    Text="{Binding SampleValue}"
                                                                    TextTrimming="CharacterEllipsis"
                                                                    TextWrapping="NoWrap" />
-                                                        <Border Grid.Column="7" Background="{StaticResource CiaPanelAlternateBrush}">
-                                                            <Border.RenderTransform>
-                                                                <TranslateTransform X="{Binding PinnedBlacklistOffset, ElementName=DiscoveryViewRoot}" />
-                                                            </Border.RenderTransform>
-                                                            <Button AutomationProperties.Name="Toggle detailed identity blacklist"
-                                                                    Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                                    CommandParameter="{Binding}"
-                                                                    Content="{Binding BlacklistActionText}"
-                                                                    Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
-                                                        </Border>
+                                                        <Button Grid.Column="7"
+                                                                AutomationProperties.Name="Toggle detailed identity blacklist"
+                                                                Command="{Binding DataContext.ToggleBlacklistCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                CommandParameter="{Binding}"
+                                                                Content="{Binding BlacklistActionText}"
+                                                                Style="{StaticResource DiscoveryBlacklistButtonStyle}" />
                                                     </Grid>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
@@ -1048,7 +1043,7 @@
                                         <CheckBox Margin="0,4"
                                                   Content="Show only direct selections"
                                                   IsChecked="{Binding ShowOnlyDirectSelections}"
-                                                  ToolTip="Show rows with a direct tick and hide automatically dot-marked partial selections. Selection and processing are unchanged." />
+                                                  ToolTip="Show rows selected explicitly by the user and hide automatically selected rows. Selection and processing are unchanged." />
                                     </StackPanel>
                                 </Grid>
                             </ScrollViewer>

@@ -340,13 +340,18 @@ public sealed class UiUxBatch1Tests
         Assert.HasCount(1, Regex.Matches(load, "x:Name=\"RunDiscoveryButton\"").Cast<Match>());
         Assert.HasCount(1, Regex.Matches(discovery, "x:Name=\"BuildDatabaseButton\"").Cast<Match>());
         StringAssert.Contains(load, "Width=\"142\"");
-        StringAssert.Contains(load, "PinnedStatusOffset");
-        StringAssert.Contains(loadCode, "PinnedStatusOffset = e.HorizontalOffset");
+        Assert.IsFalse(load.Contains("PinnedStatusOffset", StringComparison.Ordinal));
+        Assert.IsFalse(loadCode.Contains("PinnedStatusOffset", StringComparison.Ordinal));
         StringAssert.Contains(load, "CommandParameter=\"Size\"");
         StringAssert.Contains(load, "Failed validation: content was rejected");
 
-        StringAssert.Contains(discovery, "PinnedBlacklistOffset");
-        StringAssert.Contains(discoveryCode, "PinnedBlacklistOffset = e.HorizontalOffset");
+        Assert.IsFalse(discovery.Contains("PinnedBlacklistOffset", StringComparison.Ordinal));
+        Assert.IsFalse(discoveryCode.Contains("PinnedBlacklistOffset", StringComparison.Ordinal));
+        var buildDatabaseButton = FindNamedElement(discovery, "BuildDatabaseButton");
+        Assert.AreEqual("1", buildDatabaseButton.Attribute("Grid.Column")?.Value);
+        Assert.IsNotNull(buildDatabaseButton.Parent);
+        Assert.IsTrue(buildDatabaseButton.Parent.Elements().Any(element =>
+            string.Equals(element.Name.LocalName, "Grid.ColumnDefinitions", StringComparison.Ordinal)));
         StringAssert.Contains(discovery, "Content=\"Show only direct selections\"");
         Assert.IsFalse(discovery.Contains("Show only tags with Database Tag Name Override", StringComparison.Ordinal));
         Assert.IsFalse(discovery.Contains("Revert Database Tag Name Override", StringComparison.Ordinal));

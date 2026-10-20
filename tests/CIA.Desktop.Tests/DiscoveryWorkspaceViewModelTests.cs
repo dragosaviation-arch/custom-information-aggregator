@@ -1303,6 +1303,11 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.AreEqual("2 / 2 selected", viewModel.SelectionSummary);
         StringAssert.Contains(viewModel.SelectionFanoutSummary, "2 detailed fields");
 
+        viewModel.ShowOnlyDirectSelections = true;
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreSame(structuralScope, viewModel.Information[0]);
+        viewModel.ShowOnlyDirectSelections = false;
+
         var specification = databaseCoordinator.CreateBuildSpecification();
         Assert.HasCount(2, specification.Datasets.Single().Fields);
         Assert.IsFalse(specification.Datasets.Single().Fields
@@ -1311,7 +1316,7 @@ public sealed class DiscoveryWorkspaceViewModelTests
     }
 
     [TestMethod]
-    public async Task ShowOnlyDirectSelectionsHidesDotMarkedRowsWithoutChangingSelection()
+    public async Task ShowOnlyDirectSelectionsUsesUserIntentInsteadOfComputedTickState()
     {
         var source = CreateSource("direct-selection-filter.xml");
         using var workflow = CreateWorkflowCoordinator();
@@ -1321,28 +1326,22 @@ public sealed class DiscoveryWorkspaceViewModelTests
         {
             CreateDetailedInformation(
                 source,
-                "/root/one/direct",
-                "direct",
-                SourceValueCandidateKind.Element,
-                "/root/one/direct"),
+                "/tem/toolst/tool/toolnbr",
+                "toolnbr",
+                SourceValueCandidateKind.ElementScope,
+                "/tem/toolst/tool/toolnbr"),
             CreateDetailedInformation(
                 source,
-                "/root/two/direct",
-                "direct",
+                "/tem/toolst/tool/toolnbr/mfr",
+                "mfr",
                 SourceValueCandidateKind.Element,
-                "/root/two/direct"),
+                "/tem/toolst/tool/toolnbr/mfr"),
             CreateDetailedInformation(
                 source,
-                "/root/one/automatic",
-                "automatic",
+                "/tem/toolst/tool/toolnbr/pnr",
+                "pnr",
                 SourceValueCandidateKind.Element,
-                "/root/one/automatic"),
-            CreateDetailedInformation(
-                source,
-                "/root/two/automatic",
-                "automatic",
-                SourceValueCandidateKind.Element,
-                "/root/two/automatic")
+                "/tem/toolst/tool/toolnbr/pnr")
         };
         var configuration = new ActiveDiscoveryConfiguration();
         using var viewModel = new DiscoveryWorkspaceViewModel(
@@ -1359,29 +1358,32 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 NullLogger<DatabaseBuildCoordinator>.Instance));
 
         await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
-        var directRow = viewModel.Information.Single(item => item.InformationType == "direct");
-        var automaticRow = viewModel.Information.Single(item => item.InformationType == "automatic");
-        Assert.HasCount(2, directRow.Children);
-        Assert.HasCount(2, automaticRow.Children);
+        var scope = viewModel.Information.Single(item => item.InformationType == "toolnbr");
+        var manufacturer = viewModel.Information.Single(item => item.InformationType == "mfr");
+        var partNumber = viewModel.Information.Single(item => item.InformationType == "pnr");
+        scope.IsExpanded = true;
 
-        viewModel.ToggleSelectionCommand.Execute(directRow);
-        automaticRow.IsExpanded = true;
-        viewModel.ToggleSelectionCommand.Execute(automaticRow.Children[0]);
+        viewModel.ToggleSelectionCommand.Execute(manufacturer);
+        viewModel.ToggleSelectionCommand.Execute(partNumber);
 
-        Assert.IsTrue(directRow.SelectionState ?? false, "A full tick is a direct selection.");
-        Assert.IsNull(automaticRow.SelectionState, "A dot is an automatic partial selection.");
+        Assert.IsTrue(scope.SelectionState ?? false, "The scope becomes fully selected by propagation.");
+        Assert.IsTrue(manufacturer.SelectionState ?? false);
+        Assert.IsTrue(partNumber.SelectionState ?? false);
         var selectedIdentities = configuration.Current.Items
             .Where(item => item.Disposition == DiscoveryInformationDisposition.Selected)
             .Select(item => item.Identity)
             .ToHashSet();
-        Assert.HasCount(3, selectedIdentities);
+        Assert.HasCount(2, selectedIdentities);
 
         viewModel.ShowOnlySelected = true;
-        Assert.HasCount(2, viewModel.Information);
+        Assert.HasCount(3, viewModel.Information);
         viewModel.ShowOnlyDirectSelections = true;
 
-        Assert.HasCount(1, viewModel.Information);
-        Assert.AreSame(directRow, viewModel.Information[0]);
+        Assert.HasCount(2, viewModel.Information);
+        CollectionAssert.AreEquivalent(
+            new[] { "mfr", "pnr" },
+            viewModel.Information.Select(item => item.InformationType).ToArray());
+        CollectionAssert.DoesNotContain(viewModel.Information.ToArray(), scope);
         CollectionAssert.AreEquivalent(
             selectedIdentities.ToArray(),
             configuration.Current.Items
@@ -1389,10 +1391,66 @@ public sealed class DiscoveryWorkspaceViewModelTests
                 .Select(item => item.Identity)
                 .ToArray());
 
+        viewModel.ToggleSelectionCommand.Execute(manufacturer);
+
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreSame(partNumber, viewModel.Information[0]);
+        Assert.IsNull(scope.SelectionState, "The scope becomes partial after one direct field is removed.");
+        Assert.IsTrue(scope.IsExpanded, "Visibility filters must not collapse structural context.");
+
         viewModel.ShowOnlyDirectSelections = false;
         Assert.HasCount(2, viewModel.Information);
-        Assert.IsTrue(automaticRow.IsExpanded);
-        Assert.IsNull(automaticRow.SelectionState);
+        CollectionAssert.Contains(viewModel.Information.ToArray(), scope);
+        CollectionAssert.Contains(viewModel.Information.ToArray(), partNumber);
+    }
+
+    [TestMethod]
+    public async Task DirectSelectionFilterIncludesExplicitDetailedSelectionWhenParentIsPartial()
+    {
+        var source = CreateSource("direct-partial-filter.xml");
+        using var workflow = CreateWorkflowCoordinator();
+        var (sourceSet, _) = await LoadSourcesAsync(workflow, source);
+        source = sourceSet.CreateIncludedReadySnapshot().Single();
+        var discovered = new[]
+        {
+            CreateDetailedInformation(
+                source,
+                "/root/one/name",
+                "name",
+                SourceValueCandidateKind.Element,
+                "/root/one/name"),
+            CreateDetailedInformation(
+                source,
+                "/root/two/name",
+                "name",
+                SourceValueCandidateKind.Element,
+                "/root/two/name")
+        };
+        var configuration = new ActiveDiscoveryConfiguration();
+        using var viewModel = new DiscoveryWorkspaceViewModel(
+            new StubDiscoveryClient((correlation, sources) =>
+                Accept(correlation, sources, discovered)),
+            configuration,
+            sourceSet,
+            workflow,
+            new DatabaseBuildCoordinator(
+                configuration,
+                sourceSet,
+                workflow,
+                new NoOpDatabaseClient(),
+                NullLogger<DatabaseBuildCoordinator>.Instance));
+
+        await viewModel.RunDiscoveryCommand.ExecuteAsync(null);
+        var parent = viewModel.Information.Single();
+        parent.IsExpanded = true;
+        viewModel.ToggleSelectionCommand.Execute(parent.Children[0]);
+
+        Assert.IsNull(parent.SelectionState);
+        viewModel.ShowOnlyDirectSelections = true;
+
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreSame(parent, viewModel.Information[0]);
+        Assert.IsTrue(parent.IsExpanded);
     }
 
     [TestMethod]
@@ -1461,7 +1519,12 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.IsTrue(parent.Children[0].IsSelected);
         Assert.IsTrue(blacklistedChild.IsBlacklisted);
 
+        viewModel.ShowOnlyDirectSelections = true;
+        Assert.HasCount(1, viewModel.Information);
+
         viewModel.DeselectVisibleCommand.Execute(null);
+        Assert.IsEmpty(viewModel.Information);
+        viewModel.ShowOnlyDirectSelections = false;
         Assert.IsFalse(parent.SelectionState ?? true);
         Assert.IsFalse(parent.Children[0].IsSelected);
         Assert.IsTrue(blacklistedChild.IsBlacklisted);
@@ -1481,6 +1544,9 @@ public sealed class DiscoveryWorkspaceViewModelTests
         Assert.IsNull(reconstructed.SelectionState);
         Assert.IsTrue(reconstructed.Children.Single(child =>
             child.StructuralPath == "/root/seller/name").IsBlacklisted);
+        viewModel.ShowOnlyDirectSelections = true;
+        Assert.HasCount(1, viewModel.Information);
+        Assert.AreSame(reconstructed, viewModel.Information[0]);
     }
 
     [TestMethod]
