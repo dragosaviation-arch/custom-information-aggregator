@@ -53,6 +53,12 @@ See the [CIA v1 Installation Guide](docs/installation/README.md) for supported W
 | **UI/UX convergence / Beta closure** | Complete |
 | **Release Candidate** | In preparation |
 | **v1.0.0** | After RC acceptance |
+| **v1.0.x — Bug fixes & cosmetic update** | First expected post-release update: correct confirmed bugs, refine UI labels/layout/filter usability, and investigate source-file output sparse columns / blank rows ([SPR-227](https://dragosaviation.atlassian.net/browse/SPR-227)). |
+| **Future major release — JSON & CSV input** | Proposed: bring additional structured formats into CIA's discovery, review and export workflow. |
+| **Future major release — HTML extraction** | Proposed: discover and extract useful structures in HTML documents, including tables. |
+| **Longer-term — advanced output control** | Exploratory: richer repeated/nested data handling, reusable configurations and flexible output layouts while preserving source associations. |
+
+Future milestones are directional, not dated commitments. **v1.0.0 is XML-focused**; JSON, CSV and HTML are not shipped features. See [Release Notes / What's New](docs/release-notes/README.md) and [Support](SUPPORT.md).
 
 ## For technical reviewers
 
