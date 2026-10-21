@@ -4,8 +4,8 @@ This guide covers installing, starting, upgrading and uninstalling Custom Inform
 
 ## Supported environment
 
-- Primary baseline: Windows 11 x64.
-- Compatibility target: Windows 10 x64. Physical product-owner verification on Windows 10 is pending.
+- Primary baseline: Windows 11 x64. Product owner reports physical installer test PASS.
+- Compatibility confirmed: Windows 10 x64. Product owner reports physical installer test PASS.
 - Architecture: x64 only for the current release.
 
 ## Prerequisites
@@ -14,7 +14,7 @@ CIA is distributed as a self-contained .NET application. The installer includes 
 
 ## Install CIA
 
-1. Download the CIA installer from the [official GitHub Releases page](https://github.com/dragosaviation-arch/custom-information-aggregator/releases).
+1. Once published, download the CIA installer from the [official GitHub Releases page](https://github.com/dragosaviation-arch/custom-information-aggregator/releases) and verify its SHA-256 against the [v1.0.0 release notes](../release-notes/v1.0.0.md).
 2. Launch the downloaded installer.
 3. Follow the graphical installation flow. Administrator elevation is not required.
 4. Optionally select the Desktop shortcut component.
