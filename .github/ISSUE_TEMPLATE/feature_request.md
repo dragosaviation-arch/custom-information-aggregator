@@ -24,6 +24,6 @@ Accuracy, scale, compatibility, UX or export implications:
 
 ## Roadmap check
 
-- [ ] I reviewed the [current roadmap](../../README.md#release-roadmap) and understand that proposed features are not committed releases.
+- [ ] I reviewed the [current roadmap](https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/README.md#release-roadmap) and understand that proposed features are not committed releases.
 
-See [Support](../../SUPPORT.md) for expectations. Do not include sensitive or proprietary data.
+See [Support](https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/SUPPORT.md) for expectations. Do not include sensitive or proprietary data.
