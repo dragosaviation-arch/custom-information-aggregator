@@ -32,7 +32,7 @@ CIA works with local files. **Do not post private or proprietary XML, confidenti
 
 When Issues is enabled, use [New issue](https://github.com/dragosaviation-arch/custom-information-aggregator/issues/new/choose) and select **Feature request**. Describe the problem or workflow need, desired outcome, example use case and any constraints. Requests are evaluated for future releases; submitting one does not commit CIA to implementing it.
 
-The [roadmap](README.md#roadmap--after-v100) outlines the current post-release direction.
+The [roadmap](README.md#release-roadmap) outlines the current post-release direction.
 
 ## Find diagnostics
 
