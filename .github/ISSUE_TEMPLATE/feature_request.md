@@ -24,6 +24,6 @@ Accuracy, scale, compatibility, UX or export implications:
 
 ## Roadmap check
 
-- [ ] I reviewed the [current roadmap](../../README.md#roadmap--after-v100) and understand that proposed features are not committed releases.
+- [ ] I reviewed the [current roadmap](../../README.md#release-roadmap) and understand that proposed features are not committed releases.
 
 See [Support](../../SUPPORT.md) for expectations. Do not include sensitive or proprietary data.
