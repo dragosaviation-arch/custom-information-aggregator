@@ -16,4 +16,4 @@ After publication, obtain installers, published release notes and checksums excl
 - [Installation Guide](../installation/README.md)
 - [Support](../../SUPPORT.md)
 - [Forking & Developer Guide](../../FORKING.md)
-- [Post-release roadmap](../../README.md#roadmap--after-v100)
+- [Post-release roadmap](../../README.md#release-roadmap)
