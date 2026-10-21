@@ -6,6 +6,7 @@ This is the entry point for **Custom Information Aggregator v1** user documentat
 
 - [Start here — introduction and index](index.md)
 - [Quick Start](quick-start.md)
+- [Download the exact 30 XML sample files](sample-data/sample_files.zip)
 - [Full walkthrough](walkthrough.md)
 - [Feature reference](reference.md)
 - [Troubleshooting](troubleshooting.md)
