@@ -244,6 +244,13 @@ public sealed class UiUxBatch1Tests
         StringAssert.Contains(mainWindow, "Maximum=\"{Binding GlobalStatus.ProgressMaximum, ElementName=WindowRoot, Mode=OneWay}\"");
         StringAssert.Contains(mainWindow, "Value=\"{Binding GlobalStatus.ProgressValue, ElementName=WindowRoot, Mode=OneWay}\"");
         StringAssert.Contains(mainWindow, "Text=\"{Binding GlobalStatus.ProgressPercentText, ElementName=WindowRoot}\"");
+        StringAssert.Contains(mainWindow, "x:Name=\"AttributionProgressSlot\"");
+        StringAssert.Contains(mainWindow, "Width=\"200\"");
+        StringAssert.Contains(mainWindow, "x:Name=\"OriginalAuthorAttributionButton\"");
+        StringAssert.Contains(mainWindow, "FontSize=\"12\"");
+        StringAssert.Contains(mainWindow, "FontSize=\"11\"");
+        StringAssert.Contains(mainWindow, "GlobalStatus.IsOriginalAttributionVisible");
+        StringAssert.Contains(mainWindow, "GlobalStatus.IsProgressIndeterminate");
         StringAssert.Contains(discovery, "IsChecked=\"{Binding OpenDatabaseWhenCreationCompletes}\"");
         Assert.IsNotNull(FindNamedElement(discovery, "BuildDatabaseButton"));
     }

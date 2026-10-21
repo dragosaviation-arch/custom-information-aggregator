@@ -11,6 +11,36 @@
     <_CiaApplicationProject Include="$(_CiaRepositoryRoot)src\CIA.ProcessingHost\CIA.ProcessingHost.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)LICENSE">
+      <TargetPath>licenses\LICENSE</TargetPath>
+    </_CiaRequiredLegalFile>
+    <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)LICENSE.asc">
+      <TargetPath>licenses\LICENSE.asc</TargetPath>
+    </_CiaRequiredLegalFile>
+    <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)FORKING.md">
+      <TargetPath>licenses\FORKING.md</TargetPath>
+    </_CiaRequiredLegalFile>
+    <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)THIRD_PARTY_NOTICES.md">
+      <TargetPath>licenses\THIRD_PARTY_NOTICES.md</TargetPath>
+    </_CiaRequiredLegalFile>
+    <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)docs\licensing\README.md">
+      <TargetPath>licenses\README.md</TargetPath>
+    </_CiaRequiredLegalFile>
+    <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)docs\licensing\AAL-PUBLIC-KEY.asc">
+      <TargetPath>licenses\AAL-PUBLIC-KEY.asc</TargetPath>
+    </_CiaRequiredLegalFile>
+    <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)docs\licensing\third-party\*.*">
+      <TargetPath>licenses\third-party\%(Filename)%(Extension)</TargetPath>
+    </_CiaRequiredLegalFile>
+  </ItemGroup>
+
+  <Target Name="_ValidatePublicationLicensing">
+    <Error
+      Condition="!Exists('%(_CiaRequiredLegalFile.Identity)')"
+      Text="Required publication license artifact is missing: %(_CiaRequiredLegalFile.Identity). The original author must provide LICENSE.asc and docs\licensing\AAL-PUBLIC-KEY.asc; do not publish or build the installer without them." />
+  </Target>
+
   <Target Name="_PreparePublishDirectory">
     <RemoveDir Directories="$(_CiaPublishDirectory)" />
     <MakeDir Directories="$(_CiaPublishDirectory)" />
@@ -24,7 +54,7 @@
       Properties="RuntimeIdentifier=win-x64;SelfContained=true" />
   </Target>
 
-  <Target Name="Publish" DependsOnTargets="_PreparePublishDirectory;_RestoreApplications">
+  <Target Name="Publish" DependsOnTargets="_ValidatePublicationLicensing;_PreparePublishDirectory;_RestoreApplications">
     <MSBuild
       Projects="@(_CiaApplicationProject)"
       Targets="Publish"
@@ -50,6 +80,16 @@
     <Error
       Condition="'@(_CiaUnexpectedTestAssembly)' != ''"
       Text="Test assemblies must not be included in the CIA publication." />
+
+    <MakeDir Directories="$(_CiaPublishDirectory)licenses\third-party" />
+    <Copy
+      SourceFiles="@(_CiaRequiredLegalFile)"
+      DestinationFiles="@(_CiaRequiredLegalFile->'$(_CiaPublishDirectory)%(TargetPath)')"
+      SkipUnchangedFiles="true" />
+
+    <Error
+      Condition="!Exists('$(_CiaPublishDirectory)licenses\LICENSE.asc') Or !Exists('$(_CiaPublishDirectory)licenses\AAL-PUBLIC-KEY.asc') Or !Exists('$(_CiaPublishDirectory)licenses\THIRD_PARTY_NOTICES.md')"
+      Text="The publication is missing signed AAL or third-party notice artifacts." />
 
     <Message
       Importance="high"

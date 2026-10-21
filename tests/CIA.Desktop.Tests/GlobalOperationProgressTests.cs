@@ -53,6 +53,33 @@ public sealed class GlobalOperationProgressTests
     }
 
     [TestMethod]
+    public void DeterminateProgressReplacesAndThenRestoresIdleAttribution()
+    {
+        var supervisor = new ReadyProcessingHostSupervisor();
+        using var workflow = new ApplicationWorkflowCoordinator(
+            supervisor,
+            new RecordingProcessingHistoryRecorder());
+        var progress = new GlobalOperationProgress();
+        using var status = new GlobalStatusViewModel(supervisor, workflow, progress);
+
+        var updateId = progress.Begin("Loading sources", "Reading files", 2, 10);
+
+        Assert.IsTrue(status.IsProgressVisible);
+        Assert.IsTrue(status.HasDeterminateProgress);
+        Assert.IsFalse(status.IsProgressIndeterminate);
+        Assert.IsFalse(status.IsOriginalAttributionVisible);
+        Assert.AreEqual("20%", status.ProgressPercentText);
+
+        progress.Complete(
+            updateId,
+            GlobalOperationProgressState.CompletedSuccessfully,
+            "completed successfully");
+
+        Assert.IsFalse(status.IsProgressVisible);
+        Assert.IsTrue(status.IsOriginalAttributionVisible);
+    }
+
+    [TestMethod]
     public async Task ActiveStageSurvivesWorkflowBeginAndTerminalActionRemainsVisible()
     {
         using var workflow = new ApplicationWorkflowCoordinator(

@@ -10,17 +10,20 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
     private readonly IProcessingHostSupervisor _processingHostSupervisor;
     private readonly IApplicationWorkflowCoordinator _workflowCoordinator;
     private readonly GlobalOperationProgress _operationProgress;
+    private readonly IExternalLinkLauncher _externalLinkLauncher;
     private readonly SynchronizationContext? _uiSynchronizationContext;
     private string _hostStatusText;
     private string _operationStatusText;
     private GlobalOperationProgressSnapshot _progress;
     private readonly AsyncRelayCommand _cancelActiveOperationCommand;
+    private readonly RelayCommand _openOriginalRepositoryCommand;
     private int _disposed;
 
     public GlobalStatusViewModel(
         IProcessingHostSupervisor processingHostSupervisor,
         IApplicationWorkflowCoordinator workflowCoordinator,
-        GlobalOperationProgress? operationProgress = null)
+        GlobalOperationProgress? operationProgress = null,
+        IExternalLinkLauncher? externalLinkLauncher = null)
     {
         ArgumentNullException.ThrowIfNull(processingHostSupervisor);
         ArgumentNullException.ThrowIfNull(workflowCoordinator);
@@ -28,6 +31,7 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
         _processingHostSupervisor = processingHostSupervisor;
         _workflowCoordinator = workflowCoordinator;
         _operationProgress = operationProgress ?? new GlobalOperationProgress();
+        _externalLinkLauncher = externalLinkLauncher ?? new WindowsExternalLinkLauncher();
         _uiSynchronizationContext = SynchronizationContext.Current;
         _hostStatusText = FormatHostStatus(_processingHostSupervisor.Current);
         _operationStatusText = FormatOperationStatus(_workflowCoordinator.Current.LatestOperation);
@@ -35,6 +39,7 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
         _cancelActiveOperationCommand = new AsyncRelayCommand(
             RequestCancellationAsync,
             CanRequestCancellation);
+        _openOriginalRepositoryCommand = new RelayCommand(OpenOriginalRepository);
 
         _processingHostSupervisor.StateChanged += OnProcessingHostStateChanged;
         _workflowCoordinator.StateChanged += OnWorkflowStateChanged;
@@ -53,7 +58,26 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _operationStatusText, value);
     }
 
-    public bool IsProgressVisible => _progress.HasDeterminateProgress;
+    public bool IsProgressVisible => IsOperationActive;
+
+    public bool IsOperationActive =>
+        _progress.IsActive || _workflowCoordinator.Current.ActiveOperation is not null;
+
+    public bool HasDeterminateProgress => _progress.HasDeterminateProgress;
+
+    public bool IsProgressIndeterminate => IsOperationActive && !HasDeterminateProgress;
+
+    public bool IsOriginalAttributionVisible => !IsOperationActive;
+
+    public string OriginalAuthorIdentityText =>
+        $"{CiaProductIdentity.OriginalAuthor.Name} · "
+        + CiaProductIdentity.OriginalAuthor.ProfessionalIdentification;
+
+    public string OriginalAuthorDisplayUrl => CiaProductIdentity.OriginalAuthor.DisplayUrl;
+
+    public string OriginalAuthorAccessibleName =>
+        $"Original CIA author: {OriginalAuthorIdentityText}, "
+        + $"{OriginalAuthorDisplayUrl}. Open the original CIA repository.";
 
     public double ProgressMaximum => _progress.TotalWork ?? 1;
 
@@ -64,6 +88,8 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
         : string.Empty;
 
     public IAsyncRelayCommand CancelActiveOperationCommand => _cancelActiveOperationCommand;
+
+    public IRelayCommand OpenOriginalRepositoryCommand => _openOriginalRepositoryCommand;
 
     public void Dispose()
     {
@@ -94,6 +120,10 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
                 {
                     OperationStatusText = FormatOperationStatus(state.LatestOperation);
                 }
+                OnPropertyChanged(nameof(IsProgressVisible));
+                OnPropertyChanged(nameof(IsOperationActive));
+                OnPropertyChanged(nameof(IsProgressIndeterminate));
+                OnPropertyChanged(nameof(IsOriginalAttributionVisible));
                 _cancelActiveOperationCommand.NotifyCanExecuteChanged();
             });
     }
@@ -107,6 +137,10 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
             _progress = progress;
             OperationStatusText = $"{progress.OperationName} - {progress.StageText}";
             OnPropertyChanged(nameof(IsProgressVisible));
+            OnPropertyChanged(nameof(IsOperationActive));
+            OnPropertyChanged(nameof(HasDeterminateProgress));
+            OnPropertyChanged(nameof(IsProgressIndeterminate));
+            OnPropertyChanged(nameof(IsOriginalAttributionVisible));
             OnPropertyChanged(nameof(ProgressMaximum));
             OnPropertyChanged(nameof(ProgressValue));
             OnPropertyChanged(nameof(ProgressPercentText));
@@ -128,6 +162,20 @@ public sealed class GlobalStatusViewModel : ObservableObject, IDisposable
     private async Task RequestCancellationAsync()
     {
         await _workflowCoordinator.RequestCancellationAsync().ConfigureAwait(true);
+    }
+
+    private void OpenOriginalRepository()
+    {
+        try
+        {
+            _externalLinkLauncher.TryOpen(CiaProductIdentity.OriginalAuthor.Destination);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
+                                          or NotSupportedException
+                                          or System.ComponentModel.Win32Exception)
+        {
+            // Browser availability must not affect CIA operation or attribution visibility.
+        }
     }
 
     private void DispatchToUi(Action update)

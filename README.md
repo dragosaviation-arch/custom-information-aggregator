@@ -4,6 +4,14 @@ A Windows desktop application for turning large XML document sets into structure
 
 ![Custom Information Aggregator — application overview](docs/assets/cia-overview.png)
 
+## Fork endorsement
+
+I welcome and endorse independent CIA forks that comply with applicable laws and ethical standards. You have my permission to reference this endorsement without contacting me. It does not imply that I've personally reviewed, certified or contributed to your fork.
+
+— Dragos Tone
+
+[How to fork and personalize CIA](FORKING.md)
+
 ## What is this?
 
 Custom Information Aggregator started as a practical response to a real Maintenance, Repair and Overhaul (MRO) problem: useful information can be buried inside thousands of structured technical documents, while extracting it manually is slow, repetitive and difficult to scale.

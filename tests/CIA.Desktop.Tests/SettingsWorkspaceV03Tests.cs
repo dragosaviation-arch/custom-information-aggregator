@@ -190,13 +190,17 @@ public sealed class SettingsWorkspaceV03Tests
         viewModel.OpenUserManualCommand.Execute(null);
         viewModel.OpenReleaseNotesCommand.Execute(null);
         viewModel.OpenSupportCommand.Execute(null);
+        viewModel.OpenCurrentDeveloperCommand.Execute(null);
+        viewModel.OpenOriginalRepositoryCommand.Execute(null);
 
         CollectionAssert.AreEqual(
             new[]
             {
                 SettingsWorkspaceViewModel.UserManualUri,
                 SettingsWorkspaceViewModel.ReleaseNotesUri,
-                SettingsWorkspaceViewModel.SupportUri
+                SettingsWorkspaceViewModel.SupportUri,
+                CiaProductIdentity.CurrentDeveloper.Destination,
+                CiaProductIdentity.OriginalAuthor.Destination
             },
             launcher.Destinations.ToArray());
         Assert.IsTrue(launcher.Destinations.All(destination =>
@@ -206,6 +210,8 @@ public sealed class SettingsWorkspaceV03Tests
         failingViewModel.OpenUserManualCommand.Execute(null);
         failingViewModel.OpenReleaseNotesCommand.Execute(null);
         failingViewModel.OpenSupportCommand.Execute(null);
+        failingViewModel.OpenCurrentDeveloperCommand.Execute(null);
+        failingViewModel.OpenOriginalRepositoryCommand.Execute(null);
 
         var repositoryRoot = FindRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(
@@ -220,6 +226,13 @@ public sealed class SettingsWorkspaceV03Tests
         StringAssert.Contains(xaml, "Command=\"{Binding OpenUserManualCommand}\"");
         StringAssert.Contains(xaml, "Command=\"{Binding OpenReleaseNotesCommand}\"");
         StringAssert.Contains(xaml, "Command=\"{Binding OpenSupportCommand}\"");
+        StringAssert.Contains(xaml, "Text=\"CURRENT DEVELOPER\"");
+        StringAssert.Contains(xaml, "Command=\"{Binding OpenCurrentDeveloperCommand}\"");
+        StringAssert.Contains(xaml, "Text=\"ORIGINAL AUTHOR\"");
+        StringAssert.Contains(xaml, "Command=\"{Binding OpenOriginalRepositoryCommand}\"");
+        Assert.AreNotSame(
+            CiaProductIdentity.CurrentDeveloper,
+            CiaProductIdentity.OriginalAuthor);
         Assert.IsFalse(xaml.Contains("Installation Guide", StringComparison.Ordinal));
         Assert.IsFalse(xaml.Contains("Content=\"Documentation\"", StringComparison.Ordinal));
 
@@ -228,12 +241,14 @@ public sealed class SettingsWorkspaceV03Tests
             "docs",
             "user-manual",
             "README.md"));
-        StringAssert.Contains(manual, "loading and Source Sets");
-        StringAssert.Contains(manual, "Discovery");
-        StringAssert.Contains(manual, "Repeated Data Layout modes");
-        StringAssert.Contains(manual, "Database review and provenance");
-        StringAssert.Contains(manual, "Excel export");
-        StringAssert.Contains(manual, "Settings and recovery");
+        StringAssert.Contains(manual, "[Quick Start](quick-start.md)");
+        StringAssert.Contains(manual, "[Full walkthrough](walkthrough.md)");
+        StringAssert.Contains(manual, "[Feature reference](reference.md)");
+        StringAssert.Contains(manual, "[Download the PDF manual](pdf/CIA-User-Manual.pdf)");
+        Assert.IsTrue(File.Exists(Path.Combine(repositoryRoot, "docs", "user-manual", "load.md")));
+        Assert.IsTrue(File.Exists(Path.Combine(repositoryRoot, "docs", "user-manual", "discovery-output.md")));
+        Assert.IsTrue(File.Exists(Path.Combine(repositoryRoot, "docs", "user-manual", "database.md")));
+        Assert.IsTrue(File.Exists(Path.Combine(repositoryRoot, "docs", "user-manual", "excel-export.md")));
         StringAssert.Contains(
             File.ReadAllText(Path.Combine(repositoryRoot, "SUPPORT.md")),
             "pre-release validation");
@@ -764,6 +779,9 @@ public sealed class SettingsWorkspaceV03InteractionTests
             var logSide = (Grid)view.FindName("LogDiagnosticsSide");
             var settingsSide = (Border)view.FindName("SettingsSide");
             var aboutHelp = (Grid)view.FindName("AboutHelpPanel");
+            var aboutHelpScroll = (ScrollViewer)view.FindName("AboutHelpScrollViewer");
+            var currentDeveloper = (Button)view.FindName("CurrentDeveloperLinkButton");
+            var originalAuthor = (Button)view.FindName("OriginalAuthorLinkButton");
             var entries = (ListView)view.FindName("LogEntriesList");
             var export = (Button)view.FindName("ExportVisibleButton");
             var reset = (Button)view.FindName("ResetDefaultsButton");
@@ -789,6 +807,9 @@ public sealed class SettingsWorkspaceV03InteractionTests
             Assert.AreEqual(Visibility.Visible, logSide.Visibility);
             Assert.AreEqual(Visibility.Visible, settingsSide.Visibility);
             Assert.AreEqual(Visibility.Visible, aboutHelp.Visibility);
+            Assert.AreEqual(ScrollBarVisibility.Auto, aboutHelpScroll.VerticalScrollBarVisibility);
+            Assert.IsTrue(currentDeveloper.IsEnabled);
+            Assert.IsTrue(originalAuthor.IsEnabled);
             Assert.AreEqual(2, entries.Items.Count);
             Assert.IsFalse(export.IsEnabled);
             Assert.IsTrue(reset.IsEnabled);
@@ -806,7 +827,8 @@ public sealed class SettingsWorkspaceV03InteractionTests
             Assert.AreEqual("Failure code: parse-failed", selectedFailureCode.Text);
             Assert.AreEqual(Visibility.Visible, selectedFailureCode.Visibility);
 
-            window.Width = 1100;
+            window.Width = 1000;
+            window.Height = 520;
             window.UpdateLayout();
 
             Assert.AreEqual(Visibility.Visible, internalSwitch.Visibility);
@@ -820,6 +842,9 @@ public sealed class SettingsWorkspaceV03InteractionTests
             Assert.AreEqual(Visibility.Collapsed, logSide.Visibility);
             Assert.AreEqual(Visibility.Visible, settingsSide.Visibility);
             Assert.AreEqual(Visibility.Visible, aboutHelp.Visibility);
+            Assert.IsGreaterThan(0, aboutHelpScroll.ViewportHeight);
+            Assert.IsTrue(currentDeveloper.IsVisible);
+            Assert.IsTrue(originalAuthor.IsVisible);
         }
         finally
         {

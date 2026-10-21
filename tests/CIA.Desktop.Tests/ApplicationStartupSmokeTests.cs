@@ -49,6 +49,15 @@ public sealed class ApplicationStartupSmokeTests
             var settingsWorkspace = host.Services.GetRequiredService<SettingsWorkspaceViewModel>();
             var cleanupService = host.Services.GetRequiredService<IManagedStorageCleanupService>();
             Application.Current.MainWindow = window;
+            window.ShowInTaskbar = false;
+            window.ShowActivated = false;
+            window.WindowStartupLocation = WindowStartupLocation.Manual;
+            window.Left = -10000;
+            window.Top = -10000;
+            window.Width = window.MinWidth;
+            window.Height = window.MinHeight;
+            window.Show();
+            window.UpdateLayout();
 
             Assert.IsTrue(lifetime.ApplicationStarted.IsCancellationRequested);
             Assert.IsNotNull(window.Content);
@@ -68,6 +77,33 @@ public sealed class ApplicationStartupSmokeTests
             Assert.IsTrue(settingsWorkspace.CleanupManagedStorageCommand.CanExecute(null));
             Assert.HasCount(4, viewModel.Workspaces);
             Assert.AreEqual(WorkspaceArea.Load, viewModel.SelectedWorkspace.Area);
+            var attributionSlot = (System.Windows.Controls.Grid)window.FindName(
+                "AttributionProgressSlot");
+            var attributionButton = (System.Windows.Controls.Button)window.FindName(
+                "OriginalAuthorAttributionButton");
+            var authorIdentityText = (System.Windows.Controls.TextBlock)window.FindName(
+                "OriginalAuthorIdentityText");
+            var authorUrlText = (System.Windows.Controls.TextBlock)window.FindName(
+                "OriginalAuthorUrlText");
+            var progressPanel = (System.Windows.Controls.Grid)window.FindName(
+                "GlobalProgressPanel");
+            Assert.AreEqual(200d, attributionSlot.Width);
+            Assert.AreEqual(200d, attributionSlot.ActualWidth);
+            Assert.IsTrue(globalStatus.IsOriginalAttributionVisible);
+            Assert.IsTrue(attributionButton.IsTabStop);
+            Assert.AreEqual(Visibility.Visible, attributionButton.Visibility);
+            Assert.AreEqual(Visibility.Collapsed, progressPanel.Visibility);
+            Assert.AreEqual(System.Windows.TextTrimming.None, authorIdentityText.TextTrimming);
+            Assert.AreEqual(System.Windows.TextTrimming.None, authorUrlText.TextTrimming);
+            Assert.AreEqual(12d, authorIdentityText.FontSize);
+            Assert.AreEqual(11d, authorUrlText.FontSize);
+            Assert.IsGreaterThan(0, authorIdentityText.ActualWidth);
+            Assert.IsLessThanOrEqualTo(attributionSlot.ActualWidth, authorIdentityText.ActualWidth);
+            Assert.IsGreaterThan(0, authorUrlText.ActualWidth);
+            Assert.IsLessThanOrEqualTo(attributionSlot.ActualWidth, authorUrlText.ActualWidth);
+            StringAssert.Contains(
+                System.Windows.Automation.AutomationProperties.GetName(attributionButton),
+                "Dragos Tone · Project Manager");
 
             var databaseView = (DatabaseWorkspaceView)window.FindName("DatabaseWorkspaceView");
             var placeholder = (System.Windows.Controls.Grid)window.FindName(
