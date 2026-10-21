@@ -29,7 +29,7 @@ The application is designed to let a user load large XML document sets, discover
 5. **Review** the resulting data and configure how it should be presented.
 6. **Prepare and export** the required fields to Excel.
 
-The major v1 workflow and UI structure are frozen. The v1.0.0 release candidate has passed product-owner physical acceptance; official GitHub publication remains pending.
+The major v1 workflow and UI structure are frozen. **CIA v1.0.0 is publicly released**, following product-owner physical acceptance on Windows 10 and 11 x64.
 
 ## Installation
 
@@ -37,13 +37,13 @@ See the [CIA v1 Installation Guide](docs/installation/README.md) for supported W
 
 ## Development status
 
-**Current stage: Release candidate accepted; v1.0.0 publication pending**
+**Current stage: [CIA v1.0.0 publicly released](https://github.com/dragosaviation-arch/custom-information-aggregator/releases/tag/v1.0.0)**
 
 - ✅ Core Load → Discovery → Database → Extraction / Review / Export workflow
 - ✅ v1 UI/UX convergence and structure freeze
 - ✅ Windows installer, shell integration, upgrade and uninstall lifecycle
 - ✅ Windows 10 and Windows 11 x64 physical acceptance (owner-reported)
-- 🟡 GitHub release publication and public installer checksum verification
+- ✅ GitHub v1.0.0 public release and installer SHA-256 verification
 
 ### Release roadmap
 
@@ -52,7 +52,7 @@ See the [CIA v1 Installation Guide](docs/installation/README.md) for supported W
 | **Full Alpha** | Complete |
 | **UI/UX convergence / Beta closure** | Complete |
 | **Release Candidate** | Accepted — Windows 10/11 x64 physical verification |
-| **v1.0.0** | GitHub release publication pending |
+| **v1.0.0** | [Released — 21 October 2026](https://github.com/dragosaviation-arch/custom-information-aggregator/releases/tag/v1.0.0) |
 | **v1.0.x — Bug fixes & cosmetic update** | First expected post-release update: correct confirmed bugs, refine UI labels/layout/filter usability, and investigate source-file output sparse columns / blank rows ([SPR-227](https://dragosaviation.atlassian.net/browse/SPR-227)). |
 | **Future major release — JSON & CSV input** | Proposed: bring additional structured formats into CIA's discovery, review and export workflow. |
 | **Future major release — HTML extraction** | Proposed: discover and extract useful structures in HTML documents, including tables. |
