@@ -249,9 +249,14 @@ public sealed class SettingsWorkspaceV03Tests
         Assert.IsTrue(File.Exists(Path.Combine(repositoryRoot, "docs", "user-manual", "discovery-output.md")));
         Assert.IsTrue(File.Exists(Path.Combine(repositoryRoot, "docs", "user-manual", "database.md")));
         Assert.IsTrue(File.Exists(Path.Combine(repositoryRoot, "docs", "user-manual", "excel-export.md")));
+        var support = File.ReadAllText(Path.Combine(repositoryRoot, "SUPPORT.md"));
+        StringAssert.Contains(support, "## Report a bug");
+        StringAssert.Contains(support, "select **Bug report**");
+        StringAssert.Contains(support, "## Suggest an improvement");
+        StringAssert.Contains(support, "select **Feature request**");
         StringAssert.Contains(
-            File.ReadAllText(Path.Combine(repositoryRoot, "SUPPORT.md")),
-            "pre-release validation");
+            support,
+            "[Troubleshooting](docs/user-manual/troubleshooting.md)");
     }
 
     [TestMethod]

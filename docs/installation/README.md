@@ -20,7 +20,7 @@ CIA is distributed as a self-contained .NET application. The installer includes 
 4. Optionally select the Desktop shortcut component.
 5. Finish the installation and launch CIA if desired.
 
-CIA is installed per user under `%LOCALAPPDATA%\Programs\Custom Information Aggregator`. The installer creates a Start Menu shortcut, creates the Desktop shortcut only when selected, and registers the `.cia` file association for the current user. Only `CIA.exe` is user-facing.
+CIA is installed per user under `%LOCALAPPDATA%\Programs\Custom Information Aggregator`. The installer creates a Start Menu shortcut and creates the Desktop shortcut only when selected. Only `CIA.exe` is user-facing.
 
 ## Unsigned v1.0.0 release
 
@@ -34,8 +34,7 @@ Launch CIA from any of these supported entry points:
 
 - the installer finish page;
 - the Start Menu shortcut;
-- the optional Desktop shortcut;
-- an associated `.cia` working-state file.
+- the optional Desktop shortcut.
 
 CIA does not install a background service, startup application or permanent background process.
 
