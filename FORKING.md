@@ -117,6 +117,6 @@ Relevant tests include `tests/CIA.Desktop.Tests/GlobalStatusViewModelTests.cs`, 
 - `CIA.Installer.proj` — builds the installer.
 - `deployment/nsis/CIA.Installer.nsi` — packages the publish directory using `File /r "${CIA_PUBLISH_DIR}\*"`.
 
-`CIA.Publish.proj` validates and copies the applicable license, verifiable signed text, public key/verification guidance, forking guide and third-party notices before NSIS collects the publish directory. Publication is intentionally blocked when the signed license or public key is absent. Recheck that gate and the resulting `licenses` directory if your fork changes packaging.
+`CIA.Publish.proj` validates and copies the applicable license, verifiable signed text, public key/verification guidance, forking guide and third-party notices before NSIS collects the publish directory. Publication is intentionally blocked when the signed license or public key is absent, invalid, signed by an unapproved key or inconsistent with `LICENSE`. Recheck that gate and the resulting `licenses` directory if your fork changes packaging.
 
 For CIA product help, see the [User Manual](docs/user-manual/README.md); for the original source, see the [CIA repository](https://github.com/dragosaviation-arch/custom-information-aggregator).

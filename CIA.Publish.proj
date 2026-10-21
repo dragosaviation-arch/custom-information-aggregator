@@ -4,6 +4,10 @@
     <_CiaRepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))</_CiaRepositoryRoot>
     <_CiaPublishDirectory>$(_CiaRepositoryRoot)artifacts\publish\win-x64\</_CiaPublishDirectory>
     <_CiaPublishProperties>Configuration=Release;RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=false;PublishTrimmed=false;DebugType=None;DebugSymbols=false;PublishDir=$(_CiaPublishDirectory)</_CiaPublishProperties>
+    <_CiaAalLicenseFile Condition="'$(_CiaAalLicenseFile)' == ''">$(_CiaRepositoryRoot)LICENSE</_CiaAalLicenseFile>
+    <_CiaAalSignedLicenseFile Condition="'$(_CiaAalSignedLicenseFile)' == ''">$(_CiaRepositoryRoot)LICENSE.asc</_CiaAalSignedLicenseFile>
+    <_CiaAalPublicKeyFile Condition="'$(_CiaAalPublicKeyFile)' == ''">$(_CiaRepositoryRoot)docs\licensing\AAL-PUBLIC-KEY.asc</_CiaAalPublicKeyFile>
+    <_CiaAalSignatureVerifier>$(_CiaRepositoryRoot)deployment\Verify-AalLicense.ps1</_CiaAalSignatureVerifier>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,10 +16,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)LICENSE">
+    <_CiaRequiredLegalFile Include="$(_CiaAalLicenseFile)">
       <TargetPath>licenses\LICENSE</TargetPath>
     </_CiaRequiredLegalFile>
-    <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)LICENSE.asc">
+    <_CiaRequiredLegalFile Include="$(_CiaAalSignedLicenseFile)">
       <TargetPath>licenses\LICENSE.asc</TargetPath>
     </_CiaRequiredLegalFile>
     <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)FORKING.md">
@@ -27,7 +31,7 @@
     <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)docs\licensing\README.md">
       <TargetPath>licenses\README.md</TargetPath>
     </_CiaRequiredLegalFile>
-    <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)docs\licensing\AAL-PUBLIC-KEY.asc">
+    <_CiaRequiredLegalFile Include="$(_CiaAalPublicKeyFile)">
       <TargetPath>licenses\AAL-PUBLIC-KEY.asc</TargetPath>
     </_CiaRequiredLegalFile>
     <_CiaRequiredLegalFile Include="$(_CiaRepositoryRoot)docs\licensing\third-party\*.*">
@@ -39,6 +43,11 @@
     <Error
       Condition="!Exists('%(_CiaRequiredLegalFile.Identity)')"
       Text="Required publication license artifact is missing: %(_CiaRequiredLegalFile.Identity). The original author must provide LICENSE.asc and docs\licensing\AAL-PUBLIC-KEY.asc; do not publish or build the installer without them." />
+    <Error
+      Condition="!Exists('$(_CiaAalSignatureVerifier)')"
+      Text="The AAL license signature verifier is missing: $(_CiaAalSignatureVerifier)." />
+    <Exec
+      Command="powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(_CiaAalSignatureVerifier)&quot; -LicensePath &quot;$(_CiaAalLicenseFile)&quot; -SignedLicensePath &quot;$(_CiaAalSignedLicenseFile)&quot; -PublicKeyPath &quot;$(_CiaAalPublicKeyFile)&quot;" />
   </Target>
 
   <Target Name="_PreparePublishDirectory">

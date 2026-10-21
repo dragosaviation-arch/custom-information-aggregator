@@ -92,19 +92,39 @@ public sealed class LicensingIntegrationTests
     {
         var root = FindRepositoryRoot();
         var publishProject = File.ReadAllText(Path.Combine(root, "CIA.Publish.proj"));
+        var verifier = File.ReadAllText(Path.Combine(root, "deployment", "Verify-AalLicense.ps1"));
         var installerProject = File.ReadAllText(Path.Combine(root, "CIA.Installer.proj"));
         var nsis = File.ReadAllText(Path.Combine(root, "deployment", "nsis", "CIA.Installer.nsi"));
 
         StringAssert.Contains(publishProject, "_ValidatePublicationLicensing");
         StringAssert.Contains(publishProject, "LICENSE.asc");
         StringAssert.Contains(publishProject, "AAL-PUBLIC-KEY.asc");
+        StringAssert.Contains(publishProject, "Verify-AalLicense.ps1");
         StringAssert.Contains(publishProject, "THIRD_PARTY_NOTICES.md");
         StringAssert.Contains(publishProject, "licenses\\third-party");
         StringAssert.Contains(
             publishProject,
             "DependsOnTargets=\"_ValidatePublicationLicensing;_PreparePublishDirectory;_RestoreApplications\"");
+        StringAssert.Contains(verifier, "'--verify'");
+        StringAssert.Contains(verifier, "VALIDSIG");
+        StringAssert.Contains(verifier, "16C968BD782888D630101761EF8DC38A512D8472");
+        StringAssert.Contains(verifier, "Normalize-OpenPgpText");
+        StringAssert.Contains(verifier, "CIA_GPG_EXECUTABLE");
         StringAssert.Contains(installerProject, "CIA.Publish.proj");
         StringAssert.Contains(nsis, "File /r \"${CIA_PUBLISH_DIR}\\*\"");
+    }
+
+    [TestMethod]
+    public void SignedLicenseArtifactsArePresentWithoutPrivateKeyMaterial()
+    {
+        var root = FindRepositoryRoot();
+        var signedLicense = File.ReadAllText(Path.Combine(root, "LICENSE.asc"));
+        var publicKey = File.ReadAllText(Path.Combine(root, "docs", "licensing", "AAL-PUBLIC-KEY.asc"));
+
+        StringAssert.StartsWith(signedLicense, "-----BEGIN PGP SIGNED MESSAGE-----");
+        StringAssert.Contains(signedLicense, "-----BEGIN PGP SIGNATURE-----");
+        StringAssert.StartsWith(publicKey, "-----BEGIN PGP PUBLIC KEY BLOCK-----");
+        Assert.IsFalse(publicKey.Contains("BEGIN PGP PRIVATE KEY BLOCK", StringComparison.Ordinal));
     }
 
     private static string FindRepositoryRoot()
