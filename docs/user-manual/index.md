@@ -10,7 +10,7 @@ nav_order: 1
 
 CIA is a Windows desktop application that helps you inspect structured XML sources, choose the information you need, build a reviewable database, and export selected results to Excel workbooks.
 
-This manual explains the **actual user interface**, using screenshots from a 30-file selection of Goodbooks XML files. You do not need to understand XML internals or software development to follow the main workflow.
+This manual explains the **actual user interface**, using screenshots from a 30-file selection of Goodbooks XML files. [Download the same 30 XML sample files](sample-data/sample_files.zip) to follow along. You do not need to understand XML internals or software development to follow the main workflow.
 
 > **Screenshot note:** Numbered callouts are documentation overlays, not controls inside CIA.
 
