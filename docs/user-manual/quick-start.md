@@ -6,7 +6,7 @@ nav_order: 2
 
 # Quick Start — first workbook
 
-The screenshots use a selection of **30 Goodbooks XML files**. Sample files are not bundled with CIA; you can follow the same steps using your own supported XML files.
+The screenshots use **30 Goodbooks XML files**. [Download the exact 30-file sample ZIP](sample-data/sample_files.zip), extract the archive into a folder, and use those XML files to follow along. The sample is part of the documentation, not bundled with the CIA installer. You can also use your own XML files.
 
 ## 1 — Load the files
 
