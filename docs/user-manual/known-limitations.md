@@ -29,6 +29,6 @@ Output Preview is intentionally bounded. Depending on current schema knowledge a
 
 ## Boundaries of this tutorial
 
-The screenshots use a local 30-file Goodbooks selection to illustrate CIA controls. Results depend on the XML files and selected fields. The sample files are not distributed with CIA.
+The screenshots use a 30-file Goodbooks selection to illustrate CIA controls. The [exact 30-file sample ZIP](sample-data/sample_files.zip) is available alongside the online manual, but is not bundled with the CIA installer. Results still depend on the files and fields you select.
 
 For installation or compatibility statements, consult the separate [Installation Guide](https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/docs/installation/README.md), rather than treating these workflow screenshots as an installation test.
