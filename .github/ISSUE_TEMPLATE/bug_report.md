@@ -43,4 +43,4 @@ Workaround, if found:
 - [ ] I have removed proprietary XML, confidential information, credentials, personal information and unredacted local paths from this issue and its attachments.
 - [ ] Any sample XML provided is synthetic or explicitly safe to share publicly.
 
-Before posting, review [Support](../../SUPPORT.md) and the [Troubleshooting guide](../../docs/user-manual/troubleshooting.md).
+Before posting, review [Support](https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/SUPPORT.md) and the [Troubleshooting guide](https://github.com/dragosaviation-arch/custom-information-aggregator/blob/main/docs/user-manual/troubleshooting.md).
