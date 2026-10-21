@@ -102,12 +102,14 @@ public sealed class NsisInstallerTests
     }
 
     [TestMethod]
-    public void InstallerRegistersCiaAssociationPerUserThroughDesktopExecutable()
+    public void InstallerDoesNotAdvertiseWorkingStateAndCleansOnlyTheLegacyOwnedAssociation()
     {
         var installer = ReadRepositoryFile("deployment", "nsis", "CIA.Installer.nsi");
-        var registryLines = installer
+        var cleanupInvocations = installer
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Where(line => line.Contains("WriteReg", StringComparison.OrdinalIgnoreCase))
+            .Where(line => line.Contains(
+                "!insertmacro RemoveLegacyCiaAssociation",
+                StringComparison.Ordinal))
             .ToArray();
 
         StringAssert.Contains(installer, "SetRegView 64");
@@ -116,16 +118,45 @@ public sealed class NsisInstallerTests
             "!define CIA_CLASSES_KEY \"Software\\Classes\"");
         StringAssert.Contains(
             installer,
-            "WriteRegStr HKCU \"${CIA_CLASSES_KEY}\\.cia\" \"\" \"CIA.WorkingState\"");
+            "!macro RemoveLegacyCiaAssociation");
         StringAssert.Contains(
             installer,
-            "WriteRegStr HKCU \"${CIA_CLASSES_KEY}\\CIA.WorkingState\\shell\\open\\command\"");
-        StringAssert.Contains(installer, "$INSTDIR\\CIA.exe");
-        StringAssert.Contains(installer, "$\\\"%1$\\\"");
-        Assert.IsTrue(registryLines.All(
-            line => line.Contains("HKCU", StringComparison.Ordinal)));
-        Assert.IsFalse(registryLines.Any(
-            line => line.Contains("CIA.ProcessingHost", StringComparison.OrdinalIgnoreCase)));
+            "ReadRegStr $0 HKCU \"${CIA_CLASSES_KEY}\\.cia\" \"\"");
+        StringAssert.Contains(installer, "${If} $0 == \"CIA.WorkingState\"");
+        StringAssert.Contains(
+            installer,
+            "DeleteRegValue HKCU \"${CIA_CLASSES_KEY}\\.cia\" \"\"");
+        StringAssert.Contains(
+            installer,
+            "DeleteRegKey /ifempty HKCU \"${CIA_CLASSES_KEY}\\.cia\"");
+        StringAssert.Contains(
+            installer,
+            "DeleteRegKey HKCU \"${CIA_CLASSES_KEY}\\CIA.WorkingState\"");
+        Assert.HasCount(2, cleanupInvocations);
+        Assert.IsFalse(installer.Contains(
+            "WriteRegStr HKCU \"${CIA_CLASSES_KEY}\\.cia\"",
+            StringComparison.Ordinal));
+        Assert.IsFalse(installer.Contains(
+            "WriteRegStr HKCU \"${CIA_CLASSES_KEY}\\CIA.WorkingState",
+            StringComparison.Ordinal));
+        Assert.IsFalse(installer.Contains(
+            "DeleteRegKey HKCU \"${CIA_CLASSES_KEY}\\.cia\"",
+            StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void InstallationGuideDoesNotAdvertiseUnavailableWorkingStateOpening()
+    {
+        var guide = ReadRepositoryFile("docs", "installation", "README.md");
+
+        StringAssert.Contains(guide, "the installer finish page");
+        StringAssert.Contains(guide, "the Start Menu shortcut");
+        StringAssert.Contains(guide, "the optional Desktop shortcut");
+        StringAssert.Contains(
+            guide,
+            "CIA does not search for or delete arbitrary user-created `.cia` files");
+        Assert.IsFalse(guide.Contains("registers the `.cia`", StringComparison.Ordinal));
+        Assert.IsFalse(guide.Contains("associated `.cia`", StringComparison.Ordinal));
     }
 
     [TestMethod]

@@ -40,6 +40,15 @@ Unicode true
 Var RemoveManagedDataCheckbox
 Var RemoveManagedData
 
+!macro RemoveLegacyCiaAssociation
+  ReadRegStr $0 HKCU "${CIA_CLASSES_KEY}\.cia" ""
+  ${If} $0 == "CIA.WorkingState"
+    DeleteRegValue HKCU "${CIA_CLASSES_KEY}\.cia" ""
+    DeleteRegKey /ifempty HKCU "${CIA_CLASSES_KEY}\.cia"
+  ${EndIf}
+  DeleteRegKey HKCU "${CIA_CLASSES_KEY}\CIA.WorkingState"
+!macroend
+
 Name "Custom Information Aggregator ${CIA_VERSION}"
 Caption "Custom Information Aggregator Setup"
 BrandingText "Custom Information Aggregator"
@@ -77,10 +86,7 @@ Section "CIA application" SecApplication
   CreateShortcut "${CIA_START_MENU_DIRECTORY}\Custom Information Aggregator.lnk" "$INSTDIR\CIA.exe"
 
   SetRegView 64
-  WriteRegStr HKCU "${CIA_CLASSES_KEY}\.cia" "" "CIA.WorkingState"
-  WriteRegStr HKCU "${CIA_CLASSES_KEY}\CIA.WorkingState" "" "CIA Working State"
-  WriteRegStr HKCU "${CIA_CLASSES_KEY}\CIA.WorkingState\DefaultIcon" "" "$\"$INSTDIR\CIA.exe$\",0"
-  WriteRegStr HKCU "${CIA_CLASSES_KEY}\CIA.WorkingState\shell\open\command" "" "$\"$INSTDIR\CIA.exe$\" $\"%1$\""
+  !insertmacro RemoveLegacyCiaAssociation
 
   WriteRegStr HKCU "${CIA_UNINSTALL_KEY}" "DisplayName" "Custom Information Aggregator"
   WriteRegStr HKCU "${CIA_UNINSTALL_KEY}" "DisplayVersion" "${CIA_VERSION}"
@@ -141,11 +147,7 @@ Section "Uninstall"
   RMDir "${CIA_START_MENU_DIRECTORY}"
   Delete "${CIA_DESKTOP_SHORTCUT}"
 
-  ReadRegStr $0 HKCU "${CIA_CLASSES_KEY}\.cia" ""
-  ${If} $0 == "CIA.WorkingState"
-    DeleteRegKey HKCU "${CIA_CLASSES_KEY}\.cia"
-  ${EndIf}
-  DeleteRegKey HKCU "${CIA_CLASSES_KEY}\CIA.WorkingState"
+  !insertmacro RemoveLegacyCiaAssociation
   DeleteRegKey HKCU "${CIA_UNINSTALL_KEY}"
   System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
 
