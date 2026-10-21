@@ -80,7 +80,7 @@
                                     Background="{TemplateBinding Foreground}"
                                     CornerRadius="2">
                                 <Border.RenderTransform>
-                                    <TranslateTransform x:Name="IndeterminateTransform" />
+                                    <TranslateTransform x:Name="IndeterminateTransform" X="0" />
                                 </Border.RenderTransform>
                             </Border>
                         </Grid>
@@ -90,7 +90,7 @@
                             <Setter TargetName="PART_Indicator" Property="Width" Value="44" />
                             <Setter TargetName="PART_Indicator" Property="Opacity" Value="0.72" />
                             <Trigger.EnterActions>
-                                <BeginStoryboard>
+                                <BeginStoryboard x:Name="IndeterminateStoryboard">
                                     <Storyboard RepeatBehavior="Forever">
                                         <DoubleAnimation Storyboard.TargetName="IndeterminateTransform"
                                                          Storyboard.TargetProperty="X"
@@ -100,6 +100,9 @@
                                     </Storyboard>
                                 </BeginStoryboard>
                             </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <RemoveStoryboard BeginStoryboardName="IndeterminateStoryboard" />
+                            </Trigger.ExitActions>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
