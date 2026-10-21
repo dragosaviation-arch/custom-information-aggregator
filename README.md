@@ -45,21 +45,12 @@ See the [CIA v1 Installation Guide](docs/installation/README.md) for supported W
 | **UI/UX convergence / Beta closure** | Complete |
 | **Release Candidate** | In preparation |
 | **v1.0.0** | After RC acceptance |
+| **v1.0.x — Bug fixes & cosmetic update** | First expected post-release update: correct confirmed bugs, refine UI labels/layout/filter usability, and investigate source-file output sparse columns / blank rows ([SPR-227](https://dragosaviation.atlassian.net/browse/SPR-227)). |
+| **Future major release — JSON & CSV input** | Proposed: bring additional structured formats into CIA's discovery, review and export workflow. |
+| **Future major release — HTML extraction** | Proposed: discover and extract useful structures in HTML documents, including tables. |
+| **Longer-term — advanced output control** | Exploratory: richer repeated/nested data handling, reusable configurations and flexible output layouts while preserving source associations. |
 
-## Roadmap — after v1.0.0
-
-The first planned follow-up is **bug fixing and cosmetic refinement**, followed by larger capabilities. This is a directional roadmap, not a promise of dates or finalized scope. Major features will require their own requirements, design, implementation and verification before release.
-
-| Order | Planned milestone | What it would cover | Status |
-|---|---|---|---|
-| **1** | **v1.0.x — Bug fixes & cosmetic update** | Respond to early user feedback, fix confirmed defects, polish labels/layout/filter usability, and investigate sparse columns or blank source-aligned rows in the optional **One row per source file** mode (tracked as SPR-227). Preserve the accepted default output behavior. | Planned first post-release update; fixes depend on investigation |
-| **2** | **Broader structured-file support** | Introduce **JSON and CSV** as input formats, including mapping their structures into CIA's discovery, selection, review and export workflow. | Future major feature — proposed |
-| **3** | **HTML extraction** | Support selected HTML document structures such as tables or other discoverable elements, with the same review-before-export approach. | Future major feature — proposed |
-| **4** | **Advanced extraction and output control** | Explore richer handling of repeated/nested structures, reusable extraction configurations and more flexible output layouts without losing source relationships. | Longer-term exploration |
-
-The initial release remains focused on **XML**. JSON, CSV and HTML support are **not included in v1.0.0**. Image-based extraction is outside the committed roadmap.
-
-For the initial release details, see [Release Notes / What's New](docs/release-notes/README.md). To report problems or suggest improvements after public support opens, see [Support](SUPPORT.md).
+Future milestones are directional, not dated commitments. **v1.0.0 is XML-focused**; JSON, CSV and HTML are not shipped features. See [Release Notes / What's New](docs/release-notes/README.md) and [Support](SUPPORT.md).
 
 ## For technical reviewers
 
