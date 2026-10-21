@@ -14,7 +14,7 @@ CIA is distributed as a self-contained .NET application. The installer includes 
 
 ## Install CIA
 
-1. Once published, download the CIA installer from the [official GitHub Releases page](https://github.com/dragosaviation-arch/custom-information-aggregator/releases) and verify its SHA-256 against the [v1.0.0 release notes](../release-notes/v1.0.0.md).
+1. [Download CIA v1.0.0 installer](https://github.com/dragosaviation-arch/custom-information-aggregator/releases/download/v1.0.0/CIA-Setup-1.0.0.exe) from the official GitHub Release and verify its SHA-256 against the [v1.0.0 release notes](../release-notes/v1.0.0.md).
 2. Launch the downloaded installer.
 3. Follow the graphical installation flow. Administrator elevation is not required.
 4. Optionally select the Desktop shortcut component.
