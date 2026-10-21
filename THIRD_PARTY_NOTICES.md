@@ -1,0 +1,20 @@
+# Third-party software notices
+
+CIA redistributes the following NuGet/runtime components. This inventory was checked against the restored `project.assets.json` and package metadata for the self-contained Windows build on 21 October 2026.
+
+| Component family | Included package(s) and version(s) | Declared license | Included license/notice material |
+|---|---|---|---|
+| .NET runtime and Windows Desktop | Microsoft.NETCore.App / Microsoft.WindowsDesktop.App 10.0.11; `System.Diagnostics.EventLog` 10.0.11; `System.IO.Packaging` 10.0.2 | MIT | [`DotNet-LICENSE.txt`](docs/licensing/third-party/DotNet-LICENSE.txt), [`DotNet-THIRD-PARTY-NOTICES.txt`](docs/licensing/third-party/DotNet-THIRD-PARTY-NOTICES.txt), [`WindowsDesktop-LICENSE.txt`](docs/licensing/third-party/WindowsDesktop-LICENSE.txt), [`WindowsDesktop-THIRD-PARTY-NOTICES.txt`](docs/licensing/third-party/WindowsDesktop-THIRD-PARTY-NOTICES.txt) |
+| .NET Community Toolkit | `CommunityToolkit.Mvvm` 8.4.2 | MIT | [`CommunityToolkit-Mvvm-LICENSE.md`](docs/licensing/third-party/CommunityToolkit-Mvvm-LICENSE.md), [`CommunityToolkit-Mvvm-THIRD-PARTY-NOTICES.txt`](docs/licensing/third-party/CommunityToolkit-Mvvm-THIRD-PARTY-NOTICES.txt) |
+| Open XML SDK | `DocumentFormat.OpenXml` and `DocumentFormat.OpenXml.Framework` 3.5.1 | MIT | [`Open-XML-SDK-LICENSE.txt`](docs/licensing/third-party/Open-XML-SDK-LICENSE.txt) |
+| Microsoft.Data.Sqlite | `Microsoft.Data.Sqlite` and `Microsoft.Data.Sqlite.Core` 10.0.11 | MIT | Covered by the included .NET license and notices above |
+| Microsoft.Extensions | Configuration, dependency injection, diagnostics, file providers, hosting, logging, options and primitives packages 10.0.11 | MIT | Covered by the included .NET license and notices above |
+| Serilog | `Serilog` 4.4.0; `Serilog.Extensions.Hosting` and `Serilog.Extensions.Logging` 10.0.0; `Serilog.Formatting.Compact` 3.0.0; `Serilog.Sinks.File` 7.0.0 | Apache-2.0 | [`Serilog-LICENSE.txt`](docs/licensing/third-party/Serilog-LICENSE.txt) |
+| SharpCompress | `SharpCompress` 0.50.4 | MIT | [`SharpCompress-LICENSE.txt`](docs/licensing/third-party/SharpCompress-LICENSE.txt) |
+| SQLitePCLRaw / SQLite | `SQLitePCLRaw.bundle_e_sqlite3`, `SQLitePCLRaw.core`, `SQLitePCLRaw.lib.e_sqlite3` and `SQLitePCLRaw.provider.e_sqlite3` 2.1.12 | Apache-2.0; bundled SQLite terms described in upstream notice | [`SQLitePCLRaw-LICENSE.txt`](docs/licensing/third-party/SQLitePCLRaw-LICENSE.txt), [`SQLitePCLRaw-NOTICE.txt`](docs/licensing/third-party/SQLitePCLRaw-NOTICE.txt) |
+
+The Microsoft.Extensions transitive set currently comprises:
+
+`Microsoft.Extensions.Configuration`, `Microsoft.Extensions.Configuration.Abstractions`, `Microsoft.Extensions.Configuration.Binder`, `Microsoft.Extensions.Configuration.CommandLine`, `Microsoft.Extensions.Configuration.EnvironmentVariables`, `Microsoft.Extensions.Configuration.FileExtensions`, `Microsoft.Extensions.Configuration.Json`, `Microsoft.Extensions.Configuration.UserSecrets`, `Microsoft.Extensions.DependencyInjection`, `Microsoft.Extensions.DependencyInjection.Abstractions`, `Microsoft.Extensions.Diagnostics`, `Microsoft.Extensions.Diagnostics.Abstractions`, `Microsoft.Extensions.FileProviders.Abstractions`, `Microsoft.Extensions.FileProviders.Physical`, `Microsoft.Extensions.FileSystemGlobbing`, `Microsoft.Extensions.Hosting`, `Microsoft.Extensions.Hosting.Abstractions`, `Microsoft.Extensions.Logging`, `Microsoft.Extensions.Logging.Abstractions`, `Microsoft.Extensions.Logging.Configuration`, `Microsoft.Extensions.Logging.Console`, `Microsoft.Extensions.Logging.Debug`, `Microsoft.Extensions.Logging.EventLog`, `Microsoft.Extensions.Logging.EventSource`, `Microsoft.Extensions.Options`, `Microsoft.Extensions.Options.ConfigurationExtensions` and `Microsoft.Extensions.Primitives`, all at version 10.0.11.
+
+This notice inventory records the packages in the accepted dependency graph. Dependency upgrades require rechecking package metadata, upstream NOTICE files and the actual self-contained publish output before distribution.

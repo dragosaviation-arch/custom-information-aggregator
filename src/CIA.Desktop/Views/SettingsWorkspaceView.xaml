@@ -81,6 +81,15 @@
             <Setter Property="BorderThickness" Value="0,1,0,0" />
             <Setter Property="BorderBrush" Value="{StaticResource CiaDividerBrush}" />
         </Style>
+        <Style x:Key="SettingsIdentityLinkStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource CiaGhostButtonStyle}">
+            <Setter Property="Height" Value="Auto" />
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="Padding" Value="5,3" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="BorderThickness" Value="0" />
+        </Style>
     </UserControl.Resources>
 
     <Grid Margin="{StaticResource CiaWorkspaceMargin}">
@@ -735,7 +744,11 @@
                             </StackPanel>
                         </ScrollViewer>
 
-                        <Grid x:Name="AboutHelpPanel" Grid.Column="2">
+                        <ScrollViewer x:Name="AboutHelpScrollViewer"
+                                      Grid.Column="2"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                        <Grid x:Name="AboutHelpPanel">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="7" />
@@ -747,15 +760,36 @@
                                 <StackPanel Margin="9">
                                     <StackPanel Orientation="Horizontal">
                                         <Border Width="38" Height="38" Background="{StaticResource CiaLogoBrush}" CornerRadius="10">
-                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="18" FontWeight="ExtraBold" Foreground="White" Text="C" />
+                                            <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="18" FontWeight="ExtraBold" Foreground="White" Text="{Binding ApplicationMonogram}" />
                                         </Border>
                                         <StackPanel Margin="9,0,0,0" VerticalAlignment="Center">
-                                            <TextBlock FontSize="18" FontWeight="Bold" Text="CIA" />
-                                            <TextBlock FontSize="10.7" Text="Custom Information Aggregator" />
+                                            <TextBlock FontSize="18" FontWeight="Bold" Text="{Binding ApplicationShortName}" />
+                                            <TextBlock FontSize="10.7" Text="{Binding ApplicationName}" TextWrapping="Wrap" />
                                         </StackPanel>
                                     </StackPanel>
                                     <TextBlock Margin="0,7,0,0" FontSize="9.7" Foreground="{StaticResource CiaAccentBrush}" Text="{Binding VersionText}" TextWrapping="Wrap" />
-                                    <TextBlock Margin="0,7,0,0" FontWeight="SemiBold" Text="Created by Dragos" />
+                                    <TextBlock Margin="0,7,0,1" FontSize="9" FontWeight="Bold" Foreground="{StaticResource CiaTextMutedBrush}" Text="CURRENT DEVELOPER" />
+                                    <Button x:Name="CurrentDeveloperLinkButton"
+                                            AutomationProperties.Name="Open current developer project"
+                                            Command="{Binding OpenCurrentDeveloperCommand}"
+                                            Style="{StaticResource SettingsIdentityLinkStyle}"
+                                            ToolTip="Open the current developer project in the default browser.">
+                                        <StackPanel>
+                                            <TextBlock FontWeight="SemiBold" Text="{Binding CurrentDeveloperIdentityText}" TextWrapping="Wrap" />
+                                            <TextBlock FontSize="9.7" Foreground="{StaticResource CiaAccentBrush}" Text="{Binding CurrentDeveloperDisplayUrl}" TextDecorations="Underline" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Button>
+                                    <TextBlock Margin="0,5,0,1" FontSize="9" FontWeight="Bold" Foreground="{StaticResource CiaTextMutedBrush}" Text="ORIGINAL AUTHOR" />
+                                    <Button x:Name="OriginalAuthorLinkButton"
+                                            AutomationProperties.Name="Open original CIA repository"
+                                            Command="{Binding OpenOriginalRepositoryCommand}"
+                                            Style="{StaticResource SettingsIdentityLinkStyle}"
+                                            ToolTip="Open the original CIA repository in the default browser.">
+                                        <StackPanel>
+                                            <TextBlock FontWeight="SemiBold" Text="{Binding OriginalAuthorIdentityText}" TextWrapping="Wrap" />
+                                            <TextBlock FontSize="9.7" Foreground="{StaticResource CiaAccentBrush}" Text="{Binding OriginalAuthorDisplayUrl}" TextDecorations="Underline" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Button>
                                     <TextBlock Margin="0,4,0,0" Style="{StaticResource CiaSecondaryTextStyle}" Text="{Binding CopyrightText}" />
                                     <TextBlock Margin="0,3,0,0"
                                                Style="{StaticResource CiaSecondaryTextStyle}"
@@ -769,8 +803,8 @@
                                     BorderThickness="1"
                                     CornerRadius="9">
                                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                    <TextBlock HorizontalAlignment="Center" FontSize="30" FontWeight="ExtraBold" Foreground="{StaticResource CiaAccentBrush}" Text="CIA" />
-                                    <TextBlock FontSize="8.8" Foreground="{StaticResource CiaTextSecondaryBrush}" Text="FOCUS · EXTRACT · REVIEW" />
+                                    <TextBlock HorizontalAlignment="Center" FontSize="30" FontWeight="ExtraBold" Foreground="{StaticResource CiaAccentBrush}" Text="{Binding ApplicationShortName}" />
+                                    <TextBlock FontSize="8.8" Foreground="{StaticResource CiaTextSecondaryBrush}" Text="{Binding ApplicationTagline}" />
                                 </StackPanel>
                             </Border>
                             <Border Grid.Row="4" Style="{StaticResource SettingsCardStyle}" Margin="0">
@@ -782,6 +816,7 @@
                                 </StackPanel>
                             </Border>
                         </Grid>
+                        </ScrollViewer>
                     </Grid>
                 </Grid>
             </Border>

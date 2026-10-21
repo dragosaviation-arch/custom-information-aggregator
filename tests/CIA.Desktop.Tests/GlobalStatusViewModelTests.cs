@@ -11,6 +11,56 @@ namespace CIA.Desktop.Tests;
 public sealed class GlobalStatusViewModelTests
 {
     [TestMethod]
+    public void OriginalAttributionIsVisibleFromStartupAndOpensTheOriginalRepository()
+    {
+        var supervisor = new StubProcessingHostSupervisor(ProcessingHostLifecycleState.Ready);
+        using var coordinator = CreateCoordinator(supervisor);
+        var launcher = new RecordingExternalLinkLauncher();
+        using var status = new GlobalStatusViewModel(
+            supervisor,
+            coordinator,
+            externalLinkLauncher: launcher);
+
+        Assert.IsTrue(status.IsOriginalAttributionVisible);
+        Assert.IsFalse(status.IsOperationActive);
+        Assert.IsFalse(status.IsProgressVisible);
+        Assert.AreEqual("Dragos Tone · Project Manager", status.OriginalAuthorIdentityText);
+        Assert.AreEqual("github.com/dragosaviation-arch", status.OriginalAuthorDisplayUrl);
+
+        status.OpenOriginalRepositoryCommand.Execute(null);
+
+        CollectionAssert.AreEqual(
+            new[] { CiaProductIdentity.OriginalAuthor.Destination },
+            launcher.Destinations.ToArray());
+    }
+
+    [TestMethod]
+    public async Task ActiveOperationWithoutPercentageSuppressesAttributionAndShowsWorkingState()
+    {
+        var supervisor = new StubProcessingHostSupervisor(ProcessingHostLifecycleState.Ready);
+        using var coordinator = CreateCoordinator(supervisor);
+        using var status = new GlobalStatusViewModel(supervisor, coordinator);
+        coordinator.RecordSourceSelectionChanged(true);
+
+        var operation = await coordinator.BeginOperationAsync(WorkflowOperationKind.Discovery);
+
+        Assert.IsTrue(operation.Accepted);
+        Assert.IsTrue(status.IsOperationActive);
+        Assert.IsTrue(status.IsProgressVisible);
+        Assert.IsTrue(status.IsProgressIndeterminate);
+        Assert.IsFalse(status.HasDeterminateProgress);
+        Assert.IsFalse(status.IsOriginalAttributionVisible);
+
+        coordinator.CompleteOperation(
+            operation.Operation!.OperationId,
+            OperationOutcome.CompletedSuccessfully);
+
+        Assert.IsFalse(status.IsOperationActive);
+        Assert.IsFalse(status.IsProgressVisible);
+        Assert.IsTrue(status.IsOriginalAttributionVisible);
+    }
+
+    [TestMethod]
     public async Task HostAvailabilityAndWorkloadStateRemainDistinct()
     {
         var supervisor = new StubProcessingHostSupervisor(ProcessingHostLifecycleState.Ready);
@@ -269,6 +319,17 @@ public sealed class GlobalStatusViewModelTests
                 FailureCode: state == ProcessingHostLifecycleState.Faulted
                     ? "TestFailure"
                     : null);
+        }
+    }
+
+    private sealed class RecordingExternalLinkLauncher : IExternalLinkLauncher
+    {
+        public List<Uri> Destinations { get; } = [];
+
+        public bool TryOpen(Uri destination)
+        {
+            Destinations.Add(destination);
+            return true;
         }
     }
 

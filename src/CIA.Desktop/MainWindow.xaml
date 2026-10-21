@@ -296,7 +296,6 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <Ellipse Width="7"
@@ -333,43 +332,92 @@
                            Style="{StaticResource CiaSecondaryTextStyle}"
                            Text="{Binding GlobalStatus.OperationStatusText, ElementName=WindowRoot}"
                            TextTrimming="CharacterEllipsis" />
-                <ProgressBar Grid.Column="2"
-                             Width="150"
-                             Height="5"
-                             Margin="12,0,0,0"
-                             Maximum="{Binding GlobalStatus.ProgressMaximum, ElementName=WindowRoot, Mode=OneWay}"
-                             Value="{Binding GlobalStatus.ProgressValue, ElementName=WindowRoot, Mode=OneWay}">
-                    <ProgressBar.Style>
-                        <Style TargetType="ProgressBar"
-                               BasedOn="{StaticResource CiaDeterminateProgressBarStyle}">
-                            <Setter Property="Visibility" Value="Visible" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding GlobalStatus.IsProgressVisible, ElementName=WindowRoot}"
-                                             Value="False">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </ProgressBar.Style>
-                </ProgressBar>
-                <TextBlock Grid.Column="3"
-                           Width="38"
-                           Margin="6,0,0,0"
-                           VerticalAlignment="Center"
-                           Text="{Binding GlobalStatus.ProgressPercentText, ElementName=WindowRoot}">
-                    <TextBlock.Style>
-                        <Style TargetType="TextBlock"
-                               BasedOn="{StaticResource CiaSecondaryTextStyle}">
-                            <Setter Property="Visibility" Value="Visible" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding GlobalStatus.IsProgressVisible, ElementName=WindowRoot}"
-                                             Value="False">
-                                    <Setter Property="Visibility" Value="Collapsed" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </TextBlock.Style>
-                </TextBlock>
+                <Grid x:Name="AttributionProgressSlot"
+                      Grid.Column="2"
+                      Width="200"
+                      Height="32"
+                      Margin="12,0,0,0">
+                    <Grid x:Name="GlobalProgressPanel">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding GlobalStatus.IsProgressVisible, ElementName=WindowRoot}"
+                                                 Value="False">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ProgressBar x:Name="GlobalOperationProgressBar"
+                                     Grid.Column="0"
+                                     Height="5"
+                                     VerticalAlignment="Center"
+                                     IsIndeterminate="{Binding GlobalStatus.IsProgressIndeterminate, ElementName=WindowRoot, Mode=OneWay}"
+                                     Maximum="{Binding GlobalStatus.ProgressMaximum, ElementName=WindowRoot, Mode=OneWay}"
+                                     Style="{StaticResource CiaDeterminateProgressBarStyle}"
+                                     Value="{Binding GlobalStatus.ProgressValue, ElementName=WindowRoot, Mode=OneWay}" />
+                        <TextBlock Grid.Column="1"
+                                   Width="38"
+                                   Margin="6,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Text="{Binding GlobalStatus.ProgressPercentText, ElementName=WindowRoot}">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock"
+                                       BasedOn="{StaticResource CiaSecondaryTextStyle}">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding GlobalStatus.HasDeterminateProgress, ElementName=WindowRoot}"
+                                                     Value="False">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+                    <Button x:Name="OriginalAuthorAttributionButton"
+                            AutomationProperties.HelpText="Opens the original CIA repository in the default browser."
+                            AutomationProperties.Name="{Binding GlobalStatus.OriginalAuthorAccessibleName, ElementName=WindowRoot}"
+                            Command="{Binding GlobalStatus.OpenOriginalRepositoryCommand, ElementName=WindowRoot}"
+                            ToolTip="Open the original CIA repository">
+                        <Button.Style>
+                            <Style TargetType="Button"
+                                   BasedOn="{StaticResource CiaGhostButtonStyle}">
+                                <Setter Property="Height" Value="32" />
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="BorderThickness" Value="0" />
+                                <Setter Property="HorizontalContentAlignment" Value="Center" />
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding GlobalStatus.IsOriginalAttributionVisible, ElementName=WindowRoot}"
+                                                 Value="False">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel HorizontalAlignment="Center"
+                                    VerticalAlignment="Center">
+                            <TextBlock x:Name="OriginalAuthorIdentityText"
+                                       HorizontalAlignment="Center"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource CiaTextPrimaryBrush}"
+                                       Text="{Binding GlobalStatus.OriginalAuthorIdentityText, ElementName=WindowRoot}" />
+                            <TextBlock x:Name="OriginalAuthorUrlText"
+                                       HorizontalAlignment="Center"
+                                       FontSize="11"
+                                       Foreground="{StaticResource CiaAccentBrush}"
+                                       Text="{Binding GlobalStatus.OriginalAuthorDisplayUrl, ElementName=WindowRoot}"
+                                       TextDecorations="Underline" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
             </Grid>
         </Border>
     </Grid>

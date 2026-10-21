@@ -174,6 +174,10 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
         OpenUserManualCommand = new RelayCommand(() => OpenExternalLink(UserManualUri));
         OpenReleaseNotesCommand = new RelayCommand(() => OpenExternalLink(ReleaseNotesUri));
         OpenSupportCommand = new RelayCommand(() => OpenExternalLink(SupportUri));
+        OpenCurrentDeveloperCommand = new RelayCommand(
+            () => OpenExternalLink(CiaProductIdentity.CurrentDeveloper.Destination));
+        OpenOriginalRepositoryCommand = new RelayCommand(
+            () => OpenExternalLink(CiaProductIdentity.OriginalAuthor.Destination));
         SaveSettingsCommand = new RelayCommand(SaveSettings);
         ResetSettingsCommand = new RelayCommand(ResetSettings);
         RefreshSavedStatesCommand = new RelayCommand(
@@ -226,7 +230,7 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
             "Processing Host"
         ];
         VersionText = CreateVersionText();
-        CopyrightText = $"© {DateTime.UtcNow.Year} Dragos";
+        CopyrightText = $"© {DateTime.UtcNow.Year} {CiaProductIdentity.CurrentDeveloper.Name}";
         Refresh();
     }
 
@@ -241,6 +245,10 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public IRelayCommand OpenReleaseNotesCommand { get; }
 
     public IRelayCommand OpenSupportCommand { get; }
+
+    public IRelayCommand OpenCurrentDeveloperCommand { get; }
+
+    public IRelayCommand OpenOriginalRepositoryCommand { get; }
 
     public IRelayCommand SaveSettingsCommand { get; }
 
@@ -702,6 +710,26 @@ public sealed class SettingsWorkspaceViewModel : ObservableObject
     public string VersionText { get; }
 
     public string CopyrightText { get; }
+
+    public string ApplicationMonogram => CiaProductIdentity.ApplicationMonogram;
+
+    public string ApplicationShortName => CiaProductIdentity.ApplicationShortName;
+
+    public string ApplicationName => CiaProductIdentity.ApplicationName;
+
+    public string ApplicationTagline => CiaProductIdentity.ApplicationTagline;
+
+    public string CurrentDeveloperIdentityText =>
+        $"{CiaProductIdentity.CurrentDeveloper.Name} · "
+        + CiaProductIdentity.CurrentDeveloper.ProfessionalIdentification;
+
+    public string CurrentDeveloperDisplayUrl => CiaProductIdentity.CurrentDeveloper.DisplayUrl;
+
+    public string OriginalAuthorIdentityText =>
+        $"{CiaProductIdentity.OriginalAuthor.Name} · "
+        + CiaProductIdentity.OriginalAuthor.ProfessionalIdentification;
+
+    public string OriginalAuthorDisplayUrl => CiaProductIdentity.OriginalAuthor.DisplayUrl;
 
     private void Refresh()
     {
