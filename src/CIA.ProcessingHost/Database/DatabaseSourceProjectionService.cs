@@ -40,18 +40,36 @@ public sealed class DatabaseSourceProjectionService(IHierarchyFlatteningEngine h
         var selectedIdentities = dataset.Fields
             .SelectMany(field => field.DetailedIdentities)
             .ToArray();
-        var input = HierarchySourceInput.FromInterpretedSource(
-            dataset.SourceSetId,
-            interpretedSource,
-            selectedIdentities);
-        var isLegacyCompatibility = dataset.RowFamilies.All(family =>
-            string.Equals(family.Id.AnchorPath, "/legacy", StringComparison.Ordinal));
+        var selectedIdentitySet = selectedIdentities.ToHashSet();
         var familyAssignments = dataset.Fields
             .SelectMany(field => field.DetailedIdentities.Select(identity =>
                 new KeyValuePair<DiscoveryInformationIdentity, RowFamilyId>(
                     identity,
                     field.RowFamilyId)))
             .ToDictionary(item => item.Key, item => item.Value);
+        var isLegacyCompatibility = dataset.RowFamilies.All(family =>
+            string.Equals(family.Id.AnchorPath, "/legacy", StringComparison.Ordinal));
+        var structuralContextAssignments = isLegacyCompatibility
+            ? new Dictionary<DiscoveryInformationIdentity, RowFamilyId>()
+            : CreateStructuralContextAssignments(
+                dataset.SourceSetId,
+                interpretedSource,
+                selectedIdentitySet,
+                familyAssignments);
+        var selectedInput = HierarchySourceInput.FromInterpretedSource(
+            dataset.SourceSetId,
+            interpretedSource,
+            selectedIdentities);
+        var input = CreateProjectionInput(
+            dataset.SourceSetId,
+            selectedInput,
+            interpretedSource,
+            familyAssignments,
+            structuralContextAssignments);
+        foreach (var assignment in structuralContextAssignments)
+        {
+            familyAssignments.Add(assignment.Key, assignment.Value);
+        }
         var flattened = await hierarchyFlattening.FlattenAsync(
             isLegacyCompatibility
                 ? new HierarchyFlatteningRequest(
@@ -75,16 +93,33 @@ public sealed class DatabaseSourceProjectionService(IHierarchyFlatteningEngine h
                 "Hierarchy flattening returned rows outside the source boundary.");
         }
 
+        var selectedRows = flattened.Rows
+            .Select(row => new FlattenedHierarchyRow(
+                row.Ordinal,
+                row.SourceId,
+                row.Cells.Where(cell => selectedIdentitySet.Contains(cell.DetailedIdentity)),
+                row.RowFamilyId,
+                row.AnchorInstanceId,
+                row.ProjectionOrdinal))
+            .Where(row => row.Cells.Count > 0)
+            .Select((row, index) => new FlattenedHierarchyRow(
+                checked(index + 1),
+                row.SourceId,
+                row.Cells,
+                row.RowFamilyId,
+                row.AnchorInstanceId,
+                row.ProjectionOrdinal))
+            .ToArray();
         var metadata = CreateSourceMetadata(dataset, source);
         var normalizedRows = isLegacyCompatibility
-            ? flattened.Rows.Select(row => new FlattenedHierarchyRow(
+            ? selectedRows.Select(row => new FlattenedHierarchyRow(
                 row.Ordinal,
                 row.SourceId,
                 row.Cells,
                 dataset.RowFamilies.Single().Id,
                 row.Cells.Min(cell => cell.Lineage.ElementPath[0].InstanceId),
                 row.Ordinal))
-            : flattened.Rows;
+            : selectedRows;
         var rows = normalizedRows.Select(row => CreateDatabaseRow(
             dataset,
             source,
@@ -99,6 +134,101 @@ public sealed class DatabaseSourceProjectionService(IHierarchyFlatteningEngine h
             flattened.IsTruncated,
             flattened.TruncatedRowFamilies);
     }
+
+    private static IReadOnlyDictionary<DiscoveryInformationIdentity, RowFamilyId>
+        CreateStructuralContextAssignments(
+            SourceSetId sourceSetId,
+            InterpretedSourceDocument interpretedSource,
+            IReadOnlySet<DiscoveryInformationIdentity> selectedIdentities,
+            IReadOnlyDictionary<DiscoveryInformationIdentity, RowFamilyId> familyAssignments)
+    {
+        return interpretedSource.Values
+            .Where(value => value.Lineage is not null
+                && value.CandidateKind == SourceValueCandidateKind.Structural)
+            .Select(value => HierarchySourceOccurrence.FromInterpretedValue(
+                sourceSetId,
+                value).Identity)
+            .Where(identity => !selectedIdentities.Contains(identity))
+            .Distinct()
+            .Select(identity => new
+            {
+                Identity = identity,
+                Families = familyAssignments
+                    .Where(assignment => IsAncestorOfOrEqual(
+                        identity.StructuralPath,
+                        assignment.Key.StructuralPath))
+                    .Select(assignment => assignment.Value)
+                    .Distinct()
+                    .ToArray()
+            })
+            .Where(candidate => candidate.Families.Length == 1
+                && IsAncestorOfOrEqual(
+                    candidate.Families[0].AnchorPath,
+                    candidate.Identity.StructuralPath))
+            .ToDictionary(candidate => candidate.Identity, candidate => candidate.Families[0]);
+    }
+
+    private static HierarchySourceInput CreateProjectionInput(
+        SourceSetId sourceSetId,
+        HierarchySourceInput selectedInput,
+        InterpretedSourceDocument interpretedSource,
+        IReadOnlyDictionary<DiscoveryInformationIdentity, RowFamilyId> selectedAssignments,
+        IReadOnlyDictionary<DiscoveryInformationIdentity, RowFamilyId> contextAssignments)
+    {
+        if (contextAssignments.Count == 0)
+        {
+            return selectedInput;
+        }
+
+        var selectedAnchors = selectedInput.Occurrences
+            .Select(occurrence =>
+            {
+                var family = selectedAssignments[occurrence.Identity];
+                return (Family: family, AnchorInstanceId: FindAnchorInstanceId(occurrence, family));
+            })
+            .ToHashSet();
+        // Structural candidates are relationship evidence as well as selectable values.
+        // Retain that evidence only inside records which contain selected data, then remove
+        // unselected candidates from the flattened projection before materialization.
+        var structuralContext = interpretedSource.Values
+            .Where(value => value.Lineage is not null
+                && value.CandidateKind == SourceValueCandidateKind.Structural)
+            .Select(value => HierarchySourceOccurrence.FromInterpretedValue(
+                sourceSetId,
+                value))
+            .Where(occurrence => contextAssignments.TryGetValue(
+                    occurrence.Identity,
+                    out var family)
+                && selectedAnchors.Contains((
+                    family,
+                    FindAnchorInstanceId(occurrence, family))))
+            .ToArray();
+        return new HierarchySourceInput(
+            selectedInput.SourceId,
+            selectedInput.Occurrences.Concat(structuralContext));
+    }
+
+    private static long FindAnchorInstanceId(
+        HierarchySourceOccurrence occurrence,
+        RowFamilyId family)
+    {
+        var path = string.Empty;
+        foreach (var element in occurrence.Lineage.ElementPath)
+        {
+            path += "/" + element.ExpandedName;
+            if (string.Equals(path, family.AnchorPath, StringComparison.Ordinal))
+            {
+                return element.InstanceId;
+            }
+        }
+
+        throw new InvalidOperationException(
+            "A projection context occurrence does not contain its assigned Row Family anchor.");
+    }
+
+    private static bool IsAncestorOfOrEqual(string ancestor, string path) =>
+        string.Equals(ancestor, path, StringComparison.Ordinal)
+        || path.StartsWith(ancestor + "/", StringComparison.Ordinal);
 
     private static DatabaseSourceProjection ProjectSourceFile(
         DatabaseDatasetBuildSpecification dataset,

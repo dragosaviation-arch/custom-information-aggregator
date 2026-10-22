@@ -587,6 +587,92 @@ public sealed class HierarchyDatabaseGenerationTests
     }
 
     [TestMethod]
+    public async Task UnselectedStructuralSlotsStillAssociateSelectedValuesWithTheirParentRecord()
+    {
+        using var workspace = new Workspace();
+        var set = SourceSetId.CreateNew();
+        var fixture = Path.Combine(
+            AppContext.BaseDirectory, "Fixtures", "StructuralDiscovery", "stable-slot-records.xml");
+        var source = workspace.Source(set, "selected-slots.xml", File.ReadAllText(fixture));
+        var interpreted = await workspace.InterpretAsync(source);
+        var selected = Identities(set, interpreted)
+            .Where(identity => identity.CandidateKind == SourceValueCandidateKind.Attribute
+                    && identity.InformationType == "slot"
+                || identity.CandidateKind == SourceValueCandidateKind.Element
+                    && identity.InformationType == "code")
+            .ToArray();
+        var root = new RowFamilyId(set, RowFamilyKind.Root, "/records");
+        var record = new RowFamilyDefinition(
+            new RowFamilyId(set, RowFamilyKind.Repeated, "/records/record"),
+            root);
+        var assignments = selected.ToDictionary(identity => identity, _ => record.Id);
+        var fields = DatabaseTagMapper.CreateFieldMappings(
+            set,
+            selected.Select(identity => new DiscoveryConfigurationItem(
+                identity,
+                DiscoveryInformationDisposition.Selected)),
+            new Dictionary<DiscoveryInformationIdentity, string>(),
+            assignments);
+        var specification = new DatabaseBuildSpecification(
+        [
+            new DatabaseDatasetBuildSpecification(
+                set,
+                "Selected slots",
+                1,
+                RepeatedDataLayout.StructuralRows,
+                [source],
+                [record],
+                fields)
+        ]);
+
+        var result = await workspace.Service.BuildAsync(
+            OperationCorrelation.CreateNew(),
+            specification);
+        Assert.IsTrue(result.Accepted, result.Failure?.Description);
+        var page = await workspace.Repository.ReadPublishedDatabasePageAsync(
+            new DatabaseReviewQuery(
+                result.PublishedGeneration!.OperationId,
+                set,
+                record.Id,
+                1,
+                100,
+                null,
+                DatabaseRowInclusionFilter.All));
+
+        Assert.IsNotNull(page);
+        Assert.AreEqual(2, page.TotalRowCount);
+        Assert.IsTrue(page.Rows.Any(row =>
+            Values(row).Contains("C100")
+            && Values(row).Contains("A")
+            && Values(row).Contains("B")
+            && Values(row).Contains("C")));
+        Assert.IsTrue(page.Rows.Any(row =>
+            Values(row).Contains("C200")
+            && Values(row).Contains("A")
+            && Values(row).Contains("B")
+            && Values(row).Contains("C")));
+        Assert.AreEqual(
+            selected.Sum(identity => interpreted.Values.Count(value =>
+                value.Lineage is not null
+                && HierarchySourceOccurrence.FromInterpretedValue(set, value).Identity == identity)),
+            page.Rows.SelectMany(row => row.Cells).SelectMany(cell => cell.Values).Count());
+        Assert.IsFalse(page.Rows.SelectMany(row => row.Cells).SelectMany(cell => cell.Values)
+            .Any(value => value.DetailedIdentity.CandidateKind == SourceValueCandidateKind.Structural));
+        Assert.IsFalse(page.Rows.SelectMany(Values).Any(value => value is "Widget" or "Gadget"));
+
+        var bounded = await new DatabaseSourceProjectionService(new HierarchyFlatteningEngine())
+            .ProjectAsync(
+                specification.Datasets.Single(),
+                source,
+                interpreted,
+                maximumRowsPerFamily: 1);
+        Assert.HasCount(1, bounded.Rows);
+        CollectionAssert.AreEquivalent(
+            new[] { "C100", "A", "B", "C" },
+            Values(bounded.Rows.Single()).ToArray());
+    }
+
+    [TestMethod]
     public async Task NestedNumberedCoordinatesAndAllCandidateKindsRoundTripLosslessly()
     {
         using var workspace = new Workspace();
