@@ -88,16 +88,24 @@ public sealed class RowFamilyClassifier
                 statistic.ChildStructuralPath,
                 nameof(cardinalityStatistics)))
             .ToArray();
+        var structuralSlotPaths = identities
+            .Where(identity => identity.CandidateKind == SourceValueCandidateKind.Structural)
+            .Select(identity => FindStructuralSlotPath(identity, repeatedPaths))
+            .OfType<ParsedStructuralPath>()
+            .ToHashSet();
+        var rowFamilyPaths = repeatedPaths
+            .Where(path => !structuralSlotPaths.Contains(path))
+            .ToArray();
 
-        var definitions = new List<RowFamilyDefinition>(roots.Length + repeatedPaths.Length);
+        var definitions = new List<RowFamilyDefinition>(roots.Length + rowFamilyPaths.Length);
         definitions.AddRange(roots.Select(root => new RowFamilyDefinition(
             new RowFamilyId(sourceSetId, RowFamilyKind.Root, root.Value),
             parentRowFamilyId: null)));
 
-        foreach (var repeatedPath in repeatedPaths)
+        foreach (var repeatedPath in rowFamilyPaths)
         {
             var root = FindApplicableRoot(repeatedPath, roots, nameof(cardinalityStatistics));
-            var repeatedParent = repeatedPaths
+            var repeatedParent = rowFamilyPaths
                 .Where(candidate => candidate != repeatedPath && candidate.IsAncestorOf(repeatedPath))
                 .OrderByDescending(candidate => candidate.Depth)
                 .ThenBy(candidate => candidate.Value, StringComparer.Ordinal)
@@ -114,7 +122,7 @@ public sealed class RowFamilyClassifier
             .OrderBy(definition => definition.Id)
             .ToArray();
         var assignments = identities
-            .Select(identity => Assign(identity, roots, repeatedPaths))
+            .Select(identity => Assign(identity, roots, rowFamilyPaths))
             .OrderBy(assignment => assignment.RowFamilyId)
             .ThenBy(assignment => assignment.Identity.StructuralPath, StringComparer.Ordinal)
             .ThenBy(assignment => assignment.Identity.CandidateKind)
@@ -142,6 +150,29 @@ public sealed class RowFamilyClassifier
                 ? new RowFamilyId(sourceSetId, RowFamilyKind.Root, root.Value)
                 : new RowFamilyId(sourceSetId, RowFamilyKind.Repeated, repeatedOwner.Value);
             return new RowFamilyFieldAssignment(identity, owner);
+        }
+
+        static ParsedStructuralPath? FindStructuralSlotPath(
+            DiscoveryInformationIdentity identity,
+            IReadOnlyList<ParsedStructuralPath> availableRepeatedPaths)
+        {
+            var fieldPath = ParsedStructuralPath.Create(
+                identity.StructuralPath,
+                nameof(detailedIdentities));
+            // The interpreter's selector-qualified Structural identity proves a typed
+            // slot. Its parent must also be a repeated record; otherwise ordinary
+            // repeated entries beneath a singleton branch remain independent rows.
+            return availableRepeatedPaths
+                .Where(candidate => candidate.IsAncestorOfOrEqual(fieldPath)
+                    && availableRepeatedPaths.Any(parent =>
+                        parent.Depth == candidate.Depth - 1
+                        && parent.IsAncestorOf(candidate))
+                    && identity.StructuralIdentity.StartsWith(
+                        $"{candidate.Value}[",
+                        StringComparison.Ordinal))
+                .OrderByDescending(candidate => candidate.Depth)
+                .ThenBy(candidate => candidate.Value, StringComparer.Ordinal)
+                .FirstOrDefault();
         }
     }
 

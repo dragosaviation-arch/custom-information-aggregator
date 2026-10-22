@@ -34,6 +34,20 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
             return await FlattenFamiliesAsync(request, cancellationToken).ConfigureAwait(false);
         }
 
+        return await FlattenWithoutFamiliesAsync(
+                request,
+                knownRepeatedFamilyPaths: new HashSet<string>(StringComparer.Ordinal),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask<HierarchyFlatteningResult> FlattenWithoutFamiliesAsync(
+        HierarchyFlatteningRequest request,
+        IReadOnlySet<string> knownRepeatedFamilyPaths,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
         var flattened = new List<(SourceId SourceId, RowFragment Fragment)>();
         var checkpoint = new CancellationCheckpoint();
         var tracker = new ProjectionLimitTracker();
@@ -43,7 +57,8 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
         {
             cancellationToken.ThrowIfCancellationRequested();
             var roots = BuildSourceTrees(source);
-            var repeatedFamilyPaths = FindRepeatedFamilyPaths(roots);
+            var repeatedFamilyPaths = FindRepeatedFamilyPaths(roots).ToHashSet(StringComparer.Ordinal);
+            repeatedFamilyPaths.UnionWith(knownRepeatedFamilyPaths);
             foreach (var root in roots)
             {
                 var fragments = await FlattenNodeAsync(
@@ -151,7 +166,7 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                         .Select(CreateCell)
                         .ToArray();
 
-                    var legacyResult = await FlattenAsync(
+                    var legacyResult = await FlattenWithoutFamiliesAsync(
                         new HierarchyFlatteningRequest(
                             request.SourceSetId,
                             request.Layout,
@@ -161,6 +176,10 @@ public sealed class HierarchyFlatteningEngine : IHierarchyFlatteningEngine
                             request.MaximumRowsPerFamily is null
                                 ? null
                                 : request.MaximumRowsPerFamily.Value - currentFamilyCount),
+                        new HashSet<string>(StringComparer.Ordinal)
+                        {
+                            family.Id.AnchorPath
+                        },
                         cancellationToken).ConfigureAwait(false);
                     if (legacyResult.IsTruncated)
                     {
