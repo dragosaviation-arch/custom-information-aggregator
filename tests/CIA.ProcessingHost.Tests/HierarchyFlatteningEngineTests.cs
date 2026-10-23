@@ -569,6 +569,61 @@ public sealed class HierarchyFlatteningEngineTests
     }
 
     [TestMethod]
+    public async Task FamilyAwareProjectionKeepsProvenStructuralSlotsInTheirParentRecords()
+    {
+        using var workspace = new FlatteningWorkspace();
+        var sourceSetId = SourceSetId.CreateNew();
+        var source = workspace.CopyFixture("stable-slot-records.xml", sourceSetId);
+        var document = await InterpretAsync(source);
+        var input = CreateSourceInput(sourceSetId, document);
+        var classification = new RowFamilyClassifier().Classify(
+            sourceSetId,
+            ["/records"],
+            [
+                new StructuralCardinalityStatistic(
+                    sourceSetId,
+                    "/records",
+                    "/records",
+                    "/records/record",
+                    maximumChildInstancesPerParent: 2,
+                    observedParentInstanceCount: 1,
+                    repeatingParentInstanceCount: 1,
+                    observedSourceCount: 1),
+                new StructuralCardinalityStatistic(
+                    sourceSetId,
+                    "/records",
+                    "/records/record",
+                    "/records/record/cell",
+                    maximumChildInstancesPerParent: 3,
+                    observedParentInstanceCount: 2,
+                    repeatingParentInstanceCount: 2,
+                    observedSourceCount: 1)
+            ],
+            input.Occurrences.Select(occurrence => occurrence.Identity).Distinct());
+
+        var result = await new HierarchyFlatteningEngine().FlattenAsync(
+            new HierarchyFlatteningRequest(
+                sourceSetId,
+                RepeatedDataLayout.StructuralRows,
+                [input],
+                classification.Families,
+                classification.FieldAssignments.ToDictionary(
+                    assignment => assignment.Identity,
+                    assignment => assignment.RowFamilyId)));
+
+        CollectionAssert.AreEqual(
+            new[] { "/records", "/records/record" },
+            classification.Families.Select(family => family.Id.AnchorPath).ToArray());
+        Assert.HasCount(2, result.Rows);
+        AssertPaired(result, "C100", "2");
+        AssertPaired(result, "C100", "Widget");
+        AssertPaired(result, "C200", "5");
+        AssertPaired(result, "C200", "Gadget");
+        Assert.IsTrue(result.Rows.All(row =>
+            row.RowFamilyId?.AnchorPath == "/records/record"));
+    }
+
+    [TestMethod]
     public async Task OnlySelectedDetailedPhysicalIdentitiesEnterTheResult()
     {
         using var workspace = new FlatteningWorkspace();

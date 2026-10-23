@@ -6,6 +6,20 @@ namespace CIA.Desktop.Tests;
 public sealed class NsisInstallerTests
 {
     [TestMethod]
+    public void PatchReleaseVersionIsConsistentAcrossApplicationHostAndInstaller()
+    {
+        var desktopProject = XDocument.Parse(
+            ReadRepositoryFile("src", "CIA.Desktop", "CIA.Desktop.csproj"));
+        var hostProject = XDocument.Parse(
+            ReadRepositoryFile("src", "CIA.ProcessingHost", "CIA.ProcessingHost.csproj"));
+        var installerProject = XDocument.Parse(ReadRepositoryFile("CIA.Installer.proj"));
+
+        Assert.AreEqual("1.0.1", ProjectProperty(desktopProject, "Version"));
+        Assert.AreEqual("1.0.1", ProjectProperty(hostProject, "Version"));
+        Assert.AreEqual("1.0.1", ProjectProperty(installerProject, "CiaVersion"));
+    }
+
+    [TestMethod]
     public void InstallerIsGraphicalPerUserAndUsesTheApprovedBinaryLocation()
     {
         var installer = ReadRepositoryFile("deployment", "nsis", "CIA.Installer.nsi");
@@ -16,6 +30,10 @@ public sealed class NsisInstallerTests
         StringAssert.Contains(installer, "!insertmacro MUI_PAGE_INSTFILES");
         StringAssert.Contains(installer, "!insertmacro MUI_PAGE_FINISH");
         StringAssert.Contains(installer, "RequestExecutionLevel user");
+        StringAssert.Contains(installer, "VIProductVersion \"${CIA_VERSION}.0\"");
+        StringAssert.Contains(
+            installer,
+            "VIAddVersionKey /LANG=1033 \"ProductVersion\" \"${CIA_VERSION}\"");
         StringAssert.Contains(
             installer,
             "InstallDir \"$LOCALAPPDATA\\Programs\\Custom Information Aggregator\"");
@@ -257,6 +275,12 @@ public sealed class NsisInstallerTests
 
     private static string ReadRepositoryFile(params string[] segments) =>
         File.ReadAllText(Path.Combine([FindRepositoryRoot(), .. segments]));
+
+    private static string ProjectProperty(XDocument project, string propertyName) =>
+        project
+            .Descendants(propertyName)
+            .Single()
+            .Value;
 
     private static string FindRepositoryRoot()
     {

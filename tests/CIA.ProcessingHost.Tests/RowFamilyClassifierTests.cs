@@ -109,6 +109,71 @@ public sealed class RowFamilyClassifierTests
     }
 
     [TestMethod]
+    public void ProvenStructuralSlotsRemainFieldsOfTheirRepeatedParentRecord()
+    {
+        const string recordPath = "/records/record";
+        const string slotPath = $"{recordPath}/cell";
+        const string valuePath = $"{slotPath}/value";
+        var structuralSlotValue = new DiscoveryInformationIdentity(
+            SourceSetId,
+            valuePath,
+            "cell [slot=A]",
+            SourceValueCandidateKind.Structural,
+            $"{slotPath}[@slot='A']/value");
+
+        var result = Classify(
+            ["/records"],
+            [
+                Statistic("/records", "/records", recordPath, 2),
+                Statistic("/records", recordPath, slotPath, 3)
+            ],
+            [
+                Identity($"{slotPath}/code", "code"),
+                structuralSlotValue
+            ]);
+
+        CollectionAssert.AreEqual(
+            new[] { "/records", recordPath },
+            result.Families.Select(family => family.Id.AnchorPath).ToArray());
+        Assert.AreEqual(Family(result, recordPath).Id, Assignment(result, $"{slotPath}/code"));
+        Assert.AreEqual(
+            Family(result, recordPath).Id,
+            result.FieldAssignments.Single(assignment =>
+                assignment.Identity == structuralSlotValue).RowFamilyId);
+    }
+
+    [TestMethod]
+    public void RepeatedEntriesUnderSingletonBranchesRemainIndependentFamilies()
+    {
+        const string recordPath = "/root/record";
+        const string branchPath = $"{recordPath}/left";
+        const string entryPath = $"{branchPath}/entry";
+        const string valuePath = $"{entryPath}/value";
+        var positionQualifiedValue = new DiscoveryInformationIdentity(
+            SourceSetId,
+            valuePath,
+            "entry [position=1]",
+            SourceValueCandidateKind.Structural,
+            $"{entryPath}[1]/value");
+
+        var result = Classify(
+            ["/root"],
+            [
+                Statistic("/root", "/root", recordPath, 2),
+                Statistic("/root", recordPath, branchPath, 1),
+                Statistic("/root", branchPath, entryPath, 2)
+            ],
+            [positionQualifiedValue]);
+
+        Assert.AreEqual(
+            Family(result, entryPath).Id,
+            result.FieldAssignments.Single().RowFamilyId);
+        Assert.AreEqual(
+            Family(result, recordPath).Id,
+            Family(result, entryPath).ParentRowFamilyId);
+    }
+
+    [TestMethod]
     public void NamespaceAwareRootsAndRepeatedPathsNeverCollide()
     {
         const string alphaRoot = "/{urn:alpha}root";
