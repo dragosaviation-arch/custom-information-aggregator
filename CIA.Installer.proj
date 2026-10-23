@@ -5,7 +5,7 @@
     <_CiaPublishDirectory>$(_CiaRepositoryRoot)artifacts\publish\win-x64</_CiaPublishDirectory>
     <_CiaInstallerDirectory>$(_CiaRepositoryRoot)artifacts\installer</_CiaInstallerDirectory>
     <_CiaInstallerScript>$(_CiaRepositoryRoot)deployment\nsis\CIA.Installer.nsi</_CiaInstallerScript>
-    <CiaVersion Condition="'$(CiaVersion)' == ''">1.0.0</CiaVersion>
+    <CiaVersion Condition="'$(CiaVersion)' == ''">1.0.1</CiaVersion>
     <_CiaInstallerFile>$(_CiaInstallerDirectory)\CIA-Setup-$(CiaVersion).exe</_CiaInstallerFile>
     <_NsisProgramFilesX86>$([System.Environment]::GetFolderPath(SpecialFolder.ProgramFilesX86))</_NsisProgramFilesX86>
     <NsisCompiler Condition="'$(NsisCompiler)' == '' And Exists('$(_NsisProgramFilesX86)\NSIS\makensis.exe')">$(_NsisProgramFilesX86)\NSIS\makensis.exe</NsisCompiler>
