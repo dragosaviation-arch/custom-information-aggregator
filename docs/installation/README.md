@@ -14,7 +14,7 @@ CIA is distributed as a self-contained .NET application. The installer includes 
 
 ## Install CIA
 
-1. [Download CIA v1.0.0 installer](https://github.com/dragosaviation-arch/custom-information-aggregator/releases/download/v1.0.0/CIA-Setup-1.0.0.exe) from the official GitHub Release and verify its SHA-256 against the [v1.0.0 release notes](../release-notes/v1.0.0.md).
+1. [Download CIA v1.0.1 installer](https://github.com/dragosaviation-arch/custom-information-aggregator/releases/download/v1.0.1/CIA-Setup-1.0.1.exe) from the official GitHub Release and verify its SHA-256 against the [v1.0.1 release notes](../release-notes/v1.0.1.md).
 2. Launch the downloaded installer.
 3. Follow the graphical installation flow. Administrator elevation is not required.
 4. Optionally select the Desktop shortcut component.
@@ -22,9 +22,9 @@ CIA is distributed as a self-contained .NET application. The installer includes 
 
 CIA is installed per user under `%LOCALAPPDATA%\Programs\Custom Information Aggregator`. The installer creates a Start Menu shortcut and creates the Desktop shortcut only when selected. Only `CIA.exe` is user-facing.
 
-## Unsigned v1.0.0 release
+## Unsigned v1 release
 
-CIA v1.0.0 is intentionally unsigned. Windows may display a Microsoft Defender SmartScreen or unknown-publisher warning; such a warning is expected for an unsigned release but may not appear on every system.
+CIA v1.0.1 is intentionally unsigned. Windows may display a Microsoft Defender SmartScreen or unknown-publisher warning; such a warning is expected for an unsigned release but may not appear on every system.
 
 Download the installer only from the official CIA GitHub Releases page. If Windows permits installation after showing SmartScreen, select **More info**, verify that the installer is the file downloaded from the official release, and then select **Run anyway**. Do not disable Windows security features.
 
