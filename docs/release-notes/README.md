@@ -2,6 +2,10 @@
 
 Release notes for **Custom Information Aggregator (CIA)**.
 
+## Pending physical acceptance
+
+- **[v1.0.1 — Structural-association maintenance update](v1.0.1.md)** — local bug-fix installer candidate; unpublished and pending product-owner physical acceptance.
+
 ## Published releases
 
 - **[v1.0.0 — Initial public release](v1.0.0.md)** — [published 21 October 2026](https://github.com/dragosaviation-arch/custom-information-aggregator/releases/tag/v1.0.0), Windows 10/11 verification, accepted installer SHA-256, workflow, known limitations and links to the User Manual.
