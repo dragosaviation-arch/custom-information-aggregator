@@ -53,6 +53,11 @@ Name "Custom Information Aggregator ${CIA_VERSION}"
 Caption "Custom Information Aggregator Setup"
 BrandingText "Custom Information Aggregator"
 OutFile "${CIA_INSTALLER_OUTPUT}"
+VIProductVersion "${CIA_VERSION}.0"
+VIAddVersionKey /LANG=1033 "ProductName" "Custom Information Aggregator"
+VIAddVersionKey /LANG=1033 "FileDescription" "Custom Information Aggregator Setup"
+VIAddVersionKey /LANG=1033 "FileVersion" "${CIA_VERSION}"
+VIAddVersionKey /LANG=1033 "ProductVersion" "${CIA_VERSION}"
 InstallDir "$LOCALAPPDATA\Programs\Custom Information Aggregator"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma

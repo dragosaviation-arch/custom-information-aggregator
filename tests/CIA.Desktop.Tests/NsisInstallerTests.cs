@@ -30,6 +30,10 @@ public sealed class NsisInstallerTests
         StringAssert.Contains(installer, "!insertmacro MUI_PAGE_INSTFILES");
         StringAssert.Contains(installer, "!insertmacro MUI_PAGE_FINISH");
         StringAssert.Contains(installer, "RequestExecutionLevel user");
+        StringAssert.Contains(installer, "VIProductVersion \"${CIA_VERSION}.0\"");
+        StringAssert.Contains(
+            installer,
+            "VIAddVersionKey /LANG=1033 \"ProductVersion\" \"${CIA_VERSION}\"");
         StringAssert.Contains(
             installer,
             "InstallDir \"$LOCALAPPDATA\\Programs\\Custom Information Aggregator\"");
